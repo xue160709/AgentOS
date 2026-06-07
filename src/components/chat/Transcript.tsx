@@ -50,6 +50,7 @@ export const Transcript = memo(function Transcript({
   isRunning = false,
   activeRunState,
   onCopyMessage,
+  onForkMessage,
   onEditUserMessage,
   onUserMessageEditDismissed,
   onReviewFileChanges,
@@ -59,6 +60,7 @@ export const Transcript = memo(function Transcript({
   isRunning?: boolean
   activeRunState?: ThreadRunState
   onCopyMessage?: (text: string) => void
+  onForkMessage?: (messageId: string) => void
   onEditUserMessage?: (messageId: string, text: string) => void
   onUserMessageEditDismissed?: () => void
   onReviewFileChanges?: (changeSetId: string) => void
@@ -86,6 +88,7 @@ export const Transcript = memo(function Transcript({
         item={item}
         canEdit={!isRunning}
         onCopyMessage={onCopyMessage}
+        onForkMessage={onForkMessage}
         onEditUserMessage={onEditUserMessage}
         onUserMessageEditDismissed={onUserMessageEditDismissed}
       />
@@ -130,6 +133,7 @@ export const Transcript = memo(function Transcript({
               canEdit={!isRunning}
               showDurationLabel={!hasProcessTrace}
               onCopyMessage={onCopyMessage}
+              onForkMessage={onForkMessage}
               onEditUserMessage={onEditUserMessage}
               onUserMessageEditDismissed={onUserMessageEditDismissed}
             />
@@ -345,6 +349,7 @@ const ChatMessage = memo(function ChatMessage({
   canEdit,
   showDurationLabel = true,
   onCopyMessage,
+  onForkMessage,
   onEditUserMessage,
   onUserMessageEditDismissed,
 }: {
@@ -352,6 +357,7 @@ const ChatMessage = memo(function ChatMessage({
   canEdit: boolean
   showDurationLabel?: boolean
   onCopyMessage?: (text: string) => void
+  onForkMessage?: (messageId: string) => void
   onEditUserMessage?: (messageId: string, text: string) => void
   onUserMessageEditDismissed?: () => void
 }) {
@@ -464,6 +470,18 @@ const ChatMessage = memo(function ChatMessage({
             >
               <IconInline name="copy" />
             </button>
+            {item.role === 'assistant' ? (
+              <button
+                type="button"
+                className="chat-message-action"
+                disabled={!hasBody}
+                title={t('chat.forkMessage')}
+                aria-label={t('chat.forkMessage')}
+                onClick={() => onForkMessage?.(item.id)}
+              >
+                <IconInline name="fork" />
+              </button>
+            ) : null}
             {item.role === 'user' ? (
               <button
                 type="button"

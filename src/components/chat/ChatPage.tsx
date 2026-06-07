@@ -237,6 +237,7 @@ type ChatPageProps = {
   threadRunStates: Record<string, ThreadRunState>
   onStatusChange: (text: string) => void
   onNewThread: (projectId?: string) => string | void
+  onForkThread: (projectId: string, items: TranscriptItem[], title: string) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onThreadChatStateChange: (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => void
@@ -335,6 +336,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     threadRunStates,
     onStatusChange,
     onNewThread,
+    onForkThread,
     onCreateProject,
     onSelectProject,
     onThreadChatStateChange,
@@ -1913,6 +1915,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     [onStatusChange, t],
   )
 
+  const forkMessage = useCallback(
+    (messageId: string) => {
+      const items = chatItems
+      if (items.length === 0) return
+      const idx = items.findIndex((item) => item.type === 'message' && item.id === messageId)
+      if (idx < 0) return
+      const forkedItems = items.slice(0, idx + 1).map((item) => structuredClone(item))
+      const title = activeThread?.title ?? t('thread.newThreadTitle')
+      onForkThread(activeProject.id, forkedItems, title)
+    },
+    [activeProject.id, activeThread?.title, chatItems, onForkThread, t],
+  )
+
   const editUserMessage = (messageId: string, text: string) => {
     if (isRunningRef.current) return
     const nextText = text.trim()
@@ -2546,6 +2561,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           showScrollButton={showScrollButton}
           onScrollToBottom={scrollToBottom}
           onCopyMessage={(text) => void copyMessage(text)}
+          onForkMessage={forkMessage}
           onEditUserMessage={editUserMessage}
           onUserMessageEditDismissed={notifyUserMessageEditDismissed}
           onReviewFileChanges={reviewFileChanges}

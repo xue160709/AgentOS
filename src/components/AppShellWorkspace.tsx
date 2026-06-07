@@ -9,6 +9,7 @@ import { useI18n } from '../i18n/i18n'
 import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ChatModelPick, ClaudeAgentStatusSnapshot, ProjectFileSearchItem } from '../claude-chat-types'
 import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../app-events'
 import type {
+  TranscriptItem,
   AgentSettingsPanelId,
   AppSearchScope,
   AppViewId,
@@ -55,6 +56,7 @@ type AppShellWorkspaceProps = {
   chatRef: RefObject<ChatPageHandle | null>
   onStatusChange: (text: string) => void
   onNewThread: (projectId?: string) => string | void
+  onForkThread: (projectId: string, items: TranscriptItem[], title: string) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onSelectThread: (threadId: string) => void
@@ -91,6 +93,7 @@ export function AppShellWorkspace({
   chatRef,
   onStatusChange,
   onNewThread,
+  onForkThread,
   onCreateProject,
   onSelectProject,
   onSelectThread,
@@ -429,6 +432,7 @@ export function AppShellWorkspace({
             threadRunStates={threadRunStates}
             onStatusChange={onStatusChange}
             onNewThread={onNewThread}
+            onForkThread={onForkThread}
             onCreateProject={onCreateProject}
             onSelectProject={onSelectProject}
             onThreadChatStateChange={onThreadChatStateChange}

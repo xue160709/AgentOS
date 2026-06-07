@@ -850,7 +850,8 @@
     "slashStatusDesc": "Inspect session, model, tools, and context state.",
     "statusPanelOpened": "Agent status opened",
     "slashHelpTitle": "/help",
-    "slashHelpDesc": "List slash commands available to Claude Agent in this session."
+    "slashHelpDesc": "List slash commands available to Claude Agent in this session.",
+    "forkMessage": "Fork conversation"
   },
   "electronAgent": {
     "messages": {

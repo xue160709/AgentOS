@@ -48,6 +48,7 @@ import type {
   AppViewId,
   ChatState,
   ChatWorkspaceState,
+  TranscriptItem,
   ProjectSkillRunRequest,
   ProjectSkillListState,
   SelectedProjectSkill,
@@ -724,6 +725,40 @@ export function AppShell() {
       return threadId
     },
     [activeProject?.id, goHome, projectDefaultModelPick, projectHomeDraftModelPicks, setProjectHomeDraftModelPick, updateChatWorkspace, t],
+  )
+
+  const forkThreadInProject = useCallback(
+    (projectId: string, items: TranscriptItem[], title: string) => {
+      setSelectedProjectSkill(null)
+      const threadId = createId('thread')
+      const now = Date.now()
+      updateChatWorkspace((prev) => {
+        const nextThread: WorkspaceThread = {
+          id: threadId,
+          projectId,
+          title,
+          createdAt: now,
+          updatedAt: now,
+          chatState: {
+            model: prev.threads.find((t) => t.projectId === projectId)?.chatState.model ?? 'Claude Agent',
+            modelPick: prev.threads.find((t) => t.projectId === projectId)?.chatState.modelPick,
+            cwd: prev.projects.find((p) => p.id === projectId)?.path,
+            items,
+          },
+        }
+        return {
+          ...prev,
+          activeProjectId: projectId,
+          activeThreadId: threadId,
+          projects: touchProject(prev.projects, projectId, now),
+          threads: [nextThread, ...prev.threads],
+        }
+      })
+      void window.claudeChat?.newThread(threadId)
+      goHome()
+      requestAnimationFrame(() => void chatRef.current?.focusComposer())
+    },
+    [goHome, updateChatWorkspace],
   )
 
   const createHomePluginCardThread = useCallback(
@@ -2016,6 +2051,7 @@ export function AppShell() {
           chatRef={chatRef}
           onStatusChange={setHeaderStatus}
           onNewThread={createThreadInProject}
+          onForkThread={forkThreadInProject}
           onCreateProject={createProject}
           onSelectProject={selectProject}
           onSelectThread={selectThread}
