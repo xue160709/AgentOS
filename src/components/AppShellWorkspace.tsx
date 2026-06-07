@@ -56,7 +56,7 @@ type AppShellWorkspaceProps = {
   chatRef: RefObject<ChatPageHandle | null>
   onStatusChange: (text: string) => void
   onNewThread: (projectId?: string) => string | void
-  onForkThread: (projectId: string, items: TranscriptItem[], title: string) => void
+  onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onSelectThread: (threadId: string) => void

@@ -387,6 +387,7 @@ const ChatMessage = memo(function ChatMessage({
     item.role === 'assistant' ? item.content.trim().length > 0 || attachments.length > 0 : item.content.trim().length > 0
   const durationLabel = showDurationLabel && item.role === 'assistant' && item.durationMs ? formatDuration(item.durationMs) : ''
   const canCopy = item.content.trim().length > 0
+  const canFork = hasBody && item.status !== 'streaming'
   const canSaveEdit = draft.trim().length > 0 && draft.trim() !== item.content.trim()
   const shouldRenderBubble = isEditing || hasBody
 
@@ -474,7 +475,7 @@ const ChatMessage = memo(function ChatMessage({
               <button
                 type="button"
                 className="chat-message-action"
-                disabled={!hasBody}
+                disabled={!canFork}
                 title={t('chat.forkMessage')}
                 aria-label={t('chat.forkMessage')}
                 onClick={() => onForkMessage?.(item.id)}

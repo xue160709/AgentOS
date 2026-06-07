@@ -728,7 +728,7 @@ export function AppShell() {
   )
 
   const forkThreadInProject = useCallback(
-    (projectId: string, items: TranscriptItem[], title: string) => {
+    (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => {
       setSelectedProjectSkill(null)
       const threadId = createId('thread')
       const now = Date.now()
@@ -740,9 +740,9 @@ export function AppShell() {
           createdAt: now,
           updatedAt: now,
           chatState: {
-            model: prev.threads.find((t) => t.projectId === projectId)?.chatState.model ?? 'Claude Agent',
-            modelPick: prev.threads.find((t) => t.projectId === projectId)?.chatState.modelPick,
-            cwd: prev.projects.find((p) => p.id === projectId)?.path,
+            model: model ?? 'Claude Agent',
+            modelPick,
+            cwd: prev.projects.find((p) => p.id === projectId)?.path ?? '',
             items,
           },
         }

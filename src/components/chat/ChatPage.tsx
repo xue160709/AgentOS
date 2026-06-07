@@ -237,7 +237,7 @@ type ChatPageProps = {
   threadRunStates: Record<string, ThreadRunState>
   onStatusChange: (text: string) => void
   onNewThread: (projectId?: string) => string | void
-  onForkThread: (projectId: string, items: TranscriptItem[], title: string) => void
+  onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onThreadChatStateChange: (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => void
@@ -1917,15 +1917,16 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   const forkMessage = useCallback(
     (messageId: string) => {
+      if (!activeThread) return
       const items = chatItems
       if (items.length === 0) return
       const idx = items.findIndex((item) => item.type === 'message' && item.id === messageId)
       if (idx < 0) return
       const forkedItems = items.slice(0, idx + 1).map((item) => structuredClone(item))
-      const title = activeThread?.title ?? t('thread.newThreadTitle')
-      onForkThread(activeProject.id, forkedItems, title)
+      const title = activeThread.title
+      onForkThread(activeProject.id, forkedItems, title, activeThread.chatState.model, activeThread.chatState.modelPick)
     },
-    [activeProject.id, activeThread?.title, chatItems, onForkThread, t],
+    [activeProject.id, activeThread, chatItems, onForkThread, t],
   )
 
   const editUserMessage = (messageId: string, text: string) => {
