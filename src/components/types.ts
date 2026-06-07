@@ -5,6 +5,7 @@
 
 import type {
   AgentContextSlashItem,
+  ChatModelPick,
   ClaudeChatAttachmentKind,
   ClaudeFileChangeSetStatus,
   ClaudeFileDiffFile,
@@ -16,6 +17,9 @@ export type AppViewId = 'home' | 'docs' | 'settings'
 
 /** 设置页侧栏路由 `#settings/<id>` / Settings sidebar route fragment `#settings/<id>` */
 export type SettingsCategoryId = 'general' | 'skills' | 'updates' | 'agent' | 'developer'
+
+/** Agent Mode 首页模态设置页签 / Agent Mode home modal settings panel id */
+export type AgentSettingsPanelId = 'project' | 'context' | 'general' | 'card-order' | 'skills'
 
 /** 消息气泡渲染状态 / Chat bubble render status */
 export type MessageStatus = 'done' | 'streaming' | 'error' | 'cancelled'
@@ -104,6 +108,32 @@ export type ChatFileDiffItem = {
   detail?: string
 }
 
+export type ChatTaskStatus = 'pending' | 'in_progress' | 'completed' | 'deleted'
+
+/** 当前线程内由 Claude Task 工具维护的任务项 / Task item tracked from Claude Task tools */
+export type ChatTaskItem = {
+  id: string
+  toolUseId?: string
+  subject: string
+  description?: string
+  activeForm?: string
+  status: ChatTaskStatus
+  owner?: string
+  blocks?: string[]
+  blockedBy?: string[]
+  metadata?: Record<string, unknown>
+  createdAt: number
+  updatedAt: number
+  order: number
+}
+
+/** 线程级任务清单快照 / Thread-scoped task list snapshot */
+export type ChatTaskState = {
+  requestId?: string
+  updatedAt: number
+  items: ChatTaskItem[]
+}
+
 /** 对话时间轴联合类型 / Union of rows shown in the transcript timeline */
 export type TranscriptItem = ChatMessageItem | ChatToolItem | ChatThinkingItem | ChatActivityItem | ChatFileDiffItem
 
@@ -111,7 +141,9 @@ export type TranscriptItem = ChatMessageItem | ChatToolItem | ChatThinkingItem |
 export type ChatState = {
   sessionId?: string
   model: string
+  modelPick?: ChatModelPick
   cwd?: string
+  tasks?: ChatTaskState
   items: TranscriptItem[]
 }
 
@@ -165,6 +197,11 @@ export type ThreadRunState = {
   status: ThreadRunStatus
   startedAt?: number
   updatedAt: number
+}
+
+/** 会话任务已完成但尚未查看的侧栏提示 / Sidebar notice for a completed task that has not been viewed */
+export type ThreadCompletionState = {
+  completedAt: number
 }
 
 /** 文件树节点（递归）/ Recursive file tree node */
@@ -246,7 +283,9 @@ export type SelectedProjectSkill = Pick<
 export type ProjectSkillRunRequest = Pick<
   AgentContextSlashItem,
   'title' | 'command' | 'description' | 'path' | 'relativePath'
->
+> & {
+  modelPick?: ChatModelPick
+}
 
 /** 搜索结果类型 / Search result category */
 export type AppSearchResultKind =

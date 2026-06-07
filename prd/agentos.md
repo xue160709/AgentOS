@@ -13,7 +13,7 @@ AgentOS 是一个面向本地项目与长期任务的桌面 Agent 工作台。�
 | P0 | 项目工作区、多会话、侧栏和项目首页入口 | `prd/workspace-session.md` |
 | P0 | Claude Agent 聊天运行、事件流、权限、diff、rewind、composer 输入 | `prd/chat-agent-runtime.md` |
 | P0 | 本地文件树、文件预览、附件和路径安全 | `prd/file-context.md` |
-| P0 | 模型 Provider、API Key、Base URL、模型能力 | `prd/model-settings.md` |
+| P0 | 模型 Provider、API Key、Base URL、模型能力、线程级模型选择 | `prd/model-settings.md` |
 | P0 | 工作区、线程和会话持久化 | `prd/persistence.md` |
 | P1 | Agent Mode 项目人格、记忆和 TODO 模式 | `prd/agent-mode.md` |
 | P1 | Home Plugin 项目首页数据卡片 | `prd/home-plugin.md` |
@@ -74,6 +74,11 @@ flowchart TD
 - 应用以本地项目路径为主组织单位。
 - 会话、Home Plugin、任务卡片和 Agent Mode 都必须归属某个项目。
 - React 入口只负责挂载 `AppShell`、注入初始 i18n Context、写入窗口 chrome dataset 和安装安全区/外链拦截等全局副作用。
+- 侧边栏底部全局设置入口使用与搜索入口一致的图标加文字按钮；项目首页右上角 Agent Mode 未开启时显示 Switch，开启后显示设置按钮并打开 Agent 模式设置模态。
+- Agent 模式设置模态只承载项目首页运行态设置（项目默认模型与 Agent 文档、卡片顺序、Skills 模型覆盖、常规）；全局设置页仍承载模型 Provider、Project Skills 开关、Agent Mode USER/IDENTITY、更新和开发者设置。
+- 全局设置页和 Agent 模式设置模态共用设置界面视觉规范：设置项导航与内容区分离，内容复用分区、分组行、说明文案、焦点态和确认弹窗样式。
+- 每个聊天线程可以独立保存当前使用的模型选择；composer 模型按钮显示活动线程的模型，线程没有有效模型时回退全局 Provider 设置中的当前可用模型。
+- Project Skill 从项目首页或侧栏运行时会创建 `skill-run` 线程，并优先使用 Agent 模式 Skills 面板中按 `skill.path` 保存的模型覆盖；Skill 或模型配置失效时跳过该候选，继续回退目标项目草稿模型、项目默认模型、同项目当前模型和全局默认模型。
 - About 面板、设置页和发布元数据统一读取 `APP_METADATA`，避免产品名、作者、仓库、License 等信息在多处漂移。
 - Agent 运行必须通过主进程统一处理，渲染层只通过 preload 暴露的安全 API 访问。
 - 文件读取、预览和插件运行都必须限制在项目根目录内。
@@ -105,6 +110,7 @@ flowchart TD
 - `src/desktop-types.ts`
 - `src/chat-workspace-persistence.ts`
 - `src/app-metadata.ts`
+- `src/model-pick.ts`
 
 ### 业务逻辑工具/工具类
 
@@ -117,6 +123,7 @@ flowchart TD
 - `electron/task-home-plugin-manager.ts`
 - `electron/claude-agent-settings.ts`
 - `electron/chat-workspace-store.ts`
+- `electron/agent-mode-settings-store.ts`
 
 ### Hooks/其他
 

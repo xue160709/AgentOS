@@ -12,33 +12,51 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
   type KeyboardEvent,
+  type RefObject,
 } from 'react'
-import { createPortal, flushSync } from 'react-dom'
+import { flushSync } from 'react-dom'
+import { IconInline } from '../../icon-inline'
 import type {
   AgentContextCatalog,
   AgentContextSource,
+  ChatModelPick,
   ClaudeChatAttachment,
-  ClaudeAgentModelProvider,
-  ClaudeAgentSettings,
+  ClaudeChatAttachmentPickerResult,
   ClaudeAgentSettingsSnapshot,
   ClaudeChatEvent,
   ClaudeChatSubmitPayload,
   ClaudePermissionMode,
   ProjectFileSearchItem,
 } from '../../claude-chat-types'
-import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT } from '../../app-events'
+import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../../app-events'
 import type { HomePluginRunItem, SpeechRecognitionStatus } from '../../desktop-types'
 import { useI18n } from '../../i18n/i18n'
+import {
+  buildModelPickRows,
+  displayModelForPick,
+  modelPickFromRow,
+  modelPickKey,
+  modelRowForPick,
+  resolveEffectiveModelPick,
+  sameModelPick,
+  supportsImagesForPick,
+} from '../../model-pick'
 import type {
   ChatActivityItem,
   ChatFileDiffItem,
   ChatMessageAttachment,
   ChatMessageItem,
+  ChatTaskItem,
+  ChatTaskState,
   ChatState,
   ChatThinkingItem,
   ChatToolItem,
+  FileTreeNode,
+  AgentSettingsPanelId,
   ProjectSkillRunRequest,
   ThreadRunState,
   TranscriptItem,
@@ -50,11 +68,16 @@ import { ChatStartView } from './ChatStartView'
 import { ChatThreadView } from './ChatThreadView'
 import { writeClipboardText } from './clipboard'
 import { Composer } from './Composer'
+import { formatBytes } from './format'
 import type { BuiltInSlashCommand, ChatModelMenuRow, ComposerSuggestion, ComposerTrigger, PermissionModeRow } from './local-types'
+import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 
 const PROCESS_TRACE_TOGGLE_EVENT = 'chat-process-trace:toggle'
 const MAX_COMPOSER_SUGGESTIONS = 64
 const MAX_COMPOSER_ATTACHMENTS = 8
+const COMPOSER_ATTACHMENT_MAX_TOTAL_BYTES = 24 * 1024 * 1024
+const COMPOSER_PASTE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+const COMPOSER_PASTE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const ACTIVE_SPEECH_RECOGNITION_STATUSES = new Set<SpeechRecognitionStatus>([
   'starting',
   'requesting_permission',
@@ -114,6 +137,72 @@ function escapeCssAttributeValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
+function getNativeFilePath(file: File): string {
+  const maybeNativeFile = file as File & { path?: unknown }
+  return typeof maybeNativeFile.path === 'string' ? maybeNativeFile.path : ''
+}
+
+function dedupeFiles(files: File[]): File[] {
+  const seen = new Set<string>()
+  return files.filter((file) => {
+    const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function imageExtensionForMimeType(mimeType: string): string {
+  if (mimeType === 'image/jpeg') return 'jpg'
+  if (mimeType === 'image/gif') return 'gif'
+  if (mimeType === 'image/webp') return 'webp'
+  return 'png'
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('无法读取剪贴板图片'))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('无法读取剪贴板图片'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function mergeComposerAttachments(
+  current: ClaudeChatAttachment[],
+  incoming: ClaudeChatAttachment[],
+): { attachments: ClaudeChatAttachment[]; skipped: Array<{ name: string; reason: string }> } {
+  const byPath = new Map(current.map((attachment) => [attachment.path, attachment]))
+  const skipped: Array<{ name: string; reason: string }> = []
+
+  for (const attachment of incoming) {
+    const existing = byPath.get(attachment.path)
+    const nextAttachments = existing
+      ? [...byPath.values()].map((item) => (item.path === attachment.path ? attachment : item))
+      : [...byPath.values(), attachment]
+
+    if (!existing && byPath.size >= MAX_COMPOSER_ATTACHMENTS) {
+      skipped.push({ name: attachment.name, reason: `一次最多添加 ${MAX_COMPOSER_ATTACHMENTS} 个文件` })
+      continue
+    }
+
+    if (totalAttachmentBytes(nextAttachments) > COMPOSER_ATTACHMENT_MAX_TOTAL_BYTES) {
+      skipped.push({ name: attachment.name, reason: '附件总大小超过 24MB' })
+      continue
+    }
+
+    byPath.set(attachment.path, attachment)
+  }
+
+  return { attachments: [...byPath.values()].slice(0, MAX_COMPOSER_ATTACHMENTS), skipped }
+}
+
+function totalAttachmentBytes(attachments: ClaudeChatAttachment[]): number {
+  return attachments.reduce((sum, attachment) => sum + Math.max(0, attachment.size || 0), 0)
+}
+
 // --- Imperative handle / 命令式句柄 ---
 
 export type ChatPageHandle = {
@@ -126,14 +215,21 @@ export type ChatPageHandle = {
     projectId: string,
     threadId: string,
     prompt: string,
-    promptMode?: ClaudeChatSubmitPayload['promptMode'],
+    options?: ClaudeChatSubmitPayload['promptMode'] | SubmitPromptOptions,
   ) => Promise<boolean>
+}
+
+export type SubmitPromptOptions = {
+  promptMode?: ClaudeChatSubmitPayload['promptMode']
+  modelPick?: ChatModelPick
 }
 
 type ChatPageProps = {
   hidden: boolean
   activeProject: WorkspaceProject
   activeThread: WorkspaceThread | undefined
+  projectDefaultModelPick?: ChatModelPick
+  projectHomeModelPick?: ChatModelPick
   /** 按 threadId 查找持久化 sessionId（重启后恢复 SDK）/ Threads list for resolving persisted session ids */
   threads: WorkspaceThread[]
   projects: WorkspaceProject[]
@@ -141,18 +237,28 @@ type ChatPageProps = {
   threadRunStates: Record<string, ThreadRunState>
   onStatusChange: (text: string) => void
   onNewThread: (projectId?: string) => string | void
+  onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onThreadChatStateChange: (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => void
   onThreadPromptSubmit: (threadId: string, prompt: string) => void
   onThreadRunStateChange: (threadId: string, state: ThreadRunState | null) => void
+  onThreadCompletionStateChange: (threadId: string, completedAt: number | null) => void
+  onProjectHomeModelPickChange: (projectId: string, pick: ChatModelPick | undefined) => void
+  agentMode: WorkspaceAgentModeState
   agentModeEnabled: boolean
   todoEnabled: boolean
   agentModeLoading: boolean
+  agentSettingsOpen: boolean
+  agentSettingsPanel: AgentSettingsPanelId
+  onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
+  onAgentSettingsPanelChange: (panel: AgentSettingsPanelId) => void
+  onCloseAgentSettings: () => void
   homeModeResetKey: number
   hiddenSkillPaths: string[]
   onCreateHomePluginCardThread: (projectId: string, initialPrompt: string) => string | void
   onEditHomePluginCard: (projectId: string, item: HomePluginRunItem) => void
+  onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
 }
@@ -163,6 +269,7 @@ type SubmitPromptTarget = {
   threadId?: string
   project?: WorkspaceProject
   promptMode?: ClaudeChatSubmitPayload['promptMode']
+  modelPick?: ChatModelPick
   reuseUserMessageId?: string
   resetSession?: boolean
 }
@@ -221,24 +328,36 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     hidden,
     activeProject,
     activeThread,
+    projectDefaultModelPick,
+    projectHomeModelPick,
     threads,
     projects,
     projectOrderIds,
     threadRunStates,
     onStatusChange,
     onNewThread,
+    onForkThread,
     onCreateProject,
     onSelectProject,
     onThreadChatStateChange,
     onThreadPromptSubmit,
     onThreadRunStateChange,
+    onThreadCompletionStateChange,
+    onProjectHomeModelPickChange,
+    agentMode,
     agentModeEnabled,
     todoEnabled,
     agentModeLoading,
+    agentSettingsOpen,
+    agentSettingsPanel,
+    onOpenAgentSettings,
+    onAgentSettingsPanelChange,
+    onCloseAgentSettings,
     homeModeResetKey,
     hiddenSkillPaths,
     onCreateHomePluginCardThread,
     onEditHomePluginCard,
+    onOpenProjectFile,
     onRunProjectSkill,
     onStopProjectSkillRun,
   },
@@ -257,7 +376,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const [modelMenuRows, setModelMenuRows] = useState<ChatModelMenuRow[]>([])
   const [modelMenuSelectionKey, setModelMenuSelectionKey] = useState('')
   const [activeModelSupportsImages, setActiveModelSupportsImages] = useState(false)
+  const [claudeSettingsSnapshot, setClaudeSettingsSnapshot] = useState<ClaudeAgentSettingsSnapshot | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<ClaudeChatAttachment[]>([])
+  const pendingAttachmentsRef = useRef<ClaudeChatAttachment[]>([])
   const [agentContext, setAgentContext] = useState<AgentContextCatalog | null>(null)
   const [permissionMode, setPermissionMode] = useState<ClaudePermissionMode>(() => readStoredPermissionMode())
   const [permissionModeOpen, setPermissionModeOpen] = useState(false)
@@ -282,6 +403,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const modelPopoverSurfaceRef = useRef<HTMLDivElement>(null)
   const permissionModePopoverAnchorRef = useRef<HTMLButtonElement>(null)
   const permissionModePopoverSurfaceRef = useRef<HTMLDivElement>(null)
+  const todoButtonRef = useRef<HTMLButtonElement>(null)
+  const todoPanelRef = useRef<HTMLDivElement>(null)
   const activeThreadIdRef = useRef(activeThread?.id ?? '')
   const threadScrollTopRef = useRef(new Map<string, number>())
   const threadRunStatesRef = useRef<Record<string, ThreadRunState>>(threadRunStates)
@@ -303,6 +426,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     width: number
     maxHeight: number
   } | null>(null)
+  const newThreadModelPick = projectHomeModelPick ?? projectDefaultModelPick
   const scrollIntentRef = useRef<'none' | 'force-bottom'>('none')
   /** 取消 / Esc 关闭编辑时抑制贴底，避免 ResizeObserver 误判 isNearBottom 把视口滚到底 */
   const suppressTranscriptResizeStickRef = useRef(false)
@@ -311,6 +435,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const isFirstTranscriptLayoutRef = useRef(true)
   const isRunningRef = useRef(false)
   const globalDisplayModelRef = useRef(globalDisplayModel)
+  const currentModelPickRef = useRef<ChatModelPick | undefined>(undefined)
   const inputValueRef = useRef(inputValue)
   const composerSelectionRef = useRef(composerSelection)
   const speechDraftRangeRef = useRef<SpeechDraftRange | null>(null)
@@ -324,9 +449,25 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     width: number
     maxHeight: number
   } | null>(null)
+  const [todoPanelOpen, setTodoPanelOpen] = useState(false)
 
   const hasMessages = chatItems.length > 0
-  const activeUserInputPrompt = pendingUserInputPrompts[0] ?? null
+  const activeTaskState = activeThread?.chatState.tasks
+  const visibleTaskItems = useMemo(
+    () => (activeTaskState?.items ?? []).filter((task) => task.status !== 'deleted'),
+    [activeTaskState?.items],
+  )
+  const hasVisibleTasks = visibleTaskItems.length > 0
+  const activeUserInputPrompt = useMemo(() => {
+    const activeThreadId = activeThread?.id ?? activeThreadIdRef.current
+    if (!activeThreadId) return null
+    return (
+      pendingUserInputPrompts.find((prompt) => {
+        const promptThreadId = prompt.threadId ?? requestThreadIdsRef.current.get(prompt.requestId)
+        return promptThreadId === activeThreadId
+      }) ?? null
+    )
+  }, [activeThread?.id, pendingUserInputPrompts])
   const permissionModeRows = useMemo(() => getPermissionModeRows(t), [t])
   const permissionModeLabel = permissionModeRows.find((row) => row.mode === permissionMode)?.label ?? t('chat.permissionModeAuto')
   const speechRecognitionSupported =
@@ -471,6 +612,33 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }, [globalDisplayModel])
 
   useEffect(() => {
+    setTodoPanelOpen(false)
+  }, [activeThread?.id])
+
+  useEffect(() => {
+    if (!hasVisibleTasks) setTodoPanelOpen(false)
+  }, [hasVisibleTasks])
+
+  useEffect(() => {
+    if (!todoPanelOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (todoPanelRef.current?.contains(target) || todoButtonRef.current?.contains(target)) return
+      setTodoPanelOpen(false)
+    }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setTodoPanelOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown, { capture: true })
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, { capture: true })
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [todoPanelOpen])
+
+  useEffect(() => {
     if (!activeRunState) return
     onStatusChange(
       activeRunState.status === 'asking'
@@ -555,19 +723,28 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         opus: t('chat.modelSlotOpus'),
       }
 
-      setModelMenuRows(buildChatModelMenuRows(settings.providers, slots, t))
-      setModelMenuSelectionKey(pickerSelectionKeyFromSettings(settings, t))
-
-      const model = resolvedChatDisplayModel(settings, t)
-      setGlobalDisplayModel(model)
-      setActiveModelSupportsImages(resolvedChatSupportsImages(snapshot))
-
-      if (!isRunningRef.current) {
-        onStatusChange(compactModelName(model, t))
-      }
+      setClaudeSettingsSnapshot(snapshot)
+      setModelMenuRows(buildModelPickRows(settings.providers, slots, t('chat.modelFallback')))
     },
-    [onStatusChange, t],
+    [t],
   )
+
+  useEffect(() => {
+    if (!claudeSettingsSnapshot) return
+    const settings = claudeSettingsSnapshot.settings
+    const requestedPick = activeThread?.id ? activeThread.chatState.modelPick : newThreadModelPick
+    const effectivePick = resolveEffectiveModelPick(settings, requestedPick)
+    const row = modelRowForPick(modelMenuRows, effectivePick)
+    const displayModel = row?.anthropicModelId ?? displayModelForPick(settings, effectivePick, t('chat.modelFallback'))
+    const supportsImages = supportsImagesForPick(settings, effectivePick, false)
+    currentModelPickRef.current = effectivePick
+    setModelMenuSelectionKey(effectivePick ? modelPickKey(effectivePick) : '')
+    setGlobalDisplayModel(displayModel)
+    setActiveModelSupportsImages(supportsImages)
+    if (!isRunningRef.current) {
+      onStatusChange(compactModelName(displayModel, t))
+    }
+  }, [activeThread?.chatState.modelPick, activeThread?.id, claudeSettingsSnapshot, modelMenuRows, newThreadModelPick, onStatusChange, t])
 
   useEffect(() => {
     setHomeComposerMode('normal')
@@ -678,18 +855,33 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Model & permission pickers: floating position + click-outside / 模型与权限选择器：浮层定位与点击外部关闭 ---
 
   const pickChatMenuRow = useCallback(async (row: ChatModelMenuRow) => {
-    if (!window.claudeChat || isRunningRef.current) return
-    try {
-      const snapshot = await window.claudeChat.setActiveChatPick({
-        providerId: row.providerId,
-        anthropicModel: row.useOverlayPick ? row.anthropicModelId : undefined,
+    if (isRunningRef.current) return
+    const pick = modelPickFromRow(row)
+    if (activeThread?.id) {
+      currentModelPickRef.current = pick
+      setThreadChatState(activeThread.id, (prev) => {
+        const changed = !sameModelPick(prev.modelPick, pick)
+        return {
+          ...prev,
+          model: pick.anthropicModel,
+          modelPick: pick,
+          sessionId: changed ? undefined : prev.sessionId,
+        }
       })
-      window.dispatchEvent(new CustomEvent(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, { detail: snapshot }))
+      setModelMenuSelectionKey(row.pickKey)
+      setGlobalDisplayModel(pick.anthropicModel)
+      setActiveModelSupportsImages(row.supportsImages)
       setModelPickerOpen(false)
-    } catch {
-      /* 设置写入失败时静默 / Ignore settings write failures */
+      return
     }
-  }, [])
+
+    onProjectHomeModelPickChange(activeProject.id, pick)
+    currentModelPickRef.current = pick
+    setModelMenuSelectionKey(row.pickKey)
+    setGlobalDisplayModel(pick.anthropicModel)
+    setActiveModelSupportsImages(row.supportsImages)
+    setModelPickerOpen(false)
+  }, [activeProject.id, activeThread?.id, onProjectHomeModelPickChange, setThreadChatState])
 
   useLayoutEffect(() => {
     if (!modelPickerOpen || !modelPopoverAnchorRef.current) {
@@ -846,6 +1038,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     scrollIntentRef.current = hasSavedScrollTop ? 'none' : 'force-bottom'
     setShowScrollButton(false)
     setModelPickerOpen(false)
+    pendingAttachmentsRef.current = []
     setPendingAttachments([])
 
     let frame = 0
@@ -1023,19 +1216,21 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   const markRequestRunning = useCallback(
     (threadId: string, requestId: string, status: ThreadRunState['status'] = 'running') => {
+      onThreadCompletionStateChange(threadId, null)
       requestThreadIdsRef.current.set(requestId, threadId)
       const current = threadRunStatesRef.current[threadId]
       if (current && current.requestId !== requestId && !isPendingRequestId(current.requestId)) return
+      if (current?.requestId === requestId && current.status === 'asking' && status === 'running') return
       if (current?.requestId === requestId && current.status === status) return
       const startedAt = current?.startedAt ?? requestStartedAtRef.current.get(requestId) ?? Date.now()
       requestStartedAtRef.current.set(requestId, startedAt)
       setThreadRunState(threadId, { requestId, status, startedAt, updatedAt: Date.now() })
     },
-    [setThreadRunState],
+    [onThreadCompletionStateChange, setThreadRunState],
   )
 
   const finishRequest = useCallback(
-    (requestId: string, statusText: string, notify = false, clearPendingRun = false) => {
+    (requestId: string, statusText: string, notify = false, clearPendingRun = false, markCompleted = false) => {
       let threadId = requestThreadIdsRef.current.get(requestId)
       if (!threadId) {
         for (const [candidateThreadId, runState] of Object.entries(threadRunStatesRef.current)) {
@@ -1058,6 +1253,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         if (!runState || runState.requestId === requestId || (clearPendingRun && isPendingRequestId(runState.requestId))) {
           setThreadRunState(threadId, null)
         }
+        if (markCompleted) {
+          onThreadCompletionStateChange(threadId, activeThreadIdRef.current === threadId ? null : Date.now())
+        }
       }
 
       if (!threadId || activeThreadIdRef.current === threadId) {
@@ -1065,7 +1263,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       }
       if (notify) playAgentDoneSound()
     },
-    [onStatusChange, setThreadRunState],
+    [onStatusChange, onThreadCompletionStateChange, setThreadRunState],
   )
 
   // --- Map every `ClaudeChatEvent` into `ChatState.items` / 将每条 SDK 事件折叠进对话时间线 items ---
@@ -1244,6 +1442,24 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return
       }
 
+      if (event.type === 'task_create') {
+        markRequestRunning(eventThreadId, event.requestId)
+        setThreadChatState(eventThreadId, (prev) => applyTaskCreateEvent(prev, event))
+        return
+      }
+
+      if (event.type === 'task_update') {
+        markRequestRunning(eventThreadId, event.requestId)
+        setThreadChatState(eventThreadId, (prev) => applyTaskUpdateEvent(prev, event))
+        return
+      }
+
+      if (event.type === 'task_list') {
+        markRequestRunning(eventThreadId, event.requestId)
+        setThreadChatState(eventThreadId, (prev) => applyTaskListEvent(prev, event))
+        return
+      }
+
       if (event.type === 'ask_user_question' || event.type === 'permission_request') {
         markRequestRunning(eventThreadId, event.requestId, event.type === 'ask_user_question' ? 'asking' : 'waiting')
         setPendingUserInputPrompts((prev) =>
@@ -1374,7 +1590,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
             return { ...prev, sessionId: event.sessionId, items }
           })
         })
-        finishRequest(event.requestId, compactModelName(globalDisplayModelRef.current, t), true, !knownRequestBeforeEvent)
+        finishRequest(event.requestId, compactModelName(globalDisplayModelRef.current, t), true, !knownRequestBeforeEvent, true)
         return
       }
 
@@ -1497,6 +1713,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   ) => {
     const text = rawText.trim()
     if (!text && attachmentsForSubmit.length === 0) return
+    if (text.toLowerCase() === '/status' && attachmentsForSubmit.length === 0) {
+      inputValueRef.current = ''
+      setInputValue('')
+      setComposerSelection({ start: 0, end: 0 })
+      window.dispatchEvent(new CustomEvent(OPEN_AGENT_STATUS_EVENT, { detail: { refresh: true } }))
+      onStatusChange(t('chat.statusPanelOpened'))
+      return
+    }
     const projectForSubmit =
       target?.project ?? (activeThread ? projects.find((project) => project.id === activeThread.projectId) : undefined) ?? activeProject
 
@@ -1509,10 +1733,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       return
     }
     let submittingThreadId = target?.threadId ?? activeThreadIdRef.current
+    let createdThreadModelPick: ChatModelPick | undefined
     if (!submittingThreadId) {
       const createdThreadId = onNewThread(projectForSubmit.id)
       if (!createdThreadId) return
       submittingThreadId = createdThreadId
+      createdThreadModelPick = newThreadModelPick
       activeThreadIdRef.current = createdThreadId
       isFirstTranscriptLayoutRef.current = true
       scrollIntentRef.current = 'force-bottom'
@@ -1520,9 +1746,21 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (threadRunStatesRef.current[submittingThreadId]) return
 
     const requestStartedAt = Date.now()
-    const resumeSessionId = target?.resetSession
+    const submittingThread = threads.find((thread) => thread.id === submittingThreadId)
+    const settings = claudeSettingsSnapshot?.settings
+    const modelPickForSubmit =
+      target?.modelPick ??
+      (settings
+        ? resolveEffectiveModelPick(settings, submittingThread?.chatState.modelPick ?? createdThreadModelPick ?? currentModelPickRef.current)
+        : currentModelPickRef.current)
+    const modelPickChanged = !sameModelPick(submittingThread?.chatState.modelPick, modelPickForSubmit)
+    const resumeSessionId = target?.resetSession || modelPickChanged
       ? undefined
-      : threads.find((th) => th.id === submittingThreadId)?.chatState.sessionId
+      : submittingThread?.chatState.sessionId
+    const handoffContext =
+      !resumeSessionId && submittingThread?.chatState.items.length
+        ? buildHandoffContext(submittingThread.chatState.items)
+        : undefined
 
     const userMessage: ChatMessageItem = {
       type: 'message',
@@ -1540,11 +1778,24 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!target?.reuseUserMessageId) {
       setThreadChatState(submittingThreadId, (prev) => ({
         ...prev,
+        model: modelPickForSubmit?.anthropicModel ?? prev.model,
+        modelPick: modelPickForSubmit ?? prev.modelPick,
+        sessionId: modelPickChanged ? undefined : prev.sessionId,
         items: [...prev.items, userMessage],
+      }))
+    } else if (modelPickForSubmit) {
+      setThreadChatState(submittingThreadId, (prev) => ({
+        ...prev,
+        model: modelPickForSubmit.anthropicModel,
+        modelPick: modelPickForSubmit,
+        sessionId: modelPickChanged ? undefined : prev.sessionId,
       }))
     }
     setInputValue('')
-    if (!target?.threadId) setPendingAttachments([])
+    if (attachmentsForSubmit.length > 0 || !target?.threadId) {
+      pendingAttachmentsRef.current = []
+      setPendingAttachments([])
+    }
     const pendingRequestId = `pending-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     requestStartedAtRef.current.set(pendingRequestId, requestStartedAt)
     setThreadRunState(submittingThreadId, {
@@ -1580,12 +1831,13 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
 
     try {
-      const submittingThread = threads.find((thread) => thread.id === submittingThreadId)
       const promptMode = target?.promptMode ?? promptModeForThreadPurpose(submittingThread?.purpose)
       const { requestId } = await window.claudeChat.submit({
         text,
         attachments: attachmentsForSubmit,
         threadId: submittingThreadId,
+        modelPick: modelPickForSubmit,
+        handoffContext,
         promptMode,
         sessionId: resumeSessionId,
         cwd: projectForSubmit.path,
@@ -1661,6 +1913,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       onStatusChange(ok ? t('chat.copiedMessage') : t('chat.copyFailed'))
     },
     [onStatusChange, t],
+  )
+
+  const forkMessage = useCallback(
+    (messageId: string) => {
+      if (!activeThread) return
+      const items = chatItems
+      if (items.length === 0) return
+      const idx = items.findIndex((item) => item.type === 'message' && item.id === messageId)
+      if (idx < 0) return
+      const forkedItems = items.slice(0, idx + 1).map((item) => structuredClone(item))
+      const title = activeThread.title
+      onForkThread(activeProject.id, forkedItems, title, activeThread.chatState.model, activeThread.chatState.modelPick)
+    },
+    [activeProject.id, activeThread, chatItems, onForkThread, t],
   )
 
   const editUserMessage = (messageId: string, text: string) => {
@@ -1745,6 +2011,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       startNewThread: async () => {
         const threadId = onNewThread()
         if (threadId) activeThreadIdRef.current = threadId
+        const modelPick = newThreadModelPick ?? projectDefaultModelPick ?? currentModelPickRef.current
+        if (threadId && modelPick) {
+          setThreadChatState(threadId, (prev) => ({
+            ...prev,
+            model: modelPick.anthropicModel,
+            modelPick,
+          }))
+        }
         scrollIntentRef.current = 'force-bottom'
         isFirstTranscriptLayoutRef.current = true
         onStatusChange(compactModelName(globalDisplayModelRef.current, t))
@@ -1773,7 +2047,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         activeThreadIdRef.current = threadId
         isFirstTranscriptLayoutRef.current = true
         scrollIntentRef.current = 'force-bottom'
-        await submitPrompt(prompt, { threadId, project: projectForSubmit })
+        const modelPick = newThreadModelPick ?? projectDefaultModelPick ?? currentModelPickRef.current
+        if (modelPick) {
+          setThreadChatState(threadId, (prev) => ({ ...prev, model: modelPick.anthropicModel, modelPick }))
+        }
+        await submitPrompt(prompt, { threadId, project: projectForSubmit, modelPick })
         requestAnimationFrame(() => chatInputRef.current?.focus())
         return true
       },
@@ -1781,20 +2059,30 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         projectId: string,
         threadId: string,
         prompt: string,
-        promptMode?: ClaudeChatSubmitPayload['promptMode'],
+        options?: ClaudeChatSubmitPayload['promptMode'] | SubmitPromptOptions,
       ) => {
         const projectForSubmit = projects.find((project) => project.id === projectId)
         if (!projectForSubmit) return false
 
+        const resolvedOptions: SubmitPromptOptions =
+          typeof options === 'string' ? { promptMode: options } : options ?? {}
         activeThreadIdRef.current = threadId
         isFirstTranscriptLayoutRef.current = true
         scrollIntentRef.current = 'force-bottom'
-        await submitPrompt(prompt, { threadId, project: projectForSubmit, promptMode })
+        if (resolvedOptions.modelPick) {
+          setThreadChatState(threadId, (prev) => ({
+            ...prev,
+            model: resolvedOptions.modelPick?.anthropicModel ?? prev.model,
+            modelPick: resolvedOptions.modelPick,
+            sessionId: sameModelPick(prev.modelPick, resolvedOptions.modelPick) ? prev.sessionId : undefined,
+          }))
+        }
+        await submitPrompt(prompt, { threadId, project: projectForSubmit, ...resolvedOptions })
         requestAnimationFrame(() => chatInputRef.current?.focus())
         return true
       },
     }),
-    [onNewThread, onStatusChange, projects, revealMessage, setThreadRunState, t],
+    [newThreadModelPick, onNewThread, onStatusChange, projectDefaultModelPick, projects, revealMessage, setThreadChatState, t],
   )
 
   // --- Cancel streaming + answer permission / tool questions from modal / 停止生成；在弹窗中应答权限或工具提问 ---
@@ -1826,7 +2114,30 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     })
   }
 
-  // --- Composer attachments via native file picker (Electron) / 通过系统文件选择器添加附件（Electron）---
+  // --- Composer attachments via picker, paste, and drag/drop / 通过选择、粘贴、拖拽添加附件 ---
+
+  const applyComposerAttachmentResult = (result: ClaudeChatAttachmentPickerResult) => {
+    if (!result.ok) {
+      onStatusChange(result.message)
+      return
+    }
+
+    if (result.attachments.length > 0) {
+      const merged = mergeComposerAttachments(pendingAttachmentsRef.current, result.attachments)
+      pendingAttachmentsRef.current = merged.attachments
+      setPendingAttachments(merged.attachments)
+      const first = result.skipped[0] ?? merged.skipped[0]
+      if (first) {
+        onStatusChange(t('chat.attachmentSkipped', { name: first.name, reason: first.reason }))
+      }
+      return
+    }
+
+    const first = result.skipped[0]
+    if (first) {
+      onStatusChange(t('chat.attachmentSkipped', { name: first.name, reason: first.reason }))
+    }
+  }
 
   const addComposerAttachments = async () => {
     const pickChatAttachments = window.desktop?.pickChatAttachments
@@ -1835,31 +2146,97 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       return
     }
 
-    const result = await pickChatAttachments({ allowImages: activeModelSupportsImages })
-    if (!result.ok) {
-      onStatusChange(result.message)
+    applyComposerAttachmentResult(await pickChatAttachments({ allowImages: activeModelSupportsImages }))
+  }
+
+  const addComposerAttachmentPaths = async (filePaths: string[]) => {
+    const readChatAttachments = window.desktop?.readChatAttachments
+    if (!readChatAttachments || isRunningRef.current || filePaths.length === 0) {
+      if (!readChatAttachments) onStatusChange(t('chat.attachmentPickerUnavailable'))
       return
     }
 
-    if (result.attachments.length > 0) {
-      setPendingAttachments((current) => {
-        const byPath = new Map(current.map((attachment) => [attachment.path, attachment]))
-        for (const attachment of result.attachments) {
-          if (byPath.size >= MAX_COMPOSER_ATTACHMENTS && !byPath.has(attachment.path)) break
-          byPath.set(attachment.path, attachment)
-        }
-        return [...byPath.values()].slice(0, MAX_COMPOSER_ATTACHMENTS)
-      })
+    applyComposerAttachmentResult(await readChatAttachments(filePaths, { allowImages: activeModelSupportsImages }))
+  }
+
+  const addComposerClipboardImages = async (files: File[]) => {
+    if (isRunningRef.current || files.length === 0) return
+
+    if (!activeModelSupportsImages) {
+      onStatusChange(t('chat.imageInputDisabledStatus'))
+      return
     }
 
-    if (result.skipped.length > 0) {
-      const first = result.skipped[0]
-      onStatusChange(t('chat.attachmentSkipped', { name: first.name, reason: first.reason }))
+    const attachments: ClaudeChatAttachment[] = []
+    const skipped: Array<{ name: string; path: string; reason: string }> = []
+    for (const [index, file] of files.slice(0, MAX_COMPOSER_ATTACHMENTS).entries()) {
+      const name = file.name || `pasted-image-${Date.now()}-${index + 1}.${imageExtensionForMimeType(file.type)}`
+      if (!COMPOSER_PASTE_IMAGE_MIME_TYPES.has(file.type)) {
+        skipped.push({ name, path: name, reason: '仅支持 PNG、JPG、GIF、WEBP' })
+        continue
+      }
+      if (file.size > COMPOSER_PASTE_IMAGE_MAX_BYTES) {
+        skipped.push({ name, path: name, reason: '图片超过 5MB' })
+        continue
+      }
+      if (totalAttachmentBytes(attachments) + file.size > COMPOSER_ATTACHMENT_MAX_TOTAL_BYTES) {
+        skipped.push({ name, path: name, reason: '附件总大小超过 24MB' })
+        continue
+      }
+      try {
+        const dataUrl = await readFileAsDataUrl(file)
+        const base64 = dataUrl.split(',', 2)[1] ?? ''
+        attachments.push({
+          id: `attachment-${Date.now()}-${index}`,
+          kind: 'image',
+          name,
+          path: `clipboard://${name}`,
+          mimeType: file.type,
+          size: file.size,
+          base64,
+          dataUrl,
+          preview: formatBytes(file.size),
+        })
+      } catch (error) {
+        skipped.push({ name, path: name, reason: error instanceof Error ? error.message : '读取失败' })
+      }
     }
+    if (files.length > MAX_COMPOSER_ATTACHMENTS) {
+      for (const file of files.slice(MAX_COMPOSER_ATTACHMENTS)) {
+        skipped.push({
+          name: file.name || 'clipboard image',
+          path: file.name || 'clipboard image',
+          reason: `一次最多添加 ${MAX_COMPOSER_ATTACHMENTS} 个文件`,
+        })
+      }
+    }
+
+    applyComposerAttachmentResult({ ok: true, attachments, skipped })
+  }
+
+  const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const itemFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+    const files = dedupeFiles([...Array.from(event.clipboardData.files), ...itemFiles]).filter((file) => file.type.startsWith('image/'))
+    if (files.length === 0) return
+    event.preventDefault()
+    void addComposerClipboardImages(files)
+  }
+
+  const handleComposerDrop = (event: DragEvent<HTMLFormElement>) => {
+    const filePaths = Array.from(event.dataTransfer.files)
+      .map((file) => getNativeFilePath(file))
+      .filter((filePath): filePath is string => Boolean(filePath))
+    if (filePaths.length === 0) return
+    void addComposerAttachmentPaths(filePaths)
   }
 
   const removeComposerAttachment = (attachmentId: string) => {
-    setPendingAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId))
+    const next = pendingAttachmentsRef.current.filter((attachment) => attachment.id !== attachmentId)
+    pendingAttachmentsRef.current = next
+    setPendingAttachments(next)
   }
 
   const syncComposerSelection = useCallback(() => {
@@ -1982,9 +2359,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault()
-        insertComposerSuggestion(composerSuggestions[composerSuggestionIndex] ?? composerSuggestions[0])
-        return
+        const suggestion = composerSuggestions[composerSuggestionIndex] ?? composerSuggestions[0]
+        if (event.key === 'Enter' && activeComposerTrigger && isComposerSuggestionAlreadyApplied(inputValue, activeComposerTrigger, suggestion)) {
+          setDismissedAutocompleteKey(activeAutocompleteKey)
+        } else {
+          event.preventDefault()
+          insertComposerSuggestion(suggestion)
+          return
+        }
       }
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -2077,6 +2459,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       const result = await window.claudeChat.rewindFiles({
         threadId,
         requestId: item.requestId,
+        modelPick: activeThread?.chatState.modelPick ?? currentModelPickRef.current,
         changeSetId: item.changeSetId,
         checkpointId: item.checkpointId,
         cwd: activeProject.path,
@@ -2085,7 +2468,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         setThreadChatState(threadId, (prev) => updateFileDiffStatus(prev, item.changeSetId, 'error', result.message || t('chat.fileDiffUnavailable')))
       }
     },
-    [activeProject.path, setThreadChatState, t],
+    [activeProject.path, activeThread?.chatState.modelPick, setThreadChatState, t],
   )
 
   // --- Composer subtree (props-only; layout lives in `Composer.tsx`) / Composer 子树（仅传参；布局在 Composer 组件内）---
@@ -2139,8 +2522,10 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       onCompositionStart={() => setIsComposingText(true)}
       onCompositionEnd={() => setIsComposingText(false)}
       onInputKeyDown={handleInputKeydown}
+      onInputPaste={handleComposerPaste}
       onSyncComposerSelection={syncComposerSelection}
       onFormSubmit={handleFormSubmit}
+      onDropComposerFiles={handleComposerDrop}
       onSendClick={handleSendClick}
       onToggleSpeechRecognition={() => void toggleSpeechRecognition()}
       onAddComposerAttachments={() => void addComposerAttachments()}
@@ -2177,6 +2562,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           showScrollButton={showScrollButton}
           onScrollToBottom={scrollToBottom}
           onCopyMessage={(text) => void copyMessage(text)}
+          onForkMessage={forkMessage}
           onEditUserMessage={editUserMessage}
           onUserMessageEditDismissed={notifyUserMessageEditDismissed}
           onReviewFileChanges={reviewFileChanges}
@@ -2188,9 +2574,15 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           projects={projects}
           projectOrderIds={projectOrderIds}
           composer={composer}
+          agentMode={agentMode}
           agentModeEnabled={agentModeEnabled}
           todoEnabled={todoEnabled}
           agentModeLoading={agentModeLoading}
+          agentSettingsOpen={agentSettingsOpen}
+          agentSettingsPanel={agentSettingsPanel}
+          onOpenAgentSettings={onOpenAgentSettings}
+          onAgentSettingsPanelChange={onAgentSettingsPanelChange}
+          onCloseAgentSettings={onCloseAgentSettings}
           threads={threads.filter((thread) => thread.projectId === activeProject.id)}
           threadRunStates={threadRunStates}
           hiddenSkillPaths={hiddenSkillPaths}
@@ -2202,21 +2594,211 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           onCreateProject={onCreateProject}
           onSelectProject={onSelectProject}
           onEditHomePluginCard={(item) => onEditHomePluginCard(activeProject.id, item)}
+          onOpenProjectFile={onOpenProjectFile}
           onRunProjectSkill={onRunProjectSkill}
           onStopProjectSkillRun={onStopProjectSkillRun}
         />
       )}
-      {activeUserInputPrompt
-        ? createPortal(
-            <AgentInputPromptModal prompt={activeUserInputPrompt} onResolve={(decision) => void resolveActiveUserInputPrompt(decision)} />,
-            document.body,
-          )
-        : null}
+      {showThreadView && hasVisibleTasks ? (
+        <ThreadTodoFloatingPanel
+          taskState={activeTaskState}
+          buttonRef={todoButtonRef}
+          panelRef={todoPanelRef}
+          open={todoPanelOpen}
+          onOpenChange={setTodoPanelOpen}
+        />
+      ) : null}
+      {activeUserInputPrompt ? (
+        <AgentInputPromptModal prompt={activeUserInputPrompt} onResolve={(decision) => void resolveActiveUserInputPrompt(decision)} />
+      ) : null}
     </section>
   )
 })
 
+function ThreadTodoFloatingPanel({
+  taskState,
+  buttonRef,
+  panelRef,
+  open,
+  onOpenChange,
+}: {
+  taskState: ChatTaskState | undefined
+  buttonRef: RefObject<HTMLButtonElement | null>
+  panelRef: RefObject<HTMLDivElement | null>
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const { t } = useI18n()
+  const tasks = useMemo(() => (taskState?.items ?? []).filter((task) => task.status !== 'deleted'), [taskState?.items])
+  if (tasks.length === 0) return null
+
+  const completed = tasks.filter((task) => task.status === 'completed').length
+  const activeTask = tasks.find((task) => task.status === 'in_progress')
+  const progress = Math.round((completed / Math.max(1, tasks.length)) * 100)
+  const buttonLabel = t('chat.todoPanelButton', { completed, total: tasks.length })
+
+  return (
+    <div className="thread-todo-floating">
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`thread-todo-trigger${open ? ' is-open' : ''}${activeTask ? ' has-active-task' : ''}`}
+        title={buttonLabel}
+        aria-label={buttonLabel}
+        aria-expanded={open}
+        aria-controls="thread-todo-panel"
+        onClick={() => onOpenChange(!open)}
+      >
+        <IconInline name="checklist" />
+        <span>{completed}/{tasks.length}</span>
+      </button>
+      {open ? (
+        <section
+          ref={panelRef}
+          id="thread-todo-panel"
+          className="thread-todo-panel"
+          aria-label={t('chat.todoPanelTitle')}
+        >
+          <header className="thread-todo-panel__header">
+            <div className="thread-todo-panel__title">
+              <IconInline name="checklist" />
+              <span>{t('chat.todoPanelTitle')}</span>
+            </div>
+            <span className="thread-todo-panel__count">{completed}/{tasks.length}</span>
+          </header>
+          <div className="thread-todo-panel__progress" aria-label={t('chat.todoPanelProgress', { completed, total: tasks.length })}>
+            <span style={{ width: `${progress}%` }} />
+          </div>
+          <div className="thread-todo-panel__body">
+            {tasks.map((task) => (
+              <article key={task.id} className={`thread-todo-item thread-todo-item--${task.status}`}>
+                <span className="thread-todo-item__marker" aria-hidden="true">
+                  {task.status === 'completed' ? <IconInline name="check" /> : null}
+                </span>
+                <div className="thread-todo-item__copy">
+                  <h3>{task.subject}</h3>
+                  {task.status === 'in_progress' && task.activeForm ? <p>{task.activeForm}</p> : task.description ? <p>{task.description}</p> : null}
+                </div>
+                <span className="thread-todo-item__status">{taskStatusLabel(task.status, t)}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
 // --- Module-level pure helpers (no React) / 模块级纯函数（无 React 依赖）---
+
+function taskStatusLabel(status: ChatTaskItem['status'], t: (path: string, vars?: Record<string, string | number>) => string): string {
+  if (status === 'in_progress') return t('chat.todoStatusInProgress')
+  if (status === 'completed') return t('chat.todoStatusCompleted')
+  return t('chat.todoStatusPending')
+}
+
+function emptyTaskState(requestId: string, now = Date.now()): ChatTaskState {
+  return { requestId, updatedAt: now, items: [] }
+}
+
+function taskStateForRequest(prev: ChatState, requestId: string, resetOnNewRequest: boolean): ChatTaskState {
+  if (!prev.tasks) return emptyTaskState(requestId)
+  if (resetOnNewRequest && prev.tasks.requestId && prev.tasks.requestId !== requestId) {
+    return emptyTaskState(requestId)
+  }
+  return { ...prev.tasks, requestId, items: [...prev.tasks.items] }
+}
+
+function applyTaskCreateEvent(prev: ChatState, event: Extract<ClaudeChatEvent, { type: 'task_create' }>): ChatState {
+  const now = Date.now()
+  const tasks = taskStateForRequest(prev, event.requestId, true)
+  const taskId = event.taskId || `pending:${event.toolUseId}`
+  const idx = tasks.items.findIndex((task) => task.id === taskId || task.toolUseId === event.toolUseId)
+  const current = idx >= 0 ? tasks.items[idx] : undefined
+  const nextTask: ChatTaskItem = {
+    id: taskId,
+    toolUseId: event.toolUseId,
+    subject: event.subject || current?.subject || taskId,
+    description: event.description ?? current?.description,
+    activeForm: event.activeForm ?? current?.activeForm,
+    status: current?.status ?? 'pending',
+    owner: current?.owner,
+    blocks: current?.blocks,
+    blockedBy: current?.blockedBy,
+    metadata: event.metadata ?? current?.metadata,
+    createdAt: current?.createdAt ?? now,
+    updatedAt: now,
+    order: current?.order ?? tasks.items.length,
+  }
+
+  const items = idx >= 0 ? replaceAt(tasks.items, idx, nextTask) : [...tasks.items, nextTask]
+  return { ...prev, tasks: { ...tasks, updatedAt: now, items: sortTasks(items) } }
+}
+
+function applyTaskUpdateEvent(prev: ChatState, event: Extract<ClaudeChatEvent, { type: 'task_update' }>): ChatState {
+  const now = Date.now()
+  const tasks = taskStateForRequest(prev, event.requestId, false)
+  const idx = tasks.items.findIndex((task) => task.id === event.taskId)
+  const current = idx >= 0 ? tasks.items[idx] : undefined
+  const nextTask: ChatTaskItem = {
+    id: event.taskId,
+    toolUseId: current?.toolUseId ?? event.toolUseId,
+    subject: event.subject ?? current?.subject ?? event.taskId,
+    description: event.description ?? current?.description,
+    activeForm: event.activeForm ?? current?.activeForm,
+    status: event.status ?? current?.status ?? 'pending',
+    owner: event.owner ?? current?.owner,
+    blocks: mergeStringLists(current?.blocks, event.blocks),
+    blockedBy: mergeStringLists(current?.blockedBy, event.blockedBy),
+    metadata: event.metadata ?? current?.metadata,
+    createdAt: current?.createdAt ?? now,
+    updatedAt: now,
+    order: current?.order ?? tasks.items.length,
+  }
+
+  const items = idx >= 0 ? replaceAt(tasks.items, idx, nextTask) : [...tasks.items, nextTask]
+  return { ...prev, tasks: { ...tasks, updatedAt: now, items: sortTasks(items) } }
+}
+
+function applyTaskListEvent(prev: ChatState, event: Extract<ClaudeChatEvent, { type: 'task_list' }>): ChatState {
+  const now = Date.now()
+  const existing = prev.tasks?.requestId === event.requestId ? prev.tasks.items : []
+  const existingById = new Map(existing.map((task) => [task.id, task]))
+  const items = event.tasks.map((task, index): ChatTaskItem => {
+    const current = existingById.get(task.taskId)
+    return {
+      id: task.taskId,
+      toolUseId: current?.toolUseId,
+      subject: task.subject,
+      description: task.description ?? current?.description,
+      activeForm: task.activeForm ?? current?.activeForm,
+      status: task.status ?? current?.status ?? 'pending',
+      owner: task.owner ?? current?.owner,
+      blocks: task.blocks ?? current?.blocks,
+      blockedBy: task.blockedBy ?? current?.blockedBy,
+      metadata: task.metadata ?? current?.metadata,
+      createdAt: current?.createdAt ?? now,
+      updatedAt: now,
+      order: current?.order ?? index,
+    }
+  })
+  return { ...prev, tasks: { requestId: event.requestId, updatedAt: now, items: sortTasks(items) } }
+}
+
+function replaceAt<T>(items: T[], index: number, item: T): T[] {
+  const next = [...items]
+  next[index] = item
+  return next
+}
+
+function mergeStringLists(current: string[] | undefined, incoming: string[] | undefined): string[] | undefined {
+  if (!incoming || incoming.length === 0) return current
+  return [...new Set([...(current ?? []), ...incoming])]
+}
+
+function sortTasks(items: ChatTaskItem[]): ChatTaskItem[] {
+  return [...items].sort((a, b) => a.order - b.order || a.createdAt - b.createdAt)
+}
 
 function getComposerTrigger(value: string, selectionStart: number, selectionEnd: number): ComposerTrigger | null {
   if (selectionStart !== selectionEnd) return null
@@ -2325,6 +2907,16 @@ function normalizeSuggestionQuery(value: string): string {
   return value.trim().toLowerCase()
 }
 
+function isComposerSuggestionAlreadyApplied(
+  value: string,
+  trigger: ComposerTrigger,
+  suggestion: ComposerSuggestion,
+): boolean {
+  const currentToken = value.slice(trigger.start, trigger.end).trim()
+  const insertedToken = suggestion.insertText.trim()
+  return currentToken.length > 0 && currentToken === insertedToken
+}
+
 function formatFileMention(relativePath: string, type: ProjectFileSearchItem['type']): string {
   const mentionPath = type === 'directory' ? `${relativePath.replace(/\/+$/u, '')}/` : relativePath
   if (!/[\s"']/u.test(mentionPath)) return `@${mentionPath}`
@@ -2379,6 +2971,30 @@ function updateFileDiffStatus(
   return { ...state, items: next }
 }
 
+const HANDOFF_MAX_MESSAGES = 18
+const HANDOFF_MAX_CHARS = 12_000
+
+function buildHandoffContext(items: TranscriptItem[]): string | undefined {
+  const messages = items
+    .filter((item): item is ChatMessageItem => item.type === 'message' && Boolean(item.content.trim()))
+    .slice(-HANDOFF_MAX_MESSAGES)
+  if (!messages.length) return undefined
+
+  const lines = messages.map((message) => {
+    const attachments = message.attachments?.length
+      ? `\n附件：${message.attachments.map((item) => `${item.name} (${item.kind})`).join(', ')}`
+      : ''
+    return `${message.role === 'user' ? '用户' : '助手'}：${message.content.trim()}${attachments}`
+  })
+  const omitted = messages.length < items.filter((item) => item.type === 'message').length
+    ? ['较早的对话内容已省略。', '']
+    : []
+  const text = ['以下是当前 thread 的精简历史上下文，用于在新模型 session 中延续对话。', '', ...omitted, ...lines].join('\n')
+  return text.length > HANDOFF_MAX_CHARS
+    ? `${text.slice(-HANDOFF_MAX_CHARS)}\n\n（历史上下文已按长度截断。）`
+    : text
+}
+
 function formatContextScope(scope: 'user' | 'project', t: (path: string, vars?: Record<string, string | number>) => string): string {
   return scope === 'user' ? t('chat.scopeUser') : t('chat.scopeProject')
 }
@@ -2428,116 +3044,6 @@ function getPermissionModeRows(t: (path: string, vars?: Record<string, string | 
       description: t('chat.permissionModeFullDesc'),
     },
   ]
-}
-
-function providerAcceptsAnthropicId(provider: ClaudeAgentModelProvider, modelId: string): boolean {
-  const m = modelId.trim()
-  if (!m) return false
-  return [
-    provider.model,
-    provider.defaultHaikuModel,
-    provider.defaultSonnetModel,
-    provider.defaultOpusModel,
-  ]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .includes(m)
-}
-
-function resolvedChatDisplayModel(
-  settings: ClaudeAgentSettings,
-  t: (path: string, vars?: Record<string, string | number>) => string,
-): string {
-  const provider =
-    settings.providers.find((item) => item.id === settings.activeProviderId) ?? settings.providers[0]
-  if (!provider) return t('chat.modelFallback')
-  const overlay = settings.activeAnthropicModel?.trim() ?? ''
-  if (overlay && providerAcceptsAnthropicId(provider, overlay)) return overlay
-  return provider.model.trim() || provider.name.trim() || t('chat.modelFallback')
-}
-
-function resolvedChatSupportsImages(snapshot: ClaudeAgentSettingsSnapshot): boolean {
-  const settings = snapshot.settings
-  if (settings.configSource === 'env') return snapshot.env.supportsImages
-  const provider =
-    settings.providers.find((item) => item.id === settings.activeProviderId) ?? settings.providers[0]
-  if (!provider) return false
-  const overlay = settings.activeAnthropicModel?.trim() ?? ''
-  const primary = provider.model.trim()
-  const model = overlay && providerAcceptsAnthropicId(provider, overlay) ? overlay : primary
-  return providerSupportsImagesForModel(provider, model, false)
-}
-
-function pickerSelectionKeyFromSettings(
-  settings: ClaudeAgentSettings,
-  t: (path: string, vars?: Record<string, string | number>) => string,
-): string {
-  const provider =
-    settings.providers.find((item) => item.id === settings.activeProviderId) ?? settings.providers[0]
-  const idModel = resolvedChatDisplayModel(settings, t)
-  if (!provider) return `:${idModel}`
-  return `${provider.id}:${idModel}`
-}
-
-function buildChatModelMenuRows(
-  providers: ClaudeAgentModelProvider[],
-  slots: { primary: string; haiku: string; sonnet: string; opus: string },
-  t: (path: string, vars?: Record<string, string | number>) => string,
-): ChatModelMenuRow[] {
-  const rows: ChatModelMenuRow[] = []
-  for (const p of providers) {
-    const seen = new Set<string>()
-    const base = providerMenuSubtitle(p)
-
-    const add = (raw: string, slotLabel: string, useOverlayPick: boolean, supportsImages: boolean) => {
-      const mid = raw.trim()
-      if (!mid || seen.has(mid)) return
-      seen.add(mid)
-      rows.push({
-        pickKey: `${p.id}:${mid}`,
-        providerId: p.id,
-        anthropicModelId: mid,
-        useOverlayPick,
-        supportsImages,
-        headline: compactModelName(mid, t),
-        metaLine: [base || null, slotLabel].filter(Boolean).join(' · '),
-      })
-    }
-
-    add(p.model, slots.primary, false, providerSupportsImagesForModel(p, p.model, false))
-    add(p.defaultHaikuModel, slots.haiku, true, providerSupportsImagesForModel(p, p.defaultHaikuModel, false))
-    add(p.defaultSonnetModel, slots.sonnet, true, providerSupportsImagesForModel(p, p.defaultSonnetModel, false))
-    add(p.defaultOpusModel, slots.opus, true, providerSupportsImagesForModel(p, p.defaultOpusModel, false))
-  }
-
-  return rows
-}
-
-function providerSupportsImagesForModel(
-  provider: ClaudeAgentModelProvider,
-  modelId: string,
-  fallback: boolean,
-): boolean {
-  const m = modelId.trim()
-  if (!m) return fallback
-  const matches = [
-    { model: provider.model, supportsImages: provider.modelSupportsImages },
-    { model: provider.defaultHaikuModel, supportsImages: provider.defaultHaikuSupportsImages },
-    { model: provider.defaultSonnetModel, supportsImages: provider.defaultSonnetSupportsImages },
-    { model: provider.defaultOpusModel, supportsImages: provider.defaultOpusSupportsImages },
-  ].filter((row) => row.model.trim() === m)
-  if (!matches.length) return fallback
-  return matches.some((row) => row.supportsImages)
-}
-
-function providerMenuSubtitle(entry: ClaudeAgentModelProvider): string {
-  const parts = [
-    entry.name?.trim() && entry.model?.trim() && entry.name.trim() !== entry.model.trim()
-      ? entry.name.trim()
-      : '',
-    entry.baseUrl?.trim() || '',
-  ].filter(Boolean)
-  return parts.join(' · ')
 }
 
 function compactModelName(model: string, t: (path: string, vars?: Record<string, string | number>) => string): string {

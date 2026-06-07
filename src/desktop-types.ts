@@ -3,6 +3,8 @@
  * Desktop preference and Agent Mode shared types aligned across renderer and main.
  */
 
+import type { ChatModelPick } from './claude-chat-types'
+
 /** UI 文本语言；与会话偏好一致并由主进程写入模板 / UI text locale; matches session prefs and main-process templates */
 export type AppUiLocale = 'zh' | 'en'
 
@@ -18,6 +20,24 @@ export type DesktopPreferences = {
 
 /** 托盘菜单动作（与 IPC 载荷一致）/ Tray menu action matching IPC payloads */
 export type TrayMenuAction = 'new-thread' | 'open-project'
+
+/** Project file watcher notification; renderer decides whether to reload visible file trees. */
+export type ProjectFilesChangedEvent = {
+  rootPath: string
+  relativePath?: string
+}
+
+/** Result returned when the renderer subscribes to project file changes. */
+export type ProjectFileWatchResult =
+  | {
+      ok: true
+      rootPath: string
+    }
+  | {
+      ok: false
+      rootPath: string
+      message: string
+    }
 
 /** Apple Speech helper lifecycle exposed to the renderer / 暴露给渲染层的 Apple 语音状态 */
 export type SpeechRecognitionStatus =
@@ -86,6 +106,8 @@ export type AgentModeProjectSettings = {
   todoEnabled: boolean
   user: string
   identity: string
+  projectModelPick?: ChatModelPick
+  skillModelOverrides: Record<string, ChatModelPick>
 }
 
 /** Agent Mode 状态查询结果 / Agent Mode status query result */
@@ -110,6 +132,80 @@ export type AgentModeSettingsResult =
       ok: true
       rootPath: string
       settings: AgentModeProjectSettings
+    }
+  | {
+      ok: false
+      rootPath: string
+      message: string
+    }
+
+export type AgentProjectDocumentName = 'AGENTS.md' | 'SOUL.md' | 'GOAL.md'
+
+export type AgentProjectDocumentsResult =
+  | {
+      ok: true
+      rootPath: string
+      files: Record<AgentProjectDocumentName, string>
+    }
+  | {
+      ok: false
+      rootPath: string
+      message: string
+    }
+
+export type ProjectContextEntryMode = 'reference' | 'local'
+
+export type ProjectContextEntryKind = 'file' | 'directory' | 'other'
+
+export type ProjectContextEntry = {
+  name: string
+  path: string
+  relativePath: string
+  mode: ProjectContextEntryMode
+  kind: ProjectContextEntryKind
+  targetPath?: string
+  targetMissing?: boolean
+  size?: number
+  updatedAt?: number
+}
+
+export type ProjectContextSkippedEntry = {
+  name: string
+  path: string
+  reason: string
+}
+
+export type ProjectContextAddMode = 'reference' | 'copy'
+
+export type ProjectContextResult =
+  | {
+      ok: true
+      rootPath: string
+      contextPath: string
+      contextMode: ProjectContextEntryMode
+      contextTargetPath?: string
+      readOnly: boolean
+      instructions: string
+      entries: ProjectContextEntry[]
+    }
+  | {
+      ok: false
+      rootPath: string
+      message: string
+    }
+
+export type ProjectContextAddResult =
+  | {
+      ok: true
+      rootPath: string
+      contextPath: string
+      contextMode: ProjectContextEntryMode
+      contextTargetPath?: string
+      readOnly: boolean
+      instructions: string
+      entries: ProjectContextEntry[]
+      added: ProjectContextEntry[]
+      skipped: ProjectContextSkippedEntry[]
     }
   | {
       ok: false

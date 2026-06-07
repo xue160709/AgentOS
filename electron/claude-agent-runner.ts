@@ -12,11 +12,17 @@ import {
   type PermissionResult,
   type Query,
   type RewindFilesResult,
+  type SDKControlGetContextUsageResponse,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type {
+  ChatModelPick,
   ClaudeAskUserQuestion,
+  AgentContextCatalog,
   ClaudeAgentResolvedConfig,
+  ClaudeAgentStatusContextUsage,
+  ClaudeAgentStatusRequest,
+  ClaudeAgentStatusSnapshot,
   ClaudeChatAttachment,
   ClaudeChatEvent,
   ClaudeChatSubmitPayload,
@@ -27,7 +33,7 @@ import type {
   ClaudePermissionResponsePayload,
 } from '../src/claude-chat-types'
 import type { AgentModeProjectSettings, AppUiLocale } from '../src/desktop-types'
-import { buildRuntimeContext, resolvePromptWithContext } from './agent-context'
+import { buildRuntimeContext, discoverAgentContext, resolvePromptWithContext } from './agent-context'
 import {
   buildSdkEnv,
   getConfigSignature,
@@ -62,9 +68,12 @@ type ActiveRequest = {
   didEmitThinking: boolean
   checkpointId?: string
   promptMode?: ClaudeChatSubmitPayload['promptMode']
+  modelPick?: ChatModelPick
+  handoffContext?: string
   agentModeSettingsOverride?: ClaudeChatSubmitPayload['agentModeSettingsOverride']
   permissionMode: ClaudePermissionMode
   seenToolUseIds: Set<string>
+  seenTaskInputToolUseIds: Set<string>
   toolNamesByUseId: Map<string, string>
   diffedToolUseIds: Set<string>
   streamBlocks: Map<number, StreamBlockState>
@@ -73,6 +82,8 @@ type ActiveRequest = {
 const READ_ONLY_AUTO_ALLOWED_TOOLS = ['Read', 'Glob', 'Grep', 'ListMcpResources', 'ReadMcpResource']
 const DEFAULT_AGENT_TOOLS = { type: 'preset', preset: 'claude_code' } as const
 const HOME_PLUGIN_CUSTOMIZATION_SKILL = 'a2ui-project-home-panel'
+const STATUS_QUERY_TIMEOUT_MS = 3_000
+const STATUS_PROBE_TIMEOUT_MS = 8_000
 type PendingPermissionRequest = {
   requestId: string
   toolUseId: string
@@ -88,6 +99,21 @@ type ThreadRuntimeState = {
   model: string
   configSignature?: string
   cwd?: string
+  claudeCodeVersion?: string
+  apiKeySource?: string
+  permissionMode?: string
+  tools?: string[]
+  hostSkills?: string[]
+  hostCommands?: string[]
+  hostContextCwd?: string
+  slashCommands?: string[]
+  agents?: string[]
+  mcpServers?: { name: string; status: string }[]
+  plugins?: string[]
+  contextUsage?: ClaudeAgentStatusContextUsage
+  lastUsage?: ClaudeAgentStatusSnapshot['lastUsage']
+  lastError?: string
+  updatedAt?: number
 }
 
 type StreamBlockState = {
@@ -103,6 +129,7 @@ export class ClaudeAgentRunner {
   private readonly activeRequestIdsByThread = new Map<string, string>()
   private readonly defaultThreadId = 'default'
   private readonly threadRuntimeStates = new Map<string, ThreadRuntimeState>()
+  private readonly statusProbeByThread = new Map<string, Promise<void>>()
   private readonly pendingPermissionRequests = new Map<string, PendingPermissionRequest>()
   private readonly eventCoalescer: ClaudeChatEventCoalescer
   private readonly messageRouter: ClaudeSdkMessageRouter
@@ -110,7 +137,7 @@ export class ClaudeAgentRunner {
   constructor(
     private readonly webContents: WebContents,
     private readonly cwd: string,
-    private readonly resolveConfig: () => ClaudeAgentResolvedConfig,
+    private readonly resolveConfig: (modelPick?: ChatModelPick) => ClaudeAgentResolvedConfig,
     private readonly resolveAgentModeSettings: (rootPath: string) => Promise<AgentModeProjectSettings>,
     private readonly resolveUiLocale: () => AppUiLocale,
     private readonly observeEvent?: (event: ClaudeChatEvent) => void,
@@ -168,9 +195,12 @@ export class ClaudeAgentRunner {
         payload.promptMode === 'home-plugin-task-run'
           ? payload.promptMode
           : undefined,
+      modelPick: normalizeModelPick(payload.modelPick),
+      handoffContext: typeof payload.handoffContext === 'string' ? payload.handoffContext.trim() : '',
       agentModeSettingsOverride: normalizeAgentModeSettingsOverride(payload.agentModeSettingsOverride),
       permissionMode: normalizeChatPermissionMode(payload.permissionMode),
       seenToolUseIds: new Set(),
+      seenTaskInputToolUseIds: new Set(),
       toolNamesByUseId: new Map(),
       diffedToolUseIds: new Set(),
       streamBlocks: new Map(),
@@ -220,6 +250,174 @@ export class ClaudeAgentRunner {
       if (activeRequestId) await this.cancel(activeRequestId)
     }
     this.threadRuntimeStates.delete(normalizedThreadId)
+  }
+
+  /** 返回状态面板所需的脱敏线程快照 / Return the redacted thread snapshot used by the local status panel */
+  async getStatus(payload?: ClaudeAgentStatusRequest): Promise<ClaudeAgentStatusSnapshot> {
+    const threadId = this.normalizeThreadId(payload?.threadId)
+    await Promise.all([
+      this.refreshHostContextStatus(threadId, payload?.cwd, payload?.refresh),
+      this.refreshThreadRuntimeStatus(threadId, payload),
+    ])
+    return this.buildStatusSnapshot(threadId, payload)
+  }
+
+  private buildStatusSnapshot(threadId: string, payload?: ClaudeAgentStatusRequest): ClaudeAgentStatusSnapshot {
+    const threadState = this.threadRuntimeStates.get(threadId)
+    const config = this.resolveConfig(payload?.modelPick)
+    const requestId = this.activeRequestIdsByThread.get(threadId)
+    const mcpServers = threadState?.mcpServers
+    const hasMcpIssue = (mcpServers ?? []).some((server) => server.status !== 'connected' && server.status !== 'disabled')
+    const hasCredential = Boolean(config.apiKey || config.authToken)
+    const sessionId = threadState?.sessionId || payload?.sessionId?.trim() || undefined
+    const lastError = threadState?.lastError
+    const health =
+      !hasCredential
+        ? 'unconfigured'
+        : requestId
+          ? 'running'
+          : lastError
+            ? 'error'
+            : hasMcpIssue
+              ? 'partial'
+              : sessionId
+                ? 'ready'
+                : 'idle'
+
+    return {
+      threadId,
+      health,
+      active: Boolean(requestId),
+      requestId,
+      sessionId,
+      cwd: threadState?.cwd || payload?.cwd?.trim() || undefined,
+      configSource: config.configSource,
+      authentication: config.authToken ? 'auth-token' : config.apiKey ? 'api-key' : 'missing',
+      route: config.baseUrl ? 'custom-gateway' : 'anthropic-default',
+      baseUrl: config.baseUrl,
+      endpointHost: hostFromUrl(config.baseUrl),
+      configuredModel: config.model,
+      reportedModel: threadState?.model ?? '',
+      claudeCodeVersion: threadState?.claudeCodeVersion ?? '',
+      apiKeySource: threadState?.apiKeySource ?? '',
+      permissionMode: threadState?.permissionMode ?? '',
+      tools: threadState?.tools,
+      skills: threadState?.hostSkills,
+      slashCommands: mergeKnownLists(threadState?.hostCommands, threadState?.slashCommands),
+      agents: threadState?.agents,
+      mcpServers,
+      plugins: threadState?.plugins,
+      contextUsage: threadState?.contextUsage,
+      lastUsage: threadState?.lastUsage,
+      lastError,
+      updatedAt: threadState?.updatedAt,
+    }
+  }
+
+  private async refreshHostContextStatus(threadId: string, cwd?: string, force = false): Promise<void> {
+    const threadState = this.getThreadRuntimeState(threadId)
+    const resolvedCwd = resolveWorkspaceCwd(cwd ?? threadState.cwd, this.cwd)
+    if (!force && threadState.hostContextCwd === resolvedCwd && threadState.hostSkills && threadState.hostCommands) return
+
+    const catalog = await discoverAgentContext(resolvedCwd)
+    if (!catalog.ok) return
+    this.captureHostContextCatalog(threadState, catalog)
+  }
+
+  private captureHostContextCatalog(threadState: ThreadRuntimeState, catalog: AgentContextCatalog): void {
+    threadState.hostContextCwd = catalog.rootPath
+    threadState.hostSkills = catalog.skills.filter((item) => item.kind === 'skill').map((item) => item.command)
+    threadState.hostCommands = catalog.skills.filter((item) => item.kind === 'command').map((item) => item.command)
+  }
+
+  private async refreshThreadRuntimeStatus(threadId: string, payload?: ClaudeAgentStatusRequest): Promise<void> {
+    const activeRequestId = this.activeRequestIdsByThread.get(threadId)
+    const activeQuery = activeRequestId ? this.activeRequests.get(activeRequestId)?.query : undefined
+    if (activeQuery) {
+      await this.refreshQueryStatus(activeQuery, threadId)
+      return
+    }
+    if (!payload?.refresh) return
+
+    const existingProbe = this.statusProbeByThread.get(threadId)
+    if (existingProbe) {
+      await existingProbe
+      return
+    }
+
+    const probe = this.probeThreadRuntimeStatus(threadId, payload).finally(() => {
+      this.statusProbeByThread.delete(threadId)
+    })
+    this.statusProbeByThread.set(threadId, probe)
+    await probe
+  }
+
+  private async probeThreadRuntimeStatus(threadId: string, payload: ClaudeAgentStatusRequest): Promise<void> {
+    const threadState = this.threadRuntimeStates.get(threadId)
+    const sessionId = threadState?.sessionId || payload.sessionId?.trim()
+    const config = this.resolveConfig(payload.modelPick)
+    if (!sessionId || (!config.apiKey && !config.authToken)) return
+
+    const abortController = new AbortController()
+    const timeout = setTimeout(() => abortController.abort(), STATUS_PROBE_TIMEOUT_MS)
+    const cwd = resolveWorkspaceCwd(payload.cwd ?? threadState?.cwd, this.cwd)
+    const response = query({
+      prompt: holdStatusProbeOpen(abortController.signal),
+      options: {
+        abortController,
+        cwd,
+        env: buildSdkEnv(config),
+        extraArgs: { 'replay-user-messages': null },
+        pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath({ appRoot: this.cwd }),
+        permissionMode: 'default',
+        resume: sessionId,
+        settingSources: [],
+        skills: 'all',
+        tools: DEFAULT_AGENT_TOOLS,
+      },
+    })
+
+    try {
+      await this.refreshQueryStatus(response, threadId, STATUS_PROBE_TIMEOUT_MS)
+    } catch (error) {
+      safeConsoleWarn('[ClaudeAgentRunner] status probe failed', {
+        threadId,
+        error: summarizeErrorForLog(error),
+      })
+    } finally {
+      clearTimeout(timeout)
+      abortController.abort()
+      response.close()
+    }
+  }
+
+  private async refreshQueryStatus(response: Query, threadId: string, timeoutMs = STATUS_QUERY_TIMEOUT_MS): Promise<void> {
+    const threadState = this.getThreadRuntimeState(threadId)
+    const initialization = await settledWithin(response.initializationResult(), timeoutMs)
+    if (initialization.status === 'fulfilled') {
+      threadState.slashCommands = mergeUnique(threadState.slashCommands, ...initialization.value.commands.map((command) => command.name))
+      threadState.agents = mergeUnique(threadState.agents, ...initialization.value.agents.map((agent) => agent.name))
+    }
+
+    const [mcpServers, contextUsage] = await Promise.all([
+      settledWithin(response.mcpServerStatus(), timeoutMs),
+      settledWithin(response.getContextUsage(), timeoutMs),
+    ])
+    if (mcpServers.status === 'fulfilled') {
+      threadState.mcpServers = mcpServers.value.map((server) => ({ name: server.name, status: server.status }))
+      const mcpToolNames = mcpServers.value.flatMap((server) => server.tools?.map((tool) => tool.name) ?? [])
+      if (mcpToolNames.length > 0) threadState.tools = mergeUnique(threadState.tools, ...mcpToolNames)
+    }
+    if (contextUsage.status === 'fulfilled') {
+      threadState.contextUsage = statusContextUsageFromSdk(contextUsage.value)
+      const toolNames = [
+        ...(contextUsage.value.systemTools?.map((tool) => tool.name) ?? []),
+        ...(contextUsage.value.deferredBuiltinTools?.map((tool) => tool.name) ?? []),
+        ...contextUsage.value.mcpTools.map((tool) => tool.name),
+      ]
+      if (toolNames.length > 0) threadState.tools = mergeUnique(threadState.tools, ...toolNames)
+    }
+    threadState.updatedAt = Date.now()
   }
 
   /** 响应 UI 对权限或 AskUserQuestion 的决定 / Apply renderer decision for tool permission prompts */
@@ -284,7 +482,7 @@ export class ClaudeAgentRunner {
       }
     }
 
-    const config = this.resolveConfig()
+    const config = this.resolveConfig(payload.modelPick)
     if (!config.apiKey && !config.authToken) {
       const result: ClaudeFileRewindResult = {
         ok: false,
@@ -355,7 +553,7 @@ export class ClaudeAgentRunner {
   // --- SDK query lifecycle / SDK 查询生命周期 ---
 
   private async run(prompt: string, attachments: ClaudeChatAttachment[], activeRequest: ActiveRequest): Promise<void> {
-    const config = this.resolveConfig()
+    const config = this.resolveConfig(activeRequest.modelPick)
     const threadState = this.getThreadRuntimeState(activeRequest.threadId)
     const nextConfigSignature = getConfigSignature(config)
     if (threadState.configSignature && threadState.configSignature !== nextConfigSignature) {
@@ -363,6 +561,8 @@ export class ClaudeAgentRunner {
     }
     threadState.configSignature = nextConfigSignature
     threadState.cwd = activeRequest.cwd
+    threadState.lastError = undefined
+    threadState.updatedAt = Date.now()
 
     if (!config.apiKey && !config.authToken) {
       this.emit({
@@ -396,6 +596,7 @@ export class ClaudeAgentRunner {
         ...(activeRequest.agentModeSettingsOverride ?? {}),
       }
       const runtimeContext = await buildRuntimeContext(activeRequest.cwd, agentModeSettings, this.resolveUiLocale())
+      this.captureHostContextCatalog(threadState, runtimeContext.catalog)
       const appendSystemPrompt = buildRequestAppendSystemPrompt(activeRequest, runtimeContext.appendSystemPrompt)
       const resolvedPrompt = await resolvePromptWithContext(prompt, runtimeContext.catalog, {
         forcedSkillCommand:
@@ -403,7 +604,7 @@ export class ClaudeAgentRunner {
             ? HOME_PLUGIN_CUSTOMIZATION_SKILL
             : undefined,
       })
-      const promptInput = buildSdkPromptInput(resolvedPrompt, attachments)
+      const promptInput = buildSdkPromptInput(withHandoffContext(resolvedPrompt, activeRequest.handoffContext), attachments)
       const sdkEnv = buildSdkEnv(config)
       const pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath({ appRoot: this.cwd })
       if (attachments.length > 0) {
@@ -488,6 +689,9 @@ export class ClaudeAgentRunner {
             if (activeRequest.cancelled) break
             this.captureCheckpointFromSdkMessage(message, activeRequest)
             this.messageRouter.handleSdkMessage(message, activeRequest)
+            if (shouldRefreshStatusFromSdkMessage(message)) {
+              await this.refreshQueryStatus(response, activeRequest.threadId)
+            }
           }
           return
         } catch (error) {
@@ -699,6 +903,11 @@ export class ClaudeAgentRunner {
   private emit(event: ClaudeChatEvent): void {
     if (this.webContents.isDestroyed()) return
     const threadId = event.threadId ?? this.activeRequests.get(event.requestId)?.threadId
+    if (threadId && event.type === 'error') {
+      const threadState = this.getThreadRuntimeState(threadId)
+      threadState.lastError = event.message
+      threadState.updatedAt = Date.now()
+    }
     this.eventCoalescer.emit(threadId ? { ...event, threadId } : event)
   }
 
@@ -741,6 +950,90 @@ function joinDetails(parts: Array<string | undefined | null | false>): string | 
   return text || undefined
 }
 
+function hostFromUrl(value: string): string {
+  if (!value.trim()) return ''
+  try {
+    return new URL(value).host
+  } catch {
+    return value
+  }
+}
+
+function shouldRefreshStatusFromSdkMessage(message: SDKMessage): boolean {
+  return message.type === 'result' || (message.type === 'system' && message.subtype === 'init')
+}
+
+async function* holdStatusProbeOpen(signal: AbortSignal): AsyncGenerator<never, void, unknown> {
+  if (signal.aborted) return
+  await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+}
+
+async function settledWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<PromiseSettledResult<T>> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    const value = await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Timed out while reading Agent status.')), timeoutMs)
+      }),
+    ])
+    return { status: 'fulfilled', value }
+  } catch (reason) {
+    return { status: 'rejected', reason }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
+function mergeUnique(existing: string[] | undefined, ...values: string[]): string[] {
+  return Array.from(
+    new Set(
+      [...(existing ?? []), ...values]
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function mergeKnownLists(...lists: Array<string[] | undefined>): string[] | undefined {
+  if (!lists.some((list) => list !== undefined)) return undefined
+  return mergeUnique(undefined, ...lists.flatMap((list) => list ?? []))
+}
+
+function statusContextUsageFromSdk(usage: SDKControlGetContextUsageResponse): ClaudeAgentStatusContextUsage {
+  return {
+    model: usage.model,
+    totalTokens: usage.totalTokens,
+    maxTokens: usage.maxTokens,
+    rawMaxTokens: usage.rawMaxTokens,
+    percentage: usage.percentage,
+    autoCompactThreshold: usage.autoCompactThreshold,
+    isAutoCompactEnabled: usage.isAutoCompactEnabled,
+    categories: usage.categories.map((category) => ({
+      name: category.name,
+      tokens: category.tokens,
+      color: category.color,
+      isDeferred: category.isDeferred,
+    })),
+    slashCommands: usage.slashCommands,
+    skills: usage.skills
+      ? {
+          totalSkills: usage.skills.totalSkills,
+          includedSkills: usage.skills.includedSkills,
+          tokens: usage.skills.tokens,
+        }
+      : undefined,
+    apiUsage: usage.apiUsage
+      ? {
+          inputTokens: usage.apiUsage.input_tokens,
+          outputTokens: usage.apiUsage.output_tokens,
+          cacheCreationInputTokens: usage.apiUsage.cache_creation_input_tokens,
+          cacheReadInputTokens: usage.apiUsage.cache_read_input_tokens,
+        }
+      : undefined,
+  }
+}
+
 function isMissingConversationSessionError(error: unknown): boolean {
   if (typeof error === 'string') {
     return error.includes('No conversation found with session ID')
@@ -766,6 +1059,27 @@ function buildRequestAppendSystemPrompt(activeRequest: ActiveRequest, basePrompt
     sections.push(HOME_PLUGIN_TASK_RUN_SYSTEM_PROMPT)
   }
   return sections.length > 0 ? sections.join('\n\n') : undefined
+}
+
+function withHandoffContext(prompt: string, handoffContext?: string): string {
+  const context = handoffContext?.trim()
+  if (!context) return prompt
+  return [
+    context,
+    '',
+    '---',
+    '',
+    '继续处理当前用户消息：',
+    prompt,
+  ].join('\n')
+}
+
+function normalizeModelPick(value: unknown): ChatModelPick | undefined {
+  if (!isRecord(value)) return undefined
+  const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : ''
+  const anthropicModel = typeof value.anthropicModel === 'string' ? value.anthropicModel.trim() : ''
+  if (!providerId || !anthropicModel) return undefined
+  return { providerId, anthropicModel }
 }
 
 function previewValue(value: unknown): string {

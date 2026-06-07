@@ -42,3 +42,4 @@ package-lock.json
 
 /.agents/rules
 /.agents/home-plugins
+.agents/skills/code-review/SKILL.md

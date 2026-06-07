@@ -2,29 +2,49 @@
  * Agent Mode card home surface rendered from per-card Home Plugins.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import { A2uiSurface, basicCatalog, MarkdownContext, type ReactComponentImplementation } from '@a2ui/react/v0_9'
 import { MessageProcessor, type A2uiClientAction, type A2uiMessage, type SurfaceModel } from '@a2ui/web_core/v0_9'
-import type { AgentContextSlashItem } from '../../claude-chat-types'
+import type { AgentContextSlashItem, ChatModelPick, ClaudeAgentSettingsSnapshot } from '../../claude-chat-types'
 import type {
+  AgentProjectDocumentName,
   HomePluginCardSize,
   HomePluginRunItem,
   HomePluginTaskMode,
   HomePluginTaskSchedule,
   HomePluginTaskSkillStep,
+  ProjectContextAddMode,
+  ProjectContextEntry,
 } from '../../desktop-types'
 import { IconInline } from '../../icon-inline'
+import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT } from '../../app-events'
 import { useI18n } from '../../i18n/i18n'
-import type { ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
+import {
+  buildModelPickRows,
+  modelPickFromRow,
+  modelRowForPick,
+  sameModelPick,
+  validateModelPick,
+  type ModelPickMenuRow,
+} from '../../model-pick'
+import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
+import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { sortProjectsForSidebar } from '../project-order'
+import { formatBytes } from './format'
 import { renderMarkdown } from './markdown'
 
 type ProjectHomeSurfaceProps = {
   project: WorkspaceProject
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
+  agent: WorkspaceAgentModeState
   todoEnabled: boolean
   loading: boolean
+  agentSettingsOpen: boolean
+  agentSettingsPanel: AgentSettingsPanelId
+  onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
+  onAgentSettingsPanelChange: (panel: AgentSettingsPanelId) => void
+  onCloseAgentSettings: () => void
   threads: WorkspaceThread[]
   threadRunStates: Record<string, ThreadRunState>
   hiddenSkillPaths: string[]
@@ -32,6 +52,7 @@ type ProjectHomeSurfaceProps = {
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onEditHomePluginCard: (item: HomePluginRunItem) => void
+  onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
 }
@@ -39,6 +60,8 @@ type ProjectHomeSurfaceProps = {
 const pluginCache = new Map<string, { hashes: Record<string, string>; plugins: HomePluginRunItem[] }>()
 const HOME_GRID_COLUMNS = 3
 const HOME_CARD_LAYOUT_STORAGE_KEY = 'agentos:project-home-card-layout:v1'
+const AGENT_PROJECT_DOCUMENT_NAMES: AgentProjectDocumentName[] = ['AGENTS.md', 'SOUL.md', 'GOAL.md']
+const TODO_HOME_PLUGIN_ID = 'agentos.todo-card'
 
 type HomeCardItem =
   | { kind: 'plugin'; cardId: string; item: HomePluginRunItem; size: HomePluginCardSize }
@@ -52,6 +75,27 @@ type HomeGridFillerItem = Extract<HomeGridItem, { kind: 'filler' }>
 type HomeCardLayout = {
   order: string[]
   sizes: Record<string, HomePluginCardSize>
+}
+
+type TodoHomeCardData = {
+  phase: string
+  progress: string
+  currentTask: string
+  nextStep: string
+  blocker: string
+  updatedAt: string
+  completed: number
+  total: number
+  percent: number
+  tasks: TodoHomeCardTask[]
+}
+
+type TodoHomeCardTask = {
+  id: string
+  title: string
+  checked: boolean
+  status: string
+  priority: string
 }
 
 type ProjectHomeProjectSelectorProps = {
@@ -171,8 +215,14 @@ export function ProjectHomeSurface({
   project,
   projects,
   projectOrderIds,
+  agent,
   todoEnabled,
   loading,
+  agentSettingsOpen,
+  agentSettingsPanel,
+  onOpenAgentSettings,
+  onAgentSettingsPanelChange,
+  onCloseAgentSettings,
   threads,
   threadRunStates,
   hiddenSkillPaths,
@@ -180,6 +230,7 @@ export function ProjectHomeSurface({
   onCreateProject,
   onSelectProject,
   onEditHomePluginCard,
+  onOpenProjectFile,
   onRunProjectSkill,
   onStopProjectSkillRun,
 }: ProjectHomeSurfaceProps) {
@@ -193,9 +244,29 @@ export function ProjectHomeSurface({
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [editingTaskSlug, setEditingTaskSlug] = useState<string | undefined>()
-  const [sortDialogOpen, setSortDialogOpen] = useState(false)
   const [draftOrder, setDraftOrder] = useState<string[]>([])
   const [draftSizes, setDraftSizes] = useState<Record<string, HomePluginCardSize>>({})
+  const [projectModelPick, setProjectModelPick] = useState<ChatModelPick | undefined>(undefined)
+  const [draftProjectModelPick, setDraftProjectModelPick] = useState<ChatModelPick | undefined>(undefined)
+  const [projectDocumentDrafts, setProjectDocumentDrafts] = useState<Record<AgentProjectDocumentName, string>>(() => emptyAgentProjectDocuments())
+  const [savedProjectDocumentDrafts, setSavedProjectDocumentDrafts] = useState<Record<AgentProjectDocumentName, string>>(() => emptyAgentProjectDocuments())
+  const [projectSettingsStatus, setProjectSettingsStatus] = useState('')
+  const [projectSettingsSaving, setProjectSettingsSaving] = useState(false)
+  const [projectContextEntries, setProjectContextEntries] = useState<ProjectContextEntry[]>([])
+  const [projectContextInstructions, setProjectContextInstructions] = useState('')
+  const [savedProjectContextInstructions, setSavedProjectContextInstructions] = useState('')
+  const [projectContextReadOnly, setProjectContextReadOnly] = useState(false)
+  const [projectContextTargetPath, setProjectContextTargetPath] = useState('')
+  const [projectContextStatus, setProjectContextStatus] = useState('')
+  const [projectContextBusy, setProjectContextBusy] = useState(false)
+  const [skillModelOverrides, setSkillModelOverrides] = useState<Record<string, ChatModelPick>>({})
+  const [draftSkillModelOverrides, setDraftSkillModelOverrides] = useState<Record<string, ChatModelPick>>({})
+  const [skillSettingsStatus, setSkillSettingsStatus] = useState('')
+  const [skillSettingsSaving, setSkillSettingsSaving] = useState(false)
+  const [cardOrderSaving, setCardOrderSaving] = useState(false)
+  const [cardOrderStatus, setCardOrderStatus] = useState('')
+  const [modelRows, setModelRows] = useState<ModelPickMenuRow[]>([])
+  const [modelSettingsSnapshot, setModelSettingsSnapshot] = useState<ClaudeAgentSettingsSnapshot | null>(null)
   const [deletingSlug, setDeletingSlug] = useState('')
   const addMenuRef = useRef<HTMLDivElement>(null)
 
@@ -255,6 +326,226 @@ export function ProjectHomeSurface({
     void loadHomePlugins()
     void loadProjectSkills()
   }, [cacheKey, loadHomePlugins, loadProjectSkills])
+
+  const applyModelSettings = useCallback(
+    (snapshot: ClaudeAgentSettingsSnapshot) => {
+      const slots = {
+        primary: t('chat.modelSlotPrimary'),
+        haiku: t('chat.modelSlotHaiku'),
+        sonnet: t('chat.modelSlotSonnet'),
+        opus: t('chat.modelSlotOpus'),
+      }
+      setModelSettingsSnapshot(snapshot)
+      setModelRows(buildModelPickRows(snapshot.settings.providers, slots, t('chat.modelFallback')))
+    },
+    [t],
+  )
+
+  useEffect(() => {
+    window.claudeChat?.getSettings().then(applyModelSettings).catch(() => {
+      setModelSettingsSnapshot(null)
+      setModelRows([])
+    })
+    const onSettingsChanged = (event: Event) => {
+      applyModelSettings((event as CustomEvent<ClaudeAgentSettingsSnapshot>).detail)
+    }
+    window.addEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
+    return () => window.removeEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
+  }, [applyModelSettings])
+
+  const loadAgentSkillModelSettings = useCallback(async () => {
+    const getAgentModeSettings = window.desktop?.getAgentModeSettings
+    if (!getAgentModeSettings) {
+      setProjectModelPick(undefined)
+      setDraftProjectModelPick(undefined)
+      setSkillModelOverrides({})
+      setDraftSkillModelOverrides({})
+      setSkillSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      setProjectSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    try {
+      const result = await getAgentModeSettings(project.path)
+      if (!result.ok) {
+        setSkillSettingsStatus(result.message)
+        setProjectSettingsStatus(result.message)
+        return
+      }
+      const projectPick = result.settings.projectModelPick
+      setProjectModelPick(projectPick)
+      setDraftProjectModelPick(projectPick)
+      const overrides = result.settings.skillModelOverrides ?? {}
+      setSkillModelOverrides(overrides)
+      setDraftSkillModelOverrides(overrides)
+      setSkillSettingsStatus(t('settings.agentMode.loaded'))
+      setProjectSettingsStatus(t('settings.agentMode.loaded'))
+    } catch (error) {
+      setSkillSettingsStatus(error instanceof Error ? error.message : String(error))
+      setProjectSettingsStatus(error instanceof Error ? error.message : String(error))
+    }
+  }, [project.path, t])
+
+  useEffect(() => {
+    if (!agentSettingsOpen) return
+    void loadAgentSkillModelSettings()
+  }, [agentSettingsOpen, loadAgentSkillModelSettings])
+
+  useEffect(() => {
+    void loadAgentSkillModelSettings()
+  }, [loadAgentSkillModelSettings])
+
+  const loadAgentProjectDocuments = useCallback(async () => {
+    const readAgentProjectDocuments = window.desktop?.readAgentProjectDocuments
+      if (!readAgentProjectDocuments) {
+        setProjectDocumentDrafts(emptyAgentProjectDocuments())
+        setSavedProjectDocumentDrafts(emptyAgentProjectDocuments())
+        setProjectSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+        return
+      }
+    try {
+      const result = await readAgentProjectDocuments(project.path)
+      if (!result.ok) {
+        setProjectSettingsStatus(result.message)
+        return
+      }
+      setProjectDocumentDrafts(result.files)
+      setSavedProjectDocumentDrafts(result.files)
+      setProjectSettingsStatus(t('settings.agentMode.loaded'))
+    } catch (error) {
+      setProjectSettingsStatus(error instanceof Error ? error.message : String(error))
+    }
+  }, [project.path, t])
+
+  useEffect(() => {
+    if (!agentSettingsOpen) return
+    void loadAgentProjectDocuments()
+  }, [agentSettingsOpen, loadAgentProjectDocuments])
+
+  const applyProjectContext = useCallback((context: { entries: ProjectContextEntry[]; instructions: string; readOnly: boolean; contextTargetPath?: string }) => {
+    setProjectContextEntries(context.entries)
+    setProjectContextInstructions(context.instructions)
+    setSavedProjectContextInstructions(context.instructions)
+    setProjectContextReadOnly(context.readOnly)
+    setProjectContextTargetPath(context.contextTargetPath ?? '')
+  }, [])
+
+  const loadProjectContext = useCallback(async () => {
+    const listProjectContext = window.desktop?.listProjectContext
+    if (!listProjectContext) {
+      setProjectContextEntries([])
+      setProjectContextInstructions('')
+      setSavedProjectContextInstructions('')
+      setProjectContextReadOnly(false)
+      setProjectContextTargetPath('')
+      setProjectContextStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setProjectContextBusy(true)
+    try {
+      const result = await listProjectContext(project.path)
+      if (!result.ok) {
+        setProjectContextStatus(result.message)
+        return
+      }
+      applyProjectContext(result)
+      setProjectContextStatus(result.readOnly ? t('workspace.agentSettingsContextLoadedReadOnly') : t('workspace.agentSettingsContextLoaded'))
+    } catch (error) {
+      setProjectContextStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectContextBusy(false)
+    }
+  }, [applyProjectContext, project.path, t])
+
+  useEffect(() => {
+    if (!agentSettingsOpen || agentSettingsPanel !== 'context') return
+    void loadProjectContext()
+  }, [agentSettingsOpen, agentSettingsPanel, loadProjectContext])
+
+  const addProjectContext = async (mode: ProjectContextAddMode) => {
+    const addProjectContextEntries = window.desktop?.addProjectContextEntries
+    if (!addProjectContextEntries) {
+      setProjectContextStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setProjectContextBusy(true)
+    setProjectContextStatus(mode === 'copy' ? t('workspace.agentSettingsContextCopying') : t('workspace.agentSettingsContextReferencing'))
+    try {
+      const result = await addProjectContextEntries(project.path, mode)
+      if (!result.ok) {
+        setProjectContextStatus(result.message)
+        return
+      }
+      applyProjectContext(result)
+      if (result.added.length === 0 && result.skipped.length === 0) {
+        setProjectContextStatus(t('workspace.agentSettingsContextNoSelection'))
+        return
+      }
+      const skipped = result.skipped.length > 0 ? t('workspace.agentSettingsContextSkipped', { count: result.skipped.length }) : ''
+      setProjectContextStatus(
+        [t('workspace.agentSettingsContextAdded', { count: result.added.length }), skipped].filter(Boolean).join(' '),
+      )
+      window.dispatchEvent(new CustomEvent('project-home:refresh'))
+    } catch (error) {
+      setProjectContextStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectContextBusy(false)
+    }
+  }
+
+  const saveProjectContextInstructions = async () => {
+    const saveProjectContextInstructions = window.desktop?.saveProjectContextInstructions
+    if (!saveProjectContextInstructions) {
+      setProjectContextStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setProjectContextBusy(true)
+    setProjectContextStatus(t('settings.agentMode.saving'))
+    try {
+      const result = await saveProjectContextInstructions(project.path, projectContextInstructions)
+      if (!result.ok) {
+        setProjectContextStatus(result.message)
+        return
+      }
+      applyProjectContext(result)
+      setProjectContextStatus(t('settings.agentMode.saved'))
+      window.dispatchEvent(new CustomEvent('agentos:project-agent-settings-changed', { detail: { projectPath: project.path } }))
+    } catch (error) {
+      setProjectContextStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectContextBusy(false)
+    }
+  }
+
+  const removeProjectContextEntry = async (entry: ProjectContextEntry) => {
+    const removeProjectContextEntry = window.desktop?.removeProjectContextEntry
+    if (!removeProjectContextEntry) {
+      setProjectContextStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    const confirmed = window.confirm(
+      entry.mode === 'reference'
+        ? t('workspace.agentSettingsContextRemoveReferenceConfirm', { name: entry.name })
+        : t('workspace.agentSettingsContextRemoveLocalConfirm', { name: entry.name }),
+    )
+    if (!confirmed) return
+
+    setProjectContextBusy(true)
+    setProjectContextStatus(t('workspace.agentSettingsContextRemoving'))
+    try {
+      const result = await removeProjectContextEntry(project.path, entry.relativePath)
+      if (!result.ok) {
+        setProjectContextStatus(result.message)
+        return
+      }
+      applyProjectContext(result)
+      setProjectContextStatus(t('workspace.agentSettingsContextRemoved'))
+      window.dispatchEvent(new CustomEvent('project-home:refresh'))
+    } catch (error) {
+      setProjectContextStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectContextBusy(false)
+    }
+  }
 
   useEffect(() => {
     const onRefresh = () => {
@@ -339,12 +630,84 @@ export function ProjectHomeSurface({
   const gridItems = useMemo(() => buildHomeGridItems(homeCards), [homeCards])
 
   useEffect(() => {
-    if (!sortDialogOpen) return
+    if (!agentSettingsOpen || agentSettingsPanel !== 'card-order') return
     setDraftOrder(homeCards.map((card) => card.cardId))
     setDraftSizes(Object.fromEntries(homeCards.map((card) => [card.cardId, card.size])))
-  }, [homeCards, sortDialogOpen])
+  }, [agentSettingsOpen, agentSettingsPanel, homeCards])
+
+  const saveProjectSettings = async () => {
+    const saveAgentModeSettings = window.desktop?.saveAgentModeSettings
+    const saveAgentProjectDocuments = window.desktop?.saveAgentProjectDocuments
+    if (!saveAgentModeSettings || !saveAgentProjectDocuments) {
+      setProjectSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    const nextProjectPick = modelSettingsSnapshot
+      ? validateModelPick(modelSettingsSnapshot.settings, draftProjectModelPick)
+      : draftProjectModelPick
+    setProjectSettingsSaving(true)
+    setProjectSettingsStatus(t('settings.agentMode.saving'))
+    try {
+      const settingsResult = await saveAgentModeSettings(project.path, { projectModelPick: nextProjectPick })
+      if (!settingsResult.ok) {
+        setProjectSettingsStatus(settingsResult.message)
+        return
+      }
+      const docsResult = await saveAgentProjectDocuments(project.path, projectDocumentDrafts)
+      if (!docsResult.ok) {
+        setProjectSettingsStatus(docsResult.message)
+        return
+      }
+      const savedPick = settingsResult.settings.projectModelPick
+      const projectModelPickChanged = !sameModelPick(projectModelPick, savedPick)
+      setProjectModelPick(savedPick)
+      setDraftProjectModelPick(savedPick)
+      setProjectDocumentDrafts(docsResult.files)
+      setSavedProjectDocumentDrafts(docsResult.files)
+      setProjectSettingsStatus(t('settings.agentMode.saved'))
+      window.dispatchEvent(new CustomEvent('agentos:project-agent-settings-changed', { detail: { projectPath: project.path, projectModelPickChanged } }))
+    } catch (error) {
+      setProjectSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectSettingsSaving(false)
+    }
+  }
+
+  const saveSkillModelSettings = async () => {
+    const saveAgentModeSettings = window.desktop?.saveAgentModeSettings
+    if (!saveAgentModeSettings) {
+      setSkillSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    const skillPaths = new Set(skills.map((skill) => skill.path))
+    const next = Object.fromEntries(
+      Object.entries(draftSkillModelOverrides).filter(([skillPath, pick]) => {
+        if (!skillPaths.has(skillPath)) return false
+        return modelSettingsSnapshot ? Boolean(validateModelPick(modelSettingsSnapshot.settings, pick)) : true
+      }),
+    )
+    setSkillSettingsSaving(true)
+    setSkillSettingsStatus(t('settings.agentMode.saving'))
+    try {
+      const result = await saveAgentModeSettings(project.path, { skillModelOverrides: next })
+      if (!result.ok) {
+        setSkillSettingsStatus(result.message)
+        return
+      }
+      const overrides = result.settings.skillModelOverrides ?? {}
+      setSkillModelOverrides(overrides)
+      setDraftSkillModelOverrides(overrides)
+      setSkillSettingsStatus(t('settings.agentMode.saved'))
+    } catch (error) {
+      setSkillSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSkillSettingsSaving(false)
+    }
+  }
 
   const saveSortOrder = async () => {
+    setCardOrderSaving(true)
+    setCardOrderStatus(t('settings.agentMode.saving'))
     const cardsById = new Map(homeCards.map((card) => [card.cardId, card]))
     const pluginOrder = draftOrder
       .map((cardId) => cardsById.get(cardId))
@@ -364,15 +727,25 @@ export function ProjectHomeSurface({
           : null
       if (result && !result.ok) {
         setError(result.message)
+        setCardOrderStatus(result.message)
         return
       }
     }
     const nextLayout = normalizeHomeCardLayout({ order: draftOrder, sizes: draftSizes })
     writeHomeCardLayout(project.path, nextLayout)
     setCardLayout(nextLayout)
-    setSortDialogOpen(false)
+    setCardOrderStatus(t('settings.agentMode.saved'))
     outputHashesRef.current = {}
     window.dispatchEvent(new CustomEvent('project-home:refresh'))
+    setCardOrderSaving(false)
+  }
+
+  const saveSortOrderWithGuard = async () => {
+    try {
+      await saveSortOrder()
+    } finally {
+      setCardOrderSaving(false)
+    }
   }
 
   const deleteCard = async (item: HomePluginRunItem) => {
@@ -433,7 +806,7 @@ export function ProjectHomeSurface({
             title={t('workspace.sortAgentCards')}
             aria-label={t('workspace.sortAgentCards')}
             disabled={loading || homeCards.length === 0}
-            onClick={() => setSortDialogOpen(true)}
+            onClick={() => onOpenAgentSettings('card-order')}
           >
             <IconInline name="sort" />
           </button>
@@ -496,6 +869,11 @@ export function ProjectHomeSurface({
                   projectId={project.id}
                   threads={threads}
                   threadRunStates={threadRunStates}
+                  fixedModelLabel={skillModelLabelForCard(
+                    skillModelOverrides[card.skill.path],
+                    modelRows,
+                    modelSettingsSnapshot,
+                  )}
                   onRun={onRunProjectSkill}
                   onStop={onStopProjectSkillRun}
                 />
@@ -507,6 +885,7 @@ export function ProjectHomeSurface({
                 item={card.item}
                 size={card.size}
                 projectPath={project.path}
+                onOpenProjectFile={onOpenProjectFile}
                 onEdit={() => {
                   if (card.item.manifest.kind === 'task') {
                     setEditingTaskSlug(card.item.slug)
@@ -539,17 +918,52 @@ export function ProjectHomeSurface({
           }}
         />
       ) : null}
-      {sortDialogOpen ? (
-        <SortCardsDialog
+      {agentSettingsOpen ? (
+        <AgentSettingsModal
+          agent={agent}
+          activePanel={agentSettingsPanel}
+          onActivePanelChange={onAgentSettingsPanelChange}
           cards={homeCards}
           draftOrder={draftOrder}
           draftSizes={draftSizes}
           onDraftOrderChange={setDraftOrder}
           onDraftSizeChange={(cardId, preferredSize) => setDraftSizes((prev) => ({ ...prev, [cardId]: preferredSize }))}
+          projectModelPick={projectModelPick}
+          draftProjectModelPick={draftProjectModelPick}
+          projectDocumentDrafts={projectDocumentDrafts}
+          savedProjectDocumentDrafts={savedProjectDocumentDrafts}
+          projectSettingsStatus={projectSettingsStatus}
+          projectSettingsSaving={projectSettingsSaving}
+          projectContextEntries={projectContextEntries}
+          projectContextInstructions={projectContextInstructions}
+          savedProjectContextInstructions={savedProjectContextInstructions}
+          projectContextReadOnly={projectContextReadOnly}
+          projectContextTargetPath={projectContextTargetPath}
+          projectContextStatus={projectContextStatus}
+          projectContextBusy={projectContextBusy}
+          onDraftProjectModelPickChange={setDraftProjectModelPick}
+          onProjectDocumentDraftsChange={setProjectDocumentDrafts}
+          onSaveProjectSettings={() => void saveProjectSettings()}
+          onProjectContextInstructionsChange={setProjectContextInstructions}
+          onAddProjectContext={(mode) => void addProjectContext(mode)}
+          onRemoveProjectContextEntry={(entry) => void removeProjectContextEntry(entry)}
+          onRefreshProjectContext={() => void loadProjectContext()}
+          onSaveProjectContextInstructions={() => void saveProjectContextInstructions()}
+          skills={skills}
+          modelRows={modelRows}
+          modelSettingsSnapshot={modelSettingsSnapshot}
+          skillModelOverrides={skillModelOverrides}
+          draftSkillModelOverrides={draftSkillModelOverrides}
+          skillSettingsStatus={skillSettingsStatus}
+          skillSettingsSaving={skillSettingsSaving}
+          onDraftSkillModelOverridesChange={setDraftSkillModelOverrides}
+          onSaveSkillModelOverrides={() => void saveSkillModelSettings()}
           deletingSlug={deletingSlug}
+          cardOrderStatus={cardOrderStatus}
+          cardOrderSaving={cardOrderSaving}
           onDelete={(item) => void deleteCard(item)}
-          onClose={() => setSortDialogOpen(false)}
-          onSave={() => void saveSortOrder()}
+          onClose={onCloseAgentSettings}
+          onSave={() => void saveSortOrderWithGuard()}
         />
       ) : null}
     </div>
@@ -579,20 +993,24 @@ function HomePluginCard({
   item,
   size,
   projectPath,
+  onOpenProjectFile,
   onEdit,
 }: {
   item: HomePluginRunItem
   size: HomePluginCardSize
   projectPath: string
+  onOpenProjectFile: (node: FileTreeNode) => void
   onEdit: () => void
 }) {
   const { t } = useI18n()
   const messages = messagesForSize(item, size)
+  const todoCard = isTodoHomeCard(item) ? todoHomeCardDataFromMessages(messages) : null
   const taskCard = item.manifest.kind === 'task' ? taskCardViewModelFromMessages(item, messages) : null
   const [menuOpen, setMenuOpen] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
+  const editable = !todoCard
 
-  useMasonrySpan(cardRef, [messages, size])
+  useMasonrySpan(cardRef, [messages, size, todoCard])
 
   return (
     <div
@@ -600,7 +1018,7 @@ function HomePluginCard({
       className={`project-home-card project-home-card--${size} project-home-card--${item.manifest.kind}`}
       style={{ '--home-card-span': sizeToColumnSpan(size) } as CSSProperties}
     >
-      <div className="project-home-card__menu">
+      {editable ? <div className="project-home-card__menu">
         <button
           type="button"
           className="project-home-card__menu-button"
@@ -626,10 +1044,16 @@ function HomePluginCard({
             </button>
           </div>
         ) : null}
-      </div>
+      </div> : null}
       <div className="project-home-card__measure">
         <div className="project-home-card__surface">
-          {taskCard ? (
+          {todoCard ? (
+            <TodoHomeCardView
+              todo={todoCard}
+              size={size}
+              onOpen={() => onOpenProjectFile(createProjectFileNode(projectPath, 'TODO.md'))}
+            />
+          ) : taskCard ? (
             <TaskHomeCardView task={taskCard} projectPath={projectPath} />
           ) : (
             <MarkdownContext.Provider value={(text) => Promise.resolve(renderMarkdown(text))}>
@@ -655,6 +1079,80 @@ type TaskHomeCardViewModel = {
   meta: string[]
   threadTitle: string
   active: boolean
+}
+
+function TodoHomeCardView({ todo, size, onOpen }: { todo: TodoHomeCardData; size: HomePluginCardSize; onOpen: () => void }) {
+  const tone = todo.blocker && todo.blocker !== '无' ? 'error' : todo.percent >= 100 ? 'done' : 'active'
+  const visibleTasks = size === 'large'
+    ? todo.tasks.slice(0, 6)
+    : size === 'medium'
+      ? todo.tasks.slice(0, 3)
+      : []
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onOpen()
+  }
+
+  return (
+    <article
+      className={`todo-home-card todo-home-card--${tone}`}
+      role="button"
+      tabIndex={0}
+      aria-label="打开 TODO.md"
+      onClick={onOpen}
+      onKeyDown={handleKeyDown}
+    >
+      <header className="todo-home-card__header">
+        <span className="task-home-card__glyph todo-home-card__glyph" aria-hidden="true">
+          <IconInline name="checklist" />
+        </span>
+        <span className="task-home-card__heading">
+          <h3>TODO</h3>
+          <span>{todo.updatedAt || 'TODO.md'}</span>
+        </span>
+      </header>
+
+      <div className="todo-home-card__progress" aria-label={`TODO progress ${todo.percent}%`}>
+        <div className="todo-home-card__progress-head">
+          <span>{todo.progress || `${todo.completed}/${todo.total}`}</span>
+          <strong>{todo.percent}%</strong>
+        </div>
+        <span className="todo-home-card__bar" aria-hidden="true">
+          <span style={{ width: `${Math.min(100, Math.max(0, todo.percent))}%` }} />
+        </span>
+      </div>
+
+      <div className="todo-home-card__body">
+        <p className="task-home-card__summary">{todo.currentTask}</p>
+        {size !== 'small' ? <p className="task-home-card__detail">{todo.phase}</p> : null}
+      </div>
+
+      <div className="todo-home-card__facts">
+        <span>
+          <b>Next</b>
+          {todo.nextStep}
+        </span>
+        <span>
+          <b>Blocker</b>
+          {todo.blocker || '无'}
+        </span>
+      </div>
+
+      {visibleTasks.length > 0 ? (
+        <div className="todo-home-card__tasks" aria-label="TODO tasks">
+          {visibleTasks.map((task) => (
+            <span key={task.id} className={`todo-home-card__task todo-home-card__task--${task.status || 'todo'}`}>
+              <IconInline name={task.checked ? 'check' : 'branch'} />
+              <span>{task.id}</span>
+              <b>{task.title}</b>
+              {size === 'large' && task.priority ? <em>{task.priority}</em> : null}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  )
 }
 
 function TaskHomeCardView({ task, projectPath }: { task: TaskHomeCardViewModel; projectPath: string }) {
@@ -723,6 +1221,7 @@ function SkillHomeCard({
   projectId,
   threads,
   threadRunStates,
+  fixedModelLabel,
   onRun,
   onStop,
 }: {
@@ -731,6 +1230,7 @@ function SkillHomeCard({
   projectId: string
   threads: WorkspaceThread[]
   threadRunStates: Record<string, ThreadRunState>
+  fixedModelLabel: string
   onRun: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStop: (projectId: string, skillPath: string) => void
 }) {
@@ -828,7 +1328,12 @@ function SkillHomeCard({
               <span title={skill.relativePath}>{skill.relativePath}</span>
             </div>
 
-            <footer className="task-home-card__footer">
+            <footer className={`task-home-card__footer${fixedModelLabel ? ' skill-home-card__footer--with-model' : ''}`}>
+              {fixedModelLabel ? (
+                <span className="skill-home-card__fixed-model" title={t('workspace.skillCardFixedModelTitle', { model: fixedModelLabel })}>
+                  {fixedModelLabel}
+                </span>
+              ) : null}
               <button
                 type="button"
                 className={`task-home-card__action${active ? ' task-home-card__action--stop' : ''}`}
@@ -844,6 +1349,17 @@ function SkillHomeCard({
       </div>
     </div>
   )
+}
+
+function skillModelLabelForCard(
+  pick: ChatModelPick | undefined,
+  modelRows: ModelPickMenuRow[],
+  modelSettingsSnapshot: ClaudeAgentSettingsSnapshot | null,
+): string {
+  if (!pick || !modelSettingsSnapshot) return ''
+  const validPick = validateModelPick(modelSettingsSnapshot.settings, pick)
+  if (!validPick) return ''
+  return modelRowForPick(modelRows, validPick)?.headline ?? validPick.anthropicModel
 }
 
 function A2uiCardSurface({
@@ -1342,13 +1858,677 @@ function TaskCardDialog({
   )
 }
 
-function SortCardsDialog({
+function AgentSettingsModal({
+  agent,
+  activePanel,
+  onActivePanelChange,
+  cards,
+  draftOrder,
+  draftSizes,
+  onDraftOrderChange,
+  onDraftSizeChange,
+  projectModelPick,
+  draftProjectModelPick,
+  projectDocumentDrafts,
+  savedProjectDocumentDrafts,
+  projectSettingsStatus,
+  projectSettingsSaving,
+  projectContextEntries,
+  projectContextInstructions,
+  savedProjectContextInstructions,
+  projectContextReadOnly,
+  projectContextTargetPath,
+  projectContextStatus,
+  projectContextBusy,
+  onDraftProjectModelPickChange,
+  onProjectDocumentDraftsChange,
+  onSaveProjectSettings,
+  onProjectContextInstructionsChange,
+  onAddProjectContext,
+  onRemoveProjectContextEntry,
+  onRefreshProjectContext,
+  onSaveProjectContextInstructions,
+  skills,
+  modelRows,
+  modelSettingsSnapshot,
+  skillModelOverrides,
+  draftSkillModelOverrides,
+  skillSettingsStatus,
+  skillSettingsSaving,
+  onDraftSkillModelOverridesChange,
+  onSaveSkillModelOverrides,
+  deletingSlug,
+  cardOrderStatus,
+  cardOrderSaving,
+  onDelete,
+  onClose,
+  onSave,
+}: {
+  agent: WorkspaceAgentModeState
+  activePanel: AgentSettingsPanelId
+  onActivePanelChange: (panel: AgentSettingsPanelId) => void
+  cards: HomeCardItem[]
+  draftOrder: string[]
+  draftSizes: Record<string, HomePluginCardSize>
+  onDraftOrderChange: (order: string[]) => void
+  onDraftSizeChange: (cardId: string, preferredSize: HomePluginCardSize) => void
+  projectModelPick?: ChatModelPick
+  draftProjectModelPick?: ChatModelPick
+  projectDocumentDrafts: Record<AgentProjectDocumentName, string>
+  savedProjectDocumentDrafts: Record<AgentProjectDocumentName, string>
+  projectSettingsStatus: string
+  projectSettingsSaving: boolean
+  projectContextEntries: ProjectContextEntry[]
+  projectContextInstructions: string
+  savedProjectContextInstructions: string
+  projectContextReadOnly: boolean
+  projectContextTargetPath: string
+  projectContextStatus: string
+  projectContextBusy: boolean
+  onDraftProjectModelPickChange: (pick: ChatModelPick | undefined) => void
+  onProjectDocumentDraftsChange: (drafts: Record<AgentProjectDocumentName, string>) => void
+  onSaveProjectSettings: () => void
+  onProjectContextInstructionsChange: (instructions: string) => void
+  onAddProjectContext: (mode: ProjectContextAddMode) => void
+  onRemoveProjectContextEntry: (entry: ProjectContextEntry) => void
+  onRefreshProjectContext: () => void
+  onSaveProjectContextInstructions: () => void
+  skills: AgentContextSlashItem[]
+  modelRows: ModelPickMenuRow[]
+  modelSettingsSnapshot: ClaudeAgentSettingsSnapshot | null
+  skillModelOverrides: Record<string, ChatModelPick>
+  draftSkillModelOverrides: Record<string, ChatModelPick>
+  skillSettingsStatus: string
+  skillSettingsSaving: boolean
+  onDraftSkillModelOverridesChange: (overrides: Record<string, ChatModelPick>) => void
+  onSaveSkillModelOverrides: () => void
+  deletingSlug: string
+  cardOrderStatus: string
+  cardOrderSaving: boolean
+  onDelete: (item: HomePluginRunItem) => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const [confirmDisableOpen, setConfirmDisableOpen] = useState(false)
+  const [status, setStatus] = useState('')
+  const disableAgentMode = async () => {
+    setStatus('')
+    const ok = await agent.updateAgentModeState({ enabled: false })
+    if (!ok) {
+      setStatus(t('workspace.agentModeFailed'))
+      return
+    }
+    setConfirmDisableOpen(false)
+    onClose()
+  }
+
+  const navItems: { id: AgentSettingsPanelId; label: string; icon: 'settings' | 'sort' | 'chip' | 'folder' | 'files' }[] = [
+    { id: 'project', label: t('workspace.agentSettingsProject'), icon: 'folder' },
+    { id: 'context', label: t('workspace.agentSettingsContext'), icon: 'files' },
+    { id: 'card-order', label: t('workspace.agentSettingsCardOrder'), icon: 'sort' },
+    { id: 'skills', label: t('workspace.agentSettingsSkills'), icon: 'chip' },
+    { id: 'general', label: t('workspace.agentSettingsGeneral'), icon: 'settings' },
+  ]
+  const caption =
+    activePanel === 'project'
+      ? t('workspace.agentSettingsProject')
+      : activePanel === 'context'
+      ? t('workspace.agentSettingsContext')
+      : activePanel === 'card-order'
+      ? t('workspace.agentSettingsCardOrder')
+      : activePanel === 'skills'
+        ? t('workspace.agentSettingsSkills')
+        : t('workspace.agentModeReady')
+
+  return (
+    <div className="project-home-modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <div className="project-home-modal project-home-modal--agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="project-home-modal__header">
+          <div>
+            <h2 id="agent-settings-title">{t('workspace.agentSettings')}</h2>
+            <p className="project-home-modal__caption">{caption}</p>
+          </div>
+          <button type="button" className="project-home-icon-button" aria-label={t('filePanel.closeAria')} onClick={onClose}>
+            <IconInline name="x" />
+          </button>
+        </div>
+        <div className="agent-settings-layout">
+          <nav className="agent-settings-nav" aria-label={t('workspace.agentSettings')}>
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`agent-settings-nav__item${activePanel === item.id ? ' is-active' : ''}`}
+                aria-current={activePanel === item.id ? 'page' : undefined}
+                onClick={() => onActivePanelChange(item.id)}
+              >
+                <IconInline name={item.icon} />
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="agent-settings-content settings-page">
+            {activePanel === 'general' ? (
+              <AgentSettingsGeneralPanel
+                agent={agent}
+                status={status}
+                onDisable={() => setConfirmDisableOpen(true)}
+              />
+            ) : activePanel === 'project' ? (
+              <ProjectSettingsPanel
+                modelRows={modelRows}
+                modelSettingsSnapshot={modelSettingsSnapshot}
+                savedProjectModelPick={projectModelPick}
+                draftProjectModelPick={draftProjectModelPick}
+                documents={projectDocumentDrafts}
+                savedDocuments={savedProjectDocumentDrafts}
+                status={projectSettingsStatus}
+                saving={projectSettingsSaving}
+                onDraftProjectModelPickChange={onDraftProjectModelPickChange}
+                onDocumentsChange={onProjectDocumentDraftsChange}
+                onClose={onClose}
+                onSave={onSaveProjectSettings}
+              />
+            ) : activePanel === 'context' ? (
+              <ProjectContextSettingsPanel
+                entries={projectContextEntries}
+                instructions={projectContextInstructions}
+                savedInstructions={savedProjectContextInstructions}
+                readOnly={projectContextReadOnly}
+                contextTargetPath={projectContextTargetPath}
+                status={projectContextStatus}
+                busy={projectContextBusy}
+                onInstructionsChange={onProjectContextInstructionsChange}
+                onAdd={onAddProjectContext}
+                onRemove={onRemoveProjectContextEntry}
+                onRefresh={onRefreshProjectContext}
+                onSaveInstructions={onSaveProjectContextInstructions}
+              />
+            ) : activePanel === 'skills' ? (
+              <SkillsModelSettingsPanel
+                skills={skills}
+                modelRows={modelRows}
+                modelSettingsSnapshot={modelSettingsSnapshot}
+                savedOverrides={skillModelOverrides}
+                draftOverrides={draftSkillModelOverrides}
+                status={skillSettingsStatus}
+                saving={skillSettingsSaving}
+                onDraftOverridesChange={onDraftSkillModelOverridesChange}
+                onClose={onClose}
+                onSave={onSaveSkillModelOverrides}
+              />
+            ) : (
+              <CardOrderSettingsPanel
+                cards={cards}
+                draftOrder={draftOrder}
+                draftSizes={draftSizes}
+                onDraftOrderChange={onDraftOrderChange}
+                onDraftSizeChange={onDraftSizeChange}
+                deletingSlug={deletingSlug}
+                status={cardOrderStatus}
+                saving={cardOrderSaving}
+                onDelete={onDelete}
+                onClose={onClose}
+                onSave={onSave}
+              />
+            )}
+          </div>
+        </div>
+        {confirmDisableOpen ? (
+          <div className="agent-settings-confirm" role="presentation" onMouseDown={() => setConfirmDisableOpen(false)}>
+            <section className="agent-settings-confirm__panel" role="alertdialog" aria-modal="true" aria-labelledby="agent-disable-confirm-title" onMouseDown={(event) => event.stopPropagation()}>
+              <h3 id="agent-disable-confirm-title">{t('workspace.disableAgentModeConfirmTitle')}</h3>
+              <p>{t('workspace.disableAgentModeConfirmBody')}</p>
+              <div className="agent-settings-confirm__actions">
+                <button type="button" className="btn btn-ghost" disabled={agent.loading} onClick={() => setConfirmDisableOpen(false)}>
+                  {t('settings.agentMode.cancel')}
+                </button>
+                <button type="button" className="btn btn-primary" disabled={agent.loading} onClick={() => void disableAgentMode()}>
+                  {t('workspace.disableAgentModeConfirmAction')}
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function AgentSettingsGeneralPanel({
+  agent,
+  status,
+  onDisable,
+}: {
+  agent: WorkspaceAgentModeState
+  status: string
+  onDisable: () => void
+}) {
+  const { t } = useI18n()
+
+  return (
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-general-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-general-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsGeneral')}
+        </h3>
+        <p className="settings-section-caption">{agent.message || t('workspace.agentModeReady')}</p>
+        <div className="settings-group">
+          <div className="settings-field-row settings-field-row--action">
+            <div className="settings-field-row__meta">
+              <div className="settings-field-row__label">
+                <IconInline name="agent" />
+                {t('workspace.agentModeEnabledLabel')}
+              </div>
+              <p className="settings-field-row__hint">{t('workspace.disableAgentModeHint')}</p>
+            </div>
+            <div className="settings-field-row__controls">
+              <button type="button" className="agent-card-secondary-button" disabled={agent.loading} onClick={onDisable}>
+                {t('workspace.disableAgentMode')}
+              </button>
+            </div>
+          </div>
+        </div>
+        <p className="settings-switch-status" role="status" aria-live="polite">
+          {status || agent.message}
+        </p>
+      </section>
+    </section>
+  )
+}
+
+function SaveFeedback({ status, dirty, saving }: { status: string; dirty: boolean; saving: boolean }) {
+  const { t } = useI18n()
+  const passiveStatus = !status || status === t('settings.agentMode.loaded') || status === t('settings.agentMode.saved')
+  const message = dirty && !saving && passiveStatus
+    ? t('workspace.agentSettingsUnsavedChanges')
+    : status || t('workspace.agentSettingsNoChanges')
+  const tone = saving
+    ? ' is-saving'
+    : dirty && passiveStatus
+      ? ' is-dirty'
+      : status === t('settings.agentMode.saved')
+      ? ' is-success'
+      : ''
+
+  return (
+    <p className={`agent-settings-save-feedback${tone}`} role="status" aria-live="polite">
+      <IconInline name={saving ? 'refresh' : dirty && passiveStatus ? 'save' : status === t('settings.agentMode.saved') ? 'check' : 'check'} />
+      <span>{message}</span>
+    </p>
+  )
+}
+
+function ProjectSettingsPanel({
+  modelRows,
+  modelSettingsSnapshot,
+  savedProjectModelPick,
+  draftProjectModelPick,
+  documents,
+  savedDocuments,
+  status,
+  saving,
+  onDraftProjectModelPickChange,
+  onDocumentsChange,
+  onClose,
+  onSave,
+}: {
+  modelRows: ModelPickMenuRow[]
+  modelSettingsSnapshot: ClaudeAgentSettingsSnapshot | null
+  savedProjectModelPick?: ChatModelPick
+  draftProjectModelPick?: ChatModelPick
+  documents: Record<AgentProjectDocumentName, string>
+  savedDocuments: Record<AgentProjectDocumentName, string>
+  status: string
+  saving: boolean
+  onDraftProjectModelPickChange: (pick: ChatModelPick | undefined) => void
+  onDocumentsChange: (drafts: Record<AgentProjectDocumentName, string>) => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const hasModels = modelRows.length > 0
+  const defaultLabel = t('workspace.agentSettingsProjectDefaultModel')
+  const validPick = modelSettingsSnapshot ? validateModelPick(modelSettingsSnapshot.settings, draftProjectModelPick) : draftProjectModelPick
+  const row = modelRowForPick(modelRows, validPick)
+  const currentValue = row?.pickKey ?? ''
+  const setProjectPick = (pickKey: string) => {
+    if (!pickKey) {
+      onDraftProjectModelPickChange(undefined)
+      return
+    }
+    const nextRow = modelRows.find((item) => item.pickKey === pickKey)
+    onDraftProjectModelPickChange(nextRow ? modelPickFromRow(nextRow) : undefined)
+  }
+  const setDocument = (name: AgentProjectDocumentName, value: string) => {
+    onDocumentsChange({ ...documents, [name]: value })
+  }
+  const reset = () => {
+    onDraftProjectModelPickChange(savedProjectModelPick)
+    onDocumentsChange(savedDocuments)
+  }
+  const isDirty = !sameModelPick(savedProjectModelPick, draftProjectModelPick) || !sameProjectDocuments(savedDocuments, documents)
+
+  return (
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-project-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-project-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsProject')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsProjectHint')}</p>
+        <div className="settings-group">
+          <div className="settings-field-row settings-field-row--action">
+            <div className="settings-field-row__meta">
+              <div className="settings-field-row__label">
+                <IconInline name="chip" />
+                {t('workspace.agentSettingsProjectModel')}
+              </div>
+              <p className="settings-field-row__hint">{t('workspace.agentSettingsProjectModelHint')}</p>
+            </div>
+            <div className="settings-field-row__controls">
+              <select
+                className="settings-input settings-select"
+                value={currentValue}
+                disabled={!hasModels}
+                onChange={(event) => setProjectPick(event.target.value)}
+              >
+                <option value="">{defaultLabel}</option>
+                {modelRows.map((item) => (
+                  <option key={item.pickKey} value={item.pickKey}>
+                    {item.headline}{item.metaLine ? ` · ${item.metaLine}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="agent-project-docs">
+          {AGENT_PROJECT_DOCUMENT_NAMES.map((name) => (
+            <label key={name} className="agent-project-doc-field">
+              <span className="agent-project-doc-field__title">{name}</span>
+              <p className="agent-project-doc-field__hint">{agentProjectDocumentHint(name, t)}</p>
+              <textarea
+                className="settings-input agent-project-doc-textarea"
+                value={documents[name]}
+                spellCheck={false}
+                placeholder={agentProjectDocumentPlaceholder(name, t)}
+                onChange={(event) => setDocument(name, event.target.value)}
+              />
+            </label>
+          ))}
+        </div>
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} />
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+            reset()
+            onClose()
+          }}>
+            {t('settings.agentMode.cancel')}
+          </button>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+            <IconInline name={saving ? 'refresh' : 'save'} />
+            <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+function ProjectContextSettingsPanel({
+  entries,
+  instructions,
+  savedInstructions,
+  readOnly,
+  contextTargetPath,
+  status,
+  busy,
+  onInstructionsChange,
+  onAdd,
+  onRemove,
+  onRefresh,
+  onSaveInstructions,
+}: {
+  entries: ProjectContextEntry[]
+  instructions: string
+  savedInstructions: string
+  readOnly: boolean
+  contextTargetPath: string
+  status: string
+  busy: boolean
+  onInstructionsChange: (instructions: string) => void
+  onAdd: (mode: ProjectContextAddMode) => void
+  onRemove: (entry: ProjectContextEntry) => void
+  onRefresh: () => void
+  onSaveInstructions: () => void
+}) {
+  const { t } = useI18n()
+  const instructionsDirty = instructions !== savedInstructions
+
+  return (
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-context-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-context-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsContext')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsContextHint')}</p>
+        {readOnly ? (
+          <p className="agent-context-readonly-note">
+            {t('workspace.agentSettingsContextReadOnlyNotice', {
+              path: contextTargetPath || 'Context',
+            })}
+          </p>
+        ) : null}
+
+        <div className="agent-project-docs agent-context-docs">
+          <label className="agent-project-doc-field" htmlFor="agent-settings-context-instructions">
+            <span className="agent-project-doc-field__title">CONTEXT.md</span>
+            <p className="agent-project-doc-field__hint">{t('workspace.agentSettingsContextInstructionsHint')}</p>
+            <textarea
+              id="agent-settings-context-instructions"
+              className="settings-input agent-project-doc-textarea"
+              value={instructions}
+              spellCheck={false}
+              placeholder={t('workspace.agentSettingsContextInstructionsPlaceholder')}
+              onChange={(event) => onInstructionsChange(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="agent-context-actions" aria-label={t('workspace.agentSettingsContextAdd')}>
+          <button type="button" className="agent-card-secondary-button" disabled={busy || readOnly} onClick={() => onAdd('reference')}>
+            <IconInline name="paperclip" />
+            <span>{t('workspace.agentSettingsContextAddReference')}</span>
+          </button>
+          <button type="button" className="agent-card-secondary-button" disabled={busy || readOnly} onClick={() => onAdd('copy')}>
+            <IconInline name="copy" />
+            <span>{t('workspace.agentSettingsContextAddCopy')}</span>
+          </button>
+          <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onRefresh}>
+            <IconInline name="refresh" />
+            <span>{t('workspace.agentSettingsContextRefresh')}</span>
+          </button>
+        </div>
+
+        <div className="agent-context-list" role="list" aria-label={t('workspace.agentSettingsContextList')}>
+          {entries.length === 0 ? (
+            <p className="agent-context-empty">{t('workspace.agentSettingsContextEmpty')}</p>
+          ) : (
+            entries.map((entry) => (
+              <div key={entry.relativePath} className="agent-context-row" role="listitem">
+                <div className="agent-context-row__icon" aria-hidden="true">
+                  <IconInline name={entry.kind === 'directory' ? 'folder' : 'file'} />
+                </div>
+                <div className="agent-context-row__body">
+                  <div className="agent-context-row__title">
+                    <span>{entry.name}</span>
+                    <span className={`agent-context-chip agent-context-chip--${readOnly && entry.mode === 'local' ? 'external' : entry.mode}`}>
+                      {t(
+                        entry.mode === 'reference'
+                          ? 'workspace.agentSettingsContextModeReference'
+                          : readOnly
+                            ? 'workspace.agentSettingsContextModeExternal'
+                            : 'workspace.agentSettingsContextModeLocal',
+                      )}
+                    </span>
+                    <span className="agent-context-chip">
+                      {t(
+                        entry.kind === 'directory'
+                          ? 'workspace.agentSettingsContextKindDirectory'
+                          : entry.kind === 'file'
+                            ? 'workspace.agentSettingsContextKindFile'
+                            : 'workspace.agentSettingsContextKindOther',
+                      )}
+                    </span>
+                    {entry.targetMissing ? (
+                      <span className="agent-context-chip agent-context-chip--warning">
+                        {t('workspace.agentSettingsContextTargetMissing')}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="agent-context-row__meta">
+                    {projectContextEntryMeta(entry, t)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="project-home-icon-button agent-context-row__remove"
+                  disabled={busy || readOnly}
+                  title={t('workspace.agentSettingsContextRemove')}
+                  aria-label={t('workspace.agentSettingsContextRemoveNamed', { name: entry.name })}
+                  onClick={() => onRemove(entry)}
+                >
+                  <IconInline name="trash" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={instructionsDirty} saving={busy} />
+          <button type="button" className="agent-card-primary-button" disabled={busy || readOnly || !instructionsDirty} onClick={onSaveInstructions}>
+            <IconInline name={busy ? 'refresh' : 'save'} />
+            <span>{busy ? t('settings.agentMode.saving') : t('workspace.agentSettingsContextSaveInstructions')}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+function SkillsModelSettingsPanel({
+  skills,
+  modelRows,
+  modelSettingsSnapshot,
+  savedOverrides,
+  draftOverrides,
+  status,
+  saving,
+  onDraftOverridesChange,
+  onClose,
+  onSave,
+}: {
+  skills: AgentContextSlashItem[]
+  modelRows: ModelPickMenuRow[]
+  modelSettingsSnapshot: ClaudeAgentSettingsSnapshot | null
+  savedOverrides: Record<string, ChatModelPick>
+  draftOverrides: Record<string, ChatModelPick>
+  status: string
+  saving: boolean
+  onDraftOverridesChange: (overrides: Record<string, ChatModelPick>) => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const hasModels = modelRows.length > 0
+  const defaultLabel = t('workspace.agentSettingsSkillDefaultModel')
+  const isDirty = JSON.stringify(savedOverrides) !== JSON.stringify(draftOverrides)
+  const setSkillPick = (skillPath: string, pickKey: string) => {
+    const next = { ...draftOverrides }
+    if (!pickKey) {
+      delete next[skillPath]
+    } else {
+      const row = modelRows.find((item) => item.pickKey === pickKey)
+      if (row) next[skillPath] = modelPickFromRow(row)
+    }
+    onDraftOverridesChange(next)
+  }
+  const reset = () => onDraftOverridesChange(savedOverrides)
+
+  return (
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-skills-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-skills-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsSkills')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsSkillsHint')}</p>
+        <div className="agent-skill-model-list" role="list">
+          {skills.length === 0 ? (
+            <div className="project-home-skill-empty">{t('workspace.taskNoSkills')}</div>
+          ) : null}
+          {skills.map((skill) => {
+            const rawPick = draftOverrides[skill.path]
+            const validPick = modelSettingsSnapshot ? validateModelPick(modelSettingsSnapshot.settings, rawPick) : rawPick
+            const row = modelRowForPick(modelRows, validPick)
+            const currentValue = row?.pickKey ?? ''
+            return (
+              <div key={skill.path} className="agent-skill-model-row" role="listitem">
+                <span className="agent-skill-model-row__icon" aria-hidden="true">
+                  <IconInline name="chip" />
+                </span>
+                <span className="agent-skill-model-row__copy">
+                  <span>{skill.title || skill.name}</span>
+                  <span>{skill.command ? `/${skill.command}` : skill.relativePath}</span>
+                </span>
+                <label className="agent-skill-model-row__selector">
+                  <span className="sr-only">{t('workspace.agentSettingsSkillModelFor', { name: skill.title || skill.name })}</span>
+                  <select
+                    className="settings-input settings-select"
+                    value={currentValue}
+                    disabled={!hasModels}
+                    onChange={(event) => setSkillPick(skill.path, event.target.value)}
+                  >
+                    <option value="">{defaultLabel}</option>
+                    {modelRows.map((item) => (
+                      <option key={item.pickKey} value={item.pickKey}>
+                        {item.headline}{item.metaLine ? ` · ${item.metaLine}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )
+          })}
+        </div>
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} />
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+            reset()
+            onClose()
+          }}>
+            {t('settings.agentMode.cancel')}
+          </button>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty || (!hasModels && skills.length > 0)} onClick={onSave}>
+            <IconInline name={saving ? 'refresh' : 'save'} />
+            <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+function CardOrderSettingsPanel({
   cards,
   draftOrder,
   draftSizes,
   onDraftOrderChange,
   onDraftSizeChange,
   deletingSlug,
+  status,
+  saving,
   onDelete,
   onClose,
   onSave,
@@ -1359,6 +2539,8 @@ function SortCardsDialog({
   onDraftOrderChange: (order: string[]) => void
   onDraftSizeChange: (cardId: string, preferredSize: HomePluginCardSize) => void
   deletingSlug: string
+  status: string
+  saving: boolean
   onDelete: (item: HomePluginRunItem) => void
   onClose: () => void
   onSave: () => void
@@ -1366,6 +2548,7 @@ function SortCardsDialog({
   const { t } = useI18n()
   const byId = new Map(cards.map((item) => [item.cardId, item]))
   const ordered = draftOrder.map((cardId) => byId.get(cardId)).filter((item): item is HomeCardItem => Boolean(item))
+  const isDirty = !sameCardLayout(cards, draftOrder, draftSizes)
   const move = (cardId: string, offset: number) => {
     const index = draftOrder.indexOf(cardId)
     const nextIndex = index + offset
@@ -1394,15 +2577,13 @@ function SortCardsDialog({
   }
 
   return (
-    <div className="project-home-modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <div className="project-home-modal project-home-modal--sort" role="dialog" aria-modal="true" aria-label={t('workspace.sortAgentCards')} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="project-home-modal__header">
-          <h2>{t('workspace.sortAgentCards')}</h2>
-          <button type="button" className="project-home-icon-button" aria-label={t('filePanel.closeAria')} onClick={onClose}>
-            <IconInline name="x" />
-          </button>
-        </div>
-        <div className="project-home-sort-list" role="list">
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-card-order-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-card-order-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsCardOrder')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsCardOrderHint')}</p>
+        <div className="project-home-sort-list project-home-sort-list--settings" role="list">
           {ordered.map((card, index) => {
             const displaySize = draftSizes[card.cardId] ?? card.size
             const title = card.kind === 'plugin' ? card.item.manifest.name : card.skill.title
@@ -1450,7 +2631,7 @@ function SortCardsDialog({
               <button type="button" className="project-home-icon-button" disabled={index === ordered.length - 1} onClick={() => move(card.cardId, 1)} aria-label={t('workspace.moveCardDown')}>
                 <IconInline name="arrowDown" />
               </button>
-              {card.kind === 'plugin' ? (
+              {card.kind === 'plugin' && !isTodoHomeCard(card.item) ? (
                 <button
                   type="button"
                   className="project-home-icon-button project-home-icon-button--danger"
@@ -1468,16 +2649,18 @@ function SortCardsDialog({
             )
           })}
         </div>
-        <div className="project-home-modal__footer">
-          <button type="button" className="agent-card-secondary-button" onClick={onClose}>
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} />
+          <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={onClose}>
             {t('settings.agentMode.cancel')}
           </button>
-          <button type="button" className="agent-card-primary-button" onClick={onSave}>
-            {t('settings.agentMode.confirm')}
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+            <IconInline name={saving ? 'refresh' : 'save'} />
+            <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
           </button>
         </div>
-      </div>
-    </div>
+      </section>
+    </section>
   )
 }
 
@@ -1522,6 +2705,24 @@ function buildHomeGridItems(cards: HomeCardItem[]): HomeGridItem[] {
   return output
 }
 
+function sameProjectDocuments(
+  left: Record<AgentProjectDocumentName, string>,
+  right: Record<AgentProjectDocumentName, string>,
+): boolean {
+  return AGENT_PROJECT_DOCUMENT_NAMES.every((name) => left[name] === right[name])
+}
+
+function sameCardLayout(
+  cards: HomeCardItem[],
+  draftOrder: string[],
+  draftSizes: Record<string, HomePluginCardSize>,
+): boolean {
+  const currentOrder = cards.map((card) => card.cardId)
+  if (currentOrder.length !== draftOrder.length) return false
+  if (currentOrder.some((cardId, index) => cardId !== draftOrder[index])) return false
+  return cards.every((card) => (draftSizes[card.cardId] ?? card.size) === card.size)
+}
+
 function useMasonrySpan(ref: RefObject<HTMLElement | null>, deps: unknown[]) {
   useEffect(() => {
     const element = ref.current
@@ -1551,6 +2752,89 @@ function useMasonrySpan(ref: RefObject<HTMLElement | null>, deps: unknown[]) {
 
 function messagesForSize(item: HomePluginRunItem, size: HomePluginCardSize): A2uiMessage[] {
   return ((item.variants?.[size] ?? item.variants?.medium ?? item.variants?.large ?? item.variants?.small ?? item.messages ?? []) as A2uiMessage[])
+}
+
+function isTodoHomeCard(item: HomePluginRunItem): boolean {
+  return item.manifest.id === TODO_HOME_PLUGIN_ID
+}
+
+function todoHomeCardDataFromMessages(messages: A2uiMessage[]): TodoHomeCardData | null {
+  const data = messages
+    .map((message) => {
+      if (!isRecord(message) || !isRecord(message.updateDataModel)) return null
+      const value = message.updateDataModel.value
+      return isRecord(value) && isRecord(value.todo) ? value.todo : null
+    })
+    .find((todo): todo is Record<string, unknown> => Boolean(todo))
+
+  if (!data) return null
+  return {
+    phase: readTaskText(data.phase),
+    progress: readTaskText(data.progress),
+    currentTask: readTaskText(data.currentTask),
+    nextStep: readTaskText(data.nextStep),
+    blocker: readTaskText(data.blocker),
+    updatedAt: readTaskText(data.updatedAt),
+    completed: readFiniteNumber(data.completed),
+    total: readFiniteNumber(data.total),
+    percent: Math.round(Math.min(100, Math.max(0, readFiniteNumber(data.percent)))),
+    tasks: Array.isArray(data.tasks)
+      ? data.tasks.filter(isRecord).map((task) => ({
+          id: readTaskText(task.id),
+          title: readTaskText(task.title),
+          checked: task.checked === true,
+          status: readTaskText(task.status),
+          priority: readTaskText(task.priority),
+        })).filter((task) => task.id && task.title)
+      : [],
+  }
+}
+
+function readFiniteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function createProjectFileNode(projectPath: string, relativePath: string): FileTreeNode {
+  const normalizedProjectPath = projectPath.replace(/[\\/]+$/, '')
+  const normalizedRelativePath = normalizeProjectRelativePath(relativePath)
+  const name = normalizedRelativePath.split('/').filter(Boolean).at(-1) ?? normalizedRelativePath
+  return {
+    name,
+    path: `${normalizedProjectPath}/${normalizedRelativePath}`,
+    relativePath: normalizedRelativePath,
+    type: 'file',
+  }
+}
+
+function agentProjectDocumentHint(
+  name: AgentProjectDocumentName,
+  t: (path: string, values?: Record<string, string | number>) => string,
+): string {
+  if (name === 'AGENTS.md') return t('workspace.agentSettingsProjectDocumentAgentsHint')
+  if (name === 'SOUL.md') return t('workspace.agentSettingsProjectDocumentSoulHint')
+  return t('workspace.agentSettingsProjectDocumentGoalHint')
+}
+
+function agentProjectDocumentPlaceholder(
+  name: AgentProjectDocumentName,
+  t: (path: string, values?: Record<string, string | number>) => string,
+): string {
+  if (name === 'AGENTS.md') return t('workspace.agentSettingsProjectDocumentAgentsPlaceholder')
+  if (name === 'SOUL.md') return t('workspace.agentSettingsProjectDocumentSoulPlaceholder')
+  return t('workspace.agentSettingsProjectDocumentGoalPlaceholder')
+}
+
+function projectContextEntryMeta(
+  entry: ProjectContextEntry,
+  t: (path: string, values?: Record<string, string | number>) => string,
+): string {
+  const parts = [
+    entry.mode === 'reference' && entry.targetPath
+      ? t('workspace.agentSettingsContextTargetPath', { path: entry.targetPath })
+      : entry.relativePath,
+    typeof entry.size === 'number' ? formatBytes(entry.size) : '',
+  ].filter(Boolean)
+  return parts.join(' · ')
 }
 
 function taskCardViewModelFromMessages(item: HomePluginRunItem, messages: A2uiMessage[]): TaskHomeCardViewModel | null {
@@ -1699,6 +2983,10 @@ function latestThreadMessageStatus(thread: WorkspaceThread): 'done' | 'error' | 
 
 function defaultTaskSchedule(): HomePluginTaskSchedule {
   return { enabled: false, hour: 9, minute: 0, interval: 'off' }
+}
+
+function emptyAgentProjectDocuments(): Record<AgentProjectDocumentName, string> {
+  return Object.fromEntries(AGENT_PROJECT_DOCUMENT_NAMES.map((name) => [name, ''])) as Record<AgentProjectDocumentName, string>
 }
 
 function createTaskStepId(): string {

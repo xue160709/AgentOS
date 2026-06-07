@@ -14,6 +14,9 @@ Agent Mode 为每个项目提供可长期沉淀的 Agent 身份、用户信息�
 | P1 | TODO 模式 | 开启后维护 `TODO.md` 和 `AGENT.md` 内 TODO 指令块 |
 | P1 | 近期记忆加载 | 自动确保今日记忆文件存在，运行时加载今天和昨天的每日记忆 |
 | P1 | 设置页编辑 | 用户可编辑 user 和 identity 文本 |
+| P1 | AppShell Agent 设置模态 | Agent Mode 开启后右上角入口切换为设置按钮，提供项目、卡片顺序、Skills 和常规 |
+| P1 | 项目设置面板 | 在 Agent 设置中维护项目默认模型和项目级 Agent 文档 |
+| P1 | Project Skill 模型覆盖 | 在 Agent 设置 Skills 面板中为每个 Project Skill 选择运行模型 |
 | P1 | USER/IDENTITY 回退 | 首次读取设置时可从项目根 `USER.md` 和 `IDENTITY.md` 回退初始化 |
 
 ## 数据结构
@@ -24,6 +27,13 @@ interface AgentModeProjectSettings {
   todoEnabled: boolean
   user: string
   identity: string
+  projectModelPick?: ChatModelPick
+  skillModelOverrides: Record<string, ChatModelPick>
+}
+
+interface ChatModelPick {
+  providerId: string
+  anthropicModel: string
 }
 
 type AgentModeRequiredFile =
@@ -57,6 +67,12 @@ interface AgentModeFilesResult {
   }>
   message?: string
 }
+
+type AgentSettingsPanelId = 'project' | 'general' | 'card-order' | 'skills'
+
+type AgentProjectDocumentName = 'AGENTS.md' | 'SOUL.md' | 'GOAL.md'
+
+type AgentProjectDocuments = Record<AgentProjectDocumentName, string>
 ```
 
 ## 业务逻辑
@@ -79,6 +95,18 @@ flowchart TD
 业务规则：
 
 - 文件维护必须幂等，不能覆盖用户在标记块外的内容。
+- AppShell 右上角 Agent Mode 未开启时显示 Switch；开启成功后自动打开 Agent 设置模态，并把入口切换为设置 icon。
+- Agent 设置模态左侧设置项包含“项目”、“卡片顺序”、“Skills”和“常规”；模态本身不提供统一 footer。
+- “项目”项提供当前项目默认模型 selector；该模型只作为项目首页和新建普通对话的初始模型，用户仍可在 composer 中切换。首页切换会作为下一次新建普通对话的一次性草稿模型，创建后清空；已有 thread 则以 thread 当前选择为准。
+- “项目”项提供 `AGENTS.md`、`SOUL.md`、`GOAL.md` 三个 textarea；文件存在时读取内容，不存在时显示空内容，保存时写回或创建当前项目根目录下的对应文件。
+- “常规”项只包含关闭 Agent Mode 的入口；关闭前必须弹出确认，确认后调用项目级 Agent Mode 状态更新。
+- “卡片顺序”项复用项目首页卡片排序能力，确认/取消按钮只出现在该设置项内容底部。
+- “Skills”项只展示当前项目扫描到的 `scope === "project" && kind === "skill"` 条目，每行展示 Skill 标题、`/command` 或相对路径，并提供模型 selector。
+- Skill 模型配置以 `skill.path` 为键保存；Skill title/command 改名不影响配置，移动路径会被视为新 Skill。
+- Skill 模型 selector 复用 composer 的聚合模型选项：所有 Provider 的主模型和 Haiku/Sonnet/Opus 映射都可选；默认项“不固定模型”会删除该 Skill 的覆盖配置，运行时优先使用目标项目的草稿/默认模型，再回退同项目当前模型和全局默认模型。
+- 保存项目默认模型时只写入 `projectModelPick`；保存 Skills 面板时只写入 `skillModelOverrides`，必须保留已保存的 `enabled`、`todoEnabled`、`user` 和 `identity`。
+- Skill 删除、隐藏、移动、Provider 删除、模型删除或模型 id 不再属于对应 Provider 时，设置面板忽略或清理失效项，运行时跳过无效候选并继续使用项目草稿、项目默认、同项目当前模型或全局默认模型。
+- Agent 设置模态只承载项目首页运行态设置，不承接 USER/IDENTITY；USER/IDENTITY 继续由全局设置页的 Agent Mode 页面编辑。
 - `CLAUDE.md` 必须随 Agent Mode 自动创建；中文环境生成中文桥接指令，英文环境生成英文桥接指令。
 - `CLAUDE.md` 内应明确要求 Claude 读取 `AGENT.md`、`SOUL.md`、`MEMORY.md` 和 `memory/`。
 - TODO 模式关闭时，只移除 AgentOS 管理的 TODO 标记块和 `TODO.md`。
@@ -95,22 +123,27 @@ flowchart TD
 
 - `src/components/setting/AgentModeSettingsPage.tsx`
 - `src/components/AppShellWorkspace.tsx`
+- `src/components/chat/ProjectHomeSurface.tsx`
 
 ### 功能组件/UI组件
 
 - `src/components/AgentModeControls.tsx`
 - `src/components/AgentModeMenu.tsx`
+- `src/components/chat/ChatStartView.tsx`
 
 ### 数据管理
 
 - `src/desktop-types.ts`
 - `src/claude-chat-types.ts`
+- `src/components/types.ts`
+- `src/model-pick.ts`
 
 ### 业务逻辑工具/工具类
 
 - `electron/agent-mode-files.ts`
 - `electron/agent-mode-settings-store.ts`
 - `electron/agent-context.ts`
+- `electron/claude-agent-settings.ts`
 - `electron/main.ts`
 
 ### Hooks/其他
@@ -123,6 +156,8 @@ flowchart TD
 
 - `prd/chat-agent-runtime.md`：Agent Mode 上下文进入 SDK 运行。
 - `prd/workspace-session.md`：Agent Mode 设置绑定项目。
+- `prd/home-plugin.md`：Agent 设置模态的卡片顺序项管理项目首页卡片布局。
+- `prd/model-settings.md`：Skills 面板复用 Provider/模型聚合选项，并校验模型是否仍有效。
 
 ### 间接关联
 

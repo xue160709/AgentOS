@@ -16,8 +16,11 @@ Home Plugin 数据卡片模块负责把项目内 `.agents/home-plugins/<slug>` �
 | P1 | 卡片布局 | 支持 small、medium、large 尺寸和排序 |
 | P1 | 卡片操作 | 支持刷新、编辑、删除、自定义、打开文件等 action |
 | P1 | 项目 Skills 卡片 | 将扫描到的 Skills 作为项目首页操作卡片展示 |
+| P1 | Skills 模型设置入口 | Agent 设置模态提供 Project Skills 的模型 selector |
+| P1 | 项目设置入口 | Agent 设置模态提供项目默认模型和 Agent 文档编辑入口 |
 | P1 | 多尺寸输出 | 支持 extractor 为 small、medium、large 分别返回 variants |
 | P1 | 简化组件归一化 | 支持简化组件树、扁平组件、data binding 和 A2UI 标准消息混合输出 |
+| P1 | 内置 TODO 卡片 | 项目根存在符合 AgentOS 格式的 `TODO.md` 时，自动在首页显示 TODO 进度卡片 |
 
 ## 数据结构
 
@@ -58,6 +61,8 @@ interface HomePluginCardLayoutItem {
   slug: string
   preferredSize: 'small' | 'medium' | 'large'
 }
+
+type AgentSettingsPanelId = 'project' | 'general' | 'card-order' | 'skills'
 ```
 
 ## 业务逻辑
@@ -92,7 +97,22 @@ flowchart TD
 - 支持 action：`customize_home`、`edit_home_card`、`refresh_home`、`task_run`、`task_stop`、`open_file`。
 - `open_file` action 会把 `context.path` 归一化为 `filePath`，渲染层再次过滤 `..` 后才调用桌面打开文件。
 - 卡片布局同时写入项目内 `order.json`、各卡片 `manifest.json` 的 `preferredSize/order/updatedAt`，并在渲染层 localStorage 保存 Skill 卡片混排顺序。
+- 项目根存在 `TODO.md`，且包含 `## 0. 首页卡片` 表格字段（当前阶段、总进度、当前主任务、下一步、阻塞项、最近更新）时，运行器自动注入内置 `todo-md` 数据卡片；该卡片不要求项目存在 `.agents/home-plugins` 目录。
+- 内置 TODO 卡片只读解析 `TODO.md`，同时读取 `Txx` 构建任务的勾选状态、状态和优先级；小卡显示进度与当前主任务，中卡补充下一步和阻塞项，大卡额外展示任务列表。
+- 项目首页卡片排序入口打开 Agent 模式设置模态的“卡片顺序”项；排序、尺寸切换、删除和保存行为与原排序弹窗一致。
+- Agent 模式设置模态还包含“项目”项：设置当前项目新建普通对话默认模型，并用 textarea 维护项目根 `AGENTS.md`、`SOUL.md`、`GOAL.md`。
+- Agent 模式设置模态还包含 “Skills” 项：只展示当前项目的 Project Skills，并允许为每个 Skill 选择运行模型；该设置保存在 Agent Mode 项目设置中，不写入项目目录。
+- 项目首页 Skill 卡片点击运行时，会根据 `skill.path` 查找 Skills 面板保存的模型覆盖；有效时创建对应模型的 `skill-run` thread。覆盖、项目首页草稿、项目默认和同项目当前模型都会按顺序校验，失效时继续回退到下一层，最后使用全局默认模型。
 - 项目首页卡片自定义依赖 `/a2ui-project-home-panel` Skill 名称和定制提示词；仓库当前构建配置引用该内置 Skill 目录，但目录本身未随当前代码树出现，`test:home-plugin` 通过 `--allow-missing` 容忍缺失。
+
+模态蒙层设计规范：
+
+- 项目首页内的任务卡片创建、卡片排序等模态窗口统一使用搜索弹窗的蒙层风格。
+- 蒙层定位基于右侧工作区居中，不把左侧侧边栏计入水平居中范围。
+- 蒙层背景使用主表面色与透明混合，不叠加黑色半透明遮罩。
+- 支持 `backdrop-filter` 时启用 10px 高斯模糊；不支持时仅保留透明主表面色兜底。
+- 蒙层只负责弱化后景，内容面板自身仍使用明确边框、主表面背景和阴影来建立层级。
+- Agent 模式设置模态采用设置页同源规范：左侧设置项导航、右侧内容区，并复用 `settings-page`、`settings-section`、`settings-group`、`settings-field-row` 的间距、边框、焦点和说明文案规则。
 
 ## 相关代码文件
 
@@ -110,12 +130,14 @@ flowchart TD
 
 - `src/desktop-types.ts`
 - `src/components/types.ts`
+- `src/model-pick.ts`
 
 ### 业务逻辑工具/工具类
 
 - `electron/home-plugin-runner.ts`
 - `electron/main.ts`
 - `electron/agent-context.ts`
+- `electron/agent-mode-settings-store.ts`
 - `electron/home-plugin-customization-prompt.ts`
 
 ### Hooks/其他
@@ -136,6 +158,7 @@ flowchart TD
 
 - `prd/chat-agent-runtime.md`：卡片自定义通过 Agent 线程完成。
 - `prd/persistence.md`：卡片布局和任务状态需要持久化。
+- `prd/model-settings.md`：Project Skill 卡片运行可使用独立模型覆盖。
 
 ### 功能关联/支撑系统
 

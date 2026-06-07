@@ -4,6 +4,7 @@
  */
 
 import type {
+  ChatModelPick,
   ClaudeFileChangeSetStatus,
   ClaudeFileDiffFile,
   ClaudeFileDiffFileStatus,
@@ -14,6 +15,8 @@ import type {
 import type {
   ChatMessageAttachment,
   ChatState,
+  ChatTaskItem,
+  ChatTaskState,
   ChatWorkspaceState,
   WorkspaceProject,
   WorkspaceSidebarPrefs,
@@ -31,8 +34,8 @@ import {
 export const CHAT_WORKSPACE_STORAGE_KEY = 'CodeX-UI-Template-chat-workspace-v1'
 
 /** 新建空 ChatState / Fresh chat transcript shell */
-export function createEmptyChatState(): ChatState {
-  return { model: 'Claude Agent', items: [] }
+export function createEmptyChatState(modelPick?: ChatModelPick): ChatState {
+  return { model: modelPick?.anthropicModel ?? 'Claude Agent', modelPick, items: [] }
 }
 
 /** 生成带前缀的稳定随机 id / Stable-ish random id with prefix */
@@ -279,9 +282,57 @@ function normalizeStoredChatState(value: unknown): ChatState {
   return {
     sessionId: typeof value.sessionId === 'string' ? value.sessionId : undefined,
     model: typeof value.model === 'string' ? value.model : 'Claude Agent',
+    modelPick: normalizeStoredModelPick(value.modelPick),
     cwd: typeof value.cwd === 'string' ? value.cwd : undefined,
+    tasks: normalizeStoredTaskState(value.tasks),
     items: Array.isArray(value.items) ? value.items.flatMap(normalizeTranscriptItem) : [],
   }
+}
+
+function normalizeStoredTaskState(value: unknown): ChatTaskState | undefined {
+  if (!isRecord(value) || !Array.isArray(value.items)) return undefined
+  const items = value.items.flatMap(normalizeStoredTaskItem)
+  if (items.length === 0) return undefined
+  return {
+    requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
+    updatedAt: toFiniteNumber(value.updatedAt, Date.now()),
+    items,
+  }
+}
+
+function normalizeStoredTaskItem(value: unknown): ChatTaskItem[] {
+  if (!isRecord(value) || typeof value.id !== 'string') return []
+  const subject = typeof value.subject === 'string' ? value.subject.trim() : ''
+  if (!subject) return []
+  const status =
+    value.status === 'in_progress' || value.status === 'completed' || value.status === 'deleted'
+      ? value.status
+      : 'pending'
+  return [
+    {
+      id: value.id,
+      toolUseId: typeof value.toolUseId === 'string' ? value.toolUseId : undefined,
+      subject,
+      description: typeof value.description === 'string' ? value.description : undefined,
+      activeForm: typeof value.activeForm === 'string' ? value.activeForm : undefined,
+      status,
+      owner: typeof value.owner === 'string' ? value.owner : undefined,
+      blocks: Array.isArray(value.blocks) ? value.blocks.filter((item): item is string => typeof item === 'string') : undefined,
+      blockedBy: Array.isArray(value.blockedBy) ? value.blockedBy.filter((item): item is string => typeof item === 'string') : undefined,
+      metadata: isRecord(value.metadata) ? value.metadata : undefined,
+      createdAt: toFiniteNumber(value.createdAt, Date.now()),
+      updatedAt: toFiniteNumber(value.updatedAt, Date.now()),
+      order: toFiniteNumber(value.order, 0),
+    },
+  ]
+}
+
+function normalizeStoredModelPick(value: unknown): ChatModelPick | undefined {
+  if (!isRecord(value)) return undefined
+  const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : ''
+  const anthropicModel = typeof value.anthropicModel === 'string' ? value.anthropicModel.trim() : ''
+  if (!providerId || !anthropicModel) return undefined
+  return { providerId, anthropicModel }
 }
 
 function normalizeTranscriptItem(value: unknown): ChatState['items'] {

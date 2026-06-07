@@ -13,6 +13,11 @@ import type {
   HomePluginTaskRunResult,
   HomePluginTaskSaveResult,
   HomePluginTaskStopResult,
+  ProjectContextAddMode,
+  ProjectContextAddResult,
+  ProjectContextResult,
+  ProjectFilesChangedEvent,
+  ProjectFileWatchResult,
   SpeechRecognitionCommandResult,
   SpeechRecognitionEvent,
   SpeechRecognitionSnapshot,
@@ -21,6 +26,8 @@ import type {
 import type {
   ActiveChatPickPayload,
   ClaudeAgentSettings,
+  ClaudeAgentStatusRequest,
+  ClaudeAgentStatusSnapshot,
   ClaudeChatEvent,
   ClaudeChatEventHandler,
   ClaudeFileRewindPayload,
@@ -31,6 +38,7 @@ import type {
   AgentKnowledgeSearchOptions,
   AgentKnowledgeSearchProject,
   AgentKnowledgeSearchResult,
+  ClaudeChatAttachmentPickerResult,
 } from '../src/claude-chat-types'
 
 const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
@@ -38,6 +46,7 @@ const TRAY_MENU_ACTION_CHANNEL = 'desktop:tray-action'
 const TASK_HOME_PLUGIN_EVENT_CHANNEL = 'desktop:task-home-plugin-event'
 const APP_UPDATER_EVENT_CHANNEL = 'app-updater:event'
 const SPEECH_RECOGNITION_EVENT_CHANNEL = 'desktop:speech-recognition-event'
+const PROJECT_FILES_CHANGED_CHANNEL = 'desktop:project-files-changed'
 
 // --- Desktop bridge / 桌面通用 API ---
 
@@ -52,10 +61,24 @@ contextBridge.exposeInMainWorld('desktop', {
     return ipcRenderer.invoke('desktop:pick-project-directory') as Promise<string | null>
   },
   pickChatAttachments(options?: { allowImages?: boolean }) {
-    return ipcRenderer.invoke('desktop:pick-chat-attachments', options)
+    return ipcRenderer.invoke('desktop:pick-chat-attachments', options) as Promise<ClaudeChatAttachmentPickerResult>
+  },
+  readChatAttachments(filePaths: string[], options?: { allowImages?: boolean }) {
+    return ipcRenderer.invoke('desktop:read-chat-attachments', filePaths, options) as Promise<ClaudeChatAttachmentPickerResult>
   },
   listProjectFiles(rootPath: string) {
     return ipcRenderer.invoke('desktop:list-project-files', rootPath)
+  },
+  watchProjectFiles(rootPath: string) {
+    return ipcRenderer.invoke('desktop:watch-project-files', rootPath) as Promise<ProjectFileWatchResult>
+  },
+  unwatchProjectFiles(rootPath: string) {
+    return ipcRenderer.invoke('desktop:unwatch-project-files', rootPath) as Promise<void>
+  },
+  onProjectFilesChanged(handler: (event: ProjectFilesChangedEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: ProjectFilesChangedEvent) => handler(event)
+    ipcRenderer.on(PROJECT_FILES_CHANGED_CHANNEL, listener)
+    return () => ipcRenderer.off(PROJECT_FILES_CHANGED_CHANNEL, listener)
   },
   readProjectFile(rootPath: string, filePath: string) {
     return ipcRenderer.invoke('desktop:read-project-file', rootPath, filePath)
@@ -116,6 +139,24 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   saveAgentModeSettings(rootPath: string, payload: unknown) {
     return ipcRenderer.invoke('desktop:save-agent-mode-settings', rootPath, payload)
+  },
+  readAgentProjectDocuments(rootPath: string) {
+    return ipcRenderer.invoke('desktop:read-agent-project-documents', rootPath)
+  },
+  saveAgentProjectDocuments(rootPath: string, files: Record<string, string>) {
+    return ipcRenderer.invoke('desktop:save-agent-project-documents', rootPath, files)
+  },
+  listProjectContext(rootPath: string) {
+    return ipcRenderer.invoke('desktop:list-project-context', rootPath) as Promise<ProjectContextResult>
+  },
+  saveProjectContextInstructions(rootPath: string, instructions: string) {
+    return ipcRenderer.invoke('desktop:save-project-context-instructions', rootPath, instructions) as Promise<ProjectContextResult>
+  },
+  addProjectContextEntries(rootPath: string, mode: ProjectContextAddMode) {
+    return ipcRenderer.invoke('desktop:add-project-context-entries', rootPath, mode) as Promise<ProjectContextAddResult>
+  },
+  removeProjectContextEntry(rootPath: string, relativePath: string) {
+    return ipcRenderer.invoke('desktop:remove-project-context-entry', rootPath, relativePath) as Promise<ProjectContextResult>
   },
   getChatWorkspace() {
     return ipcRenderer.invoke('chat-workspace:get')
@@ -243,6 +284,9 @@ contextBridge.exposeInMainWorld('claudeChat', {
   },
   newThread(threadId?: string) {
     return ipcRenderer.invoke('claude-chat:new-thread', threadId)
+  },
+  getStatus(payload?: ClaudeAgentStatusRequest) {
+    return ipcRenderer.invoke('claude-chat:get-status', payload) as Promise<ClaudeAgentStatusSnapshot>
   },
   answerPermissionRequest(payload: ClaudePermissionResponsePayload) {
     return ipcRenderer.invoke('claude-chat:answer-permission-request', payload)

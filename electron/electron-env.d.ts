@@ -18,6 +18,7 @@ import type {
 } from '../src/claude-chat-types'
 import type {
   AgentModeFilesResult,
+  AgentProjectDocumentsResult,
   AgentModeProjectSettings,
   AgentModeSettingsResult,
   AgentModeStatusResult,
@@ -35,6 +36,11 @@ import type {
   HomePluginTaskRunResult,
   HomePluginTaskSaveResult,
   HomePluginTaskStopResult,
+  ProjectContextAddMode,
+  ProjectContextAddResult,
+  ProjectContextResult,
+  ProjectFilesChangedEvent,
+  ProjectFileWatchResult,
   SpeechRecognitionCommandResult,
   SpeechRecognitionEvent,
   SpeechRecognitionSnapshot,
@@ -80,7 +86,11 @@ declare global {
       }
       pickProjectDirectory?: () => Promise<string | null>
       pickChatAttachments?: (options?: { allowImages?: boolean }) => Promise<ClaudeChatAttachmentPickerResult>
+      readChatAttachments?: (filePaths: string[], options?: { allowImages?: boolean }) => Promise<ClaudeChatAttachmentPickerResult>
       listProjectFiles?: (rootPath: string) => Promise<FileTreeResult>
+      watchProjectFiles?: (rootPath: string) => Promise<ProjectFileWatchResult>
+      unwatchProjectFiles?: (rootPath: string) => Promise<void>
+      onProjectFilesChanged?: (handler: (event: ProjectFilesChangedEvent) => void) => () => void
       readProjectFile?: (rootPath: string, filePath: string) => Promise<ProjectFilePreviewResult>
       searchProjectFiles?: (rootPath: string, query: string) => Promise<ProjectFileSearchResult>
       searchChatHistory?: (projectId: string, query: string, options?: ChatHistorySearchOptions) => Promise<ChatHistorySearchResult>
@@ -118,8 +128,14 @@ declare global {
       getAgentModeSettings?: (rootPath: string) => Promise<AgentModeSettingsResult>
       saveAgentModeSettings?: (
         rootPath: string,
-        payload: Pick<AgentModeProjectSettings, 'user' | 'identity'>,
+        payload: Partial<Pick<AgentModeProjectSettings, 'user' | 'identity' | 'projectModelPick' | 'skillModelOverrides'>>,
       ) => Promise<AgentModeSettingsResult>
+      readAgentProjectDocuments?: (rootPath: string) => Promise<AgentProjectDocumentsResult>
+      saveAgentProjectDocuments?: (rootPath: string, files: Record<string, string>) => Promise<AgentProjectDocumentsResult>
+      listProjectContext?: (rootPath: string) => Promise<ProjectContextResult>
+      saveProjectContextInstructions?: (rootPath: string, instructions: string) => Promise<ProjectContextResult>
+      addProjectContextEntries?: (rootPath: string, mode: ProjectContextAddMode) => Promise<ProjectContextAddResult>
+      removeProjectContextEntry?: (rootPath: string, relativePath: string) => Promise<ProjectContextResult>
       getChatWorkspace?: () => Promise<ChatWorkspaceState | null>
       saveChatWorkspace?: (state: ChatWorkspaceState) => Promise<ChatWorkspaceState>
       clearChatWorkspaceData?: () => Promise<void>

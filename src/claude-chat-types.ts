@@ -10,6 +10,10 @@ export type ClaudeChatSubmitPayload = {
   text: string
   attachments?: ClaudeChatAttachment[]
   threadId?: string
+  /** 本次请求使用的线程级模型选择 / Per-thread model pick for this request */
+  modelPick?: ChatModelPick
+  /** 切换模型或重建 session 时注入的精简历史上下文 / Condensed history when handing context to a fresh session */
+  handoffContext?: string
   /** 特殊提示词通道；普通聊天省略 / Special prompt channel; omitted for normal chat */
   promptMode?: 'home-plugin-customization' | 'home-plugin-card-customization' | 'home-plugin-task-run'
   /**
@@ -334,6 +338,12 @@ export type ActiveChatPickPayload = {
   anthropicModel?: string | null
 }
 
+/** 线程或 Skill 绑定的实际模型选择 / Concrete provider + model pick for a thread or Skill */
+export type ChatModelPick = {
+  providerId: string
+  anthropicModel: string
+}
+
 /** 环境变量侧 Agent 配置快照（脱敏标志）/ Env-side agent snapshot with presence flags */
 export type ClaudeAgentEnvSnapshot = {
   hasApiKey: boolean
@@ -377,8 +387,124 @@ export type ClaudeChatSubmitResult = {
   requestId: string
 }
 
+/** 状态面板请求：按线程读取脱敏运行态 / Status panel request for a redacted thread runtime snapshot */
+export type ClaudeAgentStatusRequest = {
+  threadId?: string
+  sessionId?: string
+  modelPick?: ChatModelPick
+  cwd?: string
+  refresh?: boolean
+}
+
+/** 状态面板健康度 / Health indicator shown by the local Agent status panel */
+export type ClaudeAgentStatusHealth = 'unconfigured' | 'idle' | 'running' | 'ready' | 'partial' | 'error'
+
+/** MCP 连接摘要 / Redacted MCP connection summary */
+export type ClaudeAgentStatusMcpServer = {
+  name: string
+  status: string
+}
+
+/** 单模型用量摘要 / Per-model usage summary */
+export type ClaudeAgentStatusModelUsage = {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  costUsd: number
+  contextWindow: number
+}
+
+/** 最近一次 Agent 轮次用量 / Last Agent turn usage summary */
+export type ClaudeAgentStatusUsage = {
+  costUsd: number
+  durationMs: number
+  numTurns: number
+  models: ClaudeAgentStatusModelUsage[]
+}
+
+/** `/context` 同源的上下文占用摘要 / Context-window usage summary from the same source as `/context` */
+export type ClaudeAgentStatusContextUsage = {
+  model: string
+  totalTokens: number
+  maxTokens: number
+  rawMaxTokens: number
+  percentage: number
+  autoCompactThreshold?: number
+  isAutoCompactEnabled: boolean
+  categories: {
+    name: string
+    tokens: number
+    color: string
+    isDeferred?: boolean
+  }[]
+  slashCommands?: {
+    totalCommands: number
+    includedCommands: number
+    tokens: number
+  }
+  skills?: {
+    totalSkills: number
+    includedSkills: number
+    tokens: number
+  }
+  apiUsage?: {
+    inputTokens: number
+    outputTokens: number
+    cacheCreationInputTokens: number
+    cacheReadInputTokens: number
+  }
+}
+
+/** 状态面板快照：不包含凭据原文 / Status panel snapshot without credential secrets */
+export type ClaudeAgentStatusSnapshot = {
+  threadId: string
+  health: ClaudeAgentStatusHealth
+  active: boolean
+  requestId?: string
+  sessionId?: string
+  cwd?: string
+  configSource: ClaudeAgentConfigSource
+  authentication: 'api-key' | 'auth-token' | 'missing'
+  route: 'anthropic-default' | 'custom-gateway'
+  baseUrl: string
+  endpointHost: string
+  configuredModel: string
+  reportedModel: string
+  claudeCodeVersion: string
+  apiKeySource: string
+  permissionMode: string
+  tools?: string[]
+  skills?: string[]
+  slashCommands?: string[]
+  agents?: string[]
+  mcpServers?: ClaudeAgentStatusMcpServer[]
+  plugins?: string[]
+  contextUsage?: ClaudeAgentStatusContextUsage
+  lastUsage?: ClaudeAgentStatusUsage
+  lastError?: string
+  updatedAt?: number
+}
+
 /** Agent 活动条的状态 / Status for inline agent activity rows */
 export type ClaudeChatActivityStatus = 'running' | 'done' | 'error' | 'info'
+
+/** Claude Task 工具状态 / Status values from Claude Task tools */
+export type ClaudeTaskStatus = 'pending' | 'in_progress' | 'completed' | 'deleted'
+
+/** Task 工具返回或更新的单个任务快照 / Single task snapshot from Task tools */
+export type ClaudeTaskSnapshot = {
+  taskId: string
+  subject: string
+  description?: string
+  activeForm?: string
+  status?: ClaudeTaskStatus
+  owner?: string
+  blocks?: string[]
+  blockedBy?: string[]
+  metadata?: Record<string, unknown>
+}
 
 // --- File diffs & rewind / 文件 diff 与回滚 ---
 
@@ -423,6 +549,7 @@ export type ClaudeFileChangeSetStatus = 'captured' | 'reviewed' | 'reverted' | '
 export type ClaudeFileRewindPayload = {
   requestId?: string
   threadId?: string
+  modelPick?: ChatModelPick
   changeSetId?: string
   checkpointId: string
   cwd?: string
@@ -507,6 +634,36 @@ export type ClaudeChatEventBase =
       detail?: string
     }
   | {
+      type: 'task_create'
+      requestId: string
+      toolUseId: string
+      taskId?: string
+      subject: string
+      description?: string
+      activeForm?: string
+      metadata?: Record<string, unknown>
+    }
+  | {
+      type: 'task_update'
+      requestId: string
+      toolUseId: string
+      taskId: string
+      status?: ClaudeTaskStatus
+      subject?: string
+      description?: string
+      activeForm?: string
+      owner?: string
+      blocks?: string[]
+      blockedBy?: string[]
+      metadata?: Record<string, unknown>
+    }
+  | {
+      type: 'task_list'
+      requestId: string
+      toolUseId: string
+      tasks: ClaudeTaskSnapshot[]
+    }
+  | {
       type: 'ask_user_question'
       requestId: string
       permissionRequestId: string
@@ -574,6 +731,7 @@ export type ClaudeChatAPI = {
   submit(payload: ClaudeChatSubmitPayload): Promise<ClaudeChatSubmitResult>
   cancel(requestId?: string): Promise<void>
   newThread(threadId?: string): Promise<void>
+  getStatus(payload?: ClaudeAgentStatusRequest): Promise<ClaudeAgentStatusSnapshot>
   answerPermissionRequest(payload: ClaudePermissionResponsePayload): Promise<void>
   rewindFiles(payload: ClaudeFileRewindPayload): Promise<ClaudeFileRewindResult>
   getSettings(): Promise<ClaudeAgentSettingsSnapshot>

@@ -15,6 +15,9 @@
 | P1 | SQLite 索引 | 使用 sqlite3 CLI 时写入紧凑线程索引 |
 | P1 | JSON 回退 | SQLite 不可用时仍保存 JSON |
 | P1 | JSONL rollout | 按线程保存长期事件/消息记录 |
+| P1 | 线程模型持久化 | 保存每个 thread 的 `modelPick`，用于恢复独立模型选择 |
+| P1 | 项目默认模型持久化 | 保存项目级 `projectModelPick`，用于新建普通对话默认模型 |
+| P1 | Agent Mode Skills 设置 | 保存项目级 Skill 到模型的覆盖映射 |
 | P1 | 路径缺失标记 | 校验项目路径并保留缺失状态 |
 | P1 | 开发者清理 | 开发者设置可清空工作区快照或模型设置 |
 | P1 | 侧栏偏好保存 | 侧栏折叠、项目折叠和项目手动顺序随工作区保存 |
@@ -34,6 +37,19 @@ interface ChatWorkspaceState {
   }
 }
 
+interface ChatState {
+  sessionId?: string
+  model: string
+  modelPick?: ChatModelPick
+  cwd?: string
+  items: TranscriptItem[]
+}
+
+interface ChatModelPick {
+  providerId: string
+  anthropicModel: string
+}
+
 interface ChatWorkspaceStoreFiles {
   localStorageKey: 'CodeX-UI-Template-chat-workspace-v1'
   sidebarWidthKey: 'CodeX-UI-Template-sidebar-width-px'
@@ -45,12 +61,30 @@ interface ChatWorkspaceStoreFiles {
   workspaceJson: 'chat-workspace.json'
   workspaceSqlite: 'chat-workspace.sqlite*'
   rolloutJsonl: 'chat-sessions/YYYY/MM/DD/rollout-*.jsonl'
+  claudeAgentSettingsJson: 'claude-agent-settings.json'
+  agentModeSettingsJson: 'agent-mode-settings.json'
+  desktopPreferencesJson: 'desktop-preferences.json'
 }
 
 type RolloutRecord =
-  | { type: 'session_meta'; threadId: string; sessionId?: string }
-  | { type: 'thread_state'; thread: WorkspaceThread }
-  | { type: 'response_item'; item: TranscriptItem }
+  | {
+      type: 'session_meta'
+      payload: {
+        id: string
+        projectId: string
+        title: string
+        purpose?: WorkspaceThread['purpose']
+        model: string
+        modelPick?: ChatModelPick
+        cwd?: string
+        sessionId?: string
+      }
+    }
+  | {
+      type: 'thread_state'
+      payload: Pick<ChatState, 'sessionId' | 'model' | 'modelPick' | 'cwd'>
+    }
+  | { type: 'response_item'; payload: TranscriptItem }
 ```
 
 ## 业务逻辑
@@ -77,7 +111,8 @@ flowchart TD
 
 - 保存前需要去除运行时临时字段。
 - 活动项目或线程不存在时需要自动修正。
-- 线程 transcript 应保留 sessionId、model、cwd 和消息项。
+- 线程 transcript 应保留 sessionId、model、modelPick、cwd 和消息项。
+- `modelPick` 必须同时写入渲染层 `ChatState`、SQLite `threads.model_pick_json`、rollout `session_meta/thread_state`，恢复时通过安全归一化丢弃无效结构。
 - SQLite 不可用不能阻塞主流程。
 - rollout 文件按日期分目录，便于长期归档。
 - 渲染层保存使用 750ms 防抖；卸载时会尽力 flush 未保存状态。
@@ -86,6 +121,10 @@ flowchart TD
 - 工作区清理会删除 localStorage key、`chat-workspace.json`、`chat-workspace.sqlite*` 和 `chat-sessions/`，不会删除用户项目目录。
 - Claude 设置清理只删除 `claude-agent-settings.json`，不会影响项目文件、工作区、Agent Mode 或桌面偏好。
 - Agent Mode 设置、模型 Provider 设置、桌面偏好和 Home Plugin task/runtime 分别由独立 store 或项目文件保存，不写入 `ChatWorkspaceState`。
+- `agent-mode-settings.json` 按项目根路径保存 `enabled`、`todoEnabled`、`user`、`identity`、`projectModelPick` 和 `skillModelOverrides`；保存 USER/IDENTITY、项目面板或 Skills 面板时必须按字段局部合并，避免互相覆盖。
+- 项目面板的 `AGENTS.md`、`SOUL.md`、`GOAL.md` 内容直接读写项目根目录文件；文件不存在时读取为空，保存时创建。
+- 项目首页 composer 的草稿模型只保存在运行时内存中，不写入 `agent-mode-settings.json`；创建 thread 后会落到该 thread 的 `chatState.modelPick`，并清空当前项目的首页草稿模型。
+- `skillModelOverrides` 的 key 是 `skill.path`，value 是 `{ providerId, anthropicModel }`；读取时只做结构归一化，有效性由模型设置和运行时校验。
 - UI 语言偏好由 i18n 模块独立保存在 `CodeX-UI-Template-locale-v1`，不随工作区清理一起删除。
 
 ## 相关代码文件
@@ -104,6 +143,7 @@ flowchart TD
 - `src/components/types.ts`
 - `src/claude-chat-types.ts`
 - `src/app-events.ts`
+- `src/model-pick.ts`
 
 ### 业务逻辑工具/工具类
 

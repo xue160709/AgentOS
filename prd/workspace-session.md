@@ -17,6 +17,9 @@
 | P1 | 项目排序 | 支持置顶、拖拽排序和最近更新时间排序 |
 | P1 | 缺失路径处理 | 项目路径不存在时保留记录并允许重新定位 |
 | P1 | Project Skills 入口 | 在项目侧栏展示并运行扫描到的 Skills |
+| P1 | 项目首页草稿模型 | 项目首页 composer 可临时切换模型，下一次新建普通对话继承该选择后自动回到项目默认模型 |
+| P1 | Skill 运行线程 | Project Skill 运行时创建 `skill-run` thread，并继承或应用 Skill 模型覆盖 |
+| P1 | 线程模型隔离 | 每个 thread 独立保存并恢复自己的模型选择 |
 | P1 | 侧栏偏好 | 支持整栏收起、项目线程列表折叠、用户拖动宽度和按项目隐藏 Skill |
 | P2 | Docs 占位页 | 主导航保留 Docs 视图，目前渲染本地化占位内容 |
 
@@ -65,12 +68,29 @@ interface WorkspaceThread {
   chatState: ChatState
 }
 
+interface ChatState {
+  sessionId?: string
+  model: string
+  modelPick?: ChatModelPick
+  cwd?: string
+  items: TranscriptItem[]
+}
+
+interface ChatModelPick {
+  providerId: string
+  anthropicModel: string
+}
+
 interface ProjectSkillListState {
   path: string
   loading: boolean
   loaded: boolean
   skills: AgentContextSlashItem[]
   message?: string
+}
+
+interface ProjectSkillRunRequest extends AgentContextSlashItem {
+  modelPick?: ChatModelPick
 }
 ```
 
@@ -104,9 +124,13 @@ flowchart TD
 - 项目路径缺失时应保留项目和线程，避免用户历史会话丢失。
 - 首次启动时 `projects.length === 0` 会展示项目选择和可选模型设置；模型设置为空或跳过时仍允许进入项目。
 - “创建新项目”当前只创建工作区记录，路径按 `~/Projects/<name>` 生成，不负责真实创建目录。
+- 新建普通 thread 时，优先使用当前项目首页 composer 的草稿模型；草稿模型被用于创建 thread 后立即清空。没有草稿模型时使用有效 `projectModelPick`；两者都无效时沿用全局默认模型。
 - Hash 路由只把 `home`、`docs`、`settings` 识别为主视图；未知 hash 归一化为 `home`。
 - Docs 视图当前是 `DocsPage` 占位面板，只展示本地化 eyebrow、heading 和 placeholder，不读取外部文档源。
 - 侧栏项目 Skill 只展示 `scope === 'project'` 且 `kind === 'skill'` 的条目；隐藏的 Skill 路径按项目写入 localStorage。
+- Project Skill 运行入口会优先读取目标项目 Agent Mode 设置中的 `skillModelOverrides[skill.path]`；覆盖模型有效时创建带 `modelPick` 的 `skill-run` thread。覆盖模型、显式 Skill 模型、项目首页草稿模型、项目默认模型、同项目活动 thread 模型会按顺序校验，失效项会被跳过，最后回退全局默认模型。
+- `skill-run` thread 保留 `skillPath`、`skillCommand`、`skillTitle` 和 `chatState.modelPick`，因此运行后 composer 会显示本次 Skill 实际使用的模型，并可继续用该模型对话。
+- 普通 thread 的模型切换只影响当前 thread；切换到其它 thread 时 composer 根据该 thread 的 `modelPick` 重新显示。
 - 归档 `task-run` 线程时会尽力停止对应任务卡；归档 `skill-run` 线程时会尽力取消仍在运行的 request。
 - 托盘动作 `new-thread` 和 `open-project` 会唤起主窗口，并复用工作区创建线程或添加项目流程。
 
@@ -134,6 +158,7 @@ flowchart TD
 - `src/chat-workspace-persistence.ts`
 - `src/desktop-types.ts`
 - `src/project-path.ts`
+- `src/model-pick.ts`
 
 ### 业务逻辑工具/工具类
 
@@ -160,6 +185,7 @@ flowchart TD
 
 - `prd/file-context.md`：活动项目决定文件树和预览根目录。
 - `prd/agent-mode.md`：Agent Mode 设置以项目路径为键。
+- `prd/model-settings.md`：thread 和 Skill 运行依赖有效模型选择。
 
 ### 功能关联/支撑系统
 
