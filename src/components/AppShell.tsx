@@ -43,7 +43,7 @@ import {
   normalizePresetCatalog,
   type ProviderPreset,
 } from '../model-provider-presets'
-import { resolveEffectiveModelPick, sameModelPick, validateModelPick } from '../model-pick'
+import { providerHasCredential, resolveEffectiveModelPick, sameModelPick, validateModelPick } from '../model-pick'
 import type {
   AppViewId,
   ChatState,
@@ -1130,7 +1130,7 @@ export function AppShell() {
     const sonnetModel = initialModelForm.sonnetModel.trim()
     const haikuModel = initialModelForm.haikuModel.trim()
     const opusModel = initialModelForm.opusModel.trim()
-    const selectedModel = sonnetModel || primaryModel || opusModel || haikuModel
+    const selectedModel = primaryModel || sonnetModel || opusModel || haikuModel
     if (!selectedModel) {
       setInitialModelStatus(t('shell.initModelRequired'))
       return false
@@ -1145,35 +1145,35 @@ export function AppShell() {
 
     try {
       const snapshot = await window.claudeChat.getSettings()
-      const providers = snapshot.settings.providers.length
-        ? snapshot.settings.providers.map((provider) => ({ ...provider }))
-        : [createInitialModelProvider()]
-      const activeId = providers.some((provider) => provider.id === snapshot.settings.activeProviderId)
-        ? snapshot.settings.activeProviderId
-        : providers[0].id
-
-      const nextProviders = providers.map((provider) =>
-        provider.id === activeId
-          ? {
-              ...provider,
-              presetId: initialModelForm.presetId,
-              name: initialModelForm.name.trim(),
-              apiKeyUrl: initialModelForm.apiKeyUrl.trim(),
-              authMode: initialModelForm.authMode,
-              apiKey: initialModelForm.apiKey.trim(),
-              authToken: '',
-              baseUrl: initialModelForm.baseUrl.trim(),
-              model: primaryModel || selectedModel,
-              modelSupportsImages: initialModelForm.modelSupportsImages,
-              defaultHaikuModel: haikuModel,
-              defaultHaikuSupportsImages: initialModelForm.haikuSupportsImages,
-              defaultSonnetModel: sonnetModel || selectedModel,
-              defaultSonnetSupportsImages: initialModelForm.sonnetSupportsImages,
-              defaultOpusModel: opusModel,
-              defaultOpusSupportsImages: initialModelForm.opusSupportsImages,
-            }
-          : provider,
-      )
+      const activeProvider =
+        snapshot.settings.providers.find((provider) => provider.id === snapshot.settings.activeProviderId) ??
+        snapshot.settings.providers[0] ??
+        createInitialModelProvider()
+      const configuredProvider: ClaudeAgentModelProvider = {
+        ...activeProvider,
+        presetId: initialModelForm.presetId,
+        name: initialModelForm.name.trim(),
+        apiKeyUrl: initialModelForm.apiKeyUrl.trim(),
+        authMode: initialModelForm.authMode,
+        apiKey: initialModelForm.apiKey.trim(),
+        authToken: '',
+        baseUrl: initialModelForm.baseUrl.trim(),
+        model: primaryModel || selectedModel,
+        modelSupportsImages: initialModelForm.modelSupportsImages,
+        defaultHaikuModel: haikuModel,
+        defaultHaikuSupportsImages: initialModelForm.haikuSupportsImages,
+        defaultSonnetModel: sonnetModel || selectedModel,
+        defaultSonnetSupportsImages: initialModelForm.sonnetSupportsImages,
+        defaultOpusModel: opusModel,
+        defaultOpusSupportsImages: initialModelForm.opusSupportsImages,
+      }
+      const existingConfiguredProviders = snapshot.settings.providers.filter(providerHasCredential)
+      const nextProviders = existingConfiguredProviders.some((provider) => provider.id === configuredProvider.id)
+        ? existingConfiguredProviders.map((provider) =>
+            provider.id === configuredProvider.id ? configuredProvider : provider,
+          )
+        : [configuredProvider, ...existingConfiguredProviders]
+      const activeId = configuredProvider.id
 
       const nextSnapshot = await window.claudeChat.saveSettings({
         configSource: 'settings',
@@ -1724,6 +1724,16 @@ export function AppShell() {
   const initialModelUsesCustomProvider = initialModelEnabled && !initialModelForm.presetId
   const initialModelRows = [
     {
+      key: 'primary',
+      label: t('settings.models.fieldPrimary'),
+      hint: t('settings.models.fieldPrimaryHint'),
+      inputId: 'init-model-primary',
+      field: 'model' as const,
+      value: initialModelForm.model,
+      supportField: 'modelSupportsImages' as const,
+      supportsImages: initialModelForm.modelSupportsImages,
+    },
+    {
       key: 'haiku',
       label: t('settings.models.fieldHaiku'),
       hint: t('settings.models.fieldHaikuHint'),
@@ -2159,7 +2169,7 @@ function hasInitialModelInput(form: InitialModelFormState): boolean {
 }
 
 function buildInitialModelSummary(form: InitialModelFormState): string {
-  return [form.name, form.sonnetModel || form.model || form.opusModel || form.haikuModel, form.baseUrl]
+  return [form.name, form.model || form.sonnetModel || form.opusModel || form.haikuModel, form.baseUrl]
     .map((value) => value.trim())
     .filter(Boolean)
     .join(' · ')

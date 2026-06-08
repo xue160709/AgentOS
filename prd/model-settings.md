@@ -103,6 +103,9 @@ flowchart TD
 - 打包版本配置来源固定为 settings。
 - 开发环境可以按配置读取 env 来源。
 - Base URL 若未包含 `/v1`，测试连接时自动拼接 `/v1/messages`。
+- 新安装只创建一个空 Provider；预置目录仅用于“添加厂商”和首次初始化选择，不直接写入用户配置。
+- 首次初始化仅保存用户实际填写凭据的 Provider；读取旧版配置时会移除由预置目录误生成的未配置条目。
+- 聊天与 Skill 模型菜单只展示已填写凭据的 Provider，设置页仍可保留未完成条目供继续编辑。
 - 模型图片能力影响聊天附件提交。
 - 第三方 Anthropic 兼容服务通过环境变量传递模型名。
 - `activeAnthropicModel` 只允许匹配当前 Provider 的主模型或 Haiku/Sonnet/Opus 映射；等于主模型时归并为空字符串。
@@ -116,7 +119,7 @@ flowchart TD
 - Provider id 会去重；重复 id 会追加序号后缀。
 - `authToken` 模式在测试请求中使用 `Authorization: Bearer`，`apiKey` 模式使用 `x-api-key`。
 - env 来源读取 `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL`/`CLAUDE_MODEL`、`ANTHROPIC_DEFAULT_*_MODEL` 和 `ANTHROPIC_SUPPORTS_IMAGES`。
-- 连接测试超时为 20 秒，成功时验证一个可用模型；失败时尽量读取厂商返回的错误体。
+- 连接测试超时为 20 秒，优先验证主模型 `model`，为空时再回退 Sonnet/Opus/Haiku；失败时尽量读取厂商返回的错误体。
 
 ## 相关代码文件
 
