@@ -32,6 +32,7 @@ import { ProjectFilePreviewOverlay, type ProjectFilePreviewOverlayState } from '
 import { SettingsPage } from './setting/SettingsPage'
 import { useWorkspaceAgentMode } from './useWorkspaceAgentMode'
 import type { HomePluginRunItem } from '../desktop-types'
+import { projectContent } from '../project-content'
 
 /** 右侧辅助抽屉开关与当前标签 / Auxiliary side panel open flag and active tab */
 type SidePanelState = {
@@ -277,21 +278,19 @@ export function AppShellWorkspace({
         name: node.name,
       })
 
-      const readProjectFile = window.desktop?.readProjectFile
-      if (!readProjectFile) {
-        setFilePreview({
-          status: 'error',
-          path: node.path,
-          relativePath: node.relativePath,
-          name: node.name,
-          message: t('filePanel.previewUnsupported'),
-        })
-        return
-      }
-
       try {
-        const result = await readProjectFile(activeProject.path, node.path)
+        const result = await projectContent.preview(activeProject.path, node.path)
         if (filePreviewRequestRef.current !== requestId) return
+        if (!result) {
+          setFilePreview({
+            status: 'error',
+            path: node.path,
+            relativePath: node.relativePath,
+            name: node.name,
+            message: t('filePanel.previewUnsupported'),
+          })
+          return
+        }
         if (result.ok) {
           setFilePreview({ status: 'ready', file: result })
           return

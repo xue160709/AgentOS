@@ -13,6 +13,7 @@ import {
 import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ChatHistorySearchItem, ProjectFileSearchItem } from '../claude-chat-types'
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
+import { projectContent } from '../project-content'
 import type {
   AppSearchHighlightRange,
   AppSearchResult,
@@ -163,24 +164,16 @@ export function AppSearchModal({
       return
     }
 
-    const searchProjectFiles = window.desktop?.searchProjectFiles
-    if (!searchProjectFiles) {
-      setFileItems([])
-      setFileLoading(false)
-      setFileError(t('search.fileSearchUnavailable'))
-      return
-    }
-
     let cancelled = false
     setFileLoading(true)
     setFileError('')
 
     const timer = window.setTimeout(() => {
-      searchProjectFiles(activeProject.path, trimmedQuery)
+      projectContent.search(activeProject.path, trimmedQuery)
         .then((result) => {
           if (cancelled) return
-          setFileItems(result.ok ? result.items : [])
-          setFileError(result.ok ? '' : result.message)
+          setFileItems(result?.ok ? result.items : [])
+          setFileError(result ? (result.ok ? '' : result.message) : t('search.fileSearchUnavailable'))
         })
         .catch((error) => {
           if (cancelled) return

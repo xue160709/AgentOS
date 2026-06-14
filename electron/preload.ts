@@ -1,6 +1,6 @@
 /**
- * 预加载脚本：`contextBridge` 暴露 `desktop`、`ipcRenderer`、`claudeChat`。
- * Preload bridge exposing `desktop`, `ipcRenderer`, and `claudeChat` to the renderer.
+ * 预加载脚本：`contextBridge` 暴露受约束的 `desktop` 与 `claudeChat`。
+ * Preload bridge exposing constrained `desktop` and `claudeChat` adapters.
  */
 
 import { ipcRenderer, contextBridge, type IpcRendererEvent } from 'electron'
@@ -40,6 +40,7 @@ import type {
   AgentKnowledgeSearchResult,
   ClaudeChatAttachmentPickerResult,
 } from '../src/claude-chat-types'
+import type { DesktopAPI } from '../src/desktop-api'
 
 const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
 const TRAY_MENU_ACTION_CHANNEL = 'desktop:tray-action'
@@ -50,7 +51,7 @@ const PROJECT_FILES_CHANGED_CHANNEL = 'desktop:project-files-changed'
 
 // --- Desktop bridge / 桌面通用 API ---
 
-contextBridge.exposeInMainWorld('desktop', {
+const desktopAdapter = {
   platform: process.platform,
   isDevRuntime: process.env.AGENTOS_DEV_RUNTIME === '1' || Boolean(process.env.VITE_DEV_SERVER_URL),
   windowEffects: {
@@ -247,31 +248,9 @@ contextBridge.exposeInMainWorld('desktop', {
     ipcRenderer.on(APP_UPDATER_EVENT_CHANNEL, listener)
     return () => ipcRenderer.off(APP_UPDATER_EVENT_CHANNEL, listener)
   },
-})
+} satisfies DesktopAPI
 
-// --- Raw ipcRenderer passthrough / 原始 ipc 封装 ---
-
-contextBridge.exposeInMainWorld('ipcRenderer', {
-  on(...args: Parameters<typeof ipcRenderer.on>) {
-    const [channel, listener] = args
-    return ipcRenderer.on(channel, (event, ...args) => listener(event, ...args))
-  },
-  off(...args: Parameters<typeof ipcRenderer.off>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.off(channel, ...omit)
-  },
-  send(...args: Parameters<typeof ipcRenderer.send>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.send(channel, ...omit)
-  },
-  invoke(...args: Parameters<typeof ipcRenderer.invoke>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.invoke(channel, ...omit)
-  },
-
-  // You can expose other APTs you need here.
-  // ...
-})
+contextBridge.exposeInMainWorld('desktop', desktopAdapter)
 
 // --- Claude chat IPC / Claude 聊天 IPC ---
 
