@@ -9,14 +9,13 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net, { type Server, type Socket } from 'node:net'
 import path from 'node:path'
+import { DESKTOP_EVENT_CHANNELS } from '../src/desktop-seam'
 import type {
   SpeechRecognitionCommandResult,
   SpeechRecognitionEvent,
   SpeechRecognitionSnapshot,
   SpeechRecognitionStatus,
 } from '../src/desktop-types'
-
-export const SPEECH_RECOGNITION_EVENT_CHANNEL = 'desktop:speech-recognition-event'
 
 type SpeechStartOptions = {
   locale?: string
@@ -257,7 +256,7 @@ export class MacSpeechRecognitionService {
   private emit(event: SpeechRecognitionEvent) {
     const target = this.getWindow()
     if (!target || target.isDestroyed()) return
-    target.webContents.send(SPEECH_RECOGNITION_EVENT_CHANNEL, event)
+    target.webContents.send(DESKTOP_EVENT_CHANNELS.onSpeechRecognitionEvent, event)
   }
 
   private cleanupSocketPath(socketPath: string) {

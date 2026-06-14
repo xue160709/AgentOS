@@ -21,6 +21,7 @@ export function buildModelPickRows(
 ): ModelPickMenuRow[] {
   const rows: ModelPickMenuRow[] = []
   for (const provider of providers) {
+    if (!providerHasCredential(provider)) continue
     const seen = new Set<string>()
     const base = providerMenuSubtitle(provider)
     const add = (raw: string, slotLabel: string, useOverlayPick: boolean, supportsImages: boolean) => {
@@ -81,7 +82,9 @@ export function validateModelPick(
 ): ChatModelPick | undefined {
   if (!pick) return undefined
   const provider = settings.providers.find((item) => item.id === pick.providerId)
-  if (!provider || !providerAcceptsAnthropicId(provider, pick.anthropicModel)) return undefined
+  if (!provider || !providerHasCredential(provider) || !providerAcceptsAnthropicId(provider, pick.anthropicModel)) {
+    return undefined
+  }
   return { providerId: provider.id, anthropicModel: pick.anthropicModel.trim() }
 }
 
@@ -89,7 +92,7 @@ export function defaultModelPickForSettings(settings: ClaudeAgentSettings): Chat
   const activeProvider =
     settings.providers.find((item) => item.id === settings.activeProviderId) ?? settings.providers[0]
   const activeModel = settings.activeAnthropicModel.trim()
-  if (activeProvider) {
+  if (activeProvider && providerHasCredential(activeProvider)) {
     if (activeModel && providerAcceptsAnthropicId(activeProvider, activeModel)) {
       return { providerId: activeProvider.id, anthropicModel: activeModel }
     }
@@ -98,6 +101,7 @@ export function defaultModelPickForSettings(settings: ClaudeAgentSettings): Chat
   }
 
   for (const provider of settings.providers) {
+    if (!providerHasCredential(provider)) continue
     const model = firstModelForProvider(provider)
     if (model) return { providerId: provider.id, anthropicModel: model }
   }
@@ -142,6 +146,10 @@ export function providerAcceptsAnthropicId(provider: ClaudeAgentModelProvider, m
     .map((value) => value.trim())
     .filter(Boolean)
     .includes(normalized)
+}
+
+export function providerHasCredential(provider: ClaudeAgentModelProvider): boolean {
+  return Boolean(provider.apiKey.trim() || provider.authToken.trim())
 }
 
 export function providerSupportsImagesForModel(

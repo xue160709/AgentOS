@@ -491,6 +491,17 @@ export function ClaudeAgentSettingsPage() {
                 const testState = providerTestStates[pid]
                 const modelRows = [
                   {
+                    field: 'model' as const,
+                    supportField: 'modelSupportsImages' as const,
+                    inputId: `claude-primary-model-${pid}`,
+                    toggleId: `claude-primary-images-${pid}`,
+                    label: t('settings.models.fieldPrimary'),
+                    hint: t('settings.models.fieldPrimaryHint'),
+                    placeholder: 'glm-5.1',
+                    value: provider.model,
+                    supportsImages: provider.modelSupportsImages,
+                  },
+                  {
                     field: 'defaultHaikuModel' as const,
                     supportField: 'defaultHaikuSupportsImages' as const,
                     inputId: `claude-haiku-model-${pid}`,

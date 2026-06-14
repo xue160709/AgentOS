@@ -6,47 +6,7 @@
  */
 
 import type { ClaudeChatAPI } from '../src/claude-chat-types'
-import type {
-  AgentContextResult,
-  AgentKnowledgeSearchOptions,
-  AgentKnowledgeSearchProject,
-  AgentKnowledgeSearchResult,
-  ChatHistorySearchOptions,
-  ChatHistorySearchResult,
-  ClaudeChatAttachmentPickerResult,
-  ProjectFileSearchResult,
-} from '../src/claude-chat-types'
-import type {
-  AgentModeFilesResult,
-  AgentProjectDocumentsResult,
-  AgentModeProjectSettings,
-  AgentModeSettingsResult,
-  AgentModeStatusResult,
-  AppUpdaterState,
-  AppUiLocale,
-  DesktopPreferences,
-  HomePluginDeleteResult,
-  HomePluginOrderSaveResult,
-  HomePluginLayoutSaveResult,
-  HomePluginRunOptions,
-  HomePluginRunResult,
-  HomePluginTaskConfig,
-  HomePluginTaskEvent,
-  HomePluginTaskReadResult,
-  HomePluginTaskRunResult,
-  HomePluginTaskSaveResult,
-  HomePluginTaskStopResult,
-  ProjectContextAddMode,
-  ProjectContextAddResult,
-  ProjectContextResult,
-  ProjectFilesChangedEvent,
-  ProjectFileWatchResult,
-  SpeechRecognitionCommandResult,
-  SpeechRecognitionEvent,
-  SpeechRecognitionSnapshot,
-  TrayMenuAction,
-} from '../src/desktop-types'
-import type { ChatWorkspaceState, FileTreeResult, ProjectFilePreviewResult } from '../src/components/types'
+import type { DesktopAPI } from '../src/desktop-api'
 
 declare global {
   namespace NodeJS {
@@ -72,107 +32,8 @@ declare global {
 
   // preload.ts 注入的类型扩展 / Augmented via preload script
   interface Window {
-    ipcRenderer: import('electron').IpcRenderer
     claudeChat?: ClaudeChatAPI
-    desktop?: {
-      platform: NodeJS.Platform
-      /** 主进程判定的开发运行时；用于显示测试/清理入口 / Main-process dev runtime flag for test-only UI. */
-      isDevRuntime?: boolean
-      /** macOS 透明磨砂窗口标记（渲染层样式钩子）/ Enables vibrancy-aware styling on macOS */
-      windowEffects?: {
-        macVibrancy: boolean
-        /** Windows 自绘标题栏 + 原生窗口控制覆盖区 / App-drawn titlebar with native window-controls overlay */
-        windowsTitlebarOverlay: boolean
-      }
-      pickProjectDirectory?: () => Promise<string | null>
-      pickChatAttachments?: (options?: { allowImages?: boolean }) => Promise<ClaudeChatAttachmentPickerResult>
-      readChatAttachments?: (filePaths: string[], options?: { allowImages?: boolean }) => Promise<ClaudeChatAttachmentPickerResult>
-      listProjectFiles?: (rootPath: string) => Promise<FileTreeResult>
-      watchProjectFiles?: (rootPath: string) => Promise<ProjectFileWatchResult>
-      unwatchProjectFiles?: (rootPath: string) => Promise<void>
-      onProjectFilesChanged?: (handler: (event: ProjectFilesChangedEvent) => void) => () => void
-      readProjectFile?: (rootPath: string, filePath: string) => Promise<ProjectFilePreviewResult>
-      searchProjectFiles?: (rootPath: string, query: string) => Promise<ProjectFileSearchResult>
-      searchChatHistory?: (projectId: string, query: string, options?: ChatHistorySearchOptions) => Promise<ChatHistorySearchResult>
-      searchAgentKnowledge?: (
-        projects: AgentKnowledgeSearchProject[],
-        query: string,
-        options?: AgentKnowledgeSearchOptions,
-      ) => Promise<AgentKnowledgeSearchResult>
-      listAgentContext?: (rootPath: string) => Promise<AgentContextResult>
-      validateProjectPaths?: (projectPaths: string[]) => Promise<Record<string, boolean>>
-      /** 相对路径须不含 `..`；用于探测项目下目录/文件是否存在 / Relative path must not contain `..` */
-      pathExistsUnderProject?: (rootPath: string, relativePath: string) => Promise<boolean>
-      runHomePlugin?: (rootPath: string, options?: HomePluginRunOptions) => Promise<HomePluginRunResult>
-      saveHomePluginOrder?: (rootPath: string, order: string[]) => Promise<HomePluginOrderSaveResult>
-      saveHomePluginLayout?: (
-        rootPath: string,
-        order: string[],
-        cards: Array<{ slug: string; preferredSize: import('../src/desktop-types').HomePluginCardSize }>,
-      ) => Promise<HomePluginLayoutSaveResult>
-      deleteHomePlugin?: (rootPath: string, slug: string) => Promise<HomePluginDeleteResult>
-      saveTaskHomePlugin?: (
-        rootPath: string,
-        payload: Omit<HomePluginTaskConfig, 'version' | 'slug' | 'createdAt' | 'updatedAt'> & { slug?: string },
-      ) => Promise<HomePluginTaskSaveResult>
-      getTaskHomePlugin?: (rootPath: string, slug: string) => Promise<HomePluginTaskReadResult>
-      runTaskHomePlugin?: (rootPath: string, slug: string) => Promise<HomePluginTaskRunResult>
-      stopTaskHomePlugin?: (rootPath: string, slug: string) => Promise<HomePluginTaskStopResult>
-      getAgentModeStatus?: (rootPath: string, locale?: AppUiLocale) => Promise<AgentModeStatusResult>
-      ensureAgentModeFiles?: (rootPath: string, locale?: AppUiLocale) => Promise<AgentModeFilesResult>
-      setAgentModeState?: (
-        rootPath: string,
-        partial: Partial<Pick<AgentModeProjectSettings, 'enabled' | 'todoEnabled'>>,
-        locale?: AppUiLocale,
-      ) => Promise<AgentModeStatusResult>
-      getAgentModeSettings?: (rootPath: string) => Promise<AgentModeSettingsResult>
-      saveAgentModeSettings?: (
-        rootPath: string,
-        payload: Partial<Pick<AgentModeProjectSettings, 'user' | 'identity' | 'projectModelPick' | 'skillModelOverrides'>>,
-      ) => Promise<AgentModeSettingsResult>
-      readAgentProjectDocuments?: (rootPath: string) => Promise<AgentProjectDocumentsResult>
-      saveAgentProjectDocuments?: (rootPath: string, files: Record<string, string>) => Promise<AgentProjectDocumentsResult>
-      listProjectContext?: (rootPath: string) => Promise<ProjectContextResult>
-      saveProjectContextInstructions?: (rootPath: string, instructions: string) => Promise<ProjectContextResult>
-      addProjectContextEntries?: (rootPath: string, mode: ProjectContextAddMode) => Promise<ProjectContextAddResult>
-      removeProjectContextEntry?: (rootPath: string, relativePath: string) => Promise<ProjectContextResult>
-      getChatWorkspace?: () => Promise<ChatWorkspaceState | null>
-      saveChatWorkspace?: (state: ChatWorkspaceState) => Promise<ChatWorkspaceState>
-      clearChatWorkspaceData?: () => Promise<void>
-      clearClaudeAgentSettings?: () => Promise<void>
-      quitApp?: () => Promise<void>
-      /** 在访达/资源管理器中展示路径 / Reveal path in Finder or Explorer */
-      showItemInFolder?: (targetPath: string) => Promise<void>
-      /** 使用系统默认应用打开路径 / Open path with the system default app */
-      openPath?: (targetPath: string) => Promise<void>
-      /** 在系统默认浏览器中打开 HTTP(S) 链接 / Open HTTP(S) links in the system default browser */
-      openExternal?: (url: string) => Promise<void>
-      /** 可选的桌面端 PNG 剪贴板桥；不存在时渲染层回退浏览器 Clipboard API / Optional PNG clipboard bridge; renderer falls back when absent */
-      copyPngToClipboard?: (dataUrl: string) => Promise<boolean>
-      /** 桌面端 SVG 渲染到图片剪贴板 / Render SVG through Electron and write it as an image clipboard item */
-      copySvgToClipboard?: (svg: string) => Promise<boolean>
-      /** macOS Apple Speech 识别状态 / macOS Apple Speech recognition status */
-      getSpeechRecognitionStatus?: () => Promise<SpeechRecognitionSnapshot>
-      /** 启动 macOS Apple Speech 识别 / Start macOS Apple Speech recognition */
-      startSpeechRecognition?: (options?: { locale?: string; requiresOnDevice?: boolean }) => Promise<SpeechRecognitionCommandResult>
-      /** 停止录音并提交转写 / Stop recording and finalize transcription */
-      stopSpeechRecognition?: () => Promise<SpeechRecognitionCommandResult>
-      /** 取消本次语音识别 / Cancel the active speech recognition run */
-      cancelSpeechRecognition?: () => Promise<SpeechRecognitionCommandResult>
-      /** 订阅 macOS Apple Speech 事件 / Subscribe to macOS Apple Speech events */
-      onSpeechRecognitionEvent?: (handler: (event: SpeechRecognitionEvent) => void) => () => void
-      getDesktopPreferences?: () => Promise<DesktopPreferences>
-      setDesktopPreferences?: (partial: Partial<DesktopPreferences>) => Promise<DesktopPreferences>
-      syncTrayLocale?: (locale: 'zh' | 'en') => Promise<void>
-      onTrayMenuAction?: (handler: (action: TrayMenuAction) => void) => () => void
-      onHomePluginTaskEvent?: (handler: (event: HomePluginTaskEvent) => void) => () => void
-      getAppVersion?: () => Promise<string>
-      getAppUpdaterState?: () => Promise<AppUpdaterState>
-      checkForAppUpdates?: () => Promise<AppUpdaterState>
-      downloadAppUpdate?: () => Promise<AppUpdaterState>
-      quitAndInstallAppUpdate?: () => Promise<void>
-      onAppUpdaterState?: (handler: (state: AppUpdaterState) => void) => () => void
-    }
+    desktop?: DesktopAPI
   }
 }
 

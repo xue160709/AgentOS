@@ -260,7 +260,7 @@ function normalizeSettings(raw: unknown, allowEnvConfigSource: boolean): ClaudeA
   if (!isRecord(raw)) return createDefaultSettings()
 
   const configSource = normalizeSource(raw.configSource, allowEnvConfigSource)
-  const providers = normalizeProviders(raw)
+  const providers = pruneLegacySeededProviders(normalizeProviders(raw))
   const activeProviderId = providers.some((provider) => provider.id === normalizeString(raw.activeProviderId))
     ? normalizeString(raw.activeProviderId)
     : providers[0].id
@@ -391,13 +391,44 @@ function createDefaultProvider(): ClaudeAgentModelProvider {
 }
 
 function createDefaultProviders(): ClaudeAgentModelProvider[] {
+  return [createDefaultProvider()]
+}
+
+function pruneLegacySeededProviders(providers: ClaudeAgentModelProvider[]): ClaudeAgentModelProvider[] {
+  const retained = providers.filter((provider) => !isLegacySeededProvider(provider))
+  return retained.length ? retained : createDefaultProviders()
+}
+
+function isLegacySeededProvider(provider: ClaudeAgentModelProvider): boolean {
+  if (normalizeString(provider.apiKey) || normalizeString(provider.presetId)) return false
   const rawProviders = isRecord(providerPresetCatalog) && Array.isArray(providerPresetCatalog.providers)
     ? providerPresetCatalog.providers
     : []
-  const providers = rawProviders
-    .map((provider, index) => normalizeProvider(provider, `provider-${index + 1}`))
-    .filter((provider): provider is ClaudeAgentModelProvider => Boolean(provider))
-  return providers.length ? dedupeProviderIds(providers) : [createDefaultProvider()]
+
+  return rawProviders.some((rawProvider, index) => {
+    const preset = normalizeProvider(rawProvider, `legacy-preset-${index + 1}`)
+    return preset ? providersMatchLegacySeed(provider, preset) : false
+  })
+}
+
+function providersMatchLegacySeed(
+  provider: ClaudeAgentModelProvider,
+  preset: ClaudeAgentModelProvider,
+): boolean {
+  return (
+    provider.name === preset.name &&
+    provider.apiKeyUrl === preset.apiKeyUrl &&
+    provider.authMode === preset.authMode &&
+    provider.baseUrl === preset.baseUrl &&
+    provider.model === preset.model &&
+    provider.modelSupportsImages === preset.modelSupportsImages &&
+    provider.defaultHaikuModel === preset.defaultHaikuModel &&
+    provider.defaultHaikuSupportsImages === preset.defaultHaikuSupportsImages &&
+    provider.defaultSonnetModel === preset.defaultSonnetModel &&
+    provider.defaultSonnetSupportsImages === preset.defaultSonnetSupportsImages &&
+    provider.defaultOpusModel === preset.defaultOpusModel &&
+    provider.defaultOpusSupportsImages === preset.defaultOpusSupportsImages
+  )
 }
 
 function normalizeSource(value: unknown, allowEnvConfigSource: boolean): ClaudeAgentConfigSource {

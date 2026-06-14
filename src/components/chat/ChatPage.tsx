@@ -46,15 +46,12 @@ import {
   supportsImagesForPick,
 } from '../../model-pick'
 import type {
-  ChatActivityItem,
   ChatFileDiffItem,
   ChatMessageAttachment,
   ChatMessageItem,
   ChatTaskItem,
   ChatTaskState,
   ChatState,
-  ChatThinkingItem,
-  ChatToolItem,
   FileTreeNode,
   AgentSettingsPanelId,
   ProjectSkillRunRequest,
@@ -66,6 +63,8 @@ import type {
 import { AgentInputPromptModal, type PendingUserInputPrompt, type UserInputDecision } from './AgentInputPromptModal'
 import { ChatStartView } from './ChatStartView'
 import { ChatThreadView } from './ChatThreadView'
+import { ChatRun, type ChatRunTransition } from './chat-run'
+import { projectContent } from '../../project-content'
 import { writeClipboardText } from './clipboard'
 import { Composer } from './Composer'
 import { formatBytes } from './format'
@@ -407,11 +406,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const todoPanelRef = useRef<HTMLDivElement>(null)
   const activeThreadIdRef = useRef(activeThread?.id ?? '')
   const threadScrollTopRef = useRef(new Map<string, number>())
-  const threadRunStatesRef = useRef<Record<string, ThreadRunState>>(threadRunStates)
-  const requestThreadIdsRef = useRef(new Map<string, string>())
-  const requestAssistantMessageIdsRef = useRef(new Map<string, string>())
-  const requestStartedAtRef = useRef(new Map<string, number>())
-  const finishedRequestIdsRef = useRef(new Set<string>())
+  const chatRunRef = useRef<ChatRun | null>(null)
+  if (!chatRunRef.current) chatRunRef.current = new ChatRun()
+  const chatRun = chatRunRef.current
 
   /** Popover anchor avoids clipping by `.chat-composer` / fixed positioning avoids composer clipping */
   const [modelPopoverBox, setModelPopoverBox] = useState<{
@@ -463,11 +460,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!activeThreadId) return null
     return (
       pendingUserInputPrompts.find((prompt) => {
-        const promptThreadId = prompt.threadId ?? requestThreadIdsRef.current.get(prompt.requestId)
+        const promptThreadId = prompt.threadId ?? chatRun.threadIdForRequest(prompt.requestId)
         return promptThreadId === activeThreadId
       }) ?? null
     )
-  }, [activeThread?.id, pendingUserInputPrompts])
+  }, [activeThread?.id, chatRun, pendingUserInputPrompts])
   const permissionModeRows = useMemo(() => getPermissionModeRows(t), [t])
   const permissionModeLabel = permissionModeRows.find((row) => row.mode === permissionMode)?.label ?? t('chat.permissionModeAuto')
   const speechRecognitionSupported =
@@ -588,8 +585,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }, [refreshAgentContext])
 
   useEffect(() => {
-    threadRunStatesRef.current = threadRunStates
-  }, [threadRunStates])
+    chatRun.syncRunStates(threadRunStates)
+  }, [chatRun, threadRunStates])
 
   useEffect(() => {
     isRunningRef.current = isRunning
@@ -790,20 +787,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       return
     }
 
-    const searchProjectFiles = window.desktop?.searchProjectFiles
-    if (!searchProjectFiles) {
-      setFileMentionResults([])
-      return
-    }
-
     const query = activeComposerTrigger.query
+    const searchSession = projectContent.createSearchSession()
     const timer = window.setTimeout(() => {
-      searchProjectFiles(activeProject.path, query)
-        .then((result) => setFileMentionResults(result.ok ? result.items : []))
-        .catch(() => setFileMentionResults([]))
+      searchSession.search({
+        rootPath: activeProject.path,
+        query,
+        onResult: (result) => setFileMentionResults(result.ok ? result.items : []),
+      })
     }, 90)
 
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      searchSession.dispose()
+    }
   }, [activeComposerTrigger, activeProject.path])
 
   useLayoutEffect(() => {
@@ -1188,7 +1185,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     setShowScrollButton(false)
   }, [])
 
-  // --- Submit target + run state bookkeeping (request id maps, finish/cleanup) / 提交目标与运行态簿记（requestId 映射、结束清理）---
+  // --- Chat Run adapter / Chat Run 的 React adapter ---
 
   const getActiveSubmitTarget = useCallback((): SubmitPromptTarget | undefined => {
     if (!activeThread) return undefined
@@ -1200,501 +1197,79 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
   }, [activeProject, activeThread, projects])
 
-  const setThreadRunState = useCallback(
-    (threadId: string, state: ThreadRunState | null) => {
-      if (state) {
-        threadRunStatesRef.current = { ...threadRunStatesRef.current, [threadId]: state }
-      } else if (threadRunStatesRef.current[threadId]) {
-        const next = { ...threadRunStatesRef.current }
-        delete next[threadId]
-        threadRunStatesRef.current = next
+  const applyChatRunTransition = useCallback(
+    (transition: ChatRunTransition) => {
+      if (transition.updateState) {
+        const applyState = () => setThreadChatState(transition.threadId, transition.updateState!)
+        if (transition.flush) flushSync(applyState)
+        else applyState()
       }
-      onThreadRunStateChange(threadId, state)
-    },
-    [onThreadRunStateChange],
-  )
-
-  const markRequestRunning = useCallback(
-    (threadId: string, requestId: string, status: ThreadRunState['status'] = 'running') => {
-      onThreadCompletionStateChange(threadId, null)
-      requestThreadIdsRef.current.set(requestId, threadId)
-      const current = threadRunStatesRef.current[threadId]
-      if (current && current.requestId !== requestId && !isPendingRequestId(current.requestId)) return
-      if (current?.requestId === requestId && current.status === 'asking' && status === 'running') return
-      if (current?.requestId === requestId && current.status === status) return
-      const startedAt = current?.startedAt ?? requestStartedAtRef.current.get(requestId) ?? Date.now()
-      requestStartedAtRef.current.set(requestId, startedAt)
-      setThreadRunState(threadId, { requestId, status, startedAt, updatedAt: Date.now() })
-    },
-    [onThreadCompletionStateChange, setThreadRunState],
-  )
-
-  const finishRequest = useCallback(
-    (requestId: string, statusText: string, notify = false, clearPendingRun = false, markCompleted = false) => {
-      let threadId = requestThreadIdsRef.current.get(requestId)
-      if (!threadId) {
-        for (const [candidateThreadId, runState] of Object.entries(threadRunStatesRef.current)) {
-          if (runState.requestId === requestId) {
-            threadId = candidateThreadId
-            break
-          }
+      if (transition.clearCompletion) {
+        onThreadCompletionStateChange(transition.threadId, null)
+      }
+      if (transition.runState !== undefined) {
+        onThreadRunStateChange(transition.threadId, transition.runState)
+      }
+      if (transition.prompt) {
+        setPendingUserInputPrompts((prev) =>
+          prev.some((item) => item.permissionRequestId === transition.prompt?.permissionRequestId)
+            ? prev
+            : [...prev, transition.prompt!],
+        )
+        if (activeThreadIdRef.current === transition.threadId) {
+          onStatusChange(
+            transition.prompt.type === 'ask_user_question'
+              ? t('chat.waitingForAnswer')
+              : t('chat.waitingForPermission'),
+          )
         }
       }
-
-      finishedRequestIdsRef.current.add(requestId)
-      window.setTimeout(() => finishedRequestIdsRef.current.delete(requestId), 30_000)
-      requestAssistantMessageIdsRef.current.delete(requestId)
-      requestStartedAtRef.current.delete(requestId)
-      requestThreadIdsRef.current.delete(requestId)
-      setPendingUserInputPrompts((prev) => prev.filter((item) => item.requestId !== requestId))
-
-      if (threadId) {
-        const runState = threadRunStatesRef.current[threadId]
-        if (!runState || runState.requestId === requestId || (clearPendingRun && isPendingRequestId(runState.requestId))) {
-          setThreadRunState(threadId, null)
-        }
-        if (markCompleted) {
-          onThreadCompletionStateChange(threadId, activeThreadIdRef.current === threadId ? null : Date.now())
+      if (transition.removePromptsForRequest) {
+        setPendingUserInputPrompts((prev) =>
+          prev.filter((item) => item.requestId !== transition.removePromptsForRequest),
+        )
+      }
+      if (transition.markCompleted) {
+        onThreadCompletionStateChange(
+          transition.threadId,
+          activeThreadIdRef.current === transition.threadId ? null : Date.now(),
+        )
+      }
+      if (transition.scrollToBottom && activeThreadIdRef.current === transition.threadId) {
+        scrollIntentRef.current = 'force-bottom'
+      }
+      if (!transition.terminal) return
+      if (!transition.threadId || activeThreadIdRef.current === transition.threadId) {
+        if (transition.terminal.kind === 'result') {
+          onStatusChange(compactModelName(globalDisplayModelRef.current, t))
+        } else if (transition.terminal.kind === 'error') {
+          onStatusChange(
+            transition.terminal.code === 'missing_api_key'
+              ? t('chat.missingApiKey')
+              : t('chat.errorGeneric'),
+          )
+        } else {
+          onStatusChange(t('chat.stoppedStatus'))
         }
       }
-
-      if (!threadId || activeThreadIdRef.current === threadId) {
-        onStatusChange(statusText)
-      }
-      if (notify) playAgentDoneSound()
+      if (transition.terminal.kind !== 'cancelled') playAgentDoneSound()
     },
-    [onStatusChange, onThreadCompletionStateChange, setThreadRunState],
+    [onStatusChange, onThreadCompletionStateChange, onThreadRunStateChange, setThreadChatState, t],
   )
 
-  // --- Map every `ClaudeChatEvent` into `ChatState.items` / 将每条 SDK 事件折叠进对话时间线 items ---
+  // --- Fold every Agent event through the Chat Run interface / 所有 Agent 事件统一穿过 Chat Run interface ---
 
   const handleClaudeEvent = useCallback(
     (event: ClaudeChatEvent) => {
-      const knownRequestBeforeEvent = requestThreadIdsRef.current.has(event.requestId)
-      const eventThreadId = event.threadId ?? requestThreadIdsRef.current.get(event.requestId) ?? activeThreadIdRef.current
-      requestThreadIdsRef.current.set(event.requestId, eventThreadId)
-      if (event.type === 'session_start') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => ({
-          ...prev,
-          sessionId: event.sessionId,
-          model: event.model || globalDisplayModelRef.current,
-          cwd: event.cwd,
-        }))
-        return
-      }
-
-      if (event.type === 'assistant_delta') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const messageId = event.messageId
-          const startedAt = requestStartedAtRef.current.get(event.requestId) ?? Date.now()
-          let { items } = prev
-          const idx = items.findIndex((it) => it.type === 'message' && it.id === messageId)
-          if (idx >= 0) {
-            const it = items[idx] as ChatMessageItem
-            const next = [...items]
-            next[idx] = { ...it, content: it.content + event.text, status: 'streaming', startedAt: it.startedAt ?? startedAt }
-            requestAssistantMessageIdsRef.current.set(event.requestId, messageId)
-            return { ...prev, items: next }
-          }
-
-          const pendingId = requestAssistantMessageIdsRef.current.get(event.requestId)
-          const pIdx = items.findIndex((it) => it.type === 'message' && it.id === pendingId && it.role === 'assistant')
-          if (pIdx >= 0) {
-            const it = items[pIdx] as ChatMessageItem
-            const next = [...items]
-            next[pIdx] = { ...it, id: messageId, content: it.content + event.text, status: 'streaming', startedAt: it.startedAt ?? startedAt }
-            requestAssistantMessageIdsRef.current.set(event.requestId, messageId)
-            return { ...prev, items: next }
-          }
-
-          if (!event.text) {
-            requestAssistantMessageIdsRef.current.set(event.requestId, messageId)
-            return prev
-          }
-
-          const msg: ChatMessageItem = {
-            type: 'message',
-            id: messageId,
-            role: 'assistant',
-            content: event.text,
-            status: 'streaming',
-            createdAt: startedAt,
-            startedAt,
-          }
-          requestAssistantMessageIdsRef.current.set(event.requestId, messageId)
-          return { ...prev, items: [...items, msg] }
-        })
-        return
-      }
-
-      if (event.type === 'thinking_start') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'thinking' && it.thinkingId === event.thinkingId)
-          if (idx >= 0) {
-            const next = [...prev.items]
-            const it = next[idx] as ChatThinkingItem
-            next[idx] = { ...it, requestId: it.requestId ?? event.requestId, status: 'running' }
-            return { ...prev, items: next }
-          }
-          const row: ChatThinkingItem = {
-            type: 'thinking',
-            id: event.thinkingId,
-            requestId: event.requestId,
-            thinkingId: event.thinkingId,
-            title: event.title,
-            content: '',
-            status: 'running',
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'thinking_delta') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'thinking' && it.thinkingId === event.thinkingId)
-          if (idx >= 0) {
-            const next = [...prev.items]
-            const it = next[idx] as ChatThinkingItem
-            next[idx] = { ...it, requestId: it.requestId ?? event.requestId, content: it.content + event.text, status: 'running' }
-            return { ...prev, items: next }
-          }
-          const row: ChatThinkingItem = {
-            type: 'thinking',
-            id: event.thinkingId,
-            requestId: event.requestId,
-            thinkingId: event.thinkingId,
-            title: 'Think',
-            content: event.text,
-            status: 'running',
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'thinking_done') {
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'thinking' && it.thinkingId === event.thinkingId)
-          if (idx < 0) return prev
-          const next = [...prev.items]
-          const it = next[idx] as ChatThinkingItem
-          next[idx] = { ...it, requestId: it.requestId ?? event.requestId, status: 'done' }
-          return { ...prev, items: next }
-        })
-        return
-      }
-
-      if (event.type === 'tool_start') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const existingIdx = prev.items.findIndex((it) => it.type === 'tool' && it.toolUseId === event.toolUseId)
-          if (existingIdx >= 0) {
-            const next = [...prev.items]
-            const it = next[existingIdx] as ChatToolItem
-            next[existingIdx] = { ...it, requestId: it.requestId ?? event.requestId, inputPreview: event.inputPreview || it.inputPreview, status: 'running' }
-            return { ...prev, items: next }
-          }
-          const row: ChatToolItem = {
-            type: 'tool',
-            id: `tool-${event.toolUseId}`,
-            requestId: event.requestId,
-            toolUseId: event.toolUseId,
-            name: event.name,
-            inputPreview: event.inputPreview,
-            status: 'running',
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'tool_update') {
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'tool' && it.toolUseId === event.toolUseId)
-          if (idx < 0) return prev
-          const next = [...prev.items]
-          const it = next[idx] as ChatToolItem
-          next[idx] = {
-            ...it,
-            requestId: it.requestId ?? event.requestId,
-            inputPreview: event.inputPreview ?? it.inputPreview,
-            detail: event.detail ?? it.detail,
-          }
-          return { ...prev, items: next }
-        })
-        return
-      }
-
-      if (event.type === 'tool_done') {
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'tool' && it.toolUseId === event.toolUseId)
-          if (idx < 0) return prev
-          const next = [...prev.items]
-          const it = next[idx] as ChatToolItem
-          next[idx] = { ...it, requestId: it.requestId ?? event.requestId, status: event.status, detail: event.detail ?? it.detail }
-          return { ...prev, items: next }
-        })
-        return
-      }
-
-      if (event.type === 'task_create') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => applyTaskCreateEvent(prev, event))
-        return
-      }
-
-      if (event.type === 'task_update') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => applyTaskUpdateEvent(prev, event))
-        return
-      }
-
-      if (event.type === 'task_list') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => applyTaskListEvent(prev, event))
-        return
-      }
-
-      if (event.type === 'ask_user_question' || event.type === 'permission_request') {
-        markRequestRunning(eventThreadId, event.requestId, event.type === 'ask_user_question' ? 'asking' : 'waiting')
-        setPendingUserInputPrompts((prev) =>
-          prev.some((item) => item.permissionRequestId === event.permissionRequestId) ? prev : [...prev, event],
-        )
-        if (activeThreadIdRef.current === eventThreadId) {
-          onStatusChange(event.type === 'ask_user_question' ? t('chat.waitingForAnswer') : t('chat.waitingForPermission'))
-        }
-        return
-      }
-
-      if (event.type === 'agent_activity') {
-        if (event.status === 'running') markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'activity' && it.id === event.activityId)
-          if (idx >= 0) {
-            const next = [...prev.items]
-            const it = next[idx] as ChatActivityItem
-            next[idx] = {
-              ...it,
-              requestId: it.requestId ?? event.requestId,
-              title: event.title,
-              status: event.status,
-              detail: event.detail,
-              preview: event.preview,
-            }
-            return { ...prev, items: next }
-          }
-          const row: ChatActivityItem = {
-            type: 'activity',
-            id: event.activityId,
-            requestId: event.requestId,
-            title: event.title,
-            status: event.status,
-            detail: event.detail,
-            preview: event.preview,
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'file_diff') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'file_diff' && it.changeSetId === event.changeSetId)
-          if (idx >= 0) {
-            const next = [...prev.items]
-            const it = next[idx] as ChatFileDiffItem
-            next[idx] = {
-              ...it,
-              checkpointId: event.checkpointId ?? it.checkpointId,
-              files: mergeDiffFiles(it.files, event.files),
-              status: it.status === 'reverted' ? it.status : 'captured',
-              detail: undefined,
-            }
-            return { ...prev, items: next }
-          }
-          const row: ChatFileDiffItem = {
-            type: 'file_diff',
-            id: event.changeSetId,
-            requestId: event.requestId,
-            changeSetId: event.changeSetId,
-            checkpointId: event.checkpointId,
-            files: event.files,
-            status: 'captured',
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'file_rewind_result') {
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex(
-            (it) => it.type === 'file_diff' && (!event.changeSetId || it.changeSetId === event.changeSetId),
-          )
-          if (idx < 0) return prev
-          const next = [...prev.items]
-          const it = next[idx] as ChatFileDiffItem
-          next[idx] = { ...it, status: event.status === 'reverted' ? 'reverted' : 'error', detail: event.detail ?? it.detail }
-          return { ...prev, items: next }
-        })
-        return
-      }
-
-      if (event.type === 'result') {
-        const completedAt = Date.now()
-        const requestStartedAt = requestStartedAtRef.current.get(event.requestId) ?? completedAt
-        flushSync(() => {
-          setThreadChatState(eventThreadId, (prev) => {
-            const expectedId = `assistant-${event.requestId}`
-            const pendingId = requestAssistantMessageIdsRef.current.get(event.requestId)
-            let found = false
-            const mapped = prev.items.map((item): TranscriptItem => {
-              if (item.type !== 'message' || item.role !== 'assistant') return item
-              if (item.id !== expectedId && item.id !== pendingId) return item
-              found = true
-              const content =
-                !item.content.trim() && event.result.trim() ? event.result : item.content
-              const startedAt = item.startedAt ?? requestStartedAt
-              return {
-                ...item,
-                content,
-                status: 'done',
-                startedAt,
-                completedAt,
-                durationMs: Math.max(0, completedAt - startedAt),
-              }
-            })
-            const items: TranscriptItem[] =
-              found || !event.result.trim()
-                ? mapped
-                : [
-                    ...mapped,
-                    {
-                      type: 'message',
-                      id: expectedId,
-                      role: 'assistant',
-                      content: event.result,
-                      status: 'done',
-                      createdAt: requestStartedAt,
-                      startedAt: requestStartedAt,
-                      completedAt,
-                      durationMs: Math.max(0, completedAt - requestStartedAt),
-                    },
-                  ]
-            return { ...prev, sessionId: event.sessionId, items }
-          })
-        })
-        finishRequest(event.requestId, compactModelName(globalDisplayModelRef.current, t), true, !knownRequestBeforeEvent, true)
-        return
-      }
-
-      if (event.type === 'error') {
-        const completedAt = Date.now()
-        const requestStartedAt = requestStartedAtRef.current.get(event.requestId) ?? completedAt
-        if (activeThreadIdRef.current === eventThreadId) scrollIntentRef.current = 'force-bottom'
-        const expectedId = `assistant-${event.requestId}`
-        const shouldClearSession =
-          event.code === 'sdk_error' && event.message.includes('No conversation found with session ID')
-        flushSync(() => {
-          setThreadChatState(eventThreadId, (prev) => {
-            const pendingId = requestAssistantMessageIdsRef.current.get(event.requestId)
-            let found = false
-            const mapped = prev.items.map((item): TranscriptItem => {
-              if (item.type !== 'message' || item.role !== 'assistant') return item
-              if (item.id !== expectedId && item.id !== pendingId) return item
-              found = true
-              const content = !item.content.trim() ? event.message : item.content
-              const startedAt = item.startedAt ?? requestStartedAt
-              return {
-                ...item,
-                content,
-                status: 'error',
-                startedAt,
-                completedAt,
-                durationMs: Math.max(0, completedAt - startedAt),
-              }
-            })
-            const itemsOut: TranscriptItem[] = found
-              ? mapped
-              : [
-                  ...mapped,
-                  {
-                    type: 'message',
-                    id: expectedId,
-                    role: 'assistant',
-                    content: event.message,
-                    status: 'error',
-                    createdAt: requestStartedAt,
-                    startedAt: requestStartedAt,
-                    completedAt,
-                    durationMs: Math.max(0, completedAt - requestStartedAt),
-                  },
-                ]
-            return { ...prev, sessionId: shouldClearSession ? undefined : prev.sessionId, items: itemsOut }
-          })
-        })
-        finishRequest(
-          event.requestId,
-          event.code === 'missing_api_key' ? t('chat.missingApiKey') : t('chat.errorGeneric'),
-          true,
-          !knownRequestBeforeEvent,
-        )
-        return
-      }
-
-      if (event.type === 'cancelled') {
-        const completedAt = Date.now()
-        const requestStartedAt = requestStartedAtRef.current.get(event.requestId) ?? completedAt
-        if (activeThreadIdRef.current === eventThreadId) scrollIntentRef.current = 'force-bottom'
-        const expectedId = `assistant-${event.requestId}`
-        flushSync(() => {
-          setThreadChatState(eventThreadId, (prev) => {
-            const pendingId = requestAssistantMessageIdsRef.current.get(event.requestId)
-            let found = false
-            const mapped = prev.items.map((item): TranscriptItem => {
-              if (item.type !== 'message' || item.role !== 'assistant') return item
-              if (item.id !== expectedId && item.id !== pendingId) return item
-              found = true
-              const content = !item.content.trim() ? t('chat.stoppedBody') : item.content
-              const startedAt = item.startedAt ?? requestStartedAt
-              return {
-                ...item,
-                content,
-                status: 'cancelled',
-                startedAt,
-                completedAt,
-                durationMs: Math.max(0, completedAt - startedAt),
-              }
-            })
-            const items: TranscriptItem[] = found
-              ? mapped
-              : [
-                  ...mapped,
-                  {
-                    type: 'message',
-                    id: expectedId,
-                    role: 'assistant',
-                    content: t('chat.stoppedBody'),
-                    status: 'cancelled',
-                    createdAt: requestStartedAt,
-                    startedAt: requestStartedAt,
-                    completedAt,
-                    durationMs: Math.max(0, completedAt - requestStartedAt),
-                  },
-                ]
-            return { ...prev, items }
-          })
-        })
-        finishRequest(event.requestId, t('chat.stoppedStatus'), false, !knownRequestBeforeEvent)
-      }
+      applyChatRunTransition(
+        chatRun.handleEvent(event, {
+          activeThreadId: activeThreadIdRef.current,
+          fallbackModel: globalDisplayModelRef.current,
+          stoppedBody: t('chat.stoppedBody'),
+        }),
+      )
     },
-    [finishRequest, markRequestRunning, onStatusChange, setThreadChatState, t],
+    [applyChatRunTransition, chatRun, t],
   )
 
   useEffect(() => {
@@ -1743,9 +1318,6 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       isFirstTranscriptLayoutRef.current = true
       scrollIntentRef.current = 'force-bottom'
     }
-    if (threadRunStatesRef.current[submittingThreadId]) return
-
-    const requestStartedAt = Date.now()
     const submittingThread = threads.find((thread) => thread.id === submittingThreadId)
     const settings = claudeSettingsSnapshot?.settings
     const modelPickForSubmit =
@@ -1762,133 +1334,50 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         ? buildHandoffContext(submittingThread.chatState.items)
         : undefined
 
-    const userMessage: ChatMessageItem = {
-      type: 'message',
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: text,
-      status: 'done',
-      createdAt: requestStartedAt,
-      completedAt: requestStartedAt,
+    const promptMode = target?.promptMode ?? promptModeForThreadPurpose(submittingThread?.purpose)
+    const submitAttempt = chatRun.submit({
+      threadId: submittingThreadId,
+      text,
       attachments: attachmentsForSubmit.map(toChatMessageAttachment),
-    }
+      model: modelPickForSubmit?.anthropicModel,
+      modelPick: modelPickForSubmit,
+      clearSession: modelPickChanged,
+      reuseUserMessageId: Boolean(target?.reuseUserMessageId),
+      bridgeUnavailableBody: t('chat.bridgeErrorBody'),
+      submit: window.claudeChat
+        ? () =>
+            window.claudeChat!.submit({
+              text,
+              attachments: attachmentsForSubmit,
+              threadId: submittingThreadId,
+              modelPick: modelPickForSubmit,
+              handoffContext,
+              promptMode,
+              sessionId: resumeSessionId,
+              cwd: projectForSubmit.path,
+              permissionMode,
+            })
+        : undefined,
+    })
+    if (!submitAttempt) return
 
     if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
     onThreadPromptSubmit(submittingThreadId, text)
-    if (!target?.reuseUserMessageId) {
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        model: modelPickForSubmit?.anthropicModel ?? prev.model,
-        modelPick: modelPickForSubmit ?? prev.modelPick,
-        sessionId: modelPickChanged ? undefined : prev.sessionId,
-        items: [...prev.items, userMessage],
-      }))
-    } else if (modelPickForSubmit) {
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        model: modelPickForSubmit.anthropicModel,
-        modelPick: modelPickForSubmit,
-        sessionId: modelPickChanged ? undefined : prev.sessionId,
-      }))
-    }
+    applyChatRunTransition(submitAttempt.startTransition)
     setInputValue('')
     if (attachmentsForSubmit.length > 0 || !target?.threadId) {
       pendingAttachmentsRef.current = []
       setPendingAttachments([])
     }
-    const pendingRequestId = `pending-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-    requestStartedAtRef.current.set(pendingRequestId, requestStartedAt)
-    setThreadRunState(submittingThreadId, {
-      requestId: pendingRequestId,
-      status: 'running',
-      startedAt: requestStartedAt,
-      updatedAt: Date.now(),
-    })
     onStatusChange(t('chat.statusProcessing'))
 
-    if (!window.claudeChat) {
-      if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        items: [
-          ...prev.items,
-          {
-            type: 'message',
-            id: `assistant-error-${Date.now()}`,
-            role: 'assistant',
-            content: t('chat.bridgeErrorBody'),
-            status: 'error',
-            createdAt: requestStartedAt,
-            startedAt: requestStartedAt,
-            completedAt: Date.now(),
-            durationMs: Math.max(0, Date.now() - requestStartedAt),
-          },
-        ],
-      }))
-      setThreadRunState(submittingThreadId, null)
+    const submitResult = await submitAttempt.result
+    applyChatRunTransition(submitResult.transition)
+    if (submitResult.status === 'bridge_unavailable') {
       onStatusChange(t('chat.bridgeUnavailableStatus'))
       return
     }
-
-    try {
-      const promptMode = target?.promptMode ?? promptModeForThreadPurpose(submittingThread?.purpose)
-      const { requestId } = await window.claudeChat.submit({
-        text,
-        attachments: attachmentsForSubmit,
-        threadId: submittingThreadId,
-        modelPick: modelPickForSubmit,
-        handoffContext,
-        promptMode,
-        sessionId: resumeSessionId,
-        cwd: projectForSubmit.path,
-        permissionMode,
-      })
-      if (finishedRequestIdsRef.current.delete(requestId)) {
-        requestThreadIdsRef.current.delete(requestId)
-        requestAssistantMessageIdsRef.current.delete(requestId)
-        requestStartedAtRef.current.delete(requestId)
-        requestStartedAtRef.current.delete(pendingRequestId)
-        const current = threadRunStatesRef.current[submittingThreadId] as ThreadRunState | undefined
-        if (current && (current.requestId === requestId || current.requestId === pendingRequestId)) {
-          setThreadRunState(submittingThreadId, null)
-        }
-        return
-      }
-      requestStartedAtRef.current.delete(pendingRequestId)
-      requestStartedAtRef.current.set(requestId, requestStartedAt)
-      requestThreadIdsRef.current.set(requestId, submittingThreadId)
-      requestAssistantMessageIdsRef.current.set(requestId, `assistant-${requestId}`)
-      setThreadRunState(submittingThreadId, { requestId, status: 'running', startedAt: requestStartedAt, updatedAt: Date.now() })
-    } catch (error) {
-      requestStartedAtRef.current.delete(pendingRequestId)
-      if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        items: [
-          ...prev.items,
-          {
-            type: 'message',
-            id: `assistant-error-${Date.now()}`,
-            role: 'assistant',
-            content: error instanceof Error ? error.message : String(error),
-            status: 'error',
-            createdAt: requestStartedAt,
-            startedAt: requestStartedAt,
-            completedAt: Date.now(),
-            durationMs: Math.max(0, Date.now() - requestStartedAt),
-          },
-        ],
-      }))
-      if (
-        error instanceof Error &&
-        error.message.includes('No conversation found with session ID')
-      ) {
-        setThreadChatState(submittingThreadId, (prev) => ({
-          ...prev,
-          sessionId: undefined,
-        }))
-      }
-      setThreadRunState(submittingThreadId, null)
+    if (submitResult.status === 'failed') {
       onStatusChange(t('chat.sendFailedStatus'))
     }
   }
@@ -2088,7 +1577,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Cancel streaming + answer permission / tool questions from modal / 停止生成；在弹窗中应答权限或工具提问 ---
 
   const cancelActiveRequest = async () => {
-    const requestId = threadRunStatesRef.current[activeThread?.id ?? activeThreadIdRef.current]?.requestId
+    const requestId = chatRun.runStateForThread(activeThread?.id ?? activeThreadIdRef.current)?.requestId
     if (!requestId || isPendingRequestId(requestId) || !window.claudeChat) return
     await window.claudeChat.cancel(requestId)
   }
@@ -2098,14 +1587,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!prompt) return
 
     setPendingUserInputPrompts((prev) => prev.filter((item) => item.permissionRequestId !== prompt.permissionRequestId))
-    const promptThreadId = prompt.threadId ?? requestThreadIdsRef.current.get(prompt.requestId) ?? activeThreadIdRef.current
-    const promptRunState = threadRunStatesRef.current[promptThreadId]
-    if (promptRunState?.requestId === prompt.requestId && promptRunState.status === 'asking') {
-      setThreadRunState(promptThreadId, {
-        ...promptRunState,
-        status: 'running',
-        updatedAt: Date.now(),
-      })
+    const transition = chatRun.resumeAfterPrompt(
+      prompt.requestId,
+      prompt.threadId ?? activeThreadIdRef.current,
+    )
+    if (transition.runState !== undefined) {
+      onThreadRunStateChange(transition.threadId, transition.runState)
     }
     if (!window.claudeChat) return
     await window.claudeChat.answerPermissionRequest({
@@ -2697,109 +2184,6 @@ function taskStatusLabel(status: ChatTaskItem['status'], t: (path: string, vars?
   return t('chat.todoStatusPending')
 }
 
-function emptyTaskState(requestId: string, now = Date.now()): ChatTaskState {
-  return { requestId, updatedAt: now, items: [] }
-}
-
-function taskStateForRequest(prev: ChatState, requestId: string, resetOnNewRequest: boolean): ChatTaskState {
-  if (!prev.tasks) return emptyTaskState(requestId)
-  if (resetOnNewRequest && prev.tasks.requestId && prev.tasks.requestId !== requestId) {
-    return emptyTaskState(requestId)
-  }
-  return { ...prev.tasks, requestId, items: [...prev.tasks.items] }
-}
-
-function applyTaskCreateEvent(prev: ChatState, event: Extract<ClaudeChatEvent, { type: 'task_create' }>): ChatState {
-  const now = Date.now()
-  const tasks = taskStateForRequest(prev, event.requestId, true)
-  const taskId = event.taskId || `pending:${event.toolUseId}`
-  const idx = tasks.items.findIndex((task) => task.id === taskId || task.toolUseId === event.toolUseId)
-  const current = idx >= 0 ? tasks.items[idx] : undefined
-  const nextTask: ChatTaskItem = {
-    id: taskId,
-    toolUseId: event.toolUseId,
-    subject: event.subject || current?.subject || taskId,
-    description: event.description ?? current?.description,
-    activeForm: event.activeForm ?? current?.activeForm,
-    status: current?.status ?? 'pending',
-    owner: current?.owner,
-    blocks: current?.blocks,
-    blockedBy: current?.blockedBy,
-    metadata: event.metadata ?? current?.metadata,
-    createdAt: current?.createdAt ?? now,
-    updatedAt: now,
-    order: current?.order ?? tasks.items.length,
-  }
-
-  const items = idx >= 0 ? replaceAt(tasks.items, idx, nextTask) : [...tasks.items, nextTask]
-  return { ...prev, tasks: { ...tasks, updatedAt: now, items: sortTasks(items) } }
-}
-
-function applyTaskUpdateEvent(prev: ChatState, event: Extract<ClaudeChatEvent, { type: 'task_update' }>): ChatState {
-  const now = Date.now()
-  const tasks = taskStateForRequest(prev, event.requestId, false)
-  const idx = tasks.items.findIndex((task) => task.id === event.taskId)
-  const current = idx >= 0 ? tasks.items[idx] : undefined
-  const nextTask: ChatTaskItem = {
-    id: event.taskId,
-    toolUseId: current?.toolUseId ?? event.toolUseId,
-    subject: event.subject ?? current?.subject ?? event.taskId,
-    description: event.description ?? current?.description,
-    activeForm: event.activeForm ?? current?.activeForm,
-    status: event.status ?? current?.status ?? 'pending',
-    owner: event.owner ?? current?.owner,
-    blocks: mergeStringLists(current?.blocks, event.blocks),
-    blockedBy: mergeStringLists(current?.blockedBy, event.blockedBy),
-    metadata: event.metadata ?? current?.metadata,
-    createdAt: current?.createdAt ?? now,
-    updatedAt: now,
-    order: current?.order ?? tasks.items.length,
-  }
-
-  const items = idx >= 0 ? replaceAt(tasks.items, idx, nextTask) : [...tasks.items, nextTask]
-  return { ...prev, tasks: { ...tasks, updatedAt: now, items: sortTasks(items) } }
-}
-
-function applyTaskListEvent(prev: ChatState, event: Extract<ClaudeChatEvent, { type: 'task_list' }>): ChatState {
-  const now = Date.now()
-  const existing = prev.tasks?.requestId === event.requestId ? prev.tasks.items : []
-  const existingById = new Map(existing.map((task) => [task.id, task]))
-  const items = event.tasks.map((task, index): ChatTaskItem => {
-    const current = existingById.get(task.taskId)
-    return {
-      id: task.taskId,
-      toolUseId: current?.toolUseId,
-      subject: task.subject,
-      description: task.description ?? current?.description,
-      activeForm: task.activeForm ?? current?.activeForm,
-      status: task.status ?? current?.status ?? 'pending',
-      owner: task.owner ?? current?.owner,
-      blocks: task.blocks ?? current?.blocks,
-      blockedBy: task.blockedBy ?? current?.blockedBy,
-      metadata: task.metadata ?? current?.metadata,
-      createdAt: current?.createdAt ?? now,
-      updatedAt: now,
-      order: current?.order ?? index,
-    }
-  })
-  return { ...prev, tasks: { requestId: event.requestId, updatedAt: now, items: sortTasks(items) } }
-}
-
-function replaceAt<T>(items: T[], index: number, item: T): T[] {
-  const next = [...items]
-  next[index] = item
-  return next
-}
-
-function mergeStringLists(current: string[] | undefined, incoming: string[] | undefined): string[] | undefined {
-  if (!incoming || incoming.length === 0) return current
-  return [...new Set([...(current ?? []), ...incoming])]
-}
-
-function sortTasks(items: ChatTaskItem[]): ChatTaskItem[] {
-  return [...items].sort((a, b) => a.order - b.order || a.createdAt - b.createdAt)
-}
-
 function getComposerTrigger(value: string, selectionStart: number, selectionEnd: number): ComposerTrigger | null {
   if (selectionStart !== selectionEnd) return null
   const beforeCursor = value.slice(0, selectionStart)
@@ -2934,27 +2318,6 @@ function toChatMessageAttachment(attachment: ClaudeChatAttachment): ChatMessageA
     preview: attachment.preview,
     dataUrl: attachment.dataUrl,
   }
-}
-
-function mergeDiffFiles(existing: ChatFileDiffItem['files'], incoming: ChatFileDiffItem['files']): ChatFileDiffItem['files'] {
-  const next = [...existing]
-  for (const file of incoming) {
-    const idx = next.findIndex((candidate) => candidate.path === file.path)
-    if (idx < 0) {
-      next.push(file)
-      continue
-    }
-    const previous = next[idx]
-    next[idx] = {
-      ...previous,
-      status: previous.status === 'added' ? previous.status : file.status,
-      additions: previous.additions + file.additions,
-      deletions: previous.deletions + file.deletions,
-      hunks: [...previous.hunks, ...file.hunks],
-      truncated: previous.truncated || file.truncated || undefined,
-    }
-  }
-  return next
 }
 
 function updateFileDiffStatus(

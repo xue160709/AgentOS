@@ -17,7 +17,6 @@ import { flushSync } from 'react-dom'
 import {
   createEmptyChatState,
   createId,
-  latestVisibleThreadForProject,
   loadChatWorkspaceState,
   persistChatWorkspaceState,
   createDefaultChatWorkspaceState,
@@ -43,7 +42,7 @@ import {
   normalizePresetCatalog,
   type ProviderPreset,
 } from '../model-provider-presets'
-import { resolveEffectiveModelPick, sameModelPick, validateModelPick } from '../model-pick'
+import { providerHasCredential, resolveEffectiveModelPick, sameModelPick, validateModelPick } from '../model-pick'
 import type {
   AppViewId,
   ChatState,
@@ -56,14 +55,12 @@ import type {
   ThreadCompletionState,
   ThreadRunState,
   WorkspaceProject,
-  WorkspaceThread,
 } from './types'
 import { AppShellSidebar } from './AppShellSidebar'
 import { AppShellWorkspace } from './AppShellWorkspace'
 import { type ChatPageHandle } from './chat/ChatPage'
-import { projectIdsForSidebar } from './project-order'
+import { WorkspaceSession } from './workspace-session'
 
-const CHAT_WORKSPACE_SAVE_DEBOUNCE_MS = 750
 const INITIAL_PROVIDER_SKIP_VALUE = '__skip'
 const INITIAL_PROVIDER_CUSTOM_VALUE = '__custom'
 const EYE_COMFORT_CLASS = 'is-eye-comfort'
@@ -125,13 +122,17 @@ export function AppShell() {
   const [initialModelStatus, setInitialModelStatus] = useState('')
   const [initialModelBusy, setInitialModelBusy] = useState(false)
   const [initialProjectPath, setInitialProjectPath] = useState('')
-  const workspaceClearedRef = useRef(false)
   const initialModelTouchedRef = useRef(false)
 
   const chatRef = useRef<ChatPageHandle>(null)
-  const workspaceSaveTimerRef = useRef<number | null>(null)
-  const workspaceSaveInFlightRef = useRef(false)
-  const pendingWorkspaceSaveRef = useRef<ChatWorkspaceState | null>(null)
+  const workspaceSessionRef = useRef<WorkspaceSession | null>(null)
+  if (!workspaceSessionRef.current) {
+    workspaceSessionRef.current = new WorkspaceSession({
+      load: loadChatWorkspaceState,
+      save: persistChatWorkspaceState,
+    })
+  }
+  const workspaceSession = workspaceSessionRef.current
   const projectSkillStatesRef = useRef(projectSkillStates)
   const shellRef = useRef<HTMLDivElement>(null)
   const appBodyRef = useRef<HTMLDivElement>(null)
@@ -208,22 +209,9 @@ export function AppShell() {
 
   // --- Derived handles: active project/thread powering chat chrome / 派生句柄：驱动聊天框架的当前项目与线程 ---
 
-  const activeProject =
-    chatWorkspace?.projects.find((project) => project.id === chatWorkspace.activeProjectId) ??
-    chatWorkspace?.projects[0]
-  const explicitActiveThread =
-    chatWorkspace && activeProject
-      ? chatWorkspace.threads.find(
-          (thread) =>
-            thread.id === chatWorkspace.activeThreadId &&
-            thread.projectId === activeProject.id,
-        )
-      : undefined
-  const activeThread =
-    explicitActiveThread ??
-    (chatWorkspace?.activeThreadId && activeProject
-      ? latestVisibleThreadForProject(chatWorkspace, activeProject.id)
-      : undefined)
+  const activeWorkspace = chatWorkspace ? workspaceSession.active(chatWorkspace) : {}
+  const activeProject = activeWorkspace.project
+  const activeThread = activeWorkspace.thread
   const projectHomeModelPick = activeProject
     ? projectHomeDraftModelPicks[activeProject.id] ?? projectDefaultModelPick
     : undefined
@@ -347,28 +335,20 @@ export function AppShell() {
 
   useEffect(() => {
     if (!projectIdsKey) return
-    updateChatWorkspace((prev) => {
-      const allowed = new Set(prev.projects.map((project) => project.id))
-      const filtered = prev.sidebarPrefs.collapsedProjectIds.filter((id) => allowed.has(id))
-      if (filtered.length === prev.sidebarPrefs.collapsedProjectIds.length) return prev
-      return {
-        ...prev,
-        sidebarPrefs: { ...prev.sidebarPrefs, collapsedProjectIds: filtered },
-      }
-    })
-  }, [projectIdsKey, updateChatWorkspace])
+    updateChatWorkspace((prev) => workspaceSession.pruneCollapsedProjects(prev))
+  }, [projectIdsKey, updateChatWorkspace, workspaceSession])
 
   // --- Hydrate workspace from persistence (Electron file + localStorage merge) / 从持久化恢复工作区（Electron 文件与 localStorage 合并）---
 
   useEffect(() => {
     let cancelled = false
-    void loadChatWorkspaceState().then((state) => {
+    void workspaceSession.load().then((state) => {
       if (!cancelled) setChatWorkspace(state)
     })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [workspaceSession])
 
   const applyInitialModelSnapshot = useCallback(
     (snapshot: ClaudeAgentSettingsSnapshot) => {
@@ -581,46 +561,17 @@ export function AppShell() {
     }
   }, [projectSkillProjectKey, showProjectSkillsInSidebar, t])
 
-  // --- Autosave: debounce `persistChatWorkspaceState` + flush on unmount / 自动保存：防抖写入 persist，并在卸载时刷盘 ---
-
-  const flushWorkspaceSave = useCallback(() => {
-    if (workspaceSaveInFlightRef.current) return
-    const pending = pendingWorkspaceSaveRef.current
-    if (!pending) return
-
-    pendingWorkspaceSaveRef.current = null
-    workspaceSaveInFlightRef.current = true
-    void persistChatWorkspaceState(pending).finally(() => {
-      workspaceSaveInFlightRef.current = false
-      if (pendingWorkspaceSaveRef.current) flushWorkspaceSave()
-    })
-  }, [])
-
+  // --- Autosave through Workspace Session / 通过 Workspace Session 自动保存 ---
   useEffect(() => {
     if (!chatWorkspace) return
-    if (workspaceClearedRef.current && isEmptyChatWorkspace(chatWorkspace)) {
-      return
-    }
-    workspaceClearedRef.current = false
-    pendingWorkspaceSaveRef.current = chatWorkspace
-    if (workspaceSaveTimerRef.current != null) {
-      window.clearTimeout(workspaceSaveTimerRef.current)
-    }
-    workspaceSaveTimerRef.current = window.setTimeout(() => {
-      workspaceSaveTimerRef.current = null
-      flushWorkspaceSave()
-    }, CHAT_WORKSPACE_SAVE_DEBOUNCE_MS)
-  }, [chatWorkspace, flushWorkspaceSave])
+    workspaceSession.stage(chatWorkspace)
+  }, [chatWorkspace, workspaceSession])
 
   useEffect(() => {
     return () => {
-      if (workspaceSaveTimerRef.current != null) {
-        window.clearTimeout(workspaceSaveTimerRef.current)
-        workspaceSaveTimerRef.current = null
-      }
-      flushWorkspaceSave()
+      void workspaceSession.close()
     }
-  }, [flushWorkspaceSave])
+  }, [workspaceSession])
 
   // --- Routing helper: strip hash to return to main workspace chrome / 路由辅助：清空 hash 回到主工作区框架 ---
 
@@ -629,12 +580,7 @@ export function AppShell() {
   }, [])
 
   const handleWorkspaceCleared = useCallback(() => {
-    workspaceClearedRef.current = true
-    if (workspaceSaveTimerRef.current != null) {
-      window.clearTimeout(workspaceSaveTimerRef.current)
-      workspaceSaveTimerRef.current = null
-    }
-    pendingWorkspaceSaveRef.current = null
+    workspaceSession.clear()
     setChatWorkspace(createDefaultChatWorkspaceState())
     setProjectSkillStates({})
     setThreadRunStates({})
@@ -642,57 +588,31 @@ export function AppShell() {
     setHomeModeResetKey((value) => value + 1)
     setHeaderStatus(t('shell.headerDefault'))
     window.location.hash = ''
-  }, [t])
+  }, [t, workspaceSession])
 
   // --- Chat/workspace reducers: merge transcript updates and CRUD threads/projects / 归约器：合并聊天内容并增删改线程与项目 ---
 
   const updateThreadChatState = useCallback(
     (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => {
-      updateChatWorkspace((prev) => {
-        let projectId: string | null = null
-        const nextThreads = prev.threads.map((thread) => {
-          if (thread.id !== threadId) return thread
-          projectId = thread.projectId
-          return {
-            ...thread,
-            updatedAt: Date.now(),
-            chatState: resolveChatStateUpdate(thread.chatState, update),
-          }
-        })
-        if (!projectId) return prev
-        return {
-          ...prev,
-          projects: touchProject(prev.projects, projectId),
-          threads: nextThreads,
-        }
-      })
+      updateChatWorkspace((prev) => workspaceSession.updateThreadChatState(prev, threadId, update))
     },
-    [updateChatWorkspace],
+    [updateChatWorkspace, workspaceSession],
   )
 
   const selectThread = useCallback(
     (threadId: string) => {
       setSelectedProjectSkill(null)
       updateThreadCompletionState(threadId, null)
-      updateChatWorkspace((prev) => {
-        const thread = prev.threads.find((item) => item.id === threadId)
-        if (!thread) return prev
-        return {
-          ...prev,
-          activeProjectId: thread.projectId,
-          activeThreadId: thread.id,
-        }
-      })
+      updateChatWorkspace((prev) => workspaceSession.selectThread(prev, threadId))
       goHome()
     },
-    [goHome, updateChatWorkspace, updateThreadCompletionState],
+    [goHome, updateChatWorkspace, updateThreadCompletionState, workspaceSession],
   )
 
   const createThreadInProject = useCallback(
     (projectId?: string) => {
       setSelectedProjectSkill(null)
       const threadId = createId('thread')
-      const now = Date.now()
       const draftProjectId = projectId ?? activeProject?.id
       const shouldClearHomeDraft = Boolean(draftProjectId && projectHomeDraftModelPicks[draftProjectId])
       updateChatWorkspace((prev) => {
@@ -700,21 +620,12 @@ export function AppShell() {
         const defaultModelPick = targetProjectId === activeProject?.id
           ? projectHomeDraftModelPicks[targetProjectId] ?? projectDefaultModelPick
           : projectHomeDraftModelPicks[targetProjectId]
-        const nextThread: WorkspaceThread = {
+        return workspaceSession.addThread(prev, {
           id: threadId,
           projectId: targetProjectId,
           title: t('thread.newThreadTitle'),
-          createdAt: now,
-          updatedAt: now,
           chatState: createEmptyChatState(defaultModelPick),
-        }
-        return {
-          ...prev,
-          activeProjectId: targetProjectId,
-          activeThreadId: threadId,
-          projects: touchProject(prev.projects, targetProjectId, now),
-          threads: [nextThread, ...prev.threads],
-        }
+        })
       })
       if (shouldClearHomeDraft && draftProjectId) {
         setProjectHomeDraftModelPick(draftProjectId, undefined)
@@ -724,71 +635,47 @@ export function AppShell() {
       requestAnimationFrame(() => void chatRef.current?.focusComposer())
       return threadId
     },
-    [activeProject?.id, goHome, projectDefaultModelPick, projectHomeDraftModelPicks, setProjectHomeDraftModelPick, updateChatWorkspace, t],
+    [activeProject?.id, goHome, projectDefaultModelPick, projectHomeDraftModelPicks, setProjectHomeDraftModelPick, updateChatWorkspace, t, workspaceSession],
   )
 
   const forkThreadInProject = useCallback(
     (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => {
       setSelectedProjectSkill(null)
       const threadId = createId('thread')
-      const now = Date.now()
-      updateChatWorkspace((prev) => {
-        const nextThread: WorkspaceThread = {
+      updateChatWorkspace((prev) =>
+        workspaceSession.forkThread(prev, {
           id: threadId,
           projectId,
           title,
-          createdAt: now,
-          updatedAt: now,
-          chatState: {
-            model: model ?? 'Claude Agent',
-            modelPick,
-            cwd: prev.projects.find((p) => p.id === projectId)?.path ?? '',
-            items,
-          },
-        }
-        return {
-          ...prev,
-          activeProjectId: projectId,
-          activeThreadId: threadId,
-          projects: touchProject(prev.projects, projectId, now),
-          threads: [nextThread, ...prev.threads],
-        }
-      })
+          items,
+          model,
+          modelPick,
+        }),
+      )
       void window.claudeChat?.newThread(threadId)
       goHome()
       requestAnimationFrame(() => void chatRef.current?.focusComposer())
     },
-    [goHome, updateChatWorkspace],
+    [goHome, updateChatWorkspace, workspaceSession],
   )
 
   const createHomePluginCardThread = useCallback(
     (projectId: string, initialPrompt: string) => {
       setSelectedProjectSkill(null)
       const threadId = createId('thread')
-      const now = Date.now()
-      updateChatWorkspace((prev) => {
-        if (!prev.projects.some((project) => project.id === projectId)) return prev
-        const nextThread: WorkspaceThread = {
+      updateChatWorkspace((prev) =>
+        workspaceSession.addThread(prev, {
           id: threadId,
           projectId,
           title: deriveDataCardThreadTitle(initialPrompt, t),
           purpose: 'home-plugin-card-customization',
-          createdAt: now,
-          updatedAt: now,
           chatState: createEmptyChatState(),
-        }
-        return {
-          ...prev,
-          activeProjectId: projectId,
-          activeThreadId: threadId,
-          projects: touchProject(prev.projects, projectId, now),
-          threads: [nextThread, ...prev.threads],
-        }
-      })
+        }),
+      )
       goHome()
       return threadId
     },
-    [goHome, t, updateChatWorkspace],
+    [goHome, t, updateChatWorkspace, workspaceSession],
   )
 
   const openHomePluginCardThread = useCallback(
@@ -796,7 +683,6 @@ export function AppShell() {
       setSelectedProjectSkill(null)
       let threadId = ''
       let createdThread = false
-      const now = Date.now()
       const boundThreadId = item.manifest.threadId?.trim()
 
       updateChatWorkspace((prev) => {
@@ -815,23 +701,14 @@ export function AppShell() {
 
         threadId = createId('thread')
         createdThread = true
-        const nextThread: WorkspaceThread = {
+        return workspaceSession.addThread(prev, {
           id: threadId,
           projectId,
           title: t('thread.homePluginCardEditTitle', { name: item.manifest.name }),
           purpose: 'home-plugin-card-customization',
           homePluginSlug: item.slug,
-          createdAt: now,
-          updatedAt: now,
           chatState: createEmptyChatState(),
-        }
-        return {
-          ...prev,
-          activeProjectId: projectId,
-          activeThreadId: threadId,
-          projects: touchProject(prev.projects, projectId, now),
-          threads: [nextThread, ...prev.threads],
-        }
+        })
       })
       goHome()
 
@@ -854,7 +731,7 @@ export function AppShell() {
         })
       })()
     },
-    [goHome, t, updateChatWorkspace],
+    [goHome, t, updateChatWorkspace, workspaceSession],
   )
 
   const resolveSkillRunModelPick = useCallback(
@@ -901,12 +778,10 @@ export function AppShell() {
           return
         }
         const threadId = createId('thread')
-        const now = Date.now()
         const prompt = skill.title
 
-        updateChatWorkspace((prev) => {
-          if (!prev.projects.some((project) => project.id === projectId)) return prev
-          const nextThread: WorkspaceThread = {
+        updateChatWorkspace((prev) =>
+          workspaceSession.addThread(prev, {
             id: threadId,
             projectId,
             title: t('thread.newThreadTitle'),
@@ -914,18 +789,9 @@ export function AppShell() {
             skillPath: skill.path,
             skillCommand: skill.command,
             skillTitle: skill.title,
-            createdAt: now,
-            updatedAt: now,
             chatState: createEmptyChatState(modelPick),
-          }
-          return {
-            ...prev,
-            activeProjectId: projectId,
-            activeThreadId: threadId,
-            projects: touchProject(prev.projects, projectId, now),
-            threads: [nextThread, ...prev.threads],
-          }
-        })
+          }),
+        )
         if (consumedProjectDraft) {
           setProjectHomeDraftModelPick(projectId, undefined)
         }
@@ -940,7 +806,7 @@ export function AppShell() {
         })
       })()
     },
-    [chatWorkspace?.projects, createThreadInProject, goHome, resolveSkillRunModelPick, setProjectHomeDraftModelPick, t, updateChatWorkspace],
+    [chatWorkspace?.projects, createThreadInProject, goHome, resolveSkillRunModelPick, setProjectHomeDraftModelPick, t, updateChatWorkspace, workspaceSession],
   )
 
   const stopProjectSkillRun = useCallback(
@@ -960,17 +826,10 @@ export function AppShell() {
     (projectId: string) => {
       setSelectedProjectSkill(null)
       setHomeModeResetKey((value) => value + 1)
-      updateChatWorkspace((prev) => {
-        if (!prev.projects.some((project) => project.id === projectId)) return prev
-        return {
-          ...prev,
-          activeProjectId: projectId,
-          activeThreadId: '',
-        }
-      })
+      updateChatWorkspace((prev) => workspaceSession.selectProject(prev, projectId))
       goHome()
     },
-    [goHome, updateChatWorkspace],
+    [goHome, updateChatWorkspace, workspaceSession],
   )
 
   const createProjectFromExistingPath = useCallback(
@@ -978,33 +837,20 @@ export function AppShell() {
       const value = projectPath.trim()
       if (!value) return
 
-      const now = Date.now()
       const projectId = createId('project')
       const scratchDefault = t('project.scratchDefaultName')
-      const project: WorkspaceProject = {
+      const project = {
         id: projectId,
         name: pathBasename(value, scratchDefault),
         path: value,
-        createdAt: now,
-        updatedAt: now,
       }
 
       setSelectedProjectSkill(null)
-      updateChatWorkspace((prev) => ({
-        ...prev,
-        activeProjectId: projectId,
-        activeThreadId: '',
-        projects: [project, ...prev.projects],
-        threads: prev.threads,
-        sidebarPrefs: {
-          ...prev.sidebarPrefs,
-          projectOrderIds: [projectId, ...projectIdsForSidebar(prev.projects, prev.sidebarPrefs.projectOrderIds)],
-        },
-      }))
+      updateChatWorkspace((prev) => workspaceSession.addProject(prev, project))
       goHome()
       requestAnimationFrame(() => void chatRef.current?.focusComposer())
     },
-    [goHome, t, updateChatWorkspace],
+    [goHome, t, updateChatWorkspace, workspaceSession],
   )
 
   const createProject = useCallback(
@@ -1024,33 +870,20 @@ export function AppShell() {
         return
       }
 
-      const now = Date.now()
       const projectId = createId('project')
       const name = value
-      const project: WorkspaceProject = {
+      const project = {
         id: projectId,
         name,
         path: `~/Projects/${name}`,
-        createdAt: now,
-        updatedAt: now,
       }
 
       setSelectedProjectSkill(null)
-      updateChatWorkspace((prev) => ({
-        ...prev,
-        activeProjectId: projectId,
-        activeThreadId: '',
-        projects: [project, ...prev.projects],
-        threads: prev.threads,
-        sidebarPrefs: {
-          ...prev.sidebarPrefs,
-          projectOrderIds: [projectId, ...projectIdsForSidebar(prev.projects, prev.sidebarPrefs.projectOrderIds)],
-        },
-      }))
+      updateChatWorkspace((prev) => workspaceSession.addProject(prev, project))
       goHome()
       requestAnimationFrame(() => void chatRef.current?.focusComposer())
     },
-    [createProjectFromExistingPath, goHome, updateChatWorkspace, t],
+    [createProjectFromExistingPath, goHome, updateChatWorkspace, t, workspaceSession],
   )
 
   const updateInitialModelField = useCallback(
@@ -1130,7 +963,7 @@ export function AppShell() {
     const sonnetModel = initialModelForm.sonnetModel.trim()
     const haikuModel = initialModelForm.haikuModel.trim()
     const opusModel = initialModelForm.opusModel.trim()
-    const selectedModel = sonnetModel || primaryModel || opusModel || haikuModel
+    const selectedModel = primaryModel || sonnetModel || opusModel || haikuModel
     if (!selectedModel) {
       setInitialModelStatus(t('shell.initModelRequired'))
       return false
@@ -1145,35 +978,35 @@ export function AppShell() {
 
     try {
       const snapshot = await window.claudeChat.getSettings()
-      const providers = snapshot.settings.providers.length
-        ? snapshot.settings.providers.map((provider) => ({ ...provider }))
-        : [createInitialModelProvider()]
-      const activeId = providers.some((provider) => provider.id === snapshot.settings.activeProviderId)
-        ? snapshot.settings.activeProviderId
-        : providers[0].id
-
-      const nextProviders = providers.map((provider) =>
-        provider.id === activeId
-          ? {
-              ...provider,
-              presetId: initialModelForm.presetId,
-              name: initialModelForm.name.trim(),
-              apiKeyUrl: initialModelForm.apiKeyUrl.trim(),
-              authMode: initialModelForm.authMode,
-              apiKey: initialModelForm.apiKey.trim(),
-              authToken: '',
-              baseUrl: initialModelForm.baseUrl.trim(),
-              model: primaryModel || selectedModel,
-              modelSupportsImages: initialModelForm.modelSupportsImages,
-              defaultHaikuModel: haikuModel,
-              defaultHaikuSupportsImages: initialModelForm.haikuSupportsImages,
-              defaultSonnetModel: sonnetModel || selectedModel,
-              defaultSonnetSupportsImages: initialModelForm.sonnetSupportsImages,
-              defaultOpusModel: opusModel,
-              defaultOpusSupportsImages: initialModelForm.opusSupportsImages,
-            }
-          : provider,
-      )
+      const activeProvider =
+        snapshot.settings.providers.find((provider) => provider.id === snapshot.settings.activeProviderId) ??
+        snapshot.settings.providers[0] ??
+        createInitialModelProvider()
+      const configuredProvider: ClaudeAgentModelProvider = {
+        ...activeProvider,
+        presetId: initialModelForm.presetId,
+        name: initialModelForm.name.trim(),
+        apiKeyUrl: initialModelForm.apiKeyUrl.trim(),
+        authMode: initialModelForm.authMode,
+        apiKey: initialModelForm.apiKey.trim(),
+        authToken: '',
+        baseUrl: initialModelForm.baseUrl.trim(),
+        model: primaryModel || selectedModel,
+        modelSupportsImages: initialModelForm.modelSupportsImages,
+        defaultHaikuModel: haikuModel,
+        defaultHaikuSupportsImages: initialModelForm.haikuSupportsImages,
+        defaultSonnetModel: sonnetModel || selectedModel,
+        defaultSonnetSupportsImages: initialModelForm.sonnetSupportsImages,
+        defaultOpusModel: opusModel,
+        defaultOpusSupportsImages: initialModelForm.opusSupportsImages,
+      }
+      const existingConfiguredProviders = snapshot.settings.providers.filter(providerHasCredential)
+      const nextProviders = existingConfiguredProviders.some((provider) => provider.id === configuredProvider.id)
+        ? existingConfiguredProviders.map((provider) =>
+            provider.id === configuredProvider.id ? configuredProvider : provider,
+          )
+        : [configuredProvider, ...existingConfiguredProviders]
+      const activeId = configuredProvider.id
 
       const nextSnapshot = await window.claudeChat.saveSettings({
         configSource: 'settings',
@@ -1239,60 +1072,16 @@ export function AppShell() {
   const ensureTaskRunThread = useCallback(
     (event: HomePluginTaskEvent) => {
       if (!event.thread) return
-      const seed = event.thread
-      updateChatWorkspace((prev) => {
-        const project =
-          prev.projects.find((item) => item.id === seed.projectId) ??
-          prev.projects.find((item) => sameProjectPath(item.path, event.projectPath))
-        if (!project) return prev
-
-        const now = Date.now()
-        const existing = prev.threads.find((thread) => thread.id === seed.id)
-        const title = seed.title || (event.task.mode === 'agent' ? '执行agent' : `执行${event.task.title}`)
-        if (existing) {
-          const nextUpdatedAt = Math.max(existing.updatedAt, seed.updatedAt || now)
-          if (
-            existing.projectId === project.id &&
-            existing.title === title &&
-            existing.purpose === 'task-run' &&
-            existing.homePluginSlug === event.slug &&
-            existing.updatedAt === nextUpdatedAt
-          ) {
-            return prev
-          }
-          const nextThreads = prev.threads.map((thread) =>
-            thread.id === seed.id
-              ? {
-                  ...thread,
-                  projectId: project.id,
-                  title,
-                  purpose: 'task-run' as const,
-                  homePluginSlug: event.slug,
-                  updatedAt: nextUpdatedAt,
-                }
-              : thread,
-          )
-          return { ...prev, threads: nextThreads }
-        }
-
-        const nextThread: WorkspaceThread = {
-          id: seed.id,
-          projectId: project.id,
-          title,
-          purpose: 'task-run',
-          homePluginSlug: event.slug,
-          createdAt: seed.createdAt || now,
-          updatedAt: seed.updatedAt || now,
-          chatState: createEmptyChatState(),
-        }
-        return {
-          ...prev,
-          projects: touchProject(prev.projects, project.id, now),
-          threads: [nextThread, ...prev.threads],
-        }
-      })
+      updateChatWorkspace((prev) =>
+        workspaceSession.ensureTaskRunThread(prev, {
+          projectPath: event.projectPath,
+          slug: event.slug,
+          title: event.task.mode === 'agent' ? '执行agent' : `执行${event.task.title}`,
+          thread: event.thread!,
+        }),
+      )
     },
-    [updateChatWorkspace],
+    [updateChatWorkspace, workspaceSession],
   )
 
   useEffect(() => {
@@ -1328,158 +1117,48 @@ export function AppShell() {
         }
       }
 
-      updateChatWorkspace((prev) => {
-        const current = prev.threads.find((thread) => thread.id === threadId)
-        if (!current || current.archivedAt) return prev
-
-        const now = Date.now()
-        const nextThreads = prev.threads.map((thread) =>
-          thread.id === threadId ? { ...thread, archivedAt: now, updatedAt: now } : thread,
-        )
-        if (prev.activeThreadId !== threadId) {
-          return { ...prev, threads: nextThreads }
-        }
-
-        const nextState: ChatWorkspaceState = { ...prev, threads: nextThreads }
-        const nextActive = latestVisibleThreadForProject(nextState, current.projectId)
-
-        if (nextActive) {
-          return {
-            ...nextState,
-            activeProjectId: nextActive.projectId,
-            activeThreadId: nextActive.id,
-          }
-        }
-
-        return {
-          ...nextState,
-          activeProjectId: current.projectId,
-          activeThreadId: '',
-        }
-      })
+      updateChatWorkspace((prev) => workspaceSession.archiveThread(prev, threadId))
       setSelectedProjectSkill(null)
       goHome()
     },
-    [chatWorkspace, goHome, threadRunStates, updateChatWorkspace],
+    [chatWorkspace, goHome, threadRunStates, updateChatWorkspace, workspaceSession],
   )
 
   const toggleThreadPinned = useCallback((threadId: string) => {
-    const now = Date.now()
-    updateChatWorkspace((prev) => ({
-      ...prev,
-      threads: prev.threads.map((thread) =>
-        thread.id === threadId ? { ...thread, pinnedAt: thread.pinnedAt ? undefined : now } : thread,
-      ),
-    }))
-  }, [updateChatWorkspace])
+    updateChatWorkspace((prev) => workspaceSession.toggleThreadPinned(prev, threadId))
+  }, [updateChatWorkspace, workspaceSession])
 
   const toggleProjectPinned = useCallback((projectId: string) => {
-    const now = Date.now()
-    updateChatWorkspace((prev) => {
-      const target = prev.projects.find((project) => project.id === projectId)
-      if (!target) return prev
-
-      const currentOrder = projectIdsForSidebar(prev.projects, prev.sidebarPrefs.projectOrderIds)
-      const nextOrder = target.pinnedAt
-        ? currentOrder
-        : [projectId, ...currentOrder.filter((id) => id !== projectId)]
-
-      return {
-        ...prev,
-        projects: prev.projects.map((project) =>
-          project.id === projectId
-            ? { ...project, pinnedAt: project.pinnedAt ? undefined : now, updatedAt: now }
-            : project,
-        ),
-        sidebarPrefs: {
-          ...prev.sidebarPrefs,
-          projectOrderIds: nextOrder,
-        },
-      }
-    })
-  }, [updateChatWorkspace])
+    updateChatWorkspace((prev) => workspaceSession.toggleProjectPinned(prev, projectId))
+  }, [updateChatWorkspace, workspaceSession])
 
   const reorderProject = useCallback((projectId: string, targetProjectId: string, position: 'before' | 'after') => {
-    updateChatWorkspace((prev) => {
-      if (projectId === targetProjectId) return prev
-      const projectIds = new Set(prev.projects.map((project) => project.id))
-      if (!projectIds.has(projectId) || !projectIds.has(targetProjectId)) return prev
-
-      const currentOrder = projectIdsForSidebar(prev.projects, prev.sidebarPrefs.projectOrderIds)
-      const withoutDragged = currentOrder.filter((id) => id !== projectId)
-      const targetIndex = withoutDragged.indexOf(targetProjectId)
-      if (targetIndex === -1) return prev
-
-      const insertIndex = position === 'before' ? targetIndex : targetIndex + 1
-      const nextOrder = [...withoutDragged.slice(0, insertIndex), projectId, ...withoutDragged.slice(insertIndex)]
-      if (nextOrder.join('\n') === currentOrder.join('\n')) return prev
-
-      return {
-        ...prev,
-        sidebarPrefs: {
-          ...prev.sidebarPrefs,
-          projectOrderIds: nextOrder,
-        },
-      }
-    })
-  }, [updateChatWorkspace])
+    updateChatWorkspace((prev) =>
+      workspaceSession.reorderProject(prev, projectId, targetProjectId, position),
+    )
+  }, [updateChatWorkspace, workspaceSession])
 
   const toggleSidebarCollapsed = useCallback(() => {
-    updateChatWorkspace((prev) => ({
-      ...prev,
-      sidebarPrefs: { ...prev.sidebarPrefs, collapsed: !prev.sidebarPrefs.collapsed },
-    }))
-  }, [updateChatWorkspace])
+    updateChatWorkspace((prev) => workspaceSession.toggleSidebar(prev))
+  }, [updateChatWorkspace, workspaceSession])
 
   const toggleSidebarProjectCollapsed = useCallback((projectId: string) => {
-    updateChatWorkspace((prev) => {
-      const nextIds = new Set(prev.sidebarPrefs.collapsedProjectIds)
-      if (nextIds.has(projectId)) nextIds.delete(projectId)
-      else nextIds.add(projectId)
-      return {
-        ...prev,
-        sidebarPrefs: { ...prev.sidebarPrefs, collapsedProjectIds: [...nextIds] },
-      }
-    })
-  }, [updateChatWorkspace])
+    updateChatWorkspace((prev) => workspaceSession.toggleProjectCollapsed(prev, projectId))
+  }, [updateChatWorkspace, workspaceSession])
 
   const removeProject = useCallback(
     (projectId: string) => {
       let didRemove = false
       updateChatWorkspace((prev) => {
-        if (prev.projects.length <= 1) return prev
-        if (!prev.projects.some((project) => project.id === projectId)) return prev
-
-        didRemove = true
-        const nextProjects = prev.projects.filter((project) => project.id !== projectId)
-        let nextThreads = prev.threads.filter((thread) => thread.projectId !== projectId)
-
-        let activeProjectId = prev.activeProjectId
-        let activeThreadId = prev.activeThreadId
-
-        if (prev.activeProjectId === projectId) {
-          activeProjectId = nextProjects[0]?.id ?? prev.activeProjectId
-          activeThreadId = ''
-        }
-
-        return {
-          ...prev,
-          projects: nextProjects,
-          threads: nextThreads,
-          activeProjectId,
-          activeThreadId,
-          sidebarPrefs: {
-            ...prev.sidebarPrefs,
-            collapsedProjectIds: prev.sidebarPrefs.collapsedProjectIds.filter((id) => id !== projectId),
-            projectOrderIds: prev.sidebarPrefs.projectOrderIds.filter((id) => id !== projectId),
-          },
-        }
+        const next = workspaceSession.removeProject(prev, projectId)
+        didRemove = next !== prev
+        return next
       })
       if (!didRemove) return
       setSelectedProjectSkill((current) => (current?.projectId === projectId ? null : current))
       goHome()
     },
-    [goHome, updateChatWorkspace],
+    [goHome, updateChatWorkspace, workspaceSession],
   )
 
   const revealProjectInFileManager = useCallback((projectPath: string) => {
@@ -1496,17 +1175,9 @@ export function AppShell() {
       }
       if (!value) return
 
-      const now = Date.now()
-      updateChatWorkspace((prev) => ({
-        ...prev,
-        projects: prev.projects.map((project) =>
-          project.id === projectId
-            ? { ...project, path: value, pathMissing: undefined, updatedAt: now }
-            : project,
-        ),
-      }))
+      updateChatWorkspace((prev) => workspaceSession.relocateProject(prev, projectId, value))
     },
-    [t, updateChatWorkspace],
+    [t, updateChatWorkspace, workspaceSession],
   )
 
   const hideProjectSkill = useCallback((projectId: string, skillPath: string) => {
@@ -1528,20 +1199,16 @@ export function AppShell() {
 
   const handleThreadPromptSubmit = useCallback((threadId: string, prompt: string) => {
     setSelectedProjectSkill(null)
-    updateChatWorkspace((prev) => ({
-      ...prev,
-      threads: prev.threads.map((thread) => {
-        if (thread.id !== threadId) return thread
-        const isUntitled = defaultThreadTitleSet.has(thread.title)
-        const hasExistingMessages = thread.chatState.items.some((item) => item.type === 'message' && item.role === 'user')
-        return {
-          ...thread,
-          title: isUntitled && !hasExistingMessages ? titleFromPrompt(prompt, t('thread.newThreadTitle')) : thread.title,
-          updatedAt: Date.now(),
-        }
-      }),
-    }))
-  }, [updateChatWorkspace, t])
+    updateChatWorkspace((prev) =>
+      workspaceSession.markPromptSubmitted(
+        prev,
+        threadId,
+        prompt,
+        defaultThreadTitleSet,
+        t('thread.newThreadTitle'),
+      ),
+    )
+  }, [updateChatWorkspace, t, workspaceSession])
 
   // --- Read CSS length tokens, clamp sidebar, persist user width / 读取 CSS 长度 token、夹紧侧栏宽度并持久化用户宽度 ---
 
@@ -1723,6 +1390,16 @@ export function AppShell() {
       : t('settings.models.customProviderMeta')
   const initialModelUsesCustomProvider = initialModelEnabled && !initialModelForm.presetId
   const initialModelRows = [
+    {
+      key: 'primary',
+      label: t('settings.models.fieldPrimary'),
+      hint: t('settings.models.fieldPrimaryHint'),
+      inputId: 'init-model-primary',
+      field: 'model' as const,
+      value: initialModelForm.model,
+      supportField: 'modelSupportsImages' as const,
+      supportsImages: initialModelForm.modelSupportsImages,
+    },
     {
       key: 'haiku',
       label: t('settings.models.fieldHaiku'),
@@ -2077,17 +1754,6 @@ export function AppShell() {
 
 // --- File-level utilities (pure helpers below `AppShell`) / 文件级工具函数（`AppShell` 下方的纯函数）---
 
-function resolveChatStateUpdate(
-  prev: ChatState,
-  update: ChatState | ((prev: ChatState) => ChatState),
-): ChatState {
-  return typeof update === 'function' ? update(prev) : update
-}
-
-function touchProject(projects: WorkspaceProject[], projectId: string, time = Date.now()): WorkspaceProject[] {
-  return projects.map((project) => (project.id === projectId ? { ...project, updatedAt: time } : project))
-}
-
 function deriveDataCardThreadTitle(prompt: string, t: (path: string, vars?: Record<string, string | number>) => string): string {
   const normalized = prompt.replace(/\s+/g, ' ').trim()
   if (!normalized) return t('thread.homePluginCardCreateTitle')
@@ -2107,11 +1773,6 @@ function buildEditHomePluginCardPrompt(item: HomePluginRunItem, threadId: string
     '',
     '要求：只修改这一张卡片，不要创建或改写其他 Home Plugin；修改后保持 small / medium / large 三种响应式展示契约。',
   ].join('\n')
-}
-
-function titleFromPrompt(prompt: string, fallbackTitle: string): string {
-  const firstLine = prompt.trim().split(/\n/)[0]?.trim() || fallbackTitle
-  return firstLine.length > 34 ? `${firstLine.slice(0, 34)}...` : firstLine
 }
 
 function pathBasename(path: string, fallback: string): string {
@@ -2159,7 +1820,7 @@ function hasInitialModelInput(form: InitialModelFormState): boolean {
 }
 
 function buildInitialModelSummary(form: InitialModelFormState): string {
-  return [form.name, form.sonnetModel || form.model || form.opusModel || form.haikuModel, form.baseUrl]
+  return [form.name, form.model || form.sonnetModel || form.opusModel || form.haikuModel, form.baseUrl]
     .map((value) => value.trim())
     .filter(Boolean)
     .join(' · ')
@@ -2257,13 +1918,4 @@ function writeHiddenSkillPathsMap(map: Record<string, string[]>): void {
   } catch {
     /* ignore */
   }
-}
-
-function isEmptyChatWorkspace(state: ChatWorkspaceState): boolean {
-  return (
-    state.activeProjectId === '' &&
-    state.activeThreadId === '' &&
-    state.projects.length === 0 &&
-    state.threads.length === 0
-  )
 }

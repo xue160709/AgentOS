@@ -24,9 +24,9 @@ import type {
 } from './components/types'
 import {
   migrateLegacySeedProjects,
-  reconcileActiveProject,
   stripRuntimeProjectFields,
 } from './project-path'
+import { restoreWorkspaceSessionState } from './components/workspace-session'
 
 // --- Factories & selectors / 默认值与查询 ---
 
@@ -46,16 +46,6 @@ export function createId(prefix: string): string {
 /** 新建侧栏偏好默认值 / Default sidebar prefs */
 export function createDefaultSidebarPrefs(): WorkspaceSidebarPrefs {
   return { collapsed: false, collapsedProjectIds: [], projectOrderIds: [] }
-}
-
-/** 某项目下最新未归档线程 / Latest non-archived thread for project */
-export function latestVisibleThreadForProject(
-  state: ChatWorkspaceState,
-  projectId: string,
-): WorkspaceThread | undefined {
-  return state.threads
-    .filter((thread) => thread.projectId === projectId && !thread.archivedAt)
-    .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
 
 // --- Persistence IO / 持久化读写 ---
@@ -89,7 +79,7 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
 export async function finalizeChatWorkspaceState(state: ChatWorkspaceState): Promise<ChatWorkspaceState> {
   let next = migrateLegacySeedProjects(state)
   next = await annotateProjectPathAvailability(next)
-  next = reconcileActiveProject(next)
+  next = restoreWorkspaceSessionState(next)
 
   const changed =
     JSON.stringify(stripRuntimeProjectFields(next)) !== JSON.stringify(stripRuntimeProjectFields(state))
@@ -249,28 +239,9 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
 
   const sidebarPrefs = normalizeSidebarPrefs(value, projectIds)
 
-  const activeProjectId =
-    typeof value.activeProjectId === 'string' && projectIds.has(value.activeProjectId)
-      ? value.activeProjectId
-      : projects[0].id
-  const visibleThreads = threads.filter((thread) => !thread.archivedAt)
-  const requestedProjectHome = value.activeThreadId === ''
-  const activeThread =
-    typeof value.activeThreadId === 'string' && !requestedProjectHome
-      ? visibleThreads.find((thread) => thread.id === value.activeThreadId)
-      : undefined
-  const activeProjectThread = requestedProjectHome
-    ? undefined
-    : activeThread?.projectId === activeProjectId
-      ? activeThread
-      : latestVisibleThreadForProject(
-          { activeProjectId, activeThreadId: '', projects, threads, sidebarPrefs },
-          activeProjectId,
-        )
-
   return {
-    activeProjectId,
-    activeThreadId: activeProjectThread?.id ?? '',
+    activeProjectId: typeof value.activeProjectId === 'string' ? value.activeProjectId : '',
+    activeThreadId: typeof value.activeThreadId === 'string' ? value.activeThreadId : '',
     projects,
     threads,
     sidebarPrefs,

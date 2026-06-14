@@ -5,11 +5,11 @@
 
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron'
 import { fileURLToPath } from 'node:url'
-import { watch, type FSWatcher } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import zh from '../src/locales/zh.json'
 import en from '../src/locales/en.json'
+import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
 import type {
   AgentProjectDocumentsResult,
   AgentModeProjectSettings,
@@ -25,7 +25,7 @@ import type {
 } from '../src/desktop-types'
 import { ensureAgentModeFiles, getAgentModeStatus, setAgentModeState } from './agent-mode-files'
 import { AgentModeSettingsStore } from './agent-mode-settings-store'
-import { discoverAgentContext, searchAgentKnowledge, searchProjectFiles } from './agent-context'
+import { discoverAgentContext, searchAgentKnowledge } from './agent-context'
 import { ClaudeAgentRunner } from './claude-agent-runner'
 import { ClaudeAgentSettingsStore } from './claude-agent-settings'
 import { ChatWorkspaceStore } from './chat-workspace-store'
@@ -40,6 +40,16 @@ import { installAboutPanel } from './about-panel'
 import { installApplicationMenu } from './app-menu'
 import { MacSpeechRecognitionService } from './speech-recognition'
 import { formatProjectPathError, resolveProjectPath, validateProjectPaths } from './project-path'
+import {
+  configureProjectContentEvents,
+  disposeProjectFileWatchers,
+  pathExistsUnderProject,
+  readProjectFilePreview,
+  readProjectFileTree,
+  searchProjectFiles,
+  unwatchProjectFiles,
+  watchProjectFiles,
+} from './project-content'
 import { getMainWindowBackgroundColor, getMainWindowChromeOptions } from './window-chrome'
 import type {
   ActiveChatPickPayload,
@@ -58,7 +68,6 @@ import type {
   AgentKnowledgeSearchResult,
   ClaudePermissionResponsePayload,
 } from '../src/claude-chat-types'
-import type { FileTreeNode, FileTreeResult, ProjectFilePreviewKind, ProjectFilePreviewResult } from '../src/components/types'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -84,13 +93,9 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 const APP_NAME = 'AgentOS'
-const TRAY_ACTION_CHANNEL = 'desktop:tray-action'
-const TASK_HOME_PLUGIN_EVENT_CHANNEL = 'desktop:task-home-plugin-event'
-const PROJECT_FILES_CHANGED_CHANNEL = 'desktop:project-files-changed'
 
 const TRAY_LOCALE_BUNDLE = { zh, en } as const
 type TrayLocale = keyof typeof TRAY_LOCALE_BUNDLE
-type ProjectFilePreviewTextKind = Exclude<ProjectFilePreviewKind, 'image'>
 
 let win: BrowserWindow | null
 let tray: Tray | null = null
@@ -105,7 +110,6 @@ let taskHomePluginManager: TaskHomePluginManager | null = null
 let speechRecognitionService: MacSpeechRecognitionService | null = null
 let chatWorkspaceOperationChain: Promise<void> = Promise.resolve()
 let claudeSettingsOperationChain: Promise<void> = Promise.resolve()
-const projectFileWatchers = new Map<string, ProjectFileWatcherState>()
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -118,19 +122,9 @@ app.setName(APP_NAME)
 const CHAT_ATTACHMENT_MAX_FILES = 8
 const CHAT_TEXT_ATTACHMENT_MAX_BYTES = 512 * 1024
 const CHAT_ATTACHMENT_MAX_TOTAL_BYTES = 24 * 1024 * 1024
-const PROJECT_FILE_PREVIEW_TEXT_MAX_BYTES = 5 * 1024 * 1024
-const PROJECT_FILE_PREVIEW_TEXT_SAMPLE_BYTES = 8192
 const CLIPBOARD_PNG_MAX_DATA_URL_LENGTH = 25_000_000
 const CLIPBOARD_SVG_MAX_CHARS = 4_000_000
 const CLIPBOARD_SVG_MAX_DIMENSION = 4096
-const PROJECT_FILE_WATCH_DEBOUNCE_MS = 500
-
-type ProjectFileWatcherState = {
-  rootPath: string
-  watcher: FSWatcher
-  refCount: number
-  debounceTimer: NodeJS.Timeout | null
-}
 const AGENT_PROJECT_DOCUMENT_NAMES = ['AGENTS.md', 'SOUL.md', 'GOAL.md'] as const
 const AGENT_PROJECT_DOCUMENT_MAX_CHARS = 512_000
 const PROJECT_CONTEXT_DIR_NAME = 'Context'
@@ -138,121 +132,12 @@ const PROJECT_CONTEXT_INSTRUCTIONS_FILE = 'CONTEXT.md'
 const PROJECT_CONTEXT_INSTRUCTIONS_MAX_CHARS = 512_000
 const CHAT_IMAGE_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024
 const CHAT_TEXT_EXTENSIONS = new Set(['.md', '.markdown', '.txt'])
-const PROJECT_FILE_PREVIEW_TEXT_EXTENSIONS = new Set([
-  '.astro',
-  '.bat',
-  '.bash',
-  '.c',
-  '.cc',
-  '.cjs',
-  '.cfg',
-  '.cmd',
-  '.conf',
-  '.cpp',
-  '.cs',
-  '.css',
-  '.cts',
-  '.csv',
-  '.cxx',
-  '.dart',
-  '.diff',
-  '.dockerfile',
-  '.env',
-  '.fish',
-  '.go',
-  '.gql',
-  '.graphql',
-  '.h',
-  '.hpp',
-  '.htm',
-  '.html',
-  '.ini',
-  '.java',
-  '.js',
-  '.json',
-  '.json5',
-  '.jsonc',
-  '.jsx',
-  '.kt',
-  '.kts',
-  '.less',
-  '.log',
-  '.lua',
-  '.md',
-  '.markdown',
-  '.mdx',
-  '.mjs',
-  '.mts',
-  '.php',
-  '.pl',
-  '.properties',
-  '.ps1',
-  '.py',
-  '.r',
-  '.rb',
-  '.rs',
-  '.sass',
-  '.scala',
-  '.scss',
-  '.sh',
-  '.sql',
-  '.svelte',
-  '.svg',
-  '.swift',
-  '.toml',
-  '.ts',
-  '.tsv',
-  '.tsx',
-  '.txt',
-  '.vue',
-  '.xml',
-  '.yaml',
-  '.yml',
-  '.zsh',
-])
-const PROJECT_FILE_PREVIEW_TEXT_FILENAMES = new Set([
-  '.dockerignore',
-  '.editorconfig',
-  '.env',
-  '.eslintignore',
-  '.eslintrc',
-  '.gitattributes',
-  '.gitignore',
-  '.npmrc',
-  '.prettierignore',
-  '.prettierrc',
-  '.stylelintrc',
-  '.yarnrc',
-  'brewfile',
-  'changelog',
-  'dockerfile',
-  'gemfile',
-  'license',
-  'makefile',
-  'procfile',
-  'rakefile',
-  'readme',
-  'vagrantfile',
-])
 const CHAT_IMAGE_MEDIA_TYPES = new Map<string, 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'>([
   ['.gif', 'image/gif'],
   ['.jpeg', 'image/jpeg'],
   ['.jpg', 'image/jpeg'],
   ['.png', 'image/png'],
   ['.webp', 'image/webp'],
-])
-const FILE_TREE_IGNORED_DIRECTORIES = new Set([
-  '.git',
-  '.next',
-  '.turbo',
-  '.vite',
-  'build',
-  'coverage',
-  'dist',
-  'dist-electron',
-  'node_modules',
-  'out',
-  'release',
 ])
 
 // --- Window, tray & branding / 窗口、托盘与 Dock ---
@@ -490,7 +375,14 @@ async function removeIfExists(targetPath: string): Promise<void> {
 
 function sendTaskHomePluginEvent(event: HomePluginTaskEvent): void {
   if (!win || win.isDestroyed()) return
-  win.webContents.send(TASK_HOME_PLUGIN_EVENT_CHANNEL, event)
+  win.webContents.send(DESKTOP_EVENT_CHANNELS.onHomePluginTaskEvent, event)
+}
+
+function sendProjectFilesChanged(event: { rootPath: string; relativePath?: string }): void {
+  const windows = BrowserWindow.getAllWindows().filter((item) => !item.isDestroyed())
+  for (const targetWindow of windows) {
+    targetWindow.webContents.send(DESKTOP_EVENT_CHANNELS.onProjectFilesChanged, event)
+  }
 }
 
 function resolveAgentModeIpcLocale(raw: unknown): AppUiLocale {
@@ -548,7 +440,7 @@ function buildTrayContextMenu() {
         if (win && !win.isDestroyed()) {
           win.show()
           win.focus()
-          win.webContents.send(TRAY_ACTION_CHANNEL, 'new-thread')
+          win.webContents.send(DESKTOP_EVENT_CHANNELS.onTrayMenuAction, 'new-thread')
         }
       },
     },
@@ -558,7 +450,7 @@ function buildTrayContextMenu() {
         if (win && !win.isDestroyed()) {
           win.show()
           win.focus()
-          win.webContents.send(TRAY_ACTION_CHANNEL, 'open-project')
+          win.webContents.send(DESKTOP_EVENT_CHANNELS.onTrayMenuAction, 'open-project')
         }
       },
     },
@@ -655,15 +547,16 @@ if (gotSingleInstanceLock) {
     chatWorkspaceStore = new ChatWorkspaceStore(userDataPath)
     applyLoginItemSettingsOnStartup(getDesktopPreferencesStore().read())
     currentTrayLocale = normalizeUiLocale(getDesktopPreferencesStore().read().locale)
+    configureProjectContentEvents(sendProjectFilesChanged)
 
     // --- IPC handlers / IPC 注册 ---
 
     registerAppUpdaterIpc(() => win, { beforeQuitAndInstall: prepareForAppQuit })
 
-    ipcMain.handle('desktop-preferences:get', () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getDesktopPreferences, () => {
       return getDesktopPreferencesStore().read()
     })
-    ipcMain.handle('desktop-preferences:set', (_event, partial: Partial<DesktopPreferences>) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.setDesktopPreferences, (_event, partial: Partial<DesktopPreferences>) => {
       const next = getDesktopPreferencesStore().save(partial)
       if (Object.prototype.hasOwnProperty.call(partial, 'openAtLogin')) {
         applyLoginItemSettingsFromPrefs(next)
@@ -671,13 +564,13 @@ if (gotSingleInstanceLock) {
       ensureTray()
       return next
     })
-    ipcMain.handle('desktop:sync-tray-locale', (_event, raw: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.syncTrayLocale, (_event, raw: unknown) => {
       if (raw === 'zh' || raw === 'en') {
         currentTrayLocale = raw
         ensureTray()
       }
     })
-    ipcMain.handle('desktop:copy-png-to-clipboard', (_event, dataUrl: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.copyPngToClipboard, (_event, dataUrl: unknown) => {
       if (
         typeof dataUrl !== 'string' ||
         !/^data:image\/png;base64,/i.test(dataUrl) ||
@@ -690,16 +583,16 @@ if (gotSingleInstanceLock) {
       clipboard.writeImage(image)
       return true
     })
-    ipcMain.handle('desktop:copy-svg-to-clipboard', async (_event, svg: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.copySvgToClipboard, async (_event, svg: unknown) => {
       if (typeof svg !== 'string' || !svg.trim().startsWith('<svg') || svg.length > CLIPBOARD_SVG_MAX_CHARS) {
         return false
       }
       return copySvgToClipboard(svg)
     })
-    ipcMain.handle('desktop:speech-recognition:get-status', () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getSpeechRecognitionStatus, () => {
       return getSpeechRecognitionService().getSnapshot()
     })
-    ipcMain.handle('desktop:speech-recognition:start', (_event, rawOptions: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startSpeechRecognition, (_event, rawOptions: unknown) => {
       const options = isRecord(rawOptions)
         ? {
             locale: typeof rawOptions.locale === 'string' ? rawOptions.locale : undefined,
@@ -708,10 +601,10 @@ if (gotSingleInstanceLock) {
         : undefined
       return getSpeechRecognitionService().start(options)
     })
-    ipcMain.handle('desktop:speech-recognition:stop', () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.stopSpeechRecognition, () => {
       return getSpeechRecognitionService().stop()
     })
-    ipcMain.handle('desktop:speech-recognition:cancel', () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelSpeechRecognition, () => {
       return getSpeechRecognitionService().cancel()
     })
     ipcMain.handle('claude-chat:submit', (_event, payload: ClaudeChatSubmitPayload) => {
@@ -744,27 +637,27 @@ if (gotSingleInstanceLock) {
     ipcMain.handle('claude-agent-settings:set-active-chat-pick', (_event, payload: ActiveChatPickPayload) => {
       return runClaudeSettingsOperation(async () => getClaudeAgentSettingsStore().setActiveChatPick(payload))
     })
-    ipcMain.handle('chat-workspace:get', () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getChatWorkspace, () => {
       return getChatWorkspaceStore().read()
     })
-    ipcMain.handle('chat-workspace:save', (_event, state: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveChatWorkspace, (_event, state: unknown) => {
       return runChatWorkspaceOperation(async () => {
         const saved = await getChatWorkspaceStore().save(state)
         void taskHomePluginManager?.refreshFromWorkspace(saved)
         return saved
       })
     })
-    ipcMain.handle('desktop:clear-chat-workspace-data', () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.clearChatWorkspaceData, () => {
       return runChatWorkspaceOperation(async () => {
         await clearChatWorkspaceData(userDataPath)
       })
     })
-    ipcMain.handle('desktop:clear-claude-agent-settings-data', () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.clearClaudeAgentSettings, () => {
       return runClaudeSettingsOperation(async () => {
         await clearClaudeAgentSettingsData(userDataPath)
       })
     })
-    ipcMain.handle('desktop:pick-project-directory', async () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.pickProjectDirectory, async () => {
       const parent = BrowserWindow.getFocusedWindow() ?? win
       if (!parent) return null
       const result = await dialog.showOpenDialog(parent, {
@@ -774,7 +667,7 @@ if (gotSingleInstanceLock) {
       if (result.canceled || result.filePaths.length === 0) return null
       return result.filePaths[0] ?? null
     })
-    ipcMain.handle('desktop:pick-chat-attachments', async (_event, rawOptions: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.pickChatAttachments, async (_event, rawOptions: unknown) => {
       const parent = BrowserWindow.getFocusedWindow() ?? win
       if (!parent) {
         return { ok: false, message: '当前窗口不可用' } satisfies ClaudeChatAttachmentPickerResult
@@ -796,7 +689,7 @@ if (gotSingleInstanceLock) {
       }
       return readChatAttachments(result.filePaths, allowImages)
     })
-    ipcMain.handle('desktop:read-chat-attachments', async (_event, rawFilePaths: unknown, rawOptions: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.readChatAttachments, async (_event, rawFilePaths: unknown, rawOptions: unknown) => {
       if (!Array.isArray(rawFilePaths)) {
         return { ok: false, message: '附件路径无效' } satisfies ClaudeChatAttachmentPickerResult
       }
@@ -804,34 +697,26 @@ if (gotSingleInstanceLock) {
       const allowImages = isRecord(rawOptions) ? rawOptions.allowImages === true : false
       return readChatAttachments(filePaths, allowImages)
     })
-    ipcMain.handle('desktop:list-project-files', (_event, rootPath: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.listProjectFiles, (_event, rootPath: string) => {
       return readProjectFileTree(rootPath)
     })
-    ipcMain.handle('desktop:watch-project-files', async (_event, rootPath: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.watchProjectFiles, async (_event, rootPath: string) => {
       return watchProjectFiles(rootPath)
     })
-    ipcMain.handle('desktop:unwatch-project-files', async (_event, rootPath: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.unwatchProjectFiles, async (_event, rootPath: string) => {
       return unwatchProjectFiles(rootPath)
     })
-    ipcMain.handle('desktop:read-project-file', (_event, rootPath: unknown, filePath: unknown) => {
-      if (typeof rootPath !== 'string' || typeof filePath !== 'string') {
-        return {
-          ok: false,
-          rootPath: '',
-          path: '',
-          message: '文件路径无效',
-        } satisfies ProjectFilePreviewResult
-      }
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.readProjectFile, (_event, rootPath: unknown, filePath: unknown) => {
       return readProjectFilePreview(rootPath, filePath)
     })
-    ipcMain.handle('desktop:validate-project-paths', async (_event, paths: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.validateProjectPaths, async (_event, paths: unknown) => {
       if (!Array.isArray(paths)) return {}
       return validateProjectPaths(paths.filter((path): path is string => typeof path === 'string'))
     })
-    ipcMain.handle('desktop:search-project-files', (_event, rootPath: string, query: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.searchProjectFiles, (_event, rootPath: string, query: string) => {
       return searchProjectFiles(rootPath, query)
     })
-    ipcMain.handle('desktop:search-chat-history', (_event, projectId: unknown, query: unknown, options: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.searchChatHistory, (_event, projectId: unknown, query: unknown, options: unknown) => {
       const normalizedOptions: ChatHistorySearchOptions = isRecord(options)
         ? {
             includeArchived: options.includeArchived === true,
@@ -846,10 +731,10 @@ if (gotSingleInstanceLock) {
         )
       })
     })
-    ipcMain.handle('desktop:list-agent-context', (_event, rootPath: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.listAgentContext, (_event, rootPath: string) => {
       return discoverAgentContext(rootPath)
     })
-    ipcMain.handle('desktop:search-agent-knowledge', (_event, projects: unknown, query: unknown, options: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.searchAgentKnowledge, (_event, projects: unknown, query: unknown, options: unknown) => {
       const normalizedProjects: AgentKnowledgeSearchProject[] = Array.isArray(projects)
         ? projects.flatMap((project): AgentKnowledgeSearchProject[] => {
             if (!isRecord(project)) return []
@@ -868,20 +753,19 @@ if (gotSingleInstanceLock) {
         : {}
       return searchAgentKnowledge(normalizedProjects, typeof query === 'string' ? query : '', normalizedOptions) satisfies Promise<AgentKnowledgeSearchResult>
     })
-    ipcMain.handle('desktop:path-exists-under-project', async (_event, rootPath: unknown, relativePath: unknown) => {
-      if (typeof rootPath !== 'string' || typeof relativePath !== 'string') return false
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.pathExistsUnderProject, async (_event, rootPath: unknown, relativePath: unknown) => {
       return pathExistsUnderProject(rootPath, relativePath)
     })
-    ipcMain.handle('desktop:run-home-plugin', (_event, rootPath: string, options?: HomePluginRunOptions) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.runHomePlugin, (_event, rootPath: string, options?: HomePluginRunOptions) => {
       return runProjectHomePlugin(rootPath, options)
     })
-    ipcMain.handle('desktop:save-home-plugin-order', (_event, rootPath: string, order: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveHomePluginOrder, (_event, rootPath: string, order: unknown) => {
       return saveProjectHomePluginOrder(rootPath, order)
     })
-    ipcMain.handle('desktop:save-home-plugin-layout', (_event, rootPath: string, order: unknown, cards: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveHomePluginLayout, (_event, rootPath: string, order: unknown, cards: unknown) => {
       return saveProjectHomePluginLayout(rootPath, order, cards)
     })
-    ipcMain.handle('desktop:delete-home-plugin', async (_event, rootPath: string, slug: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.deleteHomePlugin, async (_event, rootPath: string, slug: unknown) => {
       if (typeof slug === 'string') {
         try {
           await taskHomePluginManager?.prepareDeleteTask(rootPath, slug)
@@ -893,69 +777,69 @@ if (gotSingleInstanceLock) {
       if (result.ok) void taskHomePluginManager?.refreshFromWorkspace()
       return result
     })
-    ipcMain.handle('desktop:save-task-home-plugin', (_event, rootPath: string, payload: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveTaskHomePlugin, (_event, rootPath: string, payload: unknown) => {
       return getTaskHomePluginManager().saveTask(rootPath, payload as Parameters<TaskHomePluginManager['saveTask']>[1])
     })
-    ipcMain.handle('desktop:get-task-home-plugin', (_event, rootPath: string, slug: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getTaskHomePlugin, (_event, rootPath: string, slug: string) => {
       return getTaskHomePluginManager().readTask(rootPath, slug)
     })
-    ipcMain.handle('desktop:run-task-home-plugin', (_event, rootPath: string, slug: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.runTaskHomePlugin, (_event, rootPath: string, slug: string) => {
       return getTaskHomePluginManager().startTask(rootPath, slug)
     })
-    ipcMain.handle('desktop:stop-task-home-plugin', (_event, rootPath: string, slug: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.stopTaskHomePlugin, (_event, rootPath: string, slug: string) => {
       return getTaskHomePluginManager().stopTask(rootPath, slug)
     })
-    ipcMain.handle('desktop:get-agent-mode-status', (_event, rootPath: string, rawLocale?: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getAgentModeStatus, (_event, rootPath: string, rawLocale?: unknown) => {
       return getAgentModeStatus(rootPath, getAgentModeSettingsStore(), resolveAgentModeIpcLocale(rawLocale))
     })
-    ipcMain.handle('desktop:ensure-agent-mode-files', (_event, rootPath: string, rawLocale?: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.ensureAgentModeFiles, (_event, rootPath: string, rawLocale?: unknown) => {
       return ensureAgentModeFiles(rootPath, getAgentModeSettingsStore(), resolveAgentModeIpcLocale(rawLocale))
     })
     ipcMain.handle(
-      'desktop:set-agent-mode-state',
+      DESKTOP_INVOKE_CHANNELS.setAgentModeState,
       (_event, rootPath: string, partial: Partial<AgentModeProjectSettings>, rawLocale?: unknown) => {
         return setAgentModeState(rootPath, partial, getAgentModeSettingsStore(), resolveAgentModeIpcLocale(rawLocale))
       },
     )
-    ipcMain.handle('desktop:get-agent-mode-settings', (_event, rootPath: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getAgentModeSettings, (_event, rootPath: string) => {
       return getAgentModeSettingsStore().getResult(rootPath)
     })
-    ipcMain.handle('desktop:save-agent-mode-settings', (_event, rootPath: string, payload: Partial<AgentModeProjectSettings>) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveAgentModeSettings, (_event, rootPath: string, payload: Partial<AgentModeProjectSettings>) => {
       return getAgentModeSettingsStore().saveSettings(rootPath, payload)
     })
-    ipcMain.handle('desktop:read-agent-project-documents', (_event, rootPath: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.readAgentProjectDocuments, (_event, rootPath: string) => {
       return readAgentProjectDocuments(rootPath)
     })
-    ipcMain.handle('desktop:save-agent-project-documents', (_event, rootPath: string, files: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveAgentProjectDocuments, (_event, rootPath: string, files: unknown) => {
       return saveAgentProjectDocuments(rootPath, files)
     })
-    ipcMain.handle('desktop:list-project-context', (_event, rootPath: string) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.listProjectContext, (_event, rootPath: string) => {
       return readProjectContext(rootPath)
     })
-    ipcMain.handle('desktop:save-project-context-instructions', (_event, rootPath: string, instructions: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveProjectContextInstructions, (_event, rootPath: string, instructions: unknown) => {
       return saveProjectContextInstructions(rootPath, instructions)
     })
-    ipcMain.handle('desktop:add-project-context-entries', (_event, rootPath: string, rawMode: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.addProjectContextEntries, (_event, rootPath: string, rawMode: unknown) => {
       return pickAndAddProjectContextEntries(rootPath, rawMode)
     })
-    ipcMain.handle('desktop:remove-project-context-entry', (_event, rootPath: string, relativePath: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.removeProjectContextEntry, (_event, rootPath: string, relativePath: unknown) => {
       return removeProjectContextEntry(rootPath, relativePath)
     })
-    ipcMain.handle('desktop:quit', () => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.quitApp, () => {
       app.quit()
     })
-    ipcMain.handle('desktop:show-item-in-folder', (_event, rawPath: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.showItemInFolder, (_event, rawPath: unknown) => {
       if (typeof rawPath !== 'string' || !rawPath.trim()) return
       const resolved = resolveProjectPath(rawPath)
       shell.showItemInFolder(resolved)
     })
-    ipcMain.handle('desktop:open-path', async (_event, rawPath: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openPath, async (_event, rawPath: unknown) => {
       if (typeof rawPath !== 'string' || !rawPath.trim()) return
       const resolved = resolveProjectPath(rawPath)
       const message = await shell.openPath(resolved)
       if (message) throw new Error(message)
     })
-    ipcMain.handle('desktop:open-external', async (_event, rawUrl: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openExternal, async (_event, rawUrl: unknown) => {
       if (typeof rawUrl !== 'string' || !isExternalHttpUrl(rawUrl)) return
       await shell.openExternal(rawUrl)
     })
@@ -1606,333 +1490,6 @@ function delay(ms: number): Promise<void> {
   })
 }
 
-async function readProjectFileTree(rootPath: string): Promise<FileTreeResult> {
-  const resolvedRootPath = resolveProjectPath(rootPath)
-  try {
-    const stat = await fs.stat(resolvedRootPath)
-    if (!stat.isDirectory()) {
-      return {
-        ok: false,
-        rootPath: resolvedRootPath,
-        message: '当前项目路径不是文件夹',
-      }
-    }
-
-    const readDirectory = async (directoryPath: string, relativeBase: string, visitedRealPaths: Set<string>): Promise<FileTreeNode[]> => {
-      let entries = await fs.readdir(directoryPath, { withFileTypes: true })
-      entries = entries
-        .filter((entry) => !shouldIgnoreFileTreeEntry(entry))
-        .sort((a, b) => {
-          const typeDiff = Number(b.isDirectory()) - Number(a.isDirectory())
-          return typeDiff || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-        })
-
-      const nodes: FileTreeNode[] = []
-      for (const entry of entries) {
-        const entryPath = path.join(directoryPath, entry.name)
-        const relativePath = normalizeRelativePath(path.join(relativeBase, entry.name))
-        const entryStat = await statFileTreeEntry(entryPath)
-        const isDirectory = entry.isDirectory() || Boolean(entry.isSymbolicLink() && entryStat?.isDirectory())
-        const isFile = entry.isFile() || Boolean(entry.isSymbolicLink() && entryStat?.isFile())
-
-        if (isDirectory) {
-          nodes.push({
-            name: entry.name,
-            path: entryPath,
-            relativePath,
-            type: 'directory',
-            children: await readChildDirectory(entryPath, relativePath, visitedRealPaths),
-          })
-          continue
-        }
-
-        if (isFile || entry.isSymbolicLink()) {
-          nodes.push({
-            name: entry.name,
-            path: entryPath,
-            relativePath,
-            type: 'file',
-          })
-        }
-      }
-
-      return nodes
-    }
-
-    const readChildDirectory = async (directoryPath: string, relativePath: string, parentVisitedRealPaths: Set<string>) => {
-      try {
-        const realPath = await fs.realpath(directoryPath)
-        if (parentVisitedRealPaths.has(realPath)) return []
-        const nextVisitedRealPaths = new Set(parentVisitedRealPaths)
-        nextVisitedRealPaths.add(realPath)
-        return await readDirectory(directoryPath, relativePath, nextVisitedRealPaths)
-      } catch {
-        return []
-      }
-    }
-
-    const rootRealPath = await fs.realpath(resolvedRootPath)
-    const visitedRealPaths = new Set([rootRealPath])
-
-    return {
-      ok: true,
-      rootPath: resolvedRootPath,
-      rootName: path.basename(resolvedRootPath) || resolvedRootPath,
-      nodes: await readDirectory(resolvedRootPath, '', visitedRealPaths),
-      truncated: false,
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      rootPath: resolvedRootPath,
-      message: formatProjectPathError(error),
-    }
-  }
-}
-
-async function statFileTreeEntry(entryPath: string): Promise<import('node:fs').Stats | null> {
-  try {
-    return await fs.stat(entryPath)
-  } catch {
-    return null
-  }
-}
-
-async function watchProjectFiles(rootPath: string): Promise<{ ok: true; rootPath: string } | { ok: false; rootPath: string; message: string }> {
-  const resolvedRootPath = resolveProjectPath(rootPath)
-  try {
-    const stat = await fs.stat(resolvedRootPath)
-    if (!stat.isDirectory()) {
-      return { ok: false, rootPath: resolvedRootPath, message: '当前项目路径不是文件夹' }
-    }
-
-    const existing = projectFileWatchers.get(resolvedRootPath)
-    if (existing) {
-      existing.refCount += 1
-      return { ok: true, rootPath: resolvedRootPath }
-    }
-
-    const watcher = createProjectFileWatcher(resolvedRootPath)
-    projectFileWatchers.set(resolvedRootPath, {
-      rootPath: resolvedRootPath,
-      watcher,
-      refCount: 1,
-      debounceTimer: null,
-    })
-    return { ok: true, rootPath: resolvedRootPath }
-  } catch (error) {
-    return {
-      ok: false,
-      rootPath: resolvedRootPath,
-      message: formatProjectPathError(error),
-    }
-  }
-}
-
-async function unwatchProjectFiles(rootPath: string): Promise<void> {
-  const resolvedRootPath = resolveProjectPath(rootPath)
-  const state = projectFileWatchers.get(resolvedRootPath)
-  if (!state) return
-  state.refCount -= 1
-  if (state.refCount > 0) return
-  disposeProjectFileWatcher(resolvedRootPath, state)
-}
-
-function createProjectFileWatcher(rootPath: string): FSWatcher {
-  try {
-    return watch(rootPath, { recursive: true }, (_eventType, filename) => {
-      scheduleProjectFilesChanged(rootPath, filename)
-    })
-  } catch {
-    return watch(rootPath, (_eventType, filename) => {
-      scheduleProjectFilesChanged(rootPath, filename)
-    })
-  }
-}
-
-function scheduleProjectFilesChanged(rootPath: string, filename: string | Buffer | null) {
-  const relativePath = normalizeWatchRelativePath(filename)
-  if (relativePath && shouldIgnoreWatchedPath(relativePath)) return
-  const state = projectFileWatchers.get(rootPath)
-  if (!state) return
-  if (state.debounceTimer) clearTimeout(state.debounceTimer)
-  state.debounceTimer = setTimeout(() => {
-    state.debounceTimer = null
-    const windows = BrowserWindow.getAllWindows().filter((item) => !item.isDestroyed())
-    for (const targetWindow of windows) {
-      targetWindow.webContents.send(PROJECT_FILES_CHANGED_CHANNEL, {
-        rootPath,
-        relativePath,
-      })
-    }
-  }, PROJECT_FILE_WATCH_DEBOUNCE_MS)
-}
-
-function normalizeWatchRelativePath(filename: string | Buffer | null): string {
-  if (!filename) return ''
-  const raw = Buffer.isBuffer(filename) ? filename.toString('utf8') : filename
-  return normalizeRelativePath(raw)
-}
-
-function shouldIgnoreWatchedPath(relativePath: string): boolean {
-  return relativePath.split('/').some((segment) => FILE_TREE_IGNORED_DIRECTORIES.has(segment))
-}
-
-function disposeProjectFileWatchers() {
-  for (const [rootPath, state] of Array.from(projectFileWatchers)) {
-    disposeProjectFileWatcher(rootPath, state)
-  }
-}
-
-function disposeProjectFileWatcher(rootPath: string, state: ProjectFileWatcherState) {
-  if (state.debounceTimer) clearTimeout(state.debounceTimer)
-  state.watcher.close()
-  projectFileWatchers.delete(rootPath)
-}
-
-async function readProjectFilePreview(rootPath: string, filePath: string): Promise<ProjectFilePreviewResult> {
-  const resolvedRootPath = resolveProjectPath(rootPath)
-  const trimmedFilePath = filePath.trim()
-  const requestedPath = path.isAbsolute(trimmedFilePath)
-    ? path.resolve(trimmedFilePath)
-    : path.resolve(resolvedRootPath, trimmedFilePath)
-  const relativePath = normalizeRelativePath(path.relative(resolvedRootPath, requestedPath))
-  const name = path.basename(requestedPath)
-
-  const fail = (message: string): ProjectFilePreviewResult => ({
-    ok: false,
-    rootPath: resolvedRootPath,
-    path: requestedPath,
-    relativePath,
-    name,
-    message,
-  })
-
-  try {
-    const rootStat = await fs.stat(resolvedRootPath)
-    if (!rootStat.isDirectory()) return fail('当前项目路径不是文件夹')
-
-    if (!isSameOrInsidePath(resolvedRootPath, requestedPath)) {
-      return fail('只能预览当前项目内的文件')
-    }
-
-    const stat = await fs.stat(requestedPath)
-    if (!stat.isFile()) return fail('只能预览文件')
-
-    const extension = path.extname(name).toLowerCase()
-    const imageMimeType = CHAT_IMAGE_MEDIA_TYPES.get(extension)
-    const textKind = await getProjectFilePreviewTextKind(requestedPath, name, stat.size)
-
-    if (!textKind && !imageMimeType) {
-      return fail('仅支持预览纯文本文件或 PNG、JPG、GIF、WEBP 图片')
-    }
-
-    if (textKind) {
-      if (stat.size > PROJECT_FILE_PREVIEW_TEXT_MAX_BYTES) {
-        return fail('文本文件超过 5MB，暂不在应用内预览')
-      }
-      const content = await fs.readFile(requestedPath, 'utf8')
-      return {
-        ok: true,
-        rootPath: resolvedRootPath,
-        path: requestedPath,
-        relativePath,
-        name,
-        kind: textKind,
-        mimeType: getProjectFilePreviewTextMimeType(textKind),
-        size: stat.size,
-        content,
-      }
-    }
-
-    if (!imageMimeType) return fail('仅支持预览纯文本文件或 PNG、JPG、GIF、WEBP 图片')
-    if (stat.size > CHAT_IMAGE_ATTACHMENT_MAX_BYTES) {
-      return fail('图片超过 10MB，暂不在应用内预览')
-    }
-    const data = await fs.readFile(requestedPath)
-    return {
-      ok: true,
-      rootPath: resolvedRootPath,
-      path: requestedPath,
-      relativePath,
-      name,
-      kind: 'image',
-      mimeType: imageMimeType,
-      size: stat.size,
-      dataUrl: `data:${imageMimeType};base64,${data.toString('base64')}`,
-    }
-  } catch (error) {
-    return fail(formatProjectPathError(error))
-  }
-}
-
-async function getProjectFilePreviewTextKind(filePath: string, name: string, size: number): Promise<ProjectFilePreviewTextKind | null> {
-  const lowerName = name.toLowerCase()
-  const extension = path.extname(lowerName)
-  if (extension === '.md' || extension === '.markdown' || extension === '.mdx') return 'markdown'
-  if (extension === '.json' || extension === '.jsonc' || extension === '.json5') return 'json'
-  if (
-    PROJECT_FILE_PREVIEW_TEXT_EXTENSIONS.has(extension) ||
-    PROJECT_FILE_PREVIEW_TEXT_FILENAMES.has(lowerName) ||
-    lowerName.startsWith('.env.') ||
-    lowerName.endsWith('rc') ||
-    lowerName.endsWith('.lock')
-  ) {
-    return 'text'
-  }
-  return (await isProbablyTextFile(filePath, size)) ? 'text' : null
-}
-
-function getProjectFilePreviewTextMimeType(kind: ProjectFilePreviewTextKind): string {
-  if (kind === 'markdown') return 'text/markdown'
-  if (kind === 'json') return 'application/json'
-  return 'text/plain'
-}
-
-async function isProbablyTextFile(filePath: string, size: number): Promise<boolean> {
-  const sampleSize = Math.min(Math.max(size, 0), PROJECT_FILE_PREVIEW_TEXT_SAMPLE_BYTES)
-  if (sampleSize === 0) return true
-
-  const handle = await fs.open(filePath, 'r')
-  try {
-    const sample = Buffer.alloc(sampleSize)
-    const { bytesRead } = await handle.read(sample, 0, sampleSize, 0)
-    return isProbablyTextBuffer(sample.subarray(0, bytesRead))
-  } finally {
-    await handle.close()
-  }
-}
-
-function isProbablyTextBuffer(buffer: Buffer): boolean {
-  if (buffer.length === 0) return true
-  let suspiciousBytes = 0
-  for (const byte of buffer) {
-    if (byte === 0) return false
-    const isAllowedControl = byte === 7 || byte === 8 || byte === 9 || byte === 10 || byte === 12 || byte === 13
-    if ((byte < 32 && !isAllowedControl) || byte === 127) suspiciousBytes += 1
-  }
-  return suspiciousBytes / buffer.length < 0.01
-}
-
 function normalizeRelativePath(relativePath: string): string {
   return relativePath.split(/[\\/]+/).filter(Boolean).join('/')
-}
-
-async function pathExistsUnderProject(rootPath: string, relativePath: string): Promise<boolean> {
-  const resolvedRoot = resolveProjectPath(rootPath)
-  const normalized = normalizeRelativePath(relativePath)
-  if (!normalized || normalized.split('/').some((segment) => segment === '..')) return false
-  const resolvedTarget = path.resolve(resolvedRoot, ...normalized.split('/'))
-  const rel = path.relative(resolvedRoot, resolvedTarget)
-  if (rel.startsWith('..') || path.isAbsolute(rel)) return false
-  try {
-    await fs.access(resolvedTarget)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function shouldIgnoreFileTreeEntry(entry: import('node:fs').Dirent): boolean {
-  return entry.isDirectory() && FILE_TREE_IGNORED_DIRECTORIES.has(entry.name)
 }

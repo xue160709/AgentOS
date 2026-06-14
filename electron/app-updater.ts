@@ -5,12 +5,11 @@
 
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
+import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
 import type { AppUpdaterState } from '../src/desktop-types'
 
 /** electron-updater 为 CJS，ESM 主进程需走 default 再解构 / CJS package — default import then destructure */
 const { autoUpdater } = electronUpdater
-
-export const APP_UPDATER_EVENT_CHANNEL = 'app-updater:event'
 
 const STARTUP_CHECK_DELAY_MS = 8_000
 const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000
@@ -205,7 +204,7 @@ class AppUpdaterService {
   private broadcast() {
     const window = this.getWindow()
     if (!window || window.isDestroyed()) return
-    window.webContents.send(APP_UPDATER_EVENT_CHANNEL, this.getState())
+    window.webContents.send(DESKTOP_EVENT_CHANNELS.onAppUpdaterState, this.getState())
   }
 }
 
@@ -214,10 +213,10 @@ export const appUpdaterService = new AppUpdaterService()
 export function registerAppUpdaterIpc(getWindow: () => BrowserWindow | null, options?: { beforeQuitAndInstall?: () => void }) {
   appUpdaterService.install(getWindow, options)
 
-  ipcMain.handle('app-updater:get-state', () => appUpdaterService.getState())
-  ipcMain.handle('app-updater:check', () => appUpdaterService.check())
-  ipcMain.handle('app-updater:download', () => appUpdaterService.download())
-  ipcMain.handle('app-updater:quit-and-install', () => {
+  ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getAppUpdaterState, () => appUpdaterService.getState())
+  ipcMain.handle(DESKTOP_INVOKE_CHANNELS.checkForAppUpdates, () => appUpdaterService.check())
+  ipcMain.handle(DESKTOP_INVOKE_CHANNELS.downloadAppUpdate, () => appUpdaterService.download())
+  ipcMain.handle(DESKTOP_INVOKE_CHANNELS.quitAndInstallAppUpdate, () => {
     appUpdaterService.quitAndInstall()
   })
 }

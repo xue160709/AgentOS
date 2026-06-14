@@ -6,6 +6,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
+import { projectContent } from '../project-content'
 import type { FileTreeNode, FileTreeResult, WorkspaceProject } from './types'
 
 /** `AppFileTreePane` 暴露的命令式接口 / Imperative API for parent drawers */
@@ -32,7 +33,6 @@ export const AppFileTreePane = forwardRef<AppFileTreePaneHandle, AppFileTreePane
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set())
   const loadRequestRef = useRef(0)
   const lastLoadedPathRef = useRef<string | null>(null)
-  const watchedRootPathRef = useRef<string | null>(null)
   const autoRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -47,21 +47,16 @@ export const AppFileTreePane = forwardRef<AppFileTreePaneHandle, AppFileTreePane
     const showLoading = options?.showLoading !== false
     if (showLoading) setLoading(true)
 
-    const listProjectFiles = window.desktop?.listProjectFiles
-    if (!listProjectFiles) {
-      setResult({
-        ok: false,
-        rootPath: project.path,
-        message: t('filePanel.unsupported'),
-      })
-      setLoading(false)
-      return
-    }
-
     try {
-      const nextResult = await listProjectFiles(project.path)
+      const nextResult = await projectContent.list(project.path)
       if (loadRequestRef.current !== requestId) return
-      setResult(nextResult)
+      setResult(
+        nextResult ?? {
+          ok: false,
+          rootPath: project.path,
+          message: t('filePanel.unsupported'),
+        },
+      )
     } catch (error) {
       if (loadRequestRef.current !== requestId) return
       setResult({
@@ -85,12 +80,7 @@ export const AppFileTreePane = forwardRef<AppFileTreePaneHandle, AppFileTreePane
 
   useEffect(() => {
     if (!isVisible) return
-    const watchProjectFiles = window.desktop?.watchProjectFiles
-    const unwatchProjectFiles = window.desktop?.unwatchProjectFiles
-    const onProjectFilesChanged = window.desktop?.onProjectFilesChanged
-    if (!watchProjectFiles || !unwatchProjectFiles || !onProjectFilesChanged) return
 
-    let disposed = false
     const scheduleSilentRefresh = () => {
       if (autoRefreshTimerRef.current) clearTimeout(autoRefreshTimerRef.current)
       autoRefreshTimerRef.current = setTimeout(() => {
@@ -99,30 +89,16 @@ export const AppFileTreePane = forwardRef<AppFileTreePaneHandle, AppFileTreePane
       }, 250)
     }
 
-    const unsubscribe = onProjectFilesChanged((event) => {
-      const watchedRootPath = watchedRootPathRef.current
-      if (event.rootPath !== project.path && event.rootPath !== watchedRootPath) return
+    const unsubscribe = projectContent.subscribe(project.path, () => {
       scheduleSilentRefresh()
     })
 
-    void watchProjectFiles(project.path).then((watchResult) => {
-      if (disposed) {
-        if (watchResult.ok) void unwatchProjectFiles(watchResult.rootPath)
-        return
-      }
-      watchedRootPathRef.current = watchResult.ok ? watchResult.rootPath : null
-    })
-
     return () => {
-      disposed = true
       unsubscribe()
       if (autoRefreshTimerRef.current) {
         clearTimeout(autoRefreshTimerRef.current)
         autoRefreshTimerRef.current = null
       }
-      const watchedRootPath = watchedRootPathRef.current
-      watchedRootPathRef.current = null
-      void unwatchProjectFiles(watchedRootPath ?? project.path)
     }
   }, [isVisible, project.path, loadProjectFiles])
 
