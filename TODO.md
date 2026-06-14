@@ -13,36 +13,36 @@
 
 ## 1. 当前任务
 
-- [x] T01. 为 Chat Run 补充事件流特征测试
+- [x] T01. 深化 Chat Run 提交流程
   - 状态：done
   - 优先级：P0
-  - 范围：`session_start`、流式回复、工具与思考、任务、文件 diff、`result`、`error`、`cancelled`
-  - 完成标准：测试复用生产事件折叠 implementation，`npm run test:electron` 与 `npm run typecheck` 通过
-  - 结果：新增 5 组事件序列测试；Electron 测试共 17 项通过；TypeScript 类型检查通过
-- [x] T02. 提取 deep Chat Run module
-  - 状态：done
-  - 优先级：P0
-  - 范围：request lifecycle、thread 运行状态、Agent 事件折叠、交互提示、终止清理与提交竞态
-  - 完成标准：`ChatPage` 仅保留 React adapter；生命周期规则可通过独立 interface 测试
-  - 结果：新增 `ChatRun` module 与领域说明；`ChatPage` 减少约 550 行；Electron 测试共 19 项通过；类型检查和无签名应用打包通过
+  - 范围：pending request 创建、真实 request 对齐、bridge 不可用、submit 失败、Session 失效清理、terminal transcript row
+  - 完成标准：`ChatPage` 不再直接编排 `beginSubmission` / `acceptSubmission` / `rejectSubmission`；提交失败与 bridge 失败可通过 `ChatRun` interface 测试；`npm run typecheck` 与 `npm run test:electron` 通过
+  - 结果：新增 `ChatRun.submit()` interface，`ChatPage` 不再直接持有 pending request id；新增 2 组 submit interface 测试；`npm run typecheck` 与 `npm run test:electron`（33 项）通过
 
 ## 2. 后续顺序
 
-- [x] T03. 深化 Workspace Session module
+- [x] T02. 统一 Workspace Session restore rules
+  - 状态：done
+  - 优先级：P0
+  - 范围：restore-time reconciliation、active project/thread fallback、latest visible thread 规则去重
+  - 完成标准：persistence adapter 只读写 snapshot；Workspace Session 统一决定恢复后的 active project/thread
+  - 结果：新增 `WorkspaceSession.restore()` 与 `restoreWorkspaceSessionState()`；`normalizeChatWorkspaceState` 不再挑选 active thread；移除旧 `reconcileActiveProject`；新增 3 组 restore interface 测试；`npm run typecheck` 与 `npm run test:electron`（36 项）通过
+- [x] T03. 收拢 Project Content desktop implementation
   - 状态：done
   - 优先级：P1
-  - 范围：工作区恢复、状态转换、防抖串行保存、清空与卸载
-  - 完成标准：React 壳层仅应用 Workspace Session transition；工作区不变量通过独立 interface 测试
-  - 结果：新增 `WorkspaceSession` module 与 6 项测试；`AppShell` 减少约 350 行；类型检查通过
-- [x] T04. 提取 Project Content module
+  - 范围：tree、preview、search、watch、ignore policy、path normalization、event emission
+  - 完成标准：Electron `main.ts` 主要注册 Desktop Seam；Project Content 文件规则集中在一个 implementation module
+  - 结果：新增 Electron-side `project-content` implementation，统一承接 tree、preview、search、watch 与 path rules；`main.ts` 仅保留 IPC 注册与事件转发；`agent-context` 不再持有项目文件搜索；新增 2 组 desktop implementation 测试；`npm run typecheck` 与 `npm run test:electron`（38 项）通过
+- [x] T04. 深化 Project Content search lifecycle
   - 状态：done
   - 优先级：P1
-  - 范围：项目文件树、预览、搜索和文件变化订阅
-  - 完成标准：所有调用方只依赖 Project Content interface；监听注销竞态可独立测试
-  - 结果：新增 `ProjectContent` module 与 4 项测试；移除 4 处直接 desktop 文件调用；类型检查通过
-- [x] T05. 收窄 Desktop seam
+  - 范围：stale-safe search、stable unavailable result、error normalization
+  - 完成标准：搜索调用方不再重复底层不可用/过期结果规则
+  - 结果：`ProjectContent.search()` 统一返回稳定搜索结果并归一化底层不可用/异常；新增 `ProjectContentSearchSession` 丢弃过期结果；`AppSearchModal` 与 `ChatPage` 不再重复 catch/null/stale 规则；新增 3 组 search lifecycle 测试
+- [x] T05. 深化 Desktop Seam contract
   - 状态：done
   - 优先级：P2
-  - 范围：renderer Desktop interface、preload adapter 与原始 IPC 暴露
-  - 完成标准：preload 与 renderer 共用同一 interface；renderer 无法调用未声明 channel
-  - 结果：新增共享 `DesktopAPI` 与 2 项 seam 测试；移除 raw `ipcRenderer`；preload 产物构建通过
+  - 范围：capability 清单、channel name、event channel、preload forwarding、main registration verification
+  - 完成标准：Desktop Seam contract 成为单一事实来源，测试验证声明能力端到端对齐
+  - 结果：新增 `desktop-seam` contract，集中声明 static/invoke/event capabilities 与 channel；preload、main、app-updater、speech-recognition 均从 contract 取 channel；新增 Desktop Seam contract 测试；`npm run typecheck` 与 `npm run test:electron`（41 项）通过

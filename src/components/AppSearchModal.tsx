@@ -164,32 +164,27 @@ export function AppSearchModal({
       return
     }
 
-    let cancelled = false
+    const searchSession = projectContent.createSearchSession()
     setFileLoading(true)
     setFileError('')
 
     const timer = window.setTimeout(() => {
-      projectContent.search(activeProject.path, trimmedQuery)
-        .then((result) => {
-          if (cancelled) return
+      searchSession.search({
+        rootPath: activeProject.path,
+        query: trimmedQuery,
+        onResult: (result) => {
           setFileItems(result?.ok ? result.items : [])
-          setFileError(result ? (result.ok ? '' : result.message) : t('search.fileSearchUnavailable'))
-        })
-        .catch((error) => {
-          if (cancelled) return
-          setFileItems([])
-          setFileError(error instanceof Error ? error.message : t('search.fileSearchFailed'))
-        })
-        .finally(() => {
-          if (!cancelled) setFileLoading(false)
-        })
+          setFileError(result.ok ? '' : result.message)
+        },
+        onSettled: () => setFileLoading(false),
+      })
     }, FILE_SEARCH_DEBOUNCE_MS)
 
     return () => {
-      cancelled = true
       window.clearTimeout(timer)
+      searchSession.dispose()
     }
-  }, [activeProject.path, shouldSearchFiles, t, trimmedQuery])
+  }, [activeProject.path, shouldSearchFiles, trimmedQuery])
 
   useEffect(() => {
     if (!shouldSearchMessages) {

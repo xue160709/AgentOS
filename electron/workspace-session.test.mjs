@@ -110,6 +110,105 @@ test('Workspace Session interface owns active selection and thread lifecycle inv
   })
 })
 
+test('Workspace Session restore owns active project and latest visible thread fallback', () => {
+  const harness = createHarness()
+  const state = {
+    ...createState(),
+    activeProjectId: 'project-1',
+    activeThreadId: 'thread-1',
+    projects: [
+      { id: 'project-1', name: 'One', path: '/one', pathMissing: true, createdAt: 1, updatedAt: 1 },
+      { id: 'project-2', name: 'Two', path: '/two', createdAt: 2, updatedAt: 2 },
+    ],
+    threads: [
+      {
+        id: 'thread-1',
+        projectId: 'project-1',
+        title: 'Old active',
+        createdAt: 1,
+        updatedAt: 10,
+        chatState: { model: 'Claude Agent', items: [] },
+      },
+      {
+        id: 'thread-2',
+        projectId: 'project-2',
+        title: 'Older fallback',
+        createdAt: 2,
+        updatedAt: 20,
+        chatState: { model: 'Claude Agent', items: [] },
+      },
+      {
+        id: 'thread-3',
+        projectId: 'project-2',
+        title: 'Newest fallback',
+        createdAt: 3,
+        updatedAt: 30,
+        chatState: { model: 'Claude Agent', items: [] },
+      },
+      {
+        id: 'thread-4',
+        projectId: 'project-2',
+        title: 'Archived newer',
+        createdAt: 4,
+        updatedAt: 40,
+        archivedAt: 50,
+        chatState: { model: 'Claude Agent', items: [] },
+      },
+    ],
+  }
+
+  const restored = harness.session.restore(state)
+  assert.equal(restored.activeProjectId, 'project-2')
+  assert.equal(restored.activeThreadId, 'thread-3')
+  assert.deepEqual(harness.session.active(state), {
+    project: restored.projects[1],
+    thread: restored.threads[2],
+  })
+})
+
+test('Workspace Session restore preserves an explicit project-home selection', () => {
+  const harness = createHarness()
+  const state = {
+    ...createState(),
+    activeProjectId: 'project-1',
+    activeThreadId: '',
+    projects: [
+      { id: 'project-1', name: 'One', path: '/one', pathMissing: true, createdAt: 1, updatedAt: 1 },
+      { id: 'project-2', name: 'Two', path: '/two', createdAt: 2, updatedAt: 2 },
+    ],
+    threads: [
+      {
+        id: 'thread-2',
+        projectId: 'project-2',
+        title: 'Fallback thread',
+        createdAt: 2,
+        updatedAt: 20,
+        chatState: { model: 'Claude Agent', items: [] },
+      },
+    ],
+  }
+
+  const restored = harness.session.restore(state)
+  assert.equal(restored.activeProjectId, 'project-2')
+  assert.equal(restored.activeThreadId, '')
+})
+
+test('Workspace Session load restores adapter snapshots before exposing them', async () => {
+  const { WorkspaceSession } = loadWorkspaceSession()
+  const session = new WorkspaceSession({
+    load: async () => ({
+      ...createState(),
+      activeProjectId: 'missing-project',
+      activeThreadId: 'missing-thread',
+    }),
+    save: async () => {},
+  })
+
+  const loaded = await session.load()
+  assert.equal(loaded.activeProjectId, 'project-1')
+  assert.equal(loaded.activeThreadId, 'thread-1')
+})
+
 test('Workspace Session interface keeps project removal, ordering, and relocation local', () => {
   const harness = createHarness()
   let state = createState()

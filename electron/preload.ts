@@ -41,13 +41,9 @@ import type {
   ClaudeChatAttachmentPickerResult,
 } from '../src/claude-chat-types'
 import type { DesktopAPI } from '../src/desktop-api'
+import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
 
 const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
-const TRAY_MENU_ACTION_CHANNEL = 'desktop:tray-action'
-const TASK_HOME_PLUGIN_EVENT_CHANNEL = 'desktop:task-home-plugin-event'
-const APP_UPDATER_EVENT_CHANNEL = 'app-updater:event'
-const SPEECH_RECOGNITION_EVENT_CHANNEL = 'desktop:speech-recognition-event'
-const PROJECT_FILES_CHANGED_CHANNEL = 'desktop:project-files-changed'
 
 // --- Desktop bridge / 桌面通用 API ---
 
@@ -59,194 +55,194 @@ const desktopAdapter = {
     windowsTitlebarOverlay: process.platform === 'win32',
   },
   pickProjectDirectory() {
-    return ipcRenderer.invoke('desktop:pick-project-directory') as Promise<string | null>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.pickProjectDirectory) as Promise<string | null>
   },
   pickChatAttachments(options?: { allowImages?: boolean }) {
-    return ipcRenderer.invoke('desktop:pick-chat-attachments', options) as Promise<ClaudeChatAttachmentPickerResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.pickChatAttachments, options) as Promise<ClaudeChatAttachmentPickerResult>
   },
   readChatAttachments(filePaths: string[], options?: { allowImages?: boolean }) {
-    return ipcRenderer.invoke('desktop:read-chat-attachments', filePaths, options) as Promise<ClaudeChatAttachmentPickerResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.readChatAttachments, filePaths, options) as Promise<ClaudeChatAttachmentPickerResult>
   },
   listProjectFiles(rootPath: string) {
-    return ipcRenderer.invoke('desktop:list-project-files', rootPath)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.listProjectFiles, rootPath)
   },
   watchProjectFiles(rootPath: string) {
-    return ipcRenderer.invoke('desktop:watch-project-files', rootPath) as Promise<ProjectFileWatchResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.watchProjectFiles, rootPath) as Promise<ProjectFileWatchResult>
   },
   unwatchProjectFiles(rootPath: string) {
-    return ipcRenderer.invoke('desktop:unwatch-project-files', rootPath) as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.unwatchProjectFiles, rootPath) as Promise<void>
   },
   onProjectFilesChanged(handler: (event: ProjectFilesChangedEvent) => void) {
     const listener = (_event: IpcRendererEvent, event: ProjectFilesChangedEvent) => handler(event)
-    ipcRenderer.on(PROJECT_FILES_CHANGED_CHANNEL, listener)
-    return () => ipcRenderer.off(PROJECT_FILES_CHANGED_CHANNEL, listener)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onProjectFilesChanged, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onProjectFilesChanged, listener)
   },
   readProjectFile(rootPath: string, filePath: string) {
-    return ipcRenderer.invoke('desktop:read-project-file', rootPath, filePath)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.readProjectFile, rootPath, filePath)
   },
   searchProjectFiles(rootPath: string, query: string) {
-    return ipcRenderer.invoke('desktop:search-project-files', rootPath, query)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.searchProjectFiles, rootPath, query)
   },
   searchChatHistory(projectId: string, query: string, options?: ChatHistorySearchOptions) {
-    return ipcRenderer.invoke('desktop:search-chat-history', projectId, query, options) as Promise<ChatHistorySearchResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.searchChatHistory, projectId, query, options) as Promise<ChatHistorySearchResult>
   },
   searchAgentKnowledge(projects: AgentKnowledgeSearchProject[], query: string, options?: AgentKnowledgeSearchOptions) {
-    return ipcRenderer.invoke('desktop:search-agent-knowledge', projects, query, options) as Promise<AgentKnowledgeSearchResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.searchAgentKnowledge, projects, query, options) as Promise<AgentKnowledgeSearchResult>
   },
   listAgentContext(rootPath: string) {
-    return ipcRenderer.invoke('desktop:list-agent-context', rootPath)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.listAgentContext, rootPath)
   },
   validateProjectPaths(projectPaths: string[]) {
-    return ipcRenderer.invoke('desktop:validate-project-paths', projectPaths) as Promise<Record<string, boolean>>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.validateProjectPaths, projectPaths) as Promise<Record<string, boolean>>
   },
   pathExistsUnderProject(rootPath: string, relativePath: string) {
-    return ipcRenderer.invoke('desktop:path-exists-under-project', rootPath, relativePath) as Promise<boolean>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.pathExistsUnderProject, rootPath, relativePath) as Promise<boolean>
   },
   runHomePlugin(rootPath: string, options?: unknown) {
-    return ipcRenderer.invoke('desktop:run-home-plugin', rootPath, options)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.runHomePlugin, rootPath, options)
   },
   saveHomePluginOrder(rootPath: string, order: unknown) {
-    return ipcRenderer.invoke('desktop:save-home-plugin-order', rootPath, order)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveHomePluginOrder, rootPath, order)
   },
   saveHomePluginLayout(rootPath: string, order: unknown, cards: unknown) {
-    return ipcRenderer.invoke('desktop:save-home-plugin-layout', rootPath, order, cards)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveHomePluginLayout, rootPath, order, cards)
   },
   deleteHomePlugin(rootPath: string, slug: string) {
-    return ipcRenderer.invoke('desktop:delete-home-plugin', rootPath, slug) as Promise<HomePluginDeleteResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.deleteHomePlugin, rootPath, slug) as Promise<HomePluginDeleteResult>
   },
   saveTaskHomePlugin(rootPath: string, payload: unknown) {
-    return ipcRenderer.invoke('desktop:save-task-home-plugin', rootPath, payload) as Promise<HomePluginTaskSaveResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveTaskHomePlugin, rootPath, payload) as Promise<HomePluginTaskSaveResult>
   },
   getTaskHomePlugin(rootPath: string, slug: string) {
-    return ipcRenderer.invoke('desktop:get-task-home-plugin', rootPath, slug) as Promise<HomePluginTaskReadResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getTaskHomePlugin, rootPath, slug) as Promise<HomePluginTaskReadResult>
   },
   runTaskHomePlugin(rootPath: string, slug: string) {
-    return ipcRenderer.invoke('desktop:run-task-home-plugin', rootPath, slug) as Promise<HomePluginTaskRunResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.runTaskHomePlugin, rootPath, slug) as Promise<HomePluginTaskRunResult>
   },
   stopTaskHomePlugin(rootPath: string, slug: string) {
-    return ipcRenderer.invoke('desktop:stop-task-home-plugin', rootPath, slug) as Promise<HomePluginTaskStopResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.stopTaskHomePlugin, rootPath, slug) as Promise<HomePluginTaskStopResult>
   },
   getAgentModeStatus(rootPath: string, locale?: 'zh' | 'en') {
-    return ipcRenderer.invoke('desktop:get-agent-mode-status', rootPath, locale)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getAgentModeStatus, rootPath, locale)
   },
   ensureAgentModeFiles(rootPath: string, locale?: 'zh' | 'en') {
-    return ipcRenderer.invoke('desktop:ensure-agent-mode-files', rootPath, locale)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.ensureAgentModeFiles, rootPath, locale)
   },
   setAgentModeState(rootPath: string, partial: unknown, locale?: 'zh' | 'en') {
-    return ipcRenderer.invoke('desktop:set-agent-mode-state', rootPath, partial, locale)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setAgentModeState, rootPath, partial, locale)
   },
   getAgentModeSettings(rootPath: string) {
-    return ipcRenderer.invoke('desktop:get-agent-mode-settings', rootPath)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getAgentModeSettings, rootPath)
   },
   saveAgentModeSettings(rootPath: string, payload: unknown) {
-    return ipcRenderer.invoke('desktop:save-agent-mode-settings', rootPath, payload)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveAgentModeSettings, rootPath, payload)
   },
   readAgentProjectDocuments(rootPath: string) {
-    return ipcRenderer.invoke('desktop:read-agent-project-documents', rootPath)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.readAgentProjectDocuments, rootPath)
   },
   saveAgentProjectDocuments(rootPath: string, files: Record<string, string>) {
-    return ipcRenderer.invoke('desktop:save-agent-project-documents', rootPath, files)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveAgentProjectDocuments, rootPath, files)
   },
   listProjectContext(rootPath: string) {
-    return ipcRenderer.invoke('desktop:list-project-context', rootPath) as Promise<ProjectContextResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.listProjectContext, rootPath) as Promise<ProjectContextResult>
   },
   saveProjectContextInstructions(rootPath: string, instructions: string) {
-    return ipcRenderer.invoke('desktop:save-project-context-instructions', rootPath, instructions) as Promise<ProjectContextResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveProjectContextInstructions, rootPath, instructions) as Promise<ProjectContextResult>
   },
   addProjectContextEntries(rootPath: string, mode: ProjectContextAddMode) {
-    return ipcRenderer.invoke('desktop:add-project-context-entries', rootPath, mode) as Promise<ProjectContextAddResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.addProjectContextEntries, rootPath, mode) as Promise<ProjectContextAddResult>
   },
   removeProjectContextEntry(rootPath: string, relativePath: string) {
-    return ipcRenderer.invoke('desktop:remove-project-context-entry', rootPath, relativePath) as Promise<ProjectContextResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.removeProjectContextEntry, rootPath, relativePath) as Promise<ProjectContextResult>
   },
   getChatWorkspace() {
-    return ipcRenderer.invoke('chat-workspace:get')
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getChatWorkspace)
   },
   saveChatWorkspace(state: unknown) {
-    return ipcRenderer.invoke('chat-workspace:save', state)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveChatWorkspace, state)
   },
   clearChatWorkspaceData() {
-    return ipcRenderer.invoke('desktop:clear-chat-workspace-data') as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.clearChatWorkspaceData) as Promise<void>
   },
   clearClaudeAgentSettings() {
-    return ipcRenderer.invoke('desktop:clear-claude-agent-settings-data') as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.clearClaudeAgentSettings) as Promise<void>
   },
   quitApp() {
-    return ipcRenderer.invoke('desktop:quit') as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.quitApp) as Promise<void>
   },
   showItemInFolder(targetPath: string) {
-    return ipcRenderer.invoke('desktop:show-item-in-folder', targetPath) as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.showItemInFolder, targetPath) as Promise<void>
   },
   openPath(targetPath: string) {
-    return ipcRenderer.invoke('desktop:open-path', targetPath) as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openPath, targetPath) as Promise<void>
   },
   openExternal(url: string) {
-    return ipcRenderer.invoke('desktop:open-external', url) as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openExternal, url) as Promise<void>
   },
   getDesktopPreferences() {
-    return ipcRenderer.invoke('desktop-preferences:get') as Promise<DesktopPreferences>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getDesktopPreferences) as Promise<DesktopPreferences>
   },
   setDesktopPreferences(partial: Partial<DesktopPreferences>) {
-    return ipcRenderer.invoke('desktop-preferences:set', partial) as Promise<DesktopPreferences>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setDesktopPreferences, partial) as Promise<DesktopPreferences>
   },
   syncTrayLocale(locale: 'zh' | 'en') {
-    return ipcRenderer.invoke('desktop:sync-tray-locale', locale) as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.syncTrayLocale, locale) as Promise<void>
   },
   copyPngToClipboard(dataUrl: string) {
-    return ipcRenderer.invoke('desktop:copy-png-to-clipboard', dataUrl) as Promise<boolean>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.copyPngToClipboard, dataUrl) as Promise<boolean>
   },
   copySvgToClipboard(svg: string) {
-    return ipcRenderer.invoke('desktop:copy-svg-to-clipboard', svg) as Promise<boolean>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.copySvgToClipboard, svg) as Promise<boolean>
   },
   getSpeechRecognitionStatus() {
-    return ipcRenderer.invoke('desktop:speech-recognition:get-status') as Promise<SpeechRecognitionSnapshot>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getSpeechRecognitionStatus) as Promise<SpeechRecognitionSnapshot>
   },
   startSpeechRecognition(options?: { locale?: string; requiresOnDevice?: boolean }) {
-    return ipcRenderer.invoke('desktop:speech-recognition:start', options) as Promise<SpeechRecognitionCommandResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startSpeechRecognition, options) as Promise<SpeechRecognitionCommandResult>
   },
   stopSpeechRecognition() {
-    return ipcRenderer.invoke('desktop:speech-recognition:stop') as Promise<SpeechRecognitionCommandResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.stopSpeechRecognition) as Promise<SpeechRecognitionCommandResult>
   },
   cancelSpeechRecognition() {
-    return ipcRenderer.invoke('desktop:speech-recognition:cancel') as Promise<SpeechRecognitionCommandResult>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.cancelSpeechRecognition) as Promise<SpeechRecognitionCommandResult>
   },
   onSpeechRecognitionEvent(handler: (event: SpeechRecognitionEvent) => void) {
     const listener = (_event: IpcRendererEvent, event: SpeechRecognitionEvent) => handler(event)
-    ipcRenderer.on(SPEECH_RECOGNITION_EVENT_CHANNEL, listener)
-    return () => ipcRenderer.off(SPEECH_RECOGNITION_EVENT_CHANNEL, listener)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onSpeechRecognitionEvent, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onSpeechRecognitionEvent, listener)
   },
   onTrayMenuAction(handler: (action: TrayMenuAction) => void) {
     const listener = (_event: IpcRendererEvent, raw: unknown) => {
       if (raw === 'new-thread') handler('new-thread')
       else if (raw === 'open-project') handler('open-project')
     }
-    ipcRenderer.on(TRAY_MENU_ACTION_CHANNEL, listener)
-    return () => ipcRenderer.off(TRAY_MENU_ACTION_CHANNEL, listener)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onTrayMenuAction, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onTrayMenuAction, listener)
   },
   onHomePluginTaskEvent(handler: (event: HomePluginTaskEvent) => void) {
     const listener = (_event: IpcRendererEvent, event: HomePluginTaskEvent) => handler(event)
-    ipcRenderer.on(TASK_HOME_PLUGIN_EVENT_CHANNEL, listener)
-    return () => ipcRenderer.off(TASK_HOME_PLUGIN_EVENT_CHANNEL, listener)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onHomePluginTaskEvent, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onHomePluginTaskEvent, listener)
   },
   getAppVersion() {
-    return ipcRenderer.invoke('app-updater:get-state').then((state: AppUpdaterState) => state.currentVersion)
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getAppVersion).then((state: AppUpdaterState) => state.currentVersion)
   },
   getAppUpdaterState() {
-    return ipcRenderer.invoke('app-updater:get-state') as Promise<AppUpdaterState>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getAppUpdaterState) as Promise<AppUpdaterState>
   },
   checkForAppUpdates() {
-    return ipcRenderer.invoke('app-updater:check') as Promise<AppUpdaterState>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.checkForAppUpdates) as Promise<AppUpdaterState>
   },
   downloadAppUpdate() {
-    return ipcRenderer.invoke('app-updater:download') as Promise<AppUpdaterState>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.downloadAppUpdate) as Promise<AppUpdaterState>
   },
   quitAndInstallAppUpdate() {
-    return ipcRenderer.invoke('app-updater:quit-and-install') as Promise<void>
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.quitAndInstallAppUpdate) as Promise<void>
   },
   onAppUpdaterState(handler: (state: AppUpdaterState) => void) {
     const listener = (_event: IpcRendererEvent, state: AppUpdaterState) => handler(state)
-    ipcRenderer.on(APP_UPDATER_EVENT_CHANNEL, listener)
-    return () => ipcRenderer.off(APP_UPDATER_EVENT_CHANNEL, listener)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onAppUpdaterState, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onAppUpdaterState, listener)
   },
 } satisfies DesktopAPI
 

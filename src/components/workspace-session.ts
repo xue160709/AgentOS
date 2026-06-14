@@ -56,6 +56,40 @@ export type EnsureTaskRunThreadInput = {
 
 const DEFAULT_SAVE_DEBOUNCE_MS = 750
 
+export function restoreWorkspaceSessionState(state: ChatWorkspaceState): ChatWorkspaceState {
+  if (state.projects.length === 0) {
+    return { ...state, activeProjectId: '', activeThreadId: '' }
+  }
+
+  const activeProject = state.projects.find((project) => project.id === state.activeProjectId)
+  const project =
+    activeProject && !activeProject.pathMissing
+      ? activeProject
+      : state.projects.find((candidate) => !candidate.pathMissing) ??
+        activeProject ??
+        state.projects[0]
+
+  if (!project) {
+    return { ...state, activeProjectId: '', activeThreadId: '' }
+  }
+
+  const requestedProjectHome = state.activeThreadId === ''
+  const activeThread = requestedProjectHome
+    ? undefined
+    : state.threads.find(
+        (thread) =>
+          thread.id === state.activeThreadId &&
+          thread.projectId === project.id &&
+          !thread.archivedAt,
+      ) ?? latestVisibleThread(state, project.id)
+
+  return {
+    ...state,
+    activeProjectId: project.id,
+    activeThreadId: requestedProjectHome ? '' : activeThread?.id ?? '',
+  }
+}
+
 export class WorkspaceSession {
   private readonly loadState: WorkspaceSessionOptions['load']
   private readonly saveState: WorkspaceSessionOptions['save']
@@ -78,25 +112,27 @@ export class WorkspaceSession {
     this.saveDebounceMs = options.saveDebounceMs ?? DEFAULT_SAVE_DEBOUNCE_MS
   }
 
-  load(): Promise<ChatWorkspaceState> {
-    return this.loadState()
+  async load(): Promise<ChatWorkspaceState> {
+    return this.restore(await this.loadState())
+  }
+
+  restore(state: ChatWorkspaceState): ChatWorkspaceState {
+    return restoreWorkspaceSessionState(state)
   }
 
   active(state: ChatWorkspaceState): WorkspaceSessionActive {
-    const project =
-      state.projects.find((item) => item.id === state.activeProjectId) ??
-      state.projects[0]
+    const restored = this.restore(state)
+    const project = restored.projects.find((item) => item.id === restored.activeProjectId)
     if (!project) return {}
 
-    const explicitThread = state.threads.find(
-      (thread) =>
-        thread.id === state.activeThreadId &&
-        thread.projectId === project.id &&
-        !thread.archivedAt,
-    )
-    const thread =
-      explicitThread ??
-      (state.activeThreadId ? latestVisibleThread(state, project.id) : undefined)
+    const thread = restored.activeThreadId
+      ? restored.threads.find(
+          (thread) =>
+            thread.id === restored.activeThreadId &&
+            thread.projectId === project.id &&
+            !thread.archivedAt,
+        )
+      : undefined
     return { project, thread }
   }
 

@@ -44,6 +44,43 @@ export type ChatRunSubmission = {
   runState: ThreadRunState
 }
 
+export type ChatRunSubmitTransport = () => Promise<{ requestId: string }>
+
+export type ChatRunSubmitInput = {
+  threadId: string
+  text: string
+  attachments?: ChatMessageItem['attachments']
+  model?: string
+  modelPick?: ChatState['modelPick']
+  clearSession?: boolean
+  reuseUserMessageId?: boolean
+  bridgeUnavailableBody: string
+  submit?: ChatRunSubmitTransport
+}
+
+export type ChatRunSubmitAttempt = {
+  startedAt: number
+  startTransition: ChatRunTransition
+  result: Promise<ChatRunSubmitResult>
+}
+
+export type ChatRunSubmitResult =
+  | {
+      status: 'accepted'
+      requestId: string
+      transition: ChatRunTransition
+    }
+  | {
+      status: 'bridge_unavailable'
+      transition: ChatRunTransition
+    }
+  | {
+      status: 'failed'
+      error: unknown
+      missingSession: boolean
+      transition: ChatRunTransition
+    }
+
 export type ChatRunOptions = {
   now?: () => number
   random?: () => number
@@ -94,6 +131,29 @@ export class ChatRun {
 
   threadIdForRequest(requestId: string, fallback = ''): string {
     return this.requestThreadIds.get(requestId) ?? fallback
+  }
+
+  submit(input: ChatRunSubmitInput): ChatRunSubmitAttempt | null {
+    const submission = this.beginSubmission(input.threadId)
+    if (!submission) return null
+
+    const startTransition: ChatRunTransition = {
+      threadId: input.threadId,
+      clearCompletion: true,
+      runState: submission.runState,
+      scrollToBottom: true,
+      updateState: (prev) =>
+        applyChatRunSubmitStart(prev, input, {
+          startedAt: submission.startedAt,
+          userMessageId: this.nextUserMessageId(submission.startedAt),
+        }),
+    }
+
+    return {
+      startedAt: submission.startedAt,
+      startTransition,
+      result: this.finishSubmission(input, submission),
+    }
   }
 
   beginSubmission(threadId: string): ChatRunSubmission | null {
@@ -323,6 +383,79 @@ export class ChatRun {
     this.requestThreadIds.delete(requestId)
   }
 
+  private async finishSubmission(
+    input: ChatRunSubmitInput,
+    submission: ChatRunSubmission,
+  ): Promise<ChatRunSubmitResult> {
+    if (!input.submit) {
+      return this.failSubmission(input, submission, input.bridgeUnavailableBody, 'bridge_unavailable')
+    }
+
+    try {
+      const { requestId } = await input.submit()
+      const runState = this.acceptSubmission(
+        input.threadId,
+        submission.pendingRequestId,
+        requestId,
+        submission.startedAt,
+      )
+      const transition: ChatRunTransition = { threadId: input.threadId }
+      if (runState !== undefined) transition.runState = runState
+      return { status: 'accepted', requestId, transition }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return this.failSubmission(input, submission, message, 'failed', error)
+    }
+  }
+
+  private failSubmission(
+    input: ChatRunSubmitInput,
+    submission: ChatRunSubmission,
+    message: string,
+    status: 'bridge_unavailable',
+  ): ChatRunSubmitResult
+  private failSubmission(
+    input: ChatRunSubmitInput,
+    submission: ChatRunSubmission,
+    message: string,
+    status: 'failed',
+    error: unknown,
+  ): ChatRunSubmitResult
+  private failSubmission(
+    input: ChatRunSubmitInput,
+    submission: ChatRunSubmission,
+    message: string,
+    status: 'bridge_unavailable' | 'failed',
+    error?: unknown,
+  ): ChatRunSubmitResult {
+    const completedAt = this.now()
+    const missingSession = isMissingSessionMessage(message)
+    const runState = this.rejectSubmission(input.threadId, submission.pendingRequestId)
+    const transition: ChatRunTransition = {
+      threadId: input.threadId,
+      scrollToBottom: true,
+      updateState: (prev) =>
+        appendAssistantErrorMessage(prev, {
+          id: this.nextAssistantErrorId(completedAt),
+          content: message,
+          createdAt: submission.startedAt,
+          completedAt,
+          clearSession: missingSession,
+        }),
+    }
+    if (runState !== undefined) transition.runState = runState
+    if (status === 'bridge_unavailable') return { status, transition }
+    return { status, error, missingSession, transition }
+  }
+
+  private nextUserMessageId(startedAt: number): string {
+    return `user-${startedAt.toString(36)}-${this.random().toString(36).slice(2, 8)}`
+  }
+
+  private nextAssistantErrorId(completedAt: number): string {
+    return `assistant-error-${completedAt.toString(36)}-${this.random().toString(36).slice(2, 8)}`
+  }
+
   private setRunState(threadId: string, state: ThreadRunState): ThreadRunState
   private setRunState(threadId: string, state: null): null
   private setRunState(threadId: string, state: ThreadRunState | null): ThreadRunState | null {
@@ -336,6 +469,67 @@ export class ChatRun {
       this.runStates = next
     }
     return null
+  }
+}
+
+function applyChatRunSubmitStart(
+  prev: ChatState,
+  input: ChatRunSubmitInput,
+  context: { startedAt: number; userMessageId: string },
+): ChatState {
+  const nextState: ChatState = {
+    ...prev,
+    model: input.model ?? prev.model,
+    modelPick: input.modelPick ?? prev.modelPick,
+    sessionId: input.clearSession ? undefined : prev.sessionId,
+  }
+
+  if (input.reuseUserMessageId) return nextState
+
+  const message: ChatMessageItem = {
+    type: 'message',
+    id: context.userMessageId,
+    role: 'user',
+    content: input.text,
+    status: 'done',
+    createdAt: context.startedAt,
+    completedAt: context.startedAt,
+    attachments: input.attachments,
+  }
+
+  return {
+    ...nextState,
+    items: [...nextState.items, message],
+  }
+}
+
+function appendAssistantErrorMessage(
+  prev: ChatState,
+  input: {
+    id: string
+    content: string
+    createdAt: number
+    completedAt: number
+    clearSession: boolean
+  },
+): ChatState {
+  return {
+    ...prev,
+    sessionId: input.clearSession ? undefined : prev.sessionId,
+    items: [
+      ...prev.items,
+      {
+        type: 'message',
+        id: input.id,
+        role: 'assistant',
+        content: input.content,
+        status: 'error',
+        createdAt: input.createdAt,
+        startedAt: input.createdAt,
+        completedAt: input.completedAt,
+        durationMs: Math.max(0, input.completedAt - input.createdAt),
+      },
+    ],
   }
 }
 
@@ -868,4 +1062,8 @@ function mergeDiffFiles(
 
 function isPendingRequestId(requestId: string): boolean {
   return requestId.startsWith('pending-')
+}
+
+function isMissingSessionMessage(message: string): boolean {
+  return message.includes('No conversation found with session ID')
 }

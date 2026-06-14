@@ -15,6 +15,22 @@ export type ProjectContentOptions = {
   getAdapter?: () => ProjectContentAdapter | undefined
 }
 
+export type ProjectContentSearchRequest = {
+  rootPath: string
+  query: string
+  onResult: (result: ProjectFileSearchResult) => void
+  onSettled?: () => void
+}
+
+export type ProjectContentSearchSession = {
+  search: (request: ProjectContentSearchRequest) => void
+  cancel: () => void
+  dispose: () => void
+}
+
+const PROJECT_FILE_SEARCH_UNAVAILABLE_MESSAGE = '当前运行环境无法搜索项目文件'
+const PROJECT_FILE_SEARCH_FAILED_MESSAGE = '搜索项目文件失败'
+
 export class ProjectContent {
   private readonly getAdapter: NonNullable<ProjectContentOptions['getAdapter']>
 
@@ -34,9 +50,19 @@ export class ProjectContent {
     return operation ? operation(rootPath, filePath) : null
   }
 
-  async search(rootPath: string, query: string): Promise<ProjectFileSearchResult | null> {
+  async search(rootPath: string, query: string): Promise<ProjectFileSearchResult> {
     const operation = this.getAdapter()?.searchProjectFiles
-    return operation ? operation(rootPath, query) : null
+    if (!operation) return createProjectFileSearchFailure(rootPath, PROJECT_FILE_SEARCH_UNAVAILABLE_MESSAGE)
+
+    try {
+      return await operation(rootPath, query)
+    } catch (error) {
+      return createProjectFileSearchFailure(rootPath, formatProjectFileSearchError(error))
+    }
+  }
+
+  createSearchSession(): ProjectContentSearchSession {
+    return new ProjectContentSearchLifecycle(this)
   }
 
   subscribe(rootPath: string, handler: (event: ProjectFilesChangedEvent) => void): () => void {
@@ -77,6 +103,51 @@ export class ProjectContent {
       if (watchedRootPath) void unwatch(watchedRootPath)
     }
   }
+}
+
+class ProjectContentSearchLifecycle implements ProjectContentSearchSession {
+  private sequence = 0
+  private disposed = false
+
+  constructor(private readonly content: ProjectContent) {}
+
+  search(request: ProjectContentSearchRequest): void {
+    const sequence = ++this.sequence
+    void this.content.search(request.rootPath, request.query)
+      .then((result) => {
+        if (!this.isCurrent(sequence)) return
+        request.onResult(result)
+      })
+      .finally(() => {
+        if (this.isCurrent(sequence)) request.onSettled?.()
+      })
+  }
+
+  cancel(): void {
+    this.sequence += 1
+  }
+
+  dispose(): void {
+    this.disposed = true
+    this.sequence += 1
+  }
+
+  private isCurrent(sequence: number): boolean {
+    return !this.disposed && this.sequence === sequence
+  }
+}
+
+function createProjectFileSearchFailure(rootPath: string, message: string): ProjectFileSearchResult {
+  return {
+    ok: false,
+    rootPath,
+    message,
+  }
+}
+
+function formatProjectFileSearchError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message
+  return PROJECT_FILE_SEARCH_FAILED_MESSAGE
 }
 
 export const projectContent = new ProjectContent()

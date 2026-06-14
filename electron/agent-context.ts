@@ -22,8 +22,6 @@ import type {
   AgentKnowledgeSearchOptions,
   AgentKnowledgeSearchProject,
   AgentKnowledgeSearchResult,
-  ProjectFileSearchItem,
-  ProjectFileSearchResult,
 } from '../src/claude-chat-types'
 import type { AgentModeProjectSettings, AppUiLocale } from '../src/desktop-types'
 import { GENERATIVE_UI_SYSTEM_PROMPT } from './generative-ui-prompt'
@@ -58,28 +56,8 @@ const SOURCE_DIRECTORIES: Array<{ directoryName: string; source: AgentContextSou
   { directoryName: '.cursor', source: 'cursor' },
 ]
 
-const FILE_SEARCH_IGNORED_DIRECTORIES = new Set([
-  '.git',
-  '.hg',
-  '.next',
-  '.pnpm-store',
-  '.svn',
-  '.turbo',
-  '.vite',
-  '.yarn',
-  'build',
-  'coverage',
-  'dist',
-  'dist-electron',
-  'node_modules',
-  'out',
-  'release',
-])
-
 const MAX_CONTEXT_ROOT_ANCESTORS = 8
-const MAX_SEARCH_ENTRIES = 5000
 const MAX_SEARCH_RESULTS = 24
-const MAX_SEARCH_DEPTH = 10
 const MAX_KNOWLEDGE_FILE_CHARS = 16_000
 const MAX_KNOWLEDGE_MEMORY_FILES = 160
 const MAX_KNOWLEDGE_RESULTS = 48
@@ -208,78 +186,6 @@ async function expandSkillInvocation(
     '',
     'Carry out the slash command instructions for the user request above.',
   ].join('\n')
-}
-
-// --- File search / 项目文件搜索 ---
-
-/** 在项目树内按前缀模糊查找路径（受限深度与条目数）/ Fuzzy path search with caps on depth and visited entries */
-export async function searchProjectFiles(rootPath: string, query: string): Promise<ProjectFileSearchResult> {
-  const resolvedRootPath = resolveProjectPath(rootPath)
-  try {
-    const stat = await fs.stat(resolvedRootPath)
-    if (!stat.isDirectory()) {
-      return { ok: false, rootPath: resolvedRootPath, message: '当前项目路径不是文件夹' }
-    }
-
-    const normalizedQuery = normalizeQuery(query)
-    const items: ProjectFileSearchItem[] = []
-    let entriesRead = 0
-
-    const walk = async (directoryPath: string, relativeBase: string, depth: number): Promise<void> => {
-      if (depth > MAX_SEARCH_DEPTH || entriesRead >= MAX_SEARCH_ENTRIES) return
-      const entries = await safeReadDir(directoryPath)
-      entries.sort((a, b) => {
-        const typeDiff = Number(b.isDirectory()) - Number(a.isDirectory())
-        return typeDiff || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-      })
-
-      for (const entry of entries) {
-        if (entriesRead >= MAX_SEARCH_ENTRIES) break
-        if (entry.isDirectory() && FILE_SEARCH_IGNORED_DIRECTORIES.has(entry.name)) continue
-        const entryPath = path.join(directoryPath, entry.name)
-        const relativePath = normalizeRelativePath(path.join(relativeBase, entry.name))
-        entriesRead += 1
-
-        if (entry.isDirectory()) {
-          if (matchesQuery(entry.name, relativePath, normalizedQuery)) {
-            items.push({
-              label: entry.name,
-              path: entryPath,
-              relativePath,
-              type: 'directory',
-            })
-          }
-          await walk(entryPath, relativePath, depth + 1)
-          continue
-        }
-
-        if ((entry.isFile() || entry.isSymbolicLink()) && matchesQuery(entry.name, relativePath, normalizedQuery)) {
-          items.push({
-            label: entry.name,
-            path: entryPath,
-            relativePath,
-            type: 'file',
-          })
-        }
-      }
-    }
-
-    await walk(resolvedRootPath, '', 0)
-
-    return {
-      ok: true,
-      rootPath: resolvedRootPath,
-      items: items
-        .sort((a, b) => scoreFileSearchItem(b, normalizedQuery) - scoreFileSearchItem(a, normalizedQuery) || a.relativePath.localeCompare(b.relativePath))
-        .slice(0, MAX_SEARCH_RESULTS),
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      rootPath: resolvedRootPath,
-      message: formatProjectPathError(error),
-    }
-  }
 }
 
 /** 搜索 AgentOS 项目知识：memory、技能、命令、子 Agent 与 Home Plugin/task 元数据 / Search project knowledge documents */
@@ -1200,31 +1106,6 @@ function sourceRank(source: AgentContextSource): number {
   if (source === 'agents') return 1
   if (source === 'agent') return 2
   return 3
-}
-
-function matchesQuery(name: string, relativePath: string, query: string): boolean {
-  if (!query) return true
-  return scorePathMatch(name, query) > 0 || scorePathMatch(relativePath, query) > 0
-}
-
-function scoreFileSearchItem(item: ProjectFileSearchItem, query: string): number {
-  if (!query) return item.type === 'file' ? 2 : 1
-  let score = scorePathMatch(item.label, query) * 1.7 + scorePathMatch(item.relativePath, query)
-  if (item.type === 'directory') score += 8
-  else score += 4
-  score -= item.relativePath.length / 1000
-  return score
-}
-
-function scorePathMatch(value: string, query: string): number {
-  const normalizedValue = normalizeQuery(value)
-  if (!query) return 1
-  if (!normalizedValue) return 0
-  if (normalizedValue === query) return 120
-  if (normalizedValue.startsWith(query)) return 90
-  const index = normalizedValue.indexOf(query)
-  if (index >= 0) return 62 - Math.min(index, 42)
-  return fuzzyPathScore(normalizedValue, query)
 }
 
 function fuzzyPathScore(value: string, query: string): number {

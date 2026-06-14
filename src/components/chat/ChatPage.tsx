@@ -788,13 +788,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
 
     const query = activeComposerTrigger.query
+    const searchSession = projectContent.createSearchSession()
     const timer = window.setTimeout(() => {
-      projectContent.search(activeProject.path, query)
-        .then((result) => setFileMentionResults(result?.ok ? result.items : []))
-        .catch(() => setFileMentionResults([]))
+      searchSession.search({
+        rootPath: activeProject.path,
+        query,
+        onResult: (result) => setFileMentionResults(result.ok ? result.items : []),
+      })
     }, 90)
 
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      searchSession.dispose()
+    }
   }, [activeComposerTrigger, activeProject.path])
 
   useLayoutEffect(() => {
@@ -1312,16 +1318,6 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       isFirstTranscriptLayoutRef.current = true
       scrollIntentRef.current = 'force-bottom'
     }
-    const submission = chatRun.beginSubmission(submittingThreadId)
-    if (!submission) return
-    const {
-      pendingRequestId,
-      startedAt: requestStartedAt,
-      runState: pendingRunState,
-    } = submission
-    onThreadCompletionStateChange(submittingThreadId, null)
-    onThreadRunStateChange(submittingThreadId, pendingRunState)
-
     const submittingThread = threads.find((thread) => thread.id === submittingThreadId)
     const settings = claudeSettingsSnapshot?.settings
     const modelPickForSubmit =
@@ -1338,35 +1334,36 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         ? buildHandoffContext(submittingThread.chatState.items)
         : undefined
 
-    const userMessage: ChatMessageItem = {
-      type: 'message',
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: text,
-      status: 'done',
-      createdAt: requestStartedAt,
-      completedAt: requestStartedAt,
+    const promptMode = target?.promptMode ?? promptModeForThreadPurpose(submittingThread?.purpose)
+    const submitAttempt = chatRun.submit({
+      threadId: submittingThreadId,
+      text,
       attachments: attachmentsForSubmit.map(toChatMessageAttachment),
-    }
+      model: modelPickForSubmit?.anthropicModel,
+      modelPick: modelPickForSubmit,
+      clearSession: modelPickChanged,
+      reuseUserMessageId: Boolean(target?.reuseUserMessageId),
+      bridgeUnavailableBody: t('chat.bridgeErrorBody'),
+      submit: window.claudeChat
+        ? () =>
+            window.claudeChat!.submit({
+              text,
+              attachments: attachmentsForSubmit,
+              threadId: submittingThreadId,
+              modelPick: modelPickForSubmit,
+              handoffContext,
+              promptMode,
+              sessionId: resumeSessionId,
+              cwd: projectForSubmit.path,
+              permissionMode,
+            })
+        : undefined,
+    })
+    if (!submitAttempt) return
 
     if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
     onThreadPromptSubmit(submittingThreadId, text)
-    if (!target?.reuseUserMessageId) {
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        model: modelPickForSubmit?.anthropicModel ?? prev.model,
-        modelPick: modelPickForSubmit ?? prev.modelPick,
-        sessionId: modelPickChanged ? undefined : prev.sessionId,
-        items: [...prev.items, userMessage],
-      }))
-    } else if (modelPickForSubmit) {
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        model: modelPickForSubmit.anthropicModel,
-        modelPick: modelPickForSubmit,
-        sessionId: modelPickChanged ? undefined : prev.sessionId,
-      }))
-    }
+    applyChatRunTransition(submitAttempt.startTransition)
     setInputValue('')
     if (attachmentsForSubmit.length > 0 || !target?.threadId) {
       pendingAttachmentsRef.current = []
@@ -1374,87 +1371,13 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
     onStatusChange(t('chat.statusProcessing'))
 
-    if (!window.claudeChat) {
-      if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        items: [
-          ...prev.items,
-          {
-            type: 'message',
-            id: `assistant-error-${Date.now()}`,
-            role: 'assistant',
-            content: t('chat.bridgeErrorBody'),
-            status: 'error',
-            createdAt: requestStartedAt,
-            startedAt: requestStartedAt,
-            completedAt: Date.now(),
-            durationMs: Math.max(0, Date.now() - requestStartedAt),
-          },
-        ],
-      }))
-      const rejectedRunState = chatRun.rejectSubmission(submittingThreadId, pendingRequestId)
-      if (rejectedRunState !== undefined) {
-        onThreadRunStateChange(submittingThreadId, rejectedRunState)
-      }
+    const submitResult = await submitAttempt.result
+    applyChatRunTransition(submitResult.transition)
+    if (submitResult.status === 'bridge_unavailable') {
       onStatusChange(t('chat.bridgeUnavailableStatus'))
       return
     }
-
-    try {
-      const promptMode = target?.promptMode ?? promptModeForThreadPurpose(submittingThread?.purpose)
-      const { requestId } = await window.claudeChat.submit({
-        text,
-        attachments: attachmentsForSubmit,
-        threadId: submittingThreadId,
-        modelPick: modelPickForSubmit,
-        handoffContext,
-        promptMode,
-        sessionId: resumeSessionId,
-        cwd: projectForSubmit.path,
-        permissionMode,
-      })
-      const acceptedRunState = chatRun.acceptSubmission(
-        submittingThreadId,
-        pendingRequestId,
-        requestId,
-        requestStartedAt,
-      )
-      if (acceptedRunState !== undefined) {
-        onThreadRunStateChange(submittingThreadId, acceptedRunState)
-      }
-    } catch (error) {
-      if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        items: [
-          ...prev.items,
-          {
-            type: 'message',
-            id: `assistant-error-${Date.now()}`,
-            role: 'assistant',
-            content: error instanceof Error ? error.message : String(error),
-            status: 'error',
-            createdAt: requestStartedAt,
-            startedAt: requestStartedAt,
-            completedAt: Date.now(),
-            durationMs: Math.max(0, Date.now() - requestStartedAt),
-          },
-        ],
-      }))
-      if (
-        error instanceof Error &&
-        error.message.includes('No conversation found with session ID')
-      ) {
-        setThreadChatState(submittingThreadId, (prev) => ({
-          ...prev,
-          sessionId: undefined,
-        }))
-      }
-      const rejectedRunState = chatRun.rejectSubmission(submittingThreadId, pendingRequestId)
-      if (rejectedRunState !== undefined) {
-        onThreadRunStateChange(submittingThreadId, rejectedRunState)
-      }
+    if (submitResult.status === 'failed') {
       onStatusChange(t('chat.sendFailedStatus'))
     }
   }

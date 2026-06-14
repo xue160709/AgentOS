@@ -67,6 +67,10 @@ function applyEvent(harness, state, event, context = {}) {
   }
 }
 
+function applyTransition(state, transition) {
+  return transition.updateState ? transition.updateState(state) : state
+}
+
 function beginAcceptedRun(harness, requestId, threadId = 'thread-1') {
   const submission = harness.run.beginSubmission(threadId)
   assert.ok(submission)
@@ -365,6 +369,85 @@ test('Chat Run interface blocks a second submission on the same thread', () => {
   assert.ok(first)
   assert.equal(harness.run.beginSubmission('thread-1'), null)
   assert.equal(harness.run.runStateForThread('thread-1').requestId, first.pendingRequestId)
+})
+
+test('Chat Run submit interface owns optimistic user row and transport acknowledgement', async () => {
+  const harness = createHarness(100)
+  let resolveSubmit
+  const attempt = harness.run.submit({
+    threadId: 'thread-1',
+    text: 'Hello',
+    model: 'claude-sonnet',
+    clearSession: true,
+    bridgeUnavailableBody: 'Bridge unavailable',
+    submit: () => new Promise((resolve) => {
+      resolveSubmit = resolve
+    }),
+  })
+
+  assert.ok(attempt)
+  assert.equal(attempt.startTransition.runState.status, 'running')
+  assert.match(attempt.startTransition.runState.requestId, /^pending-/)
+
+  let state = applyTransition(emptyState({ sessionId: 'old-session' }), attempt.startTransition)
+  assert.equal(state.sessionId, undefined)
+  assert.equal(state.model, 'claude-sonnet')
+  assert.deepEqual(state.items, [
+    {
+      type: 'message',
+      id: 'user-2s-i',
+      role: 'user',
+      content: 'Hello',
+      status: 'done',
+      createdAt: 100,
+      completedAt: 100,
+      attachments: undefined,
+    },
+  ])
+
+  harness.setNow(130)
+  resolveSubmit({ requestId: 'request-submit' })
+  const result = await attempt.result
+
+  assert.equal(result.status, 'accepted')
+  assert.equal(result.requestId, 'request-submit')
+  assert.equal(result.transition.runState.requestId, 'request-submit')
+  assert.equal(result.transition.runState.startedAt, 100)
+  assert.equal(result.transition.runState.updatedAt, 130)
+})
+
+test('Chat Run submit interface materializes submit failures and clears missing sessions', async () => {
+  const harness = createHarness(200)
+  let rejectSubmit
+  const attempt = harness.run.submit({
+    threadId: 'thread-1',
+    text: 'Continue',
+    bridgeUnavailableBody: 'Bridge unavailable',
+    submit: () => new Promise((_resolve, reject) => {
+      rejectSubmit = reject
+    }),
+  })
+
+  assert.ok(attempt)
+  let state = applyTransition(emptyState({ sessionId: 'stale-session' }), attempt.startTransition)
+  assert.equal(state.items[0].content, 'Continue')
+
+  harness.setNow(260)
+  rejectSubmit(new Error('No conversation found with session ID stale-session'))
+  const result = await attempt.result
+  state = applyTransition(state, result.transition)
+
+  assert.equal(result.status, 'failed')
+  assert.equal(result.missingSession, true)
+  assert.equal(result.transition.runState, null)
+  assert.equal(state.sessionId, undefined)
+  assert.equal(state.items[1].type, 'message')
+  assert.equal(state.items[1].role, 'assistant')
+  assert.equal(state.items[1].status, 'error')
+  assert.equal(state.items[1].content, 'No conversation found with session ID stale-session')
+  assert.equal(state.items[1].createdAt, 200)
+  assert.equal(state.items[1].completedAt, 260)
+  assert.equal(state.items[1].durationMs, 60)
 })
 
 test('Chat Run interface absorbs terminal-before-submit-acknowledgement races', () => {
