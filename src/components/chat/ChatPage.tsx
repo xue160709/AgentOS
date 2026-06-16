@@ -26,6 +26,7 @@ import type {
   ChatModelPick,
   ClaudeChatAttachment,
   ClaudeChatAttachmentPickerResult,
+  ClaudeAgentStatusSnapshot,
   ClaudeAgentSettingsSnapshot,
   ClaudeChatEvent,
   ClaudeChatSubmitPayload,
@@ -229,6 +230,7 @@ type ChatPageProps = {
   activeThread: WorkspaceThread | undefined
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
+  agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
   /** 按 threadId 查找持久化 sessionId（重启后恢复 SDK）/ Threads list for resolving persisted session ids */
   threads: WorkspaceThread[]
   projects: WorkspaceProject[]
@@ -244,6 +246,7 @@ type ChatPageProps = {
   onThreadRunStateChange: (threadId: string, state: ThreadRunState | null) => void
   onThreadCompletionStateChange: (threadId: string, completedAt: number | null) => void
   onProjectHomeModelPickChange: (projectId: string, pick: ChatModelPick | undefined) => void
+  onRefreshAgentStatus: (refresh?: boolean) => void
   agentMode: WorkspaceAgentModeState
   agentModeEnabled: boolean
   todoEnabled: boolean
@@ -271,6 +274,7 @@ type SubmitPromptTarget = {
   modelPick?: ChatModelPick
   reuseUserMessageId?: string
   resetSession?: boolean
+  suppressUserMessage?: boolean
 }
 
 /** 内置 slash 命令清单 / Built-in slash commands backed by i18n strings */
@@ -288,13 +292,6 @@ function getBuiltInSlashCommands(t: (path: string, vars?: Record<string, string 
       command: 'status',
       title: t('chat.slashStatusTitle'),
       description: t('chat.slashStatusDesc'),
-      argumentHint: '',
-    },
-    {
-      kind: 'built-in',
-      command: 'help',
-      title: t('chat.slashHelpTitle'),
-      description: t('chat.slashHelpDesc'),
       argumentHint: '',
     },
   ]
@@ -329,6 +326,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     activeThread,
     projectDefaultModelPick,
     projectHomeModelPick,
+    agentStatusSnapshot,
     threads,
     projects,
     projectOrderIds,
@@ -343,6 +341,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     onThreadRunStateChange,
     onThreadCompletionStateChange,
     onProjectHomeModelPickChange,
+    onRefreshAgentStatus,
     agentMode,
     agentModeEnabled,
     todoEnabled,
@@ -1342,7 +1341,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       model: modelPickForSubmit?.anthropicModel,
       modelPick: modelPickForSubmit,
       clearSession: modelPickChanged,
-      reuseUserMessageId: Boolean(target?.reuseUserMessageId),
+      reuseUserMessageId: Boolean(target?.reuseUserMessageId || target?.suppressUserMessage),
       bridgeUnavailableBody: t('chat.bridgeErrorBody'),
       submit: window.claudeChat
         ? () =>
@@ -1362,7 +1361,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!submitAttempt) return
 
     if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-    onThreadPromptSubmit(submittingThreadId, text)
+    if (!target?.suppressUserMessage) onThreadPromptSubmit(submittingThreadId, text)
     applyChatRunTransition(submitAttempt.startTransition)
     setInputValue('')
     if (attachmentsForSubmit.length > 0 || !target?.threadId) {
@@ -1958,6 +1957,23 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     [activeProject.path, activeThread?.chatState.modelPick, setThreadChatState, t],
   )
 
+  const composerContextUsage = useMemo(() => {
+    const sessionId = activeThread?.chatState.sessionId?.trim()
+    if (!sessionId || !agentStatusSnapshot?.contextUsage) return undefined
+    if (agentStatusSnapshot.threadId !== activeThread?.id) return undefined
+    if (agentStatusSnapshot.sessionId !== sessionId) return undefined
+    return agentStatusSnapshot.contextUsage
+  }, [activeThread?.chatState.sessionId, activeThread?.id, agentStatusSnapshot])
+
+  const compactComposerContext = () => {
+    const threadId = activeThreadIdRef.current
+    if (isRunning || !threadId || !activeThread?.chatState.sessionId) return
+    void (async () => {
+      await submitPrompt('/compact', { threadId, project: activeProject, suppressUserMessage: true })
+      onRefreshAgentStatus(true)
+    })()
+  }
+
   // --- Composer subtree (props-only; layout lives in `Composer.tsx`) / Composer 子树（仅传参；布局在 Composer 组件内）---
 
   const composer = (
@@ -1976,6 +1992,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       modelMenuSelectionKey={modelMenuSelectionKey}
       modelPopoverBox={modelPopoverBox}
       displayModelName={compactModelName(globalDisplayModel, t)}
+      contextUsage={composerContextUsage}
       composerAutocompleteOpen={composerAutocompleteOpen}
       composerAutocompleteBox={composerAutocompleteBox}
       activeComposerTrigger={activeComposerTrigger}
@@ -2016,6 +2033,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       onSendClick={handleSendClick}
       onToggleSpeechRecognition={() => void toggleSpeechRecognition()}
       onAddComposerAttachments={() => void addComposerAttachments()}
+      onCompactContext={compactComposerContext}
+      onRefreshContextUsage={() => onRefreshAgentStatus(false)}
       onRemoveComposerAttachment={removeComposerAttachment}
       onInsertComposerSuggestion={insertComposerSuggestion}
       onPickChatMenuRow={(row) => void pickChatMenuRow(row)}

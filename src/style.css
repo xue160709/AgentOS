@@ -6815,6 +6815,94 @@ button.app-file-tree-row {
   align-items: center;
 }
 
+.composer-context-meter-shell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--size-chrome-control);
+  inline-size: var(--size-chrome-control);
+  min-inline-size: 0;
+  overflow: hidden;
+}
+
+.composer-context-meter-shell.has-meter {
+  animation: composer-context-meter-fade-in 180ms var(--transition-ease-basic) both;
+}
+
+.composer-context-meter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-chrome-control);
+  height: var(--size-chrome-control);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-token-text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.composer-context-meter:hover,
+.composer-context-meter.is-open {
+  color: var(--color-token-text-primary);
+  background: var(--color-token-list-hover-background);
+}
+
+.composer-context-meter:focus-visible {
+  outline: 2px solid var(--color-token-focus-border);
+  outline-offset: 2px;
+}
+
+.composer-context-meter.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.composer-context-meter__ring {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  background:
+    conic-gradient(var(--context-meter-color) var(--context-meter-angle), color-mix(in oklab, currentColor 24%, transparent) 0);
+}
+
+.composer-context-meter__ring::after {
+  position: absolute;
+  inset: 4px;
+  border-radius: inherit;
+  background: var(--color-token-input-background);
+  content: '';
+}
+
+.composer-context-popover {
+  z-index: var(--z-layer-context-menu);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: calc(var(--spacing) * 3);
+  border: 1px solid var(--color-token-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-token-main-surface-primary);
+  box-shadow:
+    0 10px 38px color-mix(in oklab, var(--color-token-foreground) 16%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-token-border) 40%, transparent);
+}
+
+@keyframes composer-context-meter-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-context-meter-shell.has-meter {
+    animation: none;
+  }
+}
+
 .composer-mode-picker {
   position: relative;
   display: inline-flex;

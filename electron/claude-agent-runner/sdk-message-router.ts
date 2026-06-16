@@ -186,6 +186,12 @@ export class ClaudeSdkMessageRouter {
       return
     }
 
+    if (message.subtype === 'local_command_output') {
+      const record = message as unknown
+      const content = isRecord(record) && typeof record.content === 'string' ? record.content : ''
+      if (content) this.emitAssistantDelta(activeRequest, content)
+    }
+
     const activity = activityFromSystemMessage(message)
     if (activity) {
       this.emitActivity(activeRequest, activity.key, activity.title, activity.status, activity.detail, activity.preview)
@@ -845,7 +851,15 @@ function activityFromSystemMessage(message: Extract<SDKMessage, { type: 'system'
       return { key: 'sdk-status', title: '请求模型', status: 'running', detail: formatPermissionMode(record.permissionMode) }
     }
     if (status === 'compacting') {
-      return { key: 'sdk-status', title: '压缩上下文', status: 'running', detail: formatCompactResult(record) }
+      return { key: 'sdk-compact', title: '压缩上下文', status: 'running', detail: formatCompactResult(record) }
+    }
+    if (typeof record.compact_result === 'string' || typeof record.compact_error === 'string') {
+      return {
+        key: 'sdk-compact',
+        title: '压缩上下文',
+        status: record.compact_result === 'failed' ? 'error' : 'done',
+        detail: formatCompactResult(record),
+      }
     }
     return { key: 'sdk-status', title: 'Agent 空闲', status: 'done', detail: formatCompactResult(record) }
   }
@@ -864,8 +878,8 @@ function activityFromSystemMessage(message: Extract<SDKMessage, { type: 'system'
     const metadata = isRecord(record.compact_metadata) ? record.compact_metadata : {}
     const pre = typeof metadata.pre_tokens === 'number' ? `${metadata.pre_tokens} tokens` : ''
     const post = typeof metadata.post_tokens === 'number' ? `-> ${metadata.post_tokens}` : ''
-    const trigger = typeof metadata.trigger === 'string' ? metadata.trigger : 'unknown'
-    return { key: `compact-${previewHash(`${pre}-${post}-${trigger}`)}`, title: '上下文压缩边界', status: 'done', detail: joinDetails([trigger, pre, post]) }
+    const trigger = metadata.trigger === 'auto' ? '自动' : metadata.trigger === 'manual' ? '手动' : 'unknown'
+    return { key: 'sdk-compact', title: '压缩上下文', status: 'done', detail: joinDetails([trigger, pre, post]) }
   }
 
   if (record.subtype === 'api_retry') {

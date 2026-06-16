@@ -658,6 +658,11 @@ export class ClaudeAgentRunner {
                     hooks: [async (input) => this.handlePostToolUseHook(activeRequest, input)],
                   },
                 ],
+                PostCompact: [
+                  {
+                    hooks: [async (input) => this.handlePostCompactHook(activeRequest, input)],
+                  },
+                ],
               },
               includeHookEvents: false,
               includePartialMessages: true,
@@ -779,6 +784,28 @@ export class ClaudeAgentRunner {
       }
     } catch (error) {
       safeConsoleWarn('[ClaudeAgentRunner] failed to collect file diff', {
+        requestId: activeRequest.requestId,
+        error: summarizeErrorForLog(error),
+      })
+    }
+    return { continue: true, suppressOutput: true }
+  }
+
+  private async handlePostCompactHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
+    try {
+      if (!isRecord(input) || input.hook_event_name !== 'PostCompact') return { continue: true, suppressOutput: true }
+      const trigger = input.trigger === 'auto' ? '自动' : input.trigger === 'manual' ? '手动' : ''
+      const summary = typeof input.compact_summary === 'string' ? input.compact_summary.trim() : ''
+      this.emitActivity(
+        activeRequest,
+        'sdk-compact',
+        '压缩上下文',
+        'done',
+        joinDetails([trigger, summary ? '摘要已生成' : '已完成']),
+        summary || undefined,
+      )
+    } catch (error) {
+      safeConsoleWarn('[ClaudeAgentRunner] failed to collect compact summary', {
         requestId: activeRequest.requestId,
         error: summarizeErrorForLog(error),
       })

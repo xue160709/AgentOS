@@ -128,6 +128,8 @@ export function AppShellWorkspace({
   const [agentStatusSnapshot, setAgentStatusSnapshot] = useState<ClaudeAgentStatusSnapshot | null>(null)
   const filePaneRef = useRef<AppFileTreePaneHandle>(null)
   const filePreviewRequestRef = useRef(0)
+  const agentStatusRequestSeqRef = useRef(0)
+  const autoContextRefreshKeysRef = useRef<Set<string>>(new Set())
   const agentMode = useWorkspaceAgentMode(activeProject)
   const activeThreadRunning = Boolean(activeThread && threadRunStates[activeThread.id])
   const agentStatusRequest = useMemo(
@@ -199,19 +201,50 @@ export function AppShellWorkspace({
       setAgentStatusSnapshot(null)
       return
     }
+    const requestSeq = agentStatusRequestSeqRef.current + 1
+    agentStatusRequestSeqRef.current = requestSeq
     setAgentStatusLoading(true)
     try {
-      setAgentStatusSnapshot(await getStatus({ ...agentStatusRequest, refresh }))
+      const snapshot = await getStatus({ ...agentStatusRequest, refresh })
+      if (agentStatusRequestSeqRef.current === requestSeq) setAgentStatusSnapshot(snapshot)
     } catch {
-      setAgentStatusSnapshot(null)
+      if (agentStatusRequestSeqRef.current === requestSeq) setAgentStatusSnapshot(null)
     } finally {
-      setAgentStatusLoading(false)
+      if (agentStatusRequestSeqRef.current === requestSeq) setAgentStatusLoading(false)
     }
   }, [agentStatusRequest])
 
   useEffect(() => {
     void refreshAgentStatus(false)
   }, [activeThreadRunning, refreshAgentStatus])
+
+  useEffect(() => {
+    const threadId = activeThread?.id
+    const sessionId = activeThread?.chatState.sessionId?.trim()
+    if (activeViewId !== 'home' || !threadId || !sessionId || activeThreadRunning) return
+    if (
+      agentStatusSnapshot?.threadId === threadId &&
+      agentStatusSnapshot.sessionId === sessionId &&
+      agentStatusSnapshot.contextUsage
+    ) {
+      return
+    }
+
+    const refreshKey = `${activeProject.path}:${threadId}:${sessionId}`
+    if (autoContextRefreshKeysRef.current.has(refreshKey)) return
+    autoContextRefreshKeysRef.current.add(refreshKey)
+    void refreshAgentStatus(true)
+  }, [
+    activeProject.path,
+    activeThread?.chatState.sessionId,
+    activeThread?.id,
+    activeThreadRunning,
+    activeViewId,
+    agentStatusSnapshot?.contextUsage,
+    agentStatusSnapshot?.sessionId,
+    agentStatusSnapshot?.threadId,
+    refreshAgentStatus,
+  ])
 
   useEffect(() => {
     const openStatus = (event: Event) => {
@@ -425,6 +458,7 @@ export function AppShellWorkspace({
             activeThread={activeThread}
             projectDefaultModelPick={projectDefaultModelPick}
             projectHomeModelPick={projectHomeModelPick}
+            agentStatusSnapshot={agentStatusSnapshot}
             threads={threads}
             projects={projects}
             projectOrderIds={projectOrderIds}
@@ -439,6 +473,7 @@ export function AppShellWorkspace({
             onThreadRunStateChange={onThreadRunStateChange}
             onThreadCompletionStateChange={onThreadCompletionStateChange}
             onProjectHomeModelPickChange={onProjectHomeModelPickChange}
+            onRefreshAgentStatus={refreshAgentStatus}
             agentMode={agentMode}
             agentModeEnabled={agentMode.enabled}
             todoEnabled={agentMode.todoEnabled}

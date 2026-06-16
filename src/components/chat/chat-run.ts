@@ -758,7 +758,7 @@ function foldChatRunEvent(
           title: event.title,
           status: event.status,
           detail: event.detail,
-          preview: event.preview,
+          preview: event.preview ?? item.preview,
         }),
       }
     }

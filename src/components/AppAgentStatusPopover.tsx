@@ -160,7 +160,7 @@ export function AppAgentStatusPopover({
   )
 }
 
-function ContextUsageView({
+export function ContextUsageView({
   context,
   categories,
 }: {
