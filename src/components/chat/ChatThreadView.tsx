@@ -21,7 +21,7 @@ type ChatThreadViewProps = {
   onForkMessage: (messageId: string) => void
   onEditUserMessage: (messageId: string, text: string) => void
   onUserMessageEditDismissed?: () => void
-  onReviewFileChanges: (changeSetId: string) => void
+  onReviewFileChanges: (item: ChatFileDiffItem) => void
   onRewindFileChanges: (item: ChatFileDiffItem) => void
 }
 

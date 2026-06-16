@@ -63,7 +63,7 @@ export const Transcript = memo(function Transcript({
   onForkMessage?: (messageId: string) => void
   onEditUserMessage?: (messageId: string, text: string) => void
   onUserMessageEditDismissed?: () => void
-  onReviewFileChanges?: (changeSetId: string) => void
+  onReviewFileChanges?: (item: ChatFileDiffItem) => void
   onRewindFileChanges?: (item: ChatFileDiffItem) => void
 }) {
   const now = useLiveNow(Boolean(activeRunState?.startedAt))
@@ -772,7 +772,7 @@ const FileDiffRow = memo(function FileDiffRow({
   onRewindFileChanges,
 }: {
   item: ChatFileDiffItem
-  onReviewFileChanges?: (changeSetId: string) => void
+  onReviewFileChanges?: (item: ChatFileDiffItem) => void
   onRewindFileChanges?: (item: ChatFileDiffItem) => void
 }) {
   const { t } = useI18n()
@@ -822,7 +822,7 @@ const FileDiffRow = memo(function FileDiffRow({
             type="button"
             className="btn btn-primary btn-compact"
             disabled={!canReview}
-            onClick={() => onReviewFileChanges?.(item.changeSetId)}
+            onClick={() => onReviewFileChanges?.(item)}
           >
             <IconInline name="check" />
             <span>{item.status === 'reviewed' ? t('chat.fileDiffReviewed') : t('chat.fileDiffReview')}</span>

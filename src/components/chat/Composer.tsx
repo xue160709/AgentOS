@@ -82,6 +82,7 @@ type ComposerProps = {
   onToggleSpeechRecognition: () => void
   onAddComposerAttachments: () => void
   onCompactContext?: () => void
+  onCompactContextUnavailable?: () => void
   onRefreshContextUsage?: () => void
   onRemoveComposerAttachment: (attachmentId: string) => void
   onInsertComposerSuggestion: (suggestion: ComposerSuggestion) => void
@@ -136,6 +137,7 @@ export function Composer({
   onToggleSpeechRecognition,
   onAddComposerAttachments,
   onCompactContext,
+  onCompactContextUnavailable,
   onRefreshContextUsage,
   onRemoveComposerAttachment,
   onInsertComposerSuggestion,
@@ -158,6 +160,12 @@ export function Composer({
       : speechRecognitionActive
         ? t('chat.voiceCancelTitle')
         : t('chat.voiceStartTitle')
+  const speechRecognitionButtonAriaLabel =
+    speechRecognitionStatus === 'listening'
+      ? t('chat.voiceStopAria')
+      : speechRecognitionActive
+        ? t('chat.voiceCancelAria')
+        : t('chat.voiceStartAria')
   const speechRecognitionButtonClassName = [
     'composer-icon-button',
     'composer-voice-button',
@@ -354,8 +362,9 @@ export function Composer({
               {contextUsage ? (
                 <ContextUsageMeter
                   context={contextUsage}
-                  disabled={isRunning}
+                  compactDisabledReason={isRunning ? 'running' : onCompactContext ? undefined : 'unsupported'}
                   onCompact={onCompactContext}
+                  onDisabledClick={onCompactContextUnavailable}
                   onRefresh={onRefreshContextUsage}
                 />
               ) : null}
@@ -432,9 +441,10 @@ export function Composer({
                 type="button"
                 className={speechRecognitionButtonClassName}
                 title={speechRecognitionButtonTitle}
-                aria-label={speechRecognitionActive ? t('chat.voiceStopAria') : t('chat.voiceStartAria')}
+                aria-label={speechRecognitionButtonAriaLabel}
                 aria-pressed={speechRecognitionActive}
                 disabled={isRunning}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={onToggleSpeechRecognition}
               >
                 <IconInline name="mic" />
@@ -460,13 +470,15 @@ export function Composer({
 
 function ContextUsageMeter({
   context,
-  disabled,
+  compactDisabledReason,
   onCompact,
+  onDisabledClick,
   onRefresh,
 }: {
   context: ClaudeAgentStatusContextUsage
-  disabled: boolean
+  compactDisabledReason?: 'running' | 'unsupported'
   onCompact?: () => void
+  onDisabledClick?: () => void
   onRefresh?: () => void
 }) {
   const { t } = useI18n()
@@ -480,7 +492,19 @@ function ContextUsageMeter({
     () => context.categories.filter((category) => category.tokens > 0).sort((a, b) => b.tokens - a.tokens),
     [context.categories],
   )
-  const title = disabled ? t('chat.contextCompactDisabledTitle') : t('chat.contextCompactTitle')
+  const isCompactDisabled = Boolean(compactDisabledReason)
+  const compactTitle =
+    compactDisabledReason === 'running'
+      ? t('chat.contextCompactDisabledTitle')
+      : compactDisabledReason === 'unsupported'
+        ? t('chat.contextCompactUnavailableTitle')
+        : t('chat.contextCompactTitle')
+  const compactAriaLabel =
+    compactDisabledReason === 'running'
+      ? t('chat.contextCompactDisabledAria', { percent: Math.round(percentage) })
+      : compactDisabledReason === 'unsupported'
+        ? t('chat.contextCompactUnavailableAria', { percent: Math.round(percentage) })
+        : t('chat.contextCompactAria', { percent: Math.round(percentage) })
 
   const clearCloseTimer = () => {
     if (closeTimerRef.current === null) return
@@ -504,6 +528,15 @@ function ContextUsageMeter({
   const scheduleClose = () => {
     clearCloseTimer()
     closeTimerRef.current = window.setTimeout(() => setOpen(false), 120)
+  }
+
+  const runCompactAction = () => {
+    if (isCompactDisabled || !onCompact) {
+      if (compactDisabledReason === 'unsupported') onDisabledClick?.()
+      return
+    }
+    setOpen(false)
+    onCompact()
   }
 
   useEffect(() => () => clearCloseTimer(), [])
@@ -544,10 +577,9 @@ function ContextUsageMeter({
       <button
         ref={anchorRef}
         type="button"
-        className={`composer-context-meter${open ? ' is-open' : ''}${disabled ? ' is-disabled' : ''}`}
-        title={title}
-        aria-label={t('chat.contextCompactAria', { percent: Math.round(percentage) })}
-        aria-disabled={disabled}
+        className={`composer-context-meter${open ? ' is-open' : ''}`}
+        title={t('chat.contextUsageTitle')}
+        aria-label={t('chat.contextUsageAria', { percent: Math.round(percentage) })}
         aria-expanded={open}
         aria-haspopup="dialog"
         onMouseEnter={openPopover}
@@ -555,9 +587,7 @@ function ContextUsageMeter({
         onFocus={openPopover}
         onBlur={scheduleClose}
         onClick={() => {
-          if (disabled || !onCompact) return
-          setOpen(false)
-          onCompact()
+          openPopover()
         }}
       >
         <span
@@ -587,8 +617,30 @@ function ContextUsageMeter({
                 setOpen(true)
               }}
               onMouseLeave={scheduleClose}
+              onFocus={() => {
+                clearCloseTimer()
+                setOpen(true)
+              }}
+              onBlur={scheduleClose}
             >
               <ContextUsageView context={context} categories={categories} />
+              <div className="composer-context-popover__actions">
+                <button
+                  type="button"
+                  className={`composer-context-popover__compact${isCompactDisabled ? ' is-disabled' : ''}`}
+                  title={compactTitle}
+                  aria-label={compactAriaLabel}
+                  aria-disabled={isCompactDisabled || undefined}
+                  onClick={runCompactAction}
+                >
+                  {t('chat.contextCompactTitle')}
+                </button>
+                {compactDisabledReason === 'unsupported' ? (
+                  <span>{t('chat.contextCompactUnavailableHelp')}</span>
+                ) : compactDisabledReason === 'running' ? (
+                  <span>{t('chat.contextCompactDisabledHelp')}</span>
+                ) : null}
+              </div>
             </div>,
             document.body,
           )

@@ -275,6 +275,7 @@ type SubmitPromptTarget = {
   reuseUserMessageId?: string
   resetSession?: boolean
   suppressUserMessage?: boolean
+  preserveComposerDraft?: boolean
 }
 
 /** 内置 slash 命令清单 / Built-in slash commands backed by i18n strings */
@@ -437,7 +438,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const speechDraftRangeRef = useRef<SpeechDraftRange | null>(null)
   const lastSpeechAppliedValueRef = useRef<string | null>(null)
   const ignoreSpeechRecognitionTextRef = useRef(false)
+  const speechRecognitionGenerationRef = useRef<number | null>(null)
+  const ignoredSpeechRecognitionGenerationsRef = useRef<Set<number>>(new Set())
   const speechRestartAfterEditRef = useRef(false)
+  const speechRecognitionStatusRef = useRef(speechRecognitionStatus)
+  const speechSettleWaitersRef = useRef<Array<() => void>>([])
 
   const [composerAutocompleteBox, setComposerAutocompleteBox] = useState<{
     left: number
@@ -480,6 +485,61 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     },
     [onThreadChatStateChange],
   )
+  const setSpeechStatus = useCallback((status: SpeechRecognitionStatus) => {
+    speechRecognitionStatusRef.current = status
+    setSpeechRecognitionStatus(status)
+  }, [])
+  const rememberSpeechRecognitionGeneration = useCallback((generation: number | undefined) => {
+    if (typeof generation !== 'number') return
+    speechRecognitionGenerationRef.current = generation
+    const ignored = ignoredSpeechRecognitionGenerationsRef.current
+    for (const value of ignored) {
+      if (value < generation - 2) ignored.delete(value)
+    }
+  }, [])
+  const ignoreCurrentSpeechRecognitionGeneration = useCallback(() => {
+    const generation = speechRecognitionGenerationRef.current
+    if (generation !== null) ignoredSpeechRecognitionGenerationsRef.current.add(generation)
+  }, [])
+  const shouldIgnoreSpeechRecognitionEvent = useCallback((generation: number | undefined) => {
+    if (typeof generation !== 'number') return ignoreSpeechRecognitionTextRef.current
+    if (ignoredSpeechRecognitionGenerationsRef.current.has(generation)) return true
+    const currentGeneration = speechRecognitionGenerationRef.current
+    return currentGeneration !== null && generation < currentGeneration
+  }, [])
+  const resolveSpeechRecognitionSettleWaiters = useCallback(() => {
+    const waiters = speechSettleWaitersRef.current
+    speechSettleWaitersRef.current = []
+    waiters.forEach((resolve) => resolve())
+  }, [])
+  const waitForSpeechRecognitionSettle = useCallback((timeoutMs = 9500) => {
+    return new Promise<void>((resolve) => {
+      if (!ACTIVE_SPEECH_RECOGNITION_STATUSES.has(speechRecognitionStatusRef.current)) {
+        resolve()
+        return
+      }
+
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timeout)
+        speechSettleWaitersRef.current = speechSettleWaitersRef.current.filter((item) => item !== finish)
+        resolve()
+      }
+      const timeout = window.setTimeout(finish, timeoutMs)
+      speechSettleWaitersRef.current = [...speechSettleWaitersRef.current, finish]
+    })
+  }, [])
+  const setComposerDraftValue = useCallback((nextValue: string, selectionStart = nextValue.length, selectionEnd = selectionStart) => {
+    const start = Math.max(0, Math.min(selectionStart, nextValue.length))
+    const end = Math.max(start, Math.min(selectionEnd, nextValue.length))
+    inputValueRef.current = nextValue
+    composerSelectionRef.current = { start, end }
+    setInputValue(nextValue)
+    setComposerSelection({ start, end })
+    if (!nextValue) setDismissedAutocompleteKey('')
+  }, [])
   const beginSpeechDraft = useCallback(() => {
     const currentInput = inputValueRef.current
     const selection = composerSelectionRef.current
@@ -497,6 +557,24 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     speechDraftRangeRef.current = null
     lastSpeechAppliedValueRef.current = null
   }, [])
+  const clearComposerDraft = useCallback(() => {
+    clearSpeechDraft()
+    setComposerDraftValue('', 0, 0)
+  }, [clearSpeechDraft, setComposerDraftValue])
+  const discardSpeechDraftText = useCallback(() => {
+    const draftRange = speechDraftRangeRef.current
+    if (!draftRange) {
+      clearSpeechDraft()
+      return
+    }
+
+    const currentInput = inputValueRef.current
+    const replacementStart = Math.max(0, Math.min(draftRange.start, currentInput.length))
+    const replacementEnd = Math.max(replacementStart, Math.min(draftRange.end, currentInput.length))
+    const nextValue = `${currentInput.slice(0, replacementStart)}${currentInput.slice(replacementEnd)}`
+    clearSpeechDraft()
+    setComposerDraftValue(nextValue, replacementStart, replacementStart)
+  }, [clearSpeechDraft, setComposerDraftValue])
   const replaceSpeechDraftText = useCallback((text: string) => {
     const cleanText = text.trim()
     const currentInput = inputValueRef.current
@@ -647,22 +725,35 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   useEffect(() => {
     if (!speechRecognitionSupported) {
-      setSpeechRecognitionStatus('unsupported')
+      setSpeechStatus('unsupported')
       return
     }
 
     let disposed = false
     window.desktop?.getSpeechRecognitionStatus?.()
       .then((snapshot) => {
-        if (!disposed) setSpeechRecognitionStatus(snapshot.status)
+        if (!disposed) {
+          rememberSpeechRecognitionGeneration(snapshot.generation)
+          setSpeechStatus(snapshot.status)
+        }
       })
       .catch(() => {
-        if (!disposed) setSpeechRecognitionStatus('error')
-      })
+        if (!disposed) setSpeechStatus('error')
+    })
 
     const unsubscribe = window.desktop?.onSpeechRecognitionEvent?.((event) => {
+      const hasGeneration = typeof event.generation === 'number'
+      if (hasGeneration && shouldIgnoreSpeechRecognitionEvent(event.generation)) {
+        if (event.type === 'final' || event.type === 'error') resolveSpeechRecognitionSettleWaiters()
+        return
+      }
+      rememberSpeechRecognitionGeneration(event.generation)
+
       if (event.type === 'status') {
-        setSpeechRecognitionStatus(event.status)
+        setSpeechStatus(event.status)
+        if (!ACTIVE_SPEECH_RECOGNITION_STATUSES.has(event.status)) {
+          resolveSpeechRecognitionSettleWaiters()
+        }
         if (event.status === 'requesting_permission') {
           onStatusChange(t('chat.voiceRequestingPermission'))
         } else if (event.status === 'listening') {
@@ -675,13 +766,16 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       }
 
       if (event.type === 'partial') {
-        if (ignoreSpeechRecognitionTextRef.current) return
+        if (!hasGeneration && ignoreSpeechRecognitionTextRef.current) return
         replaceSpeechDraftText(event.text)
         return
       }
 
       if (event.type === 'final') {
-        if (ignoreSpeechRecognitionTextRef.current) return
+        if (!hasGeneration && ignoreSpeechRecognitionTextRef.current) {
+          resolveSpeechRecognitionSettleWaiters()
+          return
+        }
         if (event.text.trim()) {
           replaceSpeechDraftText(event.text)
           clearSpeechDraft()
@@ -693,21 +787,35 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           clearSpeechDraft()
           onStatusChange(t('chat.voiceNoSpeech'))
         }
+        resolveSpeechRecognitionSettleWaiters()
         return
       }
 
       const message = speechRecognitionErrorMessage(event.code, event.message)
       ignoreSpeechRecognitionTextRef.current = false
       clearSpeechDraft()
-      setSpeechRecognitionStatus('error')
+      setSpeechStatus('error')
+      resolveSpeechRecognitionSettleWaiters()
       onStatusChange(message)
     })
 
     return () => {
       disposed = true
       unsubscribe?.()
+      resolveSpeechRecognitionSettleWaiters()
     }
-  }, [clearSpeechDraft, onStatusChange, replaceSpeechDraftText, speechRecognitionErrorMessage, speechRecognitionSupported, t])
+  }, [
+    clearSpeechDraft,
+    rememberSpeechRecognitionGeneration,
+    onStatusChange,
+    replaceSpeechDraftText,
+    resolveSpeechRecognitionSettleWaiters,
+    setSpeechStatus,
+    shouldIgnoreSpeechRecognitionEvent,
+    speechRecognitionErrorMessage,
+    speechRecognitionSupported,
+    t,
+  ])
 
   const applyGlobalModelFromSettings = useCallback(
     (snapshot: ClaudeAgentSettingsSnapshot) => {
@@ -1288,13 +1396,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     const text = rawText.trim()
     if (!text && attachmentsForSubmit.length === 0) return
     if (text.toLowerCase() === '/status' && attachmentsForSubmit.length === 0) {
-      inputValueRef.current = ''
-      setInputValue('')
-      setComposerSelection({ start: 0, end: 0 })
+      clearComposerDraft()
       window.dispatchEvent(new CustomEvent(OPEN_AGENT_STATUS_EVENT, { detail: { refresh: true } }))
       onStatusChange(t('chat.statusPanelOpened'))
       return
     }
+    const isLocalCompactCommand = text.toLowerCase() === '/compact' && attachmentsForSubmit.length === 0
     const projectForSubmit =
       target?.project ?? (activeThread ? projects.find((project) => project.id === activeThread.projectId) : undefined) ?? activeProject
 
@@ -1341,7 +1448,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       model: modelPickForSubmit?.anthropicModel,
       modelPick: modelPickForSubmit,
       clearSession: modelPickChanged,
-      reuseUserMessageId: Boolean(target?.reuseUserMessageId || target?.suppressUserMessage),
+      reuseUserMessageId: Boolean(target?.reuseUserMessageId || target?.suppressUserMessage || isLocalCompactCommand),
       bridgeUnavailableBody: t('chat.bridgeErrorBody'),
       submit: window.claudeChat
         ? () =>
@@ -1361,9 +1468,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!submitAttempt) return
 
     if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-    if (!target?.suppressUserMessage) onThreadPromptSubmit(submittingThreadId, text)
+    if (!target?.suppressUserMessage && !isLocalCompactCommand) onThreadPromptSubmit(submittingThreadId, text)
     applyChatRunTransition(submitAttempt.startTransition)
-    setInputValue('')
+    if (!target?.preserveComposerDraft) clearComposerDraft()
     if (attachmentsForSubmit.length > 0 || !target?.threadId) {
       pendingAttachmentsRef.current = []
       setPendingAttachments([])
@@ -1510,7 +1617,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         scrollIntentRef.current = 'force-bottom'
         isFirstTranscriptLayoutRef.current = true
         onStatusChange(compactModelName(globalDisplayModelRef.current, t))
-        setInputValue('')
+        clearComposerDraft()
         requestAnimationFrame(() => chatInputRef.current?.focus())
       },
       focusComposer: () => {
@@ -1519,10 +1626,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       insertComposerText: (text: string) => {
         const next = text.trim()
         if (!next) return
-        setInputValue((current) => {
-          const separator = current.trim().length > 0 && !current.endsWith('\n') ? '\n' : ''
-          return `${current}${separator}${next}`
-        })
+        const current = inputValueRef.current
+        const separator = current.trim().length > 0 && !current.endsWith('\n') ? '\n' : ''
+        const nextValue = `${current}${separator}${next}`
+        clearSpeechDraft()
+        setComposerDraftValue(nextValue, nextValue.length, nextValue.length)
         requestAnimationFrame(() => chatInputRef.current?.focus())
       },
       revealMessage,
@@ -1570,7 +1678,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return true
       },
     }),
-    [newThreadModelPick, onNewThread, onStatusChange, projectDefaultModelPick, projects, revealMessage, setThreadChatState, t],
+    [
+      clearComposerDraft,
+      clearSpeechDraft,
+      newThreadModelPick,
+      onNewThread,
+      onStatusChange,
+      projectDefaultModelPick,
+      projects,
+      revealMessage,
+      setComposerDraftValue,
+      setThreadChatState,
+      t,
+    ],
   )
 
   // --- Cancel streaming + answer permission / tool questions from modal / 停止生成；在弹窗中应答权限或工具提问 ---
@@ -1730,6 +1850,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!input) return
     setComposerSelection({ start: input.selectionStart, end: input.selectionEnd })
   }, [])
+  const focusComposerInput = useCallback(() => {
+    const restoreFocus = () => {
+      const input = chatInputRef.current
+      if (!input) return
+      const selection = composerSelectionRef.current
+      const start = Math.max(0, Math.min(selection.start, input.value.length))
+      const end = Math.max(start, Math.min(selection.end, input.value.length))
+      input.focus({ preventScroll: true })
+      input.setSelectionRange(start, end)
+    }
+
+    restoreFocus()
+    requestAnimationFrame(restoreFocus)
+  }, [])
 
   const insertComposerSuggestion = useCallback(
     (suggestion: ComposerSuggestion) => {
@@ -1751,10 +1885,94 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     [activeComposerTrigger, inputValue],
   )
 
-  // --- Home “data card” draft → dedicated customization thread / 首页「数据卡片」草稿 → 专用定制线程 ---
+  // --- Voice submit boundary + Home “data card” draft / 语音提交边界 + 首页「数据卡片」草稿 ---
 
-  const submitDataCardDraft = async () => {
-    const text = inputValue.trim()
+  const cancelSpeechRecognitionDraft = useCallback(
+    async (showStatus = true) => {
+      ignoreSpeechRecognitionTextRef.current = true
+      ignoreCurrentSpeechRecognitionGeneration()
+      try {
+        const result = await window.desktop?.cancelSpeechRecognition?.()
+        discardSpeechDraftText()
+        setSpeechStatus('idle')
+        if (result && !result.ok) {
+          setSpeechStatus(result.status)
+          onStatusChange(result.message)
+          return false
+        }
+        if (showStatus) onStatusChange(t('chat.voiceCancelled'))
+        return true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : t('chat.voiceError')
+        clearSpeechDraft()
+        setSpeechStatus('error')
+        onStatusChange(message)
+        return false
+      } finally {
+        resolveSpeechRecognitionSettleWaiters()
+      }
+    },
+    [
+      clearSpeechDraft,
+      discardSpeechDraftText,
+      ignoreCurrentSpeechRecognitionGeneration,
+      onStatusChange,
+      resolveSpeechRecognitionSettleWaiters,
+      setSpeechStatus,
+      t,
+    ],
+  )
+
+  const finalizeSpeechRecognitionBeforeSubmit = useCallback(async () => {
+    if (!speechRecognitionSupported) return true
+
+    const status = speechRecognitionStatusRef.current
+    if (!ACTIVE_SPEECH_RECOGNITION_STATUSES.has(status)) return true
+
+    if (status === 'listening') {
+      setSpeechStatus('transcribing')
+      onStatusChange(t('chat.voiceTranscribing'))
+      const settled = waitForSpeechRecognitionSettle()
+      try {
+        const result = await window.desktop?.stopSpeechRecognition?.()
+        if (result && !result.ok) {
+          setSpeechStatus(result.status)
+          onStatusChange(result.message)
+          resolveSpeechRecognitionSettleWaiters()
+          return false
+        }
+        await settled
+        return true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : t('chat.voiceError')
+        clearSpeechDraft()
+        setSpeechStatus('error')
+        resolveSpeechRecognitionSettleWaiters()
+        onStatusChange(message)
+        return false
+      }
+    }
+
+    if (status === 'transcribing') {
+      onStatusChange(t('chat.voiceTranscribing'))
+      await waitForSpeechRecognitionSettle()
+      return true
+    }
+
+    return cancelSpeechRecognitionDraft(false)
+  }, [
+    cancelSpeechRecognitionDraft,
+    clearSpeechDraft,
+    onStatusChange,
+    resolveSpeechRecognitionSettleWaiters,
+    setSpeechStatus,
+    speechRecognitionSupported,
+    t,
+    waitForSpeechRecognitionSettle,
+  ])
+
+  const submitDataCardDraft = async (rawText = inputValueRef.current) => {
+    const text = rawText.trim()
     if (!text) return
     const threadId = onCreateHomePluginCardThread(activeProject.id, text)
     if (!threadId) return
@@ -1770,15 +1988,23 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     })
   }
 
+  const submitComposer = async () => {
+    const speechReady = await finalizeSpeechRecognitionBeforeSubmit()
+    if (!speechReady) return
+
+    const text = inputValueRef.current
+    if (homeComposerMode === 'data-card-draft' && !hasMessages && !activeThread) {
+      await submitDataCardDraft(text)
+      return
+    }
+    await submitPrompt(text, getActiveSubmitTarget(), pendingAttachmentsRef.current)
+  }
+
   // --- Composer form + keyboard routing (autocomplete vs send) / 表单提交与键盘路由（联想优先于发送）---
 
   const handleFormSubmit = (event: FormEvent) => {
     event.preventDefault()
-    if (homeComposerMode === 'data-card-draft' && !hasMessages && !activeThread) {
-      void submitDataCardDraft()
-      return
-    }
-    void submitPrompt(inputValue, getActiveSubmitTarget(), pendingAttachments)
+    void submitComposer()
   }
 
   const handleSendClick = (event: React.MouseEvent) => {
@@ -1798,7 +2024,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
     speechRestartAfterEditRef.current = true
     ignoreSpeechRecognitionTextRef.current = true
-    setSpeechRecognitionStatus('starting')
+    ignoreCurrentSpeechRecognitionGeneration()
+    setSpeechStatus('starting')
     onStatusChange(t('chat.voiceStarting'))
 
     void (async () => {
@@ -1810,14 +2037,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         if (result && !result.ok) {
           ignoreSpeechRecognitionTextRef.current = false
           clearSpeechDraft()
-          setSpeechRecognitionStatus(result.status)
+          setSpeechStatus(result.status)
           onStatusChange(result.message)
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : t('chat.voiceError')
         ignoreSpeechRecognitionTextRef.current = false
         clearSpeechDraft()
-        setSpeechRecognitionStatus('error')
+        setSpeechStatus('error')
         onStatusChange(message)
       } finally {
         speechRestartAfterEditRef.current = false
@@ -1826,7 +2053,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }, [
     beginSpeechDraft,
     clearSpeechDraft,
+    ignoreCurrentSpeechRecognitionGeneration,
     onStatusChange,
+    setSpeechStatus,
     speechRecognitionStatus,
     speechRecognitionSupported,
     t,
@@ -1863,14 +2092,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
     if (event.key !== 'Enter' || event.shiftKey || isComposingText) return
     event.preventDefault()
-    if (homeComposerMode === 'data-card-draft' && !hasMessages && !activeThread) {
-      void submitDataCardDraft()
-      return
-    }
-    void submitPrompt(inputValue, getActiveSubmitTarget(), pendingAttachments)
+    void submitComposer()
   }
 
   const toggleSpeechRecognition = useCallback(async () => {
+    focusComposerInput()
+
     if (!speechRecognitionSupported) {
       onStatusChange(t('chat.voiceUnavailable'))
       return
@@ -1880,49 +2107,54 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     try {
       if (isActive) {
         if (speechRecognitionStatus === 'listening') {
-          setSpeechRecognitionStatus('transcribing')
+          setSpeechStatus('transcribing')
           onStatusChange(t('chat.voiceTranscribing'))
           const result = await window.desktop?.stopSpeechRecognition?.()
           if (result && !result.ok) {
-            setSpeechRecognitionStatus(result.status)
+            setSpeechStatus(result.status)
             onStatusChange(result.message)
           }
           return
         }
 
-        const result = await window.desktop?.cancelSpeechRecognition?.()
-        clearSpeechDraft()
-        if (result && !result.ok) {
-          setSpeechRecognitionStatus(result.status)
-          onStatusChange(result.message)
-        }
+        await cancelSpeechRecognitionDraft()
         return
       }
 
-      setSpeechRecognitionStatus('starting')
+      setSpeechStatus('starting')
       beginSpeechDraft()
       onStatusChange(t('chat.voiceStarting'))
       const result = await window.desktop?.startSpeechRecognition?.({ requiresOnDevice: true })
       if (result && !result.ok) {
         clearSpeechDraft()
-        setSpeechRecognitionStatus(result.status)
+        setSpeechStatus(result.status)
         onStatusChange(result.message)
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : t('chat.voiceError')
       clearSpeechDraft()
-      setSpeechRecognitionStatus('error')
+      setSpeechStatus('error')
       onStatusChange(message)
     }
-  }, [beginSpeechDraft, clearSpeechDraft, onStatusChange, speechRecognitionStatus, speechRecognitionSupported, t])
+  }, [
+    beginSpeechDraft,
+    cancelSpeechRecognitionDraft,
+    clearSpeechDraft,
+    focusComposerInput,
+    onStatusChange,
+    setSpeechStatus,
+    speechRecognitionStatus,
+    speechRecognitionSupported,
+    t,
+  ])
 
   // --- File diff UX: mark reviewed + optional rewind via SDK / 文件 diff：标记已读与可选 SDK 回滚 ---
 
   const reviewFileChanges = useCallback(
-    (changeSetId: string) => {
-      const threadId = activeThreadIdRef.current
+    (item: ChatFileDiffItem) => {
+      const threadId = item.threadId?.trim() || activeThreadIdRef.current
       setThreadChatState(threadId, (prev) => {
-        const idx = prev.items.findIndex((it) => it.type === 'file_diff' && it.changeSetId === changeSetId)
+        const idx = prev.items.findIndex((it) => it.type === 'file_diff' && it.changeSetId === item.changeSetId)
         if (idx < 0) return prev
         const next = [...prev.items]
         const it = next[idx] as ChatFileDiffItem
@@ -1935,7 +2167,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   const rewindFileChanges = useCallback(
     async (item: ChatFileDiffItem) => {
-      const threadId = activeThreadIdRef.current
+      const threadId = item.threadId?.trim() || activeThreadIdRef.current
+      const owningThread = threads.find((thread) => thread.id === threadId)
+      const projectForThread = owningThread
+        ? projects.find((project) => project.id === owningThread.projectId) ?? activeProject
+        : activeProject
       if (!item.checkpointId || !window.claudeChat?.rewindFiles) {
         setThreadChatState(threadId, (prev) => updateFileDiffStatus(prev, item.changeSetId, 'error', t('chat.fileDiffUnavailable')))
         return
@@ -1945,16 +2181,16 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       const result = await window.claudeChat.rewindFiles({
         threadId,
         requestId: item.requestId,
-        modelPick: activeThread?.chatState.modelPick ?? currentModelPickRef.current,
+        modelPick: owningThread?.chatState.modelPick ?? currentModelPickRef.current,
         changeSetId: item.changeSetId,
         checkpointId: item.checkpointId,
-        cwd: activeProject.path,
+        cwd: projectForThread.path,
       })
       if (!result.ok) {
         setThreadChatState(threadId, (prev) => updateFileDiffStatus(prev, item.changeSetId, 'error', result.message || t('chat.fileDiffUnavailable')))
       }
     },
-    [activeProject.path, activeThread?.chatState.modelPick, setThreadChatState, t],
+    [activeProject, projects, setThreadChatState, t, threads],
   )
 
   const composerContextUsage = useMemo(() => {
@@ -1965,14 +2201,26 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     return agentStatusSnapshot.contextUsage
   }, [activeThread?.chatState.sessionId, activeThread?.id, agentStatusSnapshot])
 
-  const compactComposerContext = () => {
-    const threadId = activeThreadIdRef.current
-    if (isRunning || !threadId || !activeThread?.chatState.sessionId) return
-    void (async () => {
-      await submitPrompt('/compact', { threadId, project: activeProject, suppressUserMessage: true })
-      onRefreshAgentStatus(true)
-    })()
-  }
+  const compactContext = useCallback(() => {
+    const threadId = activeThread?.id
+    const sessionId = activeThread?.chatState.sessionId?.trim()
+    if (!threadId || !sessionId) {
+      onStatusChange(t('chat.contextCompactNoSessionStatus'))
+      return
+    }
+    const projectForThread = projects.find((project) => project.id === activeThread.projectId) ?? activeProject
+    void submitPrompt('/compact', {
+      threadId,
+      project: projectForThread,
+      modelPick: activeThread.chatState.modelPick ?? currentModelPickRef.current,
+      suppressUserMessage: true,
+      preserveComposerDraft: true,
+    })
+  }, [activeProject, activeThread, onStatusChange, projects, t])
+
+  const handleUnsupportedContextCompact = useCallback(() => {
+    onStatusChange(t('chat.contextCompactUnavailableStatus'))
+  }, [onStatusChange, t])
 
   // --- Composer subtree (props-only; layout lives in `Composer.tsx`) / Composer 子树（仅传参；布局在 Composer 组件内）---
 
@@ -2033,7 +2281,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       onSendClick={handleSendClick}
       onToggleSpeechRecognition={() => void toggleSpeechRecognition()}
       onAddComposerAttachments={() => void addComposerAttachments()}
-      onCompactContext={compactComposerContext}
+      onCompactContext={compactContext}
+      onCompactContextUnavailable={handleUnsupportedContextCompact}
       onRefreshContextUsage={() => onRefreshAgentStatus(false)}
       onRemoveComposerAttachment={removeComposerAttachment}
       onInsertComposerSuggestion={insertComposerSuggestion}

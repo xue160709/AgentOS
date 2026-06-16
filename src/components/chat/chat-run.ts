@@ -217,7 +217,7 @@ export class ChatRun {
     const threadId = this.threadIdForRequest(requestId, fallbackThreadId)
     const current = this.runStates[threadId]
     const transition: ChatRunTransition = { threadId }
-    if (current?.requestId === requestId && current.status === 'asking') {
+    if (current?.requestId === requestId && (current.status === 'asking' || current.status === 'waiting')) {
       transition.runState = this.setRunState(threadId, {
         ...current,
         status: 'running',
@@ -229,10 +229,11 @@ export class ChatRun {
 
   handleEvent(event: ClaudeChatEvent, context: ChatRunEventContext): ChatRunTransition {
     const knownRequest = this.requestThreadIds.has(event.requestId)
-    const threadId =
-      event.threadId ??
-      this.requestThreadIds.get(event.requestId) ??
-      context.activeThreadId
+    const resolvedThreadId = event.threadId ?? this.requestThreadIds.get(event.requestId)
+    if (!resolvedThreadId && isUnsafeOrphanEvent(event)) {
+      return { threadId: '' }
+    }
+    const threadId = resolvedThreadId ?? context.activeThreadId
     this.requestThreadIds.set(event.requestId, threadId)
 
     const transition: ChatRunTransition = { threadId }
@@ -784,6 +785,7 @@ function foldChatRunEvent(
         ...prev,
         items: replaceAt(prev.items, index, {
           ...item,
+          threadId: item.threadId ?? event.threadId,
           checkpointId: event.checkpointId ?? item.checkpointId,
           files: mergeDiffFiles(item.files, event.files),
           status: item.status === 'reverted' ? item.status : 'captured',
@@ -795,6 +797,7 @@ function foldChatRunEvent(
       type: 'file_diff',
       id: event.changeSetId,
       requestId: event.requestId,
+      threadId: event.threadId,
       changeSetId: event.changeSetId,
       checkpointId: event.checkpointId,
       files: event.files,
@@ -1062,6 +1065,15 @@ function mergeDiffFiles(
 
 function isPendingRequestId(requestId: string): boolean {
   return requestId.startsWith('pending-')
+}
+
+function isUnsafeOrphanEvent(event: ClaudeChatEvent): boolean {
+  return (
+    event.type === 'result' ||
+    event.type === 'error' ||
+    event.type === 'cancelled' ||
+    event.type === 'file_rewind_result'
+  )
 }
 
 function isMissingSessionMessage(message: string): boolean {

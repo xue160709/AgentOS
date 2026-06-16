@@ -31,6 +31,7 @@ type HelperEvent = {
   locale?: unknown
   supportsOnDevice?: unknown
   requiresOnDevice?: unknown
+  generation?: unknown
 }
 
 const HELPER_APP_NAME = 'AgentOS Speech Helper.app'
@@ -58,6 +59,7 @@ export class MacSpeechRecognitionService {
   private helper: HelperSession | null = null
   private stdoutBuffer = ''
   private status: SpeechRecognitionStatus = process.platform === 'darwin' ? 'idle' : 'unsupported'
+  private generation = 0
 
   constructor(private readonly getWindow: () => BrowserWindow | null) {}
 
@@ -65,6 +67,7 @@ export class MacSpeechRecognitionService {
     return {
       supported: process.platform === 'darwin',
       status: this.status,
+      generation: this.generation,
     }
   }
 
@@ -81,11 +84,11 @@ export class MacSpeechRecognitionService {
         locale: typeof options.locale === 'string' ? options.locale : undefined,
         requiresOnDevice: options.requiresOnDevice !== false,
       })
-      return { ok: true, status: this.status }
+      return { ok: true, status: this.status, generation: this.generation }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to start Apple Speech recognition.'
       this.emitError('helper_start_failed', message)
-      return { ok: false, status: this.status, message }
+      return { ok: false, status: this.status, message, generation: this.generation }
     }
   }
 
@@ -95,21 +98,21 @@ export class MacSpeechRecognitionService {
     }
     if (!this.helper) {
       this.emitStatus('idle')
-      return { ok: true, status: this.status }
+      return { ok: true, status: this.status, generation: this.generation }
     }
 
     this.emitStatus('transcribing')
     this.writeCommand(this.helper, { command: 'stop' })
-    return { ok: true, status: this.status }
+    return { ok: true, status: this.status, generation: this.generation }
   }
 
   async cancel(): Promise<SpeechRecognitionCommandResult> {
     if (!this.helper) {
       this.emitStatus(process.platform === 'darwin' ? 'idle' : 'unsupported')
-      return { ok: true, status: this.status }
+      return { ok: true, status: this.status, generation: this.generation }
     }
     this.writeCommand(this.helper, { command: 'cancel' })
-    return { ok: true, status: this.status }
+    return { ok: true, status: this.status, generation: this.generation }
   }
 
   dispose() {
@@ -212,19 +215,23 @@ export class MacSpeechRecognitionService {
     }
 
     if (payload.type === 'partial' && typeof payload.text === 'string') {
-      this.emit({ type: 'partial', text: payload.text })
+      const generation = normalizeGeneration(payload.generation)
+      if (generation !== undefined) this.generation = generation
+      this.emit({ type: 'partial', text: payload.text, generation })
       return
     }
 
     if (payload.type === 'final' && typeof payload.text === 'string') {
-      this.emit({ type: 'final', text: payload.text })
+      const generation = normalizeGeneration(payload.generation)
+      if (generation !== undefined) this.generation = generation
+      this.emit({ type: 'final', text: payload.text, generation })
       return
     }
 
     if (payload.type === 'error') {
       const code = typeof payload.code === 'string' ? payload.code : 'speech_error'
       const message = typeof payload.message === 'string' ? payload.message : 'Apple Speech recognition failed.'
-      this.emitError(code, message)
+      this.emitError(code, message, normalizeGeneration(payload.generation))
     }
 
   }
@@ -237,6 +244,8 @@ export class MacSpeechRecognitionService {
   }
 
   private emitStatus(status: SpeechRecognitionStatus, raw?: HelperEvent) {
+    const generation = normalizeGeneration(raw?.generation)
+    if (generation !== undefined) this.generation = generation
     this.status = status
     this.emit({
       type: 'status',
@@ -244,13 +253,15 @@ export class MacSpeechRecognitionService {
       locale: typeof raw?.locale === 'string' ? raw.locale : undefined,
       supportsOnDevice: typeof raw?.supportsOnDevice === 'boolean' ? raw.supportsOnDevice : undefined,
       requiresOnDevice: typeof raw?.requiresOnDevice === 'boolean' ? raw.requiresOnDevice : undefined,
+      generation: generation ?? this.generation,
     })
   }
 
-  private emitError(code: string, message: string) {
+  private emitError(code: string, message: string, generation?: number) {
+    if (generation !== undefined) this.generation = generation
     this.status = 'error'
     console.warn(`[speech-recognition] ${code}: ${message}`)
-    this.emit({ type: 'error', code, message })
+    this.emit({ type: 'error', code, message, generation: generation ?? this.generation })
   }
 
   private emit(event: SpeechRecognitionEvent) {
@@ -374,4 +385,8 @@ function normalizeStatus(value: unknown): SpeechRecognitionStatus | null {
   return typeof value === 'string' && SPEECH_STATUSES.has(value as SpeechRecognitionStatus)
     ? (value as SpeechRecognitionStatus)
     : null
+}
+
+function normalizeGeneration(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined
 }

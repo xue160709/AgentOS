@@ -54,17 +54,20 @@ export type SpeechRecognitionCommandResult =
   | {
       ok: true
       status: SpeechRecognitionStatus
+      generation?: number
     }
   | {
       ok: false
       status: SpeechRecognitionStatus
       message: string
+      generation?: number
     }
 
 /** Current native speech recognizer snapshot / 原生语音识别当前快照 */
 export type SpeechRecognitionSnapshot = {
   supported: boolean
   status: SpeechRecognitionStatus
+  generation?: number
 }
 
 /** Streaming events from the Apple Speech helper / Apple 语音 helper 事件流 */
@@ -75,19 +78,23 @@ export type SpeechRecognitionEvent =
       locale?: string
       supportsOnDevice?: boolean
       requiresOnDevice?: boolean
+      generation?: number
     }
   | {
       type: 'partial'
       text: string
+      generation?: number
     }
   | {
       type: 'final'
       text: string
+      generation?: number
     }
   | {
       type: 'error'
       code: string
       message: string
+      generation?: number
     }
 
 /** Agent Mode 文件写入状态 / Agent Mode scaffold file status */

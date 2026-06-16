@@ -101,6 +101,7 @@ export type ChatFileDiffItem = {
   type: 'file_diff'
   id: string
   requestId: string
+  threadId?: string
   changeSetId: string
   checkpointId?: string
   files: ClaudeFileDiffFile[]

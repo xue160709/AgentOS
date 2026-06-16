@@ -18,6 +18,7 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
   private var hasInputTap = false
   private var fallbackFinalTimer: Timer?
   private var currentStatus = "idle"
+  private var recognitionGeneration = 0
 
   func run() {
     if let socketPath = Self.argumentValue(for: "--socket") {
@@ -153,44 +154,49 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
       return
     }
 
+    recognitionGeneration += 1
+    let generation = recognitionGeneration
     latestText = ""
     didEmitFinal = false
     isStopping = false
-    emitStatus("requesting_permission")
+    emitStatus("requesting_permission", generation: generation)
 
     SFSpeechRecognizer.requestAuthorization { [weak self] speechStatus in
       guard let self else { return }
       DispatchQueue.main.async {
+        guard self.recognitionGeneration == generation else { return }
         guard speechStatus == .authorized else {
-          self.emitAuthorizationError(speechStatus)
+          self.emitAuthorizationError(speechStatus, generation: generation)
           return
         }
 
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
           DispatchQueue.main.async {
             guard let self else { return }
+            guard self.recognitionGeneration == generation else { return }
             guard granted else {
-              self.emitError(code: "microphone_denied", message: "Microphone permission was denied.")
+              self.emitError(code: "microphone_denied", message: "Microphone permission was denied.", generation: generation)
               self.emitStatus("idle")
               return
             }
-            self.beginRecognition(localeIdentifier: localeIdentifier, requiresOnDevice: requiresOnDevice)
+            self.beginRecognition(localeIdentifier: localeIdentifier, requiresOnDevice: requiresOnDevice, generation: generation)
           }
         }
       }
     }
   }
 
-  private func beginRecognition(localeIdentifier: String?, requiresOnDevice: Bool) {
+  private func beginRecognition(localeIdentifier: String?, requiresOnDevice: Bool, generation: Int) {
+    guard recognitionGeneration == generation else { return }
     let locale = Locale(identifier: localeIdentifier?.isEmpty == false ? localeIdentifier! : Locale.current.identifier)
     guard let recognizer = SFSpeechRecognizer(locale: locale) else {
-      emitError(code: "recognizer_unavailable", message: "Speech recognizer is unavailable for locale \(locale.identifier).")
+      emitError(code: "recognizer_unavailable", message: "Speech recognizer is unavailable for locale \(locale.identifier).", generation: generation)
       emitStatus("idle")
       return
     }
 
     guard recognizer.isAvailable else {
-      emitError(code: "recognizer_not_available", message: "Speech recognizer is not currently available.")
+      emitError(code: "recognizer_not_available", message: "Speech recognizer is not currently available.", generation: generation)
       emitStatus("idle")
       return
     }
@@ -203,7 +209,8 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
     if requiresOnDevice && !supportsOnDevice {
       emitError(
         code: "on_device_unavailable",
-        message: "On-device speech recognition is unavailable for locale \(locale.identifier)."
+        message: "On-device speech recognition is unavailable for locale \(locale.identifier).",
+        generation: generation
       )
       emitStatus("idle", extra: [
         "locale": locale.identifier,
@@ -229,7 +236,7 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
     let inputNode = audioEngine.inputNode
     let recordingFormat = inputNode.outputFormat(forBus: 0)
     guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
-      emitError(code: "audio_input_unavailable", message: "No usable audio input format is available.")
+      emitError(code: "audio_input_unavailable", message: "No usable audio input format is available.", generation: generation)
       cleanupRecognition()
       emitStatus("idle")
       return
@@ -246,7 +253,7 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
 
     recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
       DispatchQueue.main.async {
-        self?.handleRecognitionResult(result: result, error: error)
+        self?.handleRecognitionResult(result: result, error: error, generation: generation)
       }
     }
 
@@ -260,7 +267,7 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
         "requiresOnDevice": requiresOnDevice,
       ])
     } catch {
-      emitError(code: "audio_start_failed", message: error.localizedDescription)
+      emitError(code: "audio_start_failed", message: error.localizedDescription, generation: generation)
       cleanupRecognition()
       emitStatus("idle")
     }
@@ -274,20 +281,22 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
 
     isStopping = true
     isRecording = false
+    let generation = recognitionGeneration
     emitStatus("transcribing")
     stopAudio()
     recognitionRequest?.endAudio()
 
     fallbackFinalTimer?.invalidate()
     fallbackFinalTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
-      guard let self, self.isStopping, !self.didEmitFinal else { return }
-      self.emitFinalIfNeeded()
+      guard let self, self.recognitionGeneration == generation, self.isStopping, !self.didEmitFinal else { return }
+      self.emitFinalIfNeeded(generation: generation)
       self.cleanupRecognition()
       self.emitStatus("idle")
     }
   }
 
   private func cancelRecognition(emitIdle: Bool) {
+    recognitionGeneration += 1
     fallbackFinalTimer?.invalidate()
     isRecording = false
     isStopping = false
@@ -299,11 +308,12 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
     }
   }
 
-  private func handleRecognitionResult(result: SFSpeechRecognitionResult?, error: Error?) {
+  private func handleRecognitionResult(result: SFSpeechRecognitionResult?, error: Error?, generation: Int) {
+    guard recognitionGeneration == generation else { return }
     if let result {
       latestText = result.bestTranscription.formattedString
       if result.isFinal {
-        emitFinalIfNeeded()
+        emitFinalIfNeeded(generation: generation)
         cleanupRecognition()
         emitStatus("idle")
         return
@@ -311,26 +321,28 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
       emit([
         "type": "partial",
         "text": latestText,
+        "generation": generation,
       ])
     }
 
     if let error {
       if isStopping {
-        emitFinalIfNeeded()
+        emitFinalIfNeeded(generation: generation)
       } else {
-        emitError(code: "recognition_failed", message: error.localizedDescription)
+        emitError(code: "recognition_failed", message: error.localizedDescription, generation: generation)
       }
       cleanupRecognition()
       emitStatus("idle")
     }
   }
 
-  private func emitFinalIfNeeded() {
+  private func emitFinalIfNeeded(generation: Int) {
     guard !didEmitFinal else { return }
     didEmitFinal = true
     emit([
       "type": "final",
       "text": latestText,
+      "generation": generation,
     ])
   }
 
@@ -356,35 +368,37 @@ final class SpeechCLI: NSObject, SFSpeechRecognizerDelegate {
     speechRecognizer = nil
   }
 
-  private func emitAuthorizationError(_ status: SFSpeechRecognizerAuthorizationStatus) {
+  private func emitAuthorizationError(_ status: SFSpeechRecognizerAuthorizationStatus, generation: Int) {
     switch status {
     case .denied:
-      emitError(code: "speech_denied", message: "Speech recognition permission was denied.")
+      emitError(code: "speech_denied", message: "Speech recognition permission was denied.", generation: generation)
     case .restricted:
-      emitError(code: "speech_restricted", message: "Speech recognition is restricted on this device.")
+      emitError(code: "speech_restricted", message: "Speech recognition is restricted on this device.", generation: generation)
     case .notDetermined:
-      emitError(code: "speech_not_determined", message: "Speech recognition permission is not determined.")
+      emitError(code: "speech_not_determined", message: "Speech recognition permission is not determined.", generation: generation)
     case .authorized:
       break
     @unknown default:
-      emitError(code: "speech_unknown_authorization", message: "Speech recognition authorization failed.")
+      emitError(code: "speech_unknown_authorization", message: "Speech recognition authorization failed.", generation: generation)
     }
     emitStatus("idle")
   }
 
-  private func emitStatus(_ status: String, extra: [String: Any] = [:]) {
+  private func emitStatus(_ status: String, extra: [String: Any] = [:], generation: Int? = nil) {
     currentStatus = status
     var payload = extra
     payload["type"] = "status"
     payload["status"] = status
+    payload["generation"] = generation ?? recognitionGeneration
     emit(payload)
   }
 
-  private func emitError(code: String, message: String) {
+  private func emitError(code: String, message: String, generation: Int? = nil) {
     emit([
       "type": "error",
       "code": code,
       "message": message,
+      "generation": generation ?? recognitionGeneration,
     ])
   }
 
