@@ -41,6 +41,7 @@ type ActiveRequest = {
   didEmitText: boolean
   didEmitThinking: boolean
   checkpointId?: string
+  compactionItemId?: string
   seenToolUseIds: Set<string>
   seenTaskInputToolUseIds: Set<string>
   toolNamesByUseId: Map<string, string>
@@ -192,10 +193,68 @@ export class ClaudeSdkMessageRouter {
       if (content) this.emitAssistantDelta(activeRequest, content)
     }
 
+    if (message.subtype === 'status' && this.emitContextCompactionFromStatus(message, activeRequest)) {
+      return
+    }
+
+    if (message.subtype === 'compact_boundary' && this.emitContextCompactionFromBoundary(message, activeRequest)) {
+      return
+    }
+
     const activity = activityFromSystemMessage(message)
     if (activity) {
       this.emitActivity(activeRequest, activity.key, activity.title, activity.status, activity.detail, activity.preview)
     }
+  }
+
+  private emitContextCompactionFromStatus(
+    message: Extract<SDKMessage, { type: 'system' }>,
+    activeRequest: ActiveRequest,
+  ): boolean {
+    const record = message as unknown
+    if (!isRecord(record) || record.subtype !== 'status') return false
+    const compactResult = typeof record.compact_result === 'string' ? record.compact_result : ''
+    const compactError = typeof record.compact_error === 'string' ? record.compact_error : ''
+    if (record.status !== 'compacting' && !compactResult && !compactError) return false
+
+    this.emit({
+      type: 'context_compaction',
+      requestId: activeRequest.requestId,
+      compactionId: this.ensureCompactionItemId(activeRequest),
+      status: compactResult === 'failed' || compactError ? 'error' : compactResult === 'success' ? 'done' : 'running',
+      error: compactError || undefined,
+    })
+    return true
+  }
+
+  private emitContextCompactionFromBoundary(
+    message: Extract<SDKMessage, { type: 'system' }>,
+    activeRequest: ActiveRequest,
+  ): boolean {
+    const record = message as unknown
+    if (!isRecord(record) || record.subtype !== 'compact_boundary') return false
+    const metadata = isRecord(record.compact_metadata) ? record.compact_metadata : {}
+    const preservedMessages = isRecord(metadata.preserved_messages) && Array.isArray(metadata.preserved_messages.uuids)
+      ? metadata.preserved_messages.uuids.length
+      : undefined
+    this.emit({
+      type: 'context_compaction',
+      requestId: activeRequest.requestId,
+      compactionId: this.ensureCompactionItemId(activeRequest, typeof record.uuid === 'string' ? `context-compact-${record.uuid}` : undefined),
+      status: 'done',
+      trigger: normalizeCompactTrigger(metadata.trigger),
+      preTokens: readFiniteNumber(metadata.pre_tokens),
+      postTokens: readFiniteNumber(metadata.post_tokens),
+      durationMs: readFiniteNumber(metadata.duration_ms),
+      preservedMessageCount: preservedMessages,
+    })
+    return true
+  }
+
+  private ensureCompactionItemId(activeRequest: ActiveRequest, preferred?: string): string {
+    const next = activeRequest.compactionItemId || preferred || `context-compact-${activeRequest.requestId}`
+    activeRequest.compactionItemId = next
+    return next
   }
 
   private handleStreamEvent(message: Extract<SDKMessage, { type: 'stream_event' }>, activeRequest: ActiveRequest): void {
@@ -1032,6 +1091,15 @@ function activityFromTaskMessage(record: Record<string, unknown>): ActivityDescr
 
 function formatPermissionMode(value: unknown): string | undefined {
   return typeof value === 'string' ? `权限 ${value}` : undefined
+}
+
+function normalizeCompactTrigger(value: unknown): 'manual' | 'auto' | 'unknown' {
+  if (value === 'manual' || value === 'auto') return value
+  return 'unknown'
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function formatCompactResult(record: Record<string, unknown>): string | undefined {

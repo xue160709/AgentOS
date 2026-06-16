@@ -75,3 +75,62 @@ test('Claude SDK router surfaces local slash command output as assistant text', 
   assert.equal(events[1].type, 'agent_activity')
   assert.equal(events[1].title, '本地命令输出')
 })
+
+test('Claude SDK router surfaces context compaction as a transcript boundary event', () => {
+  const { ClaudeSdkMessageRouter } = loadRouterModule()
+  const events = []
+  const router = new ClaudeSdkMessageRouter(
+    (event) => events.push(event),
+    () => ({ model: 'Claude Agent' }),
+  )
+  const activeRequest = createActiveRequest()
+
+  router.handleSdkMessage(
+    {
+      type: 'system',
+      subtype: 'status',
+      status: 'compacting',
+      uuid: 'status-1',
+      session_id: 'session-1',
+    },
+    activeRequest,
+  )
+  router.handleSdkMessage(
+    {
+      type: 'system',
+      subtype: 'compact_boundary',
+      compact_metadata: {
+        trigger: 'manual',
+        pre_tokens: 128000,
+        post_tokens: 21000,
+        duration_ms: 1400,
+        preserved_messages: {
+          anchor_uuid: 'anchor-1',
+          uuids: ['message-1', 'message-2'],
+        },
+      },
+      uuid: 'boundary-1',
+      session_id: 'session-1',
+    },
+    activeRequest,
+  )
+
+  assert.deepEqual(events[0], {
+    type: 'context_compaction',
+    requestId: 'request-1',
+    compactionId: 'context-compact-request-1',
+    status: 'running',
+    error: undefined,
+  })
+  assert.deepEqual(events[1], {
+    type: 'context_compaction',
+    requestId: 'request-1',
+    compactionId: 'context-compact-request-1',
+    status: 'done',
+    trigger: 'manual',
+    preTokens: 128000,
+    postTokens: 21000,
+    durationMs: 1400,
+    preservedMessageCount: 2,
+  })
+})

@@ -631,6 +631,10 @@ function buildSearchDocuments(state: ChatWorkspaceState): SearchDocument[] {
       }
       if (item.type === 'activity' && isImportantActivitySearchItem(item)) {
         documents.push(buildActivitySearchDocument(thread, project, item))
+        continue
+      }
+      if (item.type === 'context_compaction') {
+        documents.push(buildContextCompactionSearchDocument(thread, project, item))
       }
     }
   }
@@ -746,6 +750,44 @@ function buildActivitySearchDocument(
     body: compactSearchText([item.title, item.preview, item.detail].filter(Boolean).join('\n'), SEARCH_DOCUMENT_TOOL_LIMIT),
     metadataJson: JSON.stringify(metadata),
     updatedAt: thread.updatedAt,
+  }
+}
+
+function buildContextCompactionSearchDocument(
+  thread: WorkspaceThread,
+  project: WorkspaceProject | undefined,
+  item: Extract<TranscriptItem, { type: 'context_compaction' }>,
+): SearchDocument {
+  const metadata = baseSearchMetadata(thread, project, {
+    documentKind: 'activity',
+    itemId: item.id,
+    status: item.status,
+    trigger: item.trigger,
+  })
+  return {
+    id: `context-compaction:${thread.id}:${item.id}`,
+    kind: 'activity',
+    projectId: thread.projectId,
+    threadId: thread.id,
+    path: `thread:${thread.id}#${item.id}`,
+    title: thread.title || 'Untitled thread',
+    subtitle: `Context compaction · ${item.status}`,
+    body: compactSearchText(
+      [
+        'context compaction',
+        item.status,
+        item.trigger,
+        item.summary,
+        item.error,
+        typeof item.preTokens === 'number' ? `${item.preTokens} tokens` : '',
+        typeof item.postTokens === 'number' ? `${item.postTokens} tokens after compaction` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      SEARCH_DOCUMENT_TOOL_LIMIT,
+    ),
+    metadataJson: JSON.stringify(metadata),
+    updatedAt: itemTimestamp(item, thread.updatedAt),
   }
 }
 
@@ -1040,6 +1082,7 @@ function safeModelPick(value: unknown): ChatState['modelPick'] {
 
 function itemTimestamp(item: TranscriptItem, fallback: number): number {
   if (item.type === 'message') return item.completedAt ?? item.createdAt ?? fallback
+  if (item.type === 'context_compaction') return item.updatedAt ?? item.createdAt ?? fallback
   return fallback
 }
 

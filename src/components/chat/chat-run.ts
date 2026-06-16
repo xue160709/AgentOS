@@ -5,6 +5,7 @@
 import type { ClaudeChatEvent } from '../../claude-chat-types'
 import type {
   ChatActivityItem,
+  ChatContextCompactionItem,
   ChatFileDiffItem,
   ChatMessageItem,
   ChatState,
@@ -293,6 +294,14 @@ export class ChatRun {
     }
 
     if (event.type === 'agent_activity') {
+      if (event.status === 'running') {
+        this.attachRunningState(transition, threadId, event.requestId, 'running', now)
+      }
+      transition.updateState = (prev) => foldChatRunEvent(prev, event, { now })
+      return transition
+    }
+
+    if (event.type === 'context_compaction') {
       if (event.status === 'running') {
         this.attachRunningState(transition, threadId, event.requestId, 'running', now)
       }
@@ -771,6 +780,47 @@ function foldChatRunEvent(
       status: event.status,
       detail: event.detail,
       preview: event.preview,
+    }
+    return { ...prev, items: [...prev.items, row] }
+  }
+
+  if (event.type === 'context_compaction') {
+    const index = prev.items.findIndex(
+      (item) => item.type === 'context_compaction' && item.id === event.compactionId,
+    )
+    if (index >= 0) {
+      const item = prev.items[index] as ChatContextCompactionItem
+      return {
+        ...prev,
+        items: replaceAt(prev.items, index, {
+          ...item,
+          requestId: item.requestId ?? event.requestId,
+          status: event.status,
+          trigger: event.trigger ?? item.trigger,
+          preTokens: event.preTokens ?? item.preTokens,
+          postTokens: event.postTokens ?? item.postTokens,
+          durationMs: event.durationMs ?? item.durationMs,
+          preservedMessageCount: event.preservedMessageCount ?? item.preservedMessageCount,
+          summary: event.summary ?? item.summary,
+          error: event.error ?? item.error,
+          updatedAt: now,
+        }),
+      }
+    }
+    const row: ChatContextCompactionItem = {
+      type: 'context_compaction',
+      id: event.compactionId,
+      requestId: event.requestId,
+      status: event.status,
+      trigger: event.trigger ?? 'unknown',
+      preTokens: event.preTokens,
+      postTokens: event.postTokens,
+      durationMs: event.durationMs,
+      preservedMessageCount: event.preservedMessageCount,
+      summary: event.summary,
+      error: event.error,
+      createdAt: now,
+      updatedAt: now,
     }
     return { ...prev, items: [...prev.items, row] }
   }

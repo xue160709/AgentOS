@@ -13,6 +13,7 @@ import type {
   ClaudeFileDiffLineKind,
 } from './claude-chat-types'
 import type {
+  ChatContextCompactionItem,
   ChatMessageAttachment,
   ChatState,
   ChatTaskItem,
@@ -334,6 +335,7 @@ function normalizeTranscriptItem(value: unknown): ChatState['items'] {
       {
         type: 'tool',
         id: value.id,
+        requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
         toolUseId: value.toolUseId,
         name: value.name,
         inputPreview: typeof value.inputPreview === 'string' ? value.inputPreview : '',
@@ -349,6 +351,7 @@ function normalizeTranscriptItem(value: unknown): ChatState['items'] {
       {
         type: 'thinking',
         id: value.id,
+        requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
         thinkingId: value.thinkingId,
         title: typeof value.title === 'string' ? value.title : 'Think',
         content: typeof value.content === 'string' ? value.content : '',
@@ -357,11 +360,19 @@ function normalizeTranscriptItem(value: unknown): ChatState['items'] {
     ]
   }
 
+  if (value.type === 'context_compaction') {
+    return normalizeContextCompactionItem(value)
+  }
+
   if (value.type === 'activity' && typeof value.title === 'string') {
+    if (isLegacyContextCompactionActivity(value)) {
+      return normalizeLegacyContextCompactionActivity(value)
+    }
     return [
       {
         type: 'activity',
         id: value.id,
+        requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
         title: value.title,
         status:
           value.status === 'running' || value.status === 'done' || value.status === 'error' || value.status === 'info'
@@ -389,6 +400,49 @@ function normalizeTranscriptItem(value: unknown): ChatState['items'] {
   }
 
   return []
+}
+
+function normalizeContextCompactionItem(value: Record<string, unknown>): ChatContextCompactionItem[] {
+  return [
+    {
+      type: 'context_compaction',
+      id: typeof value.id === 'string' ? value.id : 'context-compact-unknown',
+      requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
+      status: normalizeContextCompactionStatus(value.status),
+      trigger: normalizeContextCompactionTrigger(value.trigger),
+      preTokens: toOptionalFiniteNumber(value.preTokens),
+      postTokens: toOptionalFiniteNumber(value.postTokens),
+      durationMs: toOptionalFiniteNumber(value.durationMs),
+      preservedMessageCount: toOptionalFiniteNumber(value.preservedMessageCount),
+      summary: typeof value.summary === 'string' ? value.summary : undefined,
+      error: typeof value.error === 'string' ? value.error : undefined,
+      createdAt: toOptionalFiniteNumber(value.createdAt),
+      updatedAt: toOptionalFiniteNumber(value.updatedAt),
+    },
+  ]
+}
+
+function normalizeLegacyContextCompactionActivity(value: Record<string, unknown>): ChatContextCompactionItem[] {
+  const detail = typeof value.detail === 'string' ? value.detail : ''
+  const tokenMatch = detail.match(/([0-9,]+)\s*tokens(?:\s*·\s*->\s*([0-9,]+))?/i)
+  return [
+    {
+      type: 'context_compaction',
+      id: value.id === 'sdk-compact' ? 'context-compact-legacy' : typeof value.id === 'string' ? value.id : 'context-compact-legacy',
+      requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
+      status: normalizeContextCompactionStatus(value.status),
+      trigger: normalizeContextCompactionTrigger(detail.includes('自动') || /auto/i.test(detail) ? 'auto' : detail.includes('手动') || /manual/i.test(detail) ? 'manual' : undefined),
+      preTokens: tokenMatch ? numberFromCompactToken(tokenMatch[1]) : undefined,
+      postTokens: tokenMatch?.[2] ? numberFromCompactToken(tokenMatch[2]) : undefined,
+      summary: typeof value.preview === 'string' ? value.preview : undefined,
+    },
+  ]
+}
+
+function isLegacyContextCompactionActivity(value: Record<string, unknown>): boolean {
+  const title = typeof value.title === 'string' ? value.title.trim() : ''
+  const id = typeof value.id === 'string' ? value.id : ''
+  return id.includes('sdk-compact') || title === '压缩上下文' || title.toLowerCase() === 'compact context'
 }
 
 // --- Module helpers / 模块内工具 ---
@@ -466,6 +520,16 @@ function normalizeFileChangeSetStatus(value: unknown): ClaudeFileChangeSetStatus
   return 'captured'
 }
 
+function normalizeContextCompactionStatus(value: unknown): ChatContextCompactionItem['status'] {
+  if (value === 'running' || value === 'error') return value
+  return 'done'
+}
+
+function normalizeContextCompactionTrigger(value: unknown): ChatContextCompactionItem['trigger'] {
+  if (value === 'manual' || value === 'auto') return value
+  return 'unknown'
+}
+
 function normalizeFileDiffStatus(value: unknown): ClaudeFileDiffFileStatus {
   if (value === 'added' || value === 'modified' || value === 'deleted') return value
   return 'unknown'
@@ -482,6 +546,11 @@ function toFiniteNumber(value: unknown, fallback: number): number {
 
 function toOptionalFiniteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function numberFromCompactToken(value: string): number | undefined {
+  const number = Number(value.replace(/,/g, ''))
+  return Number.isFinite(number) ? number : undefined
 }
 
 function normalizeThreadPurpose(value: unknown): WorkspaceThread['purpose'] {

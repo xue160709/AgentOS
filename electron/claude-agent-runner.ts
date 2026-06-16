@@ -67,6 +67,7 @@ type ActiveRequest = {
   didEmitText: boolean
   didEmitThinking: boolean
   checkpointId?: string
+  compactionItemId?: string
   promptMode?: ClaudeChatSubmitPayload['promptMode']
   modelPick?: ChatModelPick
   handoffContext?: string
@@ -794,16 +795,16 @@ export class ClaudeAgentRunner {
   private async handlePostCompactHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
     try {
       if (!isRecord(input) || input.hook_event_name !== 'PostCompact') return { continue: true, suppressOutput: true }
-      const trigger = input.trigger === 'auto' ? '自动' : input.trigger === 'manual' ? '手动' : ''
       const summary = typeof input.compact_summary === 'string' ? input.compact_summary.trim() : ''
-      this.emitActivity(
-        activeRequest,
-        'sdk-compact',
-        '压缩上下文',
-        'done',
-        joinDetails([trigger, summary ? '摘要已生成' : '已完成']),
-        summary || undefined,
-      )
+      activeRequest.compactionItemId = activeRequest.compactionItemId || `context-compact-${activeRequest.requestId}`
+      this.emit({
+        type: 'context_compaction',
+        requestId: activeRequest.requestId,
+        compactionId: activeRequest.compactionItemId,
+        status: 'done',
+        trigger: input.trigger === 'auto' || input.trigger === 'manual' ? input.trigger : 'unknown',
+        summary: summary || undefined,
+      })
     } catch (error) {
       safeConsoleWarn('[ClaudeAgentRunner] failed to collect compact summary', {
         requestId: activeRequest.requestId,

@@ -7,6 +7,8 @@ import type {
   AgentContextSlashItem,
   ChatModelPick,
   ClaudeChatAttachmentKind,
+  ClaudeContextCompactionStatus,
+  ClaudeContextCompactionTrigger,
   ClaudeFileChangeSetStatus,
   ClaudeFileDiffFile,
   ProjectFileSearchItem,
@@ -96,6 +98,23 @@ export type ChatActivityItem = {
   preview?: string
 }
 
+/** 会话压缩边界条目 / Context compaction boundary embedded in the transcript */
+export type ChatContextCompactionItem = {
+  type: 'context_compaction'
+  id: string
+  requestId?: string
+  status: ClaudeContextCompactionStatus
+  trigger: ClaudeContextCompactionTrigger
+  preTokens?: number
+  postTokens?: number
+  durationMs?: number
+  preservedMessageCount?: number
+  summary?: string
+  error?: string
+  createdAt?: number
+  updatedAt?: number
+}
+
 /** 会话中的文件 diff 卡片 / File diff card embedded in the transcript */
 export type ChatFileDiffItem = {
   type: 'file_diff'
@@ -136,7 +155,13 @@ export type ChatTaskState = {
 }
 
 /** 对话时间轴联合类型 / Union of rows shown in the transcript timeline */
-export type TranscriptItem = ChatMessageItem | ChatToolItem | ChatThinkingItem | ChatActivityItem | ChatFileDiffItem
+export type TranscriptItem =
+  | ChatMessageItem
+  | ChatToolItem
+  | ChatThinkingItem
+  | ChatActivityItem
+  | ChatContextCompactionItem
+  | ChatFileDiffItem
 
 /** 单线程内的聊天 UI 状态快照 / Per-thread chat UI state snapshot */
 export type ChatState = {

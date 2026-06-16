@@ -396,6 +396,58 @@ test('Chat Run interface owns thinking, tool, activity, task, and prompt lifecyc
   assert.equal(state.items[2].type, 'activity')
 })
 
+test('Chat Run interface persists context compaction boundary items', () => {
+  const harness = createHarness(200)
+  beginAcceptedRun(harness, 'request-compact')
+  let state = emptyState()
+
+  harness.setNow(210)
+  let result = applyEvent(harness, state, {
+    type: 'context_compaction',
+    requestId: 'request-compact',
+    compactionId: 'context-compact-request-compact',
+    status: 'running',
+    trigger: 'unknown',
+  })
+  state = result.state
+
+  assert.equal(harness.run.runStateForThread('thread-1').status, 'running')
+  assert.equal(state.items[0].type, 'context_compaction')
+  assert.equal(state.items[0].status, 'running')
+
+  harness.setNow(220)
+  result = applyEvent(harness, state, {
+    type: 'context_compaction',
+    requestId: 'request-compact',
+    compactionId: 'context-compact-request-compact',
+    status: 'done',
+    trigger: 'manual',
+    preTokens: 128000,
+    postTokens: 21000,
+    durationMs: 1400,
+    preservedMessageCount: 2,
+    summary: 'Kept the active task and recent decisions.',
+  })
+  state = result.state
+
+  assert.equal(state.items.length, 1)
+  assert.deepEqual(state.items[0], {
+    type: 'context_compaction',
+    id: 'context-compact-request-compact',
+    requestId: 'request-compact',
+    status: 'done',
+    trigger: 'manual',
+    preTokens: 128000,
+    postTokens: 21000,
+    durationMs: 1400,
+    preservedMessageCount: 2,
+    summary: 'Kept the active task and recent decisions.',
+    error: undefined,
+    createdAt: 210,
+    updatedAt: 220,
+  })
+})
+
 test('Chat Run interface merges file diffs and records rewind status', () => {
   const harness = createHarness()
   beginAcceptedRun(harness, 'request-3')

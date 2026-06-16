@@ -8145,12 +8145,14 @@ button.app-file-tree-row {
 
 .status-row__summary::-webkit-details-marker,
 .activity-row__main::-webkit-details-marker,
+.context-compaction-row__summary::-webkit-details-marker,
 .thinking-row__header::-webkit-details-marker {
   display: none;
 }
 
 .status-row__summary::marker,
 .activity-row__main::marker,
+.context-compaction-row__summary::marker,
 .thinking-row__header::marker {
   content: '';
 }
@@ -8172,6 +8174,7 @@ button.app-file-tree-row {
 
 .tool-row[open] .status-row__chevron,
 .activity-row[open] .status-row__chevron,
+.context-compaction-row[open] .status-row__chevron,
 .thinking-row[open] .status-row__chevron {
   transform: rotate(45deg);
 }
@@ -8310,6 +8313,114 @@ button.app-file-tree-row {
   border-left: 1px solid var(--color-token-border);
   color: var(--color-token-text-secondary);
   background: color-mix(in oklab, var(--color-token-foreground) 4%, transparent);
+}
+
+.context-compaction-row {
+  width: min(760px, 100%);
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.context-compaction-row__summary {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  min-height: 34px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.context-compaction-row__summary--static {
+  cursor: default;
+}
+
+.context-compaction-row__line {
+  min-width: 18px;
+  height: 1px;
+  flex: 1 1 24px;
+  background: color-mix(in oklab, var(--color-token-border) 78%, transparent);
+}
+
+.context-compaction-row__pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+  gap: calc(var(--spacing) * 2);
+  min-height: 28px;
+  padding: calc(var(--spacing) * 1) calc(var(--spacing) * 2.5);
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 82%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in oklab, var(--color-token-main-surface-primary) 88%, var(--color-token-foreground) 3%);
+  box-shadow: var(--shadow-xs);
+}
+
+.context-compaction-row__pill .icon-xs {
+  width: 14px;
+  height: 14px;
+}
+
+.context-compaction-row--done .context-compaction-row__pill .icon-xs {
+  color: var(--green-500);
+}
+
+.context-compaction-row--running .context-compaction-row__pill .icon-xs {
+  color: color-mix(in oklab, var(--color-token-text-secondary) 70%, transparent);
+}
+
+.context-compaction-row--error .context-compaction-row__pill .icon-xs {
+  color: var(--red-500);
+}
+
+.context-compaction-row__title {
+  flex: 0 0 auto;
+  color: var(--color-token-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.context-compaction-row__meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-tertiary);
+}
+
+.context-compaction-row__body {
+  margin: calc(var(--spacing) * 1) auto 0;
+  width: min(640px, calc(100% - calc(var(--spacing) * 10)));
+  color: var(--color-token-text-secondary);
+}
+
+.context-compaction-row__body > span {
+  display: block;
+  margin-bottom: calc(var(--spacing) * 1);
+  color: var(--color-token-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.context-compaction-row__body p,
+.context-compaction-row__body pre {
+  margin: 0;
+  padding: calc(var(--spacing) * 2);
+  border-left: 1px solid var(--color-token-border);
+  background: color-mix(in oklab, var(--color-token-foreground) 4%, transparent);
+}
+
+.context-compaction-row__body pre {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.context-compaction-row__body p {
+  color: var(--red-500);
 }
 
 .chat-message__duration--toggle {
