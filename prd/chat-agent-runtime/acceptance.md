@@ -73,11 +73,43 @@
 
 > 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: npm run typecheck
 
+### 需求：聊天运行时接入项目 MCP 配置
+系统 SHALL 在启动 Claude Agent SDK query 时读取当前项目 MCP server 配置，并把可用工具、连接状态和权限策略反馈到 Chat。
+
+#### 场景：启动 query 时传入 MCP servers
+- GIVEN 当前项目已保存至少一个启用的 MCP server
+- WHEN 用户提交聊天并启动 Claude Agent SDK query
+- THEN 主进程将项目级 `mcpServers` 传入 query options，并按 tool policy 构造 `allowedTools` 或拦截禁用工具
+
+> 实现状态：⬜ 未实现｜验证方式: node --test electron/claude-agent-runner-mcp.test.mjs
+
+#### 场景：MCP server 连接失败
+- GIVEN 当前项目配置的 MCP server 启动失败、认证缺失或 HTTP 401
+- WHEN Chat 状态面板刷新运行时状态
+- THEN UI 展示对应 server 的 failed 或 needs-auth 状态、脱敏错误摘要和进入 MCP 设置的修复入口
+
+> 实现状态：⬜ 未实现｜selector: [data-testid="agent-status-mcp-list"]
+
+#### 场景：MCP 工具请求权限
+- GIVEN Claude Agent SDK 请求调用 `mcp__server__tool` 且该工具策略为每次询问
+- WHEN 权限事件到达 UI
+- THEN 权限弹窗展示 server 名称、tool 名称、输入摘要和允许/拒绝操作，且不泄漏密钥或完整 header
+
+> 实现状态：⬜ 未实现｜selector: role=dialog[name="MCP 权限请求"]
+
+#### 场景：Transcript 展示 MCP 工具调用
+- GIVEN assistant 调用了名称为 `mcp__github__create_issue` 的工具
+- WHEN transcript 渲染该工具事件
+- THEN UI 以可读形式展示 `github · create_issue`，并在详情中保留完整工具名用于排查
+
+> 实现状态：⬜ 未实现｜selector: [data-testid="transcript-mcp-tool-call"]
+
 ## 平台专项验证（Electron + React）
 
 - 验证主进程事件只能影响归属线程。
 - 验证权限响应和 AskUserQuestion 不泄漏到其它线程。
 - 验证附件和模型图片能力联动。
+- 验证 MCP server 状态、tool policy 和权限响应只作用于当前项目/线程；日志和 UI 摘要不得输出 MCP token、header 或连接串明文。
 
 ## 建议验证命令
 
@@ -85,4 +117,3 @@
 npm run typecheck
 node --test electron/chat-run.test.mjs electron/claude-sdk-message-router.test.mjs
 ```
-

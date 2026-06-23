@@ -56,11 +56,29 @@
 
 > 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/model-pick.test.mjs
 
+### 需求：模型设置页与 MCP 设置保持边界
+系统 SHALL 让全局模型设置页只管理模型 Provider 和模型候选，不在 Provider 表单内保存 MCP server 配置。
+
+#### 场景：模型设置页不出现 MCP server 编辑字段
+- GIVEN 用户打开全局模型与 Provider 设置页
+- WHEN 用户编辑 Provider 配置
+- THEN 页面只展示 Provider 凭据、Base URL、模型档位和图片能力，不展示 MCP command、args、headers 或 tool policy 编辑字段
+
+> 实现状态：⬜ 未实现｜selector: role=region[name="模型与 Provider 设置"]
+
+#### 场景：用户需要配置 MCP
+- GIVEN 用户在全局模型设置页寻找 MCP 配置
+- WHEN 当前存在活动项目
+- THEN 页面提供说明或跳转入口，引导用户进入当前项目的 Agent 设置 MCP 面板
+
+> 实现状态：⬜ 未实现｜selector: [data-testid="mcp-settings-boundary-note"]
+
 ## 平台专项验证（Electron + React）
 
 - 验证密钥不出现在日志、PRD 和测试输出中。
 - 验证 packaged 环境强制 settings 配置来源。
 - 验证图片能力影响附件提交。
+- 验证 `ClaudeAgentSettings` 与 `ClaudeAgentModelProvider` 不持久化 `mcpServers` 或 MCP header/token 字段。
 
 ## 建议验证命令
 
@@ -68,4 +86,3 @@
 npm run typecheck
 node --test electron/model-pick.test.mjs electron/claude-agent-settings.test.mjs
 ```
-

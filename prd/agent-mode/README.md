@@ -29,11 +29,13 @@ Agent Mode 模块把一个本地项目初始化为 Agent 可以长期协作的�
 
 - 当前 Agent Mode 文件生成和设置保存有代码实现，但缺 UI 端正式验收截图。
 - `AGENT.md` 与当前仓库 `AGENTS.md` 事实源口径需要在产品层继续统一解释。
+- 项目级 MCP 设置尚未实现：需要在 Agent 设置中新增 MCP 面板，支持 server 配置、环境变量引用、连接测试、工具权限策略和错误恢复。
 
 ## 关键决策
 
 - Agent Mode 设置保存在 userData，项目文件只承载用户可见指令和记忆。
 - TODO 模式可以独立启停，关闭时只移除 AgentOS 管理内容。
+- MCP 配置应优先按项目保存，而不是混入全局模型 Provider；不同项目通常需要不同数据库、代码托管、浏览器或内部服务工具。
 
 ## 验收
 
@@ -41,7 +43,6 @@ Agent Mode 模块把一个本地项目初始化为 Agent 可以长期协作的�
 
 ## 关联模块
 
-- `chat-agent-runtime`：运行时读取并注入 Agent Mode 上下文。
+- `chat-agent-runtime`：运行时读取并注入 Agent Mode 上下文；后续消费项目 MCP 配置并把 server 状态、tool 调用和权限结果反馈到 Chat。
 - `file-context`：提供项目文档和 Context 面板文件能力。
 - `model-settings`：提供项目默认模型和 Skill 覆盖候选。
-

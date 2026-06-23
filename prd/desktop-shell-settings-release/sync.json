@@ -1,24 +1,14 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
   "lastPrdSyncAt": "2026-06-23",
   "module": "desktop-shell-settings-release",
   "lastChangedFiles": [
     "electron/main.ts",
     "electron/preload.ts",
-    "electron/window-chrome.ts",
-    "electron/app-menu.ts",
-    "electron/about-panel.ts",
-    "electron/desktop-preferences-store.ts",
-    "electron/app-updater.ts",
-    "electron/speech-recognition.ts",
-    "native/speech-cli/SpeechCLI.swift",
-    "electron-builder.config.cjs",
-    "electron-builder.json5",
-    "docs/RELEASE.md",
-    "docs/release.sh",
-    "electron/desktop-seam.test.mjs",
-    "electron/window-chrome.test.mjs"
+    "src/components/setting/ClaudeAgentSettingsPage.tsx",
+    "src/components/chat/ProjectHomeSurface.tsx",
+    "src/components/AppAgentStatusPopover.tsx",
+    "prd/desktop-shell-settings-release/acceptance.md"
   ],
-  "notes": "首次 PRD 全量重建：记录 Electron 宿主、preload、设置、偏好、自动更新、语音 helper 和发布配置。"
+  "notes": "规划增量：补充 MCP 设置入口与导航归属及验收契约，明确全局设置、项目 Agent 设置和 Chat 状态面板的关系。"
 }
-

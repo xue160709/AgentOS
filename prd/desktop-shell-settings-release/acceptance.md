@@ -90,11 +90,29 @@
 
 > 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: npm run typecheck
 
+### 需求：设置导航提供 MCP 入口与恢复路径
+系统 SHALL 在全局设置、项目 Agent 设置和 Chat 状态面板之间提供一致的 MCP 设置入口，且在没有活动项目时展示可恢复空态。
+
+#### 场景：从 Chat 状态面板进入当前项目 MCP 设置
+- GIVEN 用户已打开一个项目且 Agent 状态面板显示 MCP server 状态
+- WHEN 用户点击“去 MCP 设置”入口
+- THEN 系统打开该项目的 Agent 设置模态，并激活 MCP 面板
+
+> 实现状态：⬜ 未实现｜selector: [data-testid="agent-status-open-mcp-settings"]
+
+#### 场景：无活动项目时进入 MCP 设置
+- GIVEN 当前没有活动项目或项目路径不可用
+- WHEN 用户从全局设置页或状态面板尝试进入 MCP 设置
+- THEN 系统不打开空白配置页，而是提示先打开项目或选择项目
+
+> 实现状态：⬜ 未实现｜selector: [data-testid="mcp-settings-no-project-empty"]
+
 ## 平台专项验证（Electron + native helper）
 
 - 验证开发环境不触发真实更新下载。
 - 验证 packaged 构建包含 speech helper extraResources。
 - 验证 macOS、Windows、Linux 构建配置差异。
+- 验证 MCP 设置跳转不会跨项目写入，也不会在没有活动项目时创建孤立配置。
 
 ## 建议验证命令
 
@@ -103,4 +121,3 @@ npm run typecheck
 node --test electron/desktop-seam.test.mjs electron/window-chrome.test.mjs
 # 发布或打包前按需运行 npm run build:local
 ```
-

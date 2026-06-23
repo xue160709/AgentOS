@@ -1,17 +1,14 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
   "lastPrdSyncAt": "2026-06-23",
   "module": "agent-mode",
   "lastChangedFiles": [
-    "electron/agent-mode-files.ts",
+    "src/desktop-types.ts",
+    "src/desktop-api.ts",
     "electron/agent-mode-settings-store.ts",
-    "electron/agent-context.ts",
-    "src/components/useWorkspaceAgentMode.ts",
-    "src/components/AgentModeControls.tsx",
     "src/components/chat/ProjectHomeSurface.tsx",
-    "src/components/setting/AgentModeSettingsPage.tsx",
-    "electron/main.ts"
+    "electron/main.ts",
+    "prd/agent-mode/acceptance.md"
   ],
-  "notes": "首次 PRD 全量重建：记录 Agent Mode 文件维护、设置、TODO 模式和运行时上下文注入。"
+  "notes": "规划增量：记录项目级 MCP 设置归属、server 配置、环境变量引用、连接测试、tool policy 和验收契约；当前未实现。"
 }
-

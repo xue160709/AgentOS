@@ -30,11 +30,13 @@
 
 - 发布/打包和自动更新需要在 release 场景下单独正式验收。
 - macOS 语音权限失败、helper 缺失和 packaged resource 路径需要补更多证据。
+- 设置导航尚未覆盖 MCP：后续需要明确全局设置页与项目 Agent 设置之间的入口关系，让用户能从 Chat/状态面板进入当前项目 MCP 设置。
 
 ## 关键决策
 
 - 开发环境不启用自动更新，返回 `updatesSupported: false`。
 - 语音识别拆成原生 helper，避免把系统权限和长生命周期塞进渲染层。
+- MCP 是项目级工具能力，不放入全局模型设置主表单；全局设置可以保留说明或跳转，但具体 server 配置应落在项目 Agent 设置模态。
 
 ## 验收
 
@@ -43,6 +45,6 @@
 ## 关联模块
 
 - `agentos`：提供桌面工作台全局宿主。
-- `model-settings`：设置页承载 Provider 配置。
+- `model-settings`：设置页承载 Provider 配置，并与 MCP 工具配置保持边界。
 - `chat-agent-runtime`：使用语音输入和受控聊天 IPC。
-
+- `agent-mode`：项目 Agent 设置承载后续 MCP 配置入口。

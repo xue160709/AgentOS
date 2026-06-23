@@ -148,6 +148,21 @@
 - [ ] 测试补齐：为 `agent-mode-files`、`home-plugin-runner` 沙箱、`task-home-plugin-manager`、自动更新与 speech helper 增加 fixture/单测或可复现 smoke。
 - [ ] 文案/行为待确认：`electron/project-content.ts` 中图片预览常量为 5MB，但错误文案写“图片超过 10MB”；需确认是调常量还是调文案。
 
+## §15 P1｜MCP 接入 backlog
+
+- [ ] 项目级 MCP 配置模型：为 Agent 设置增加 `mcpServers` 与 `mcpToolPolicies`，支持 stdio、HTTP、SSE，归一化 server 名称、command/args/env/url/headers/alwaysLoad，并兼容旧设置文件。
+- [ ] MCP 设置入口与导航：在项目首页 Agent 设置新增 MCP Tab，并在全局模型设置页明确“Provider 配置不是 MCP 配置”；从 Chat 状态面板提供“去当前项目 MCP 设置”的跳转，无项目时展示空态。
+- [ ] MCP 设置面板：MCP Tab 提供 server 列表、启用/禁用、新增/编辑/复制/删除、未保存状态、删除确认和空态引导。
+- [ ] 密钥与环境变量体验：支持 `${ENV_NAME}` 引用，展示“已解析 / 未解析”状态；禁止在日志、状态面板和错误摘要中输出 token、API key 或完整 header 明文。
+- [ ] 连接测试与状态展示：实现保存前/保存后的 Test，展示 `connected / failed / needs-auth / pending / disabled`、serverInfo、工具数量和字段级修复提示。
+- [ ] Tool policy 配置：连接成功后按 server 分组列出工具，支持 `每次询问 / 自动允许 / 禁用`；默认不全量自动允许，读写/破坏性工具需保持显式授权。
+- [ ] SDK 运行时接入：在主聊天 query 与 status probe 中传入项目级 `mcpServers`，复用 `mcpServerStatus()`，把允许的 MCP tool 转成 `allowedTools`，把禁用策略转成 `disallowedTools` 或 `canUseTool` 拦截。
+- [ ] Chat 可见状态：在 Composer 或 Agent 状态入口展示 MCP 可用数量；状态面板显示 server 状态、失败原因、工具数和“去设置修复”入口。
+- [ ] Tool 调用展示：把 `mcp__server__tool` 在 transcript、权限弹窗和日志摘要里展示为可读的 `server · tool`，同时保留完整名称用于排查。
+- [ ] 权限与恢复交互：MCP 权限弹窗展示 server、tool、输入摘要和 policy 来源；server 失败、认证缺失、命令不存在、HTTP 401/403 时提供明确恢复路径。
+- [ ] Session 生效策略：定义 MCP 配置变化后是下一轮生效、新会话生效还是立即重建 session，并在 UI 中给出明确提示。
+- [ ] 测试与验收补齐：增加 MCP 配置 normalize/store 单测、runner options 单测、tool name 展示单测、设置面板交互测试，以及 Chat 状态/权限/失败恢复的稳定选择器。
+
 ## 验证记录
 
 ### 2026-06-17
@@ -178,5 +193,10 @@
 - 验证命令：
   - `bash .codex/scripts/agentic-lint.sh` ✅
   - `python3 .codex/scripts/agentic_drift_check.py` ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `git diff --check` ✅
+- 本轮：补充 MCP 接入产品规划，更新 `chat-agent-runtime`、`agent-mode`、`model-settings`、`desktop-shell-settings-release` PRD/acceptance，并新增 §15 MCP backlog。
+- 验证类别：Codex 自检（文档/规划同步）。
+- 验证命令：
   - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `git diff --check` ✅

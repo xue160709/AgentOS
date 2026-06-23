@@ -1,19 +1,12 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
   "lastPrdSyncAt": "2026-06-23",
-  "workflow": "full-resync",
+  "workflow": "incremental",
   "modulesUpdated": [
-    "agentos",
-    "workspace-session",
     "chat-agent-runtime",
-    "file-context",
-    "model-settings",
-    "persistence",
     "agent-mode",
-    "home-plugin",
-    "task-home-plugin",
+    "model-settings",
     "desktop-shell-settings-release"
   ],
-  "notes": "首次创建 prd/ 模块化产品文档体系；当前仓库无既有 prd/ 同步状态，基于代码、README、OpenSpec 和 prd-old 历史线索全量重建。包含未提交文档观察，acceptance 场景均待 project-verify 正式验收。"
+  "notes": "规划增量：根据 MCP 接入讨论更新 chat-agent-runtime、agent-mode、model-settings 与 desktop-shell-settings-release PRD/acceptance，并在 TODO.md 新增 §15 MCP backlog；未修改业务代码，未把 MCP 写成已实现能力。"
 }
-

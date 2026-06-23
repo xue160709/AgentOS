@@ -1,19 +1,14 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
   "lastPrdSyncAt": "2026-06-23",
   "module": "model-settings",
   "lastChangedFiles": [
     "electron/claude-agent-settings.ts",
     "src/claude-chat-types.ts",
-    "src/model-provider-presets.ts",
-    "src/model-provider-presets.json",
     "src/model-pick.ts",
     "src/components/setting/ClaudeAgentSettingsPage.tsx",
-    "src/components/AgentModeMenu.tsx",
-    "src/components/AgentModeControls.tsx",
-    "electron/model-pick.test.mjs",
-    "electron/claude-agent-settings.test.mjs"
+    "src/components/chat/ProjectHomeSurface.tsx",
+    "prd/model-settings/acceptance.md"
   ],
-  "notes": "首次 PRD 全量重建：记录 Provider 设置、连接测试、模型候选和 modelPick 解析。"
+  "notes": "规划增量：补充 MCP 与 Provider 设置边界及验收契约，明确 MCP 不进入全局模型设置主表单，而进入项目 Agent 设置。"
 }
-

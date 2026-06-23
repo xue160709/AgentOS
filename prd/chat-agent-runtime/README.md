@@ -31,11 +31,13 @@
 
 - 主流程已有单元测试，但正式验收状态戳尚未回写。
 - 端到端 UI 流式走查、权限弹窗和 Generative UI 截图证据仍需补齐。
+- MCP 接入仍处于规划状态：当前只预留 MCP 状态读取与展示基础，尚未把项目级 `mcpServers` 配置传入 Claude Agent SDK，也未在 Chat 侧完整展示 MCP 工具来源、权限策略和失败恢复入口。
 
 ## 关键决策
 
 - Chat Run seam 负责事件折叠和竞态处理，React 页面和 Electron transport 不拥有这些规则。
 - 主进程日志使用脱敏摘要，不输出 API Key、Token 或用户隐私原文。
+- MCP 运行时应优先复用 Claude Agent SDK 的 `mcpServers`、`mcpServerStatus()` 和现有权限闸门，不在 AgentOS 中重新实现 MCP JSON-RPC 客户端。
 
 ## 验收
 
@@ -46,5 +48,4 @@
 - `workspace-session`：提供线程生命周期和当前活动线程。
 - `model-settings`：解析 provider/model 与图片能力。
 - `file-context`：提供附件、预览和 `@` 搜索。
-- `agent-mode`：提供项目指令、记忆和 TODO 上下文。
-
+- `agent-mode`：提供项目指令、记忆和 TODO 上下文；后续还应提供项目级 MCP server 配置与 tool policy。

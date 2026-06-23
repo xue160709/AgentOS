@@ -1,22 +1,17 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
   "lastPrdSyncAt": "2026-06-23",
   "module": "chat-agent-runtime",
   "lastChangedFiles": [
     "src/claude-chat-types.ts",
     "src/components/chat/ChatPage.tsx",
-    "src/components/chat/chat-run.ts",
-    "src/components/chat/Composer.tsx",
-    "src/components/chat/ChatThreadView.tsx",
     "src/components/chat/Transcript.tsx",
+    "src/components/AppAgentStatusPopover.tsx",
+    "src/components/chat/chat-run.ts",
     "src/components/chat/AgentInputPromptModal.tsx",
-    "src/components/chat/GenerativeWidget.tsx",
-    "src/components/chat/generative-ui.ts",
     "electron/claude-agent-runner.ts",
-    "electron/claude-agent-runner",
-    "electron/chat-run.test.mjs",
-    "electron/claude-sdk-message-router.test.mjs"
+    "electron/claude-agent-runner/sdk-message-router.ts",
+    "prd/chat-agent-runtime/acceptance.md"
   ],
-  "notes": "首次 PRD 全量重建：记录聊天提交、SDK 事件流、权限闸门、文件 diff、语音和 Generative UI。"
+  "notes": "规划增量：记录 MCP 运行时接入目标和验收契约，包括 SDK mcpServers、mcpServerStatus、MCP tool 展示、权限策略和错误恢复；当前未实现。"
 }
-
