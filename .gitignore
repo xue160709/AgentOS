@@ -39,10 +39,6 @@ codex-ui-framework-notes.md
 /docs
 package-lock.json
 .npmrc
-
-/.agents/rules
-/.agents/home-plugins
-.agents/skills/code-review/SKILL.md
 /.codex
 /.cursor
 /openspec
