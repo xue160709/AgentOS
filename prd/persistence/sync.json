@@ -1,0 +1,17 @@
+{
+  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncAt": "2026-06-23",
+  "module": "persistence",
+  "lastChangedFiles": [
+    "src/chat-workspace-persistence.ts",
+    "src/components/workspace-session.ts",
+    "electron/chat-workspace-store.ts",
+    "electron/claude-agent-settings.ts",
+    "electron/agent-mode-settings-store.ts",
+    "electron/desktop-preferences-store.ts",
+    "electron/main.ts",
+    "electron/workspace-session.test.mjs"
+  ],
+  "notes": "首次 PRD 全量重建：记录工作区 JSON/SQLite/JSONL、独立设置 store 与恢复归一化。"
+}
+

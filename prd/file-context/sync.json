@@ -1,0 +1,17 @@
+{
+  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncAt": "2026-06-23",
+  "module": "file-context",
+  "lastChangedFiles": [
+    "electron/project-content.ts",
+    "src/project-content.ts",
+    "src/components/AppFileTreePane.tsx",
+    "src/components/ProjectFilePreviewOverlay.tsx",
+    "src/components/AppSearchModal.tsx",
+    "src/components/chat/Composer.tsx",
+    "electron/main.ts",
+    "electron/project-content.test.mjs"
+  ],
+  "notes": "首次 PRD 全量重建：记录项目文件树、预览、搜索、watch、附件与路径安全。"
+}
+

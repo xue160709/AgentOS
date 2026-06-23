@@ -1,0 +1,17 @@
+{
+  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncAt": "2026-06-23",
+  "module": "agent-mode",
+  "lastChangedFiles": [
+    "electron/agent-mode-files.ts",
+    "electron/agent-mode-settings-store.ts",
+    "electron/agent-context.ts",
+    "src/components/useWorkspaceAgentMode.ts",
+    "src/components/AgentModeControls.tsx",
+    "src/components/chat/ProjectHomeSurface.tsx",
+    "src/components/setting/AgentModeSettingsPage.tsx",
+    "electron/main.ts"
+  ],
+  "notes": "首次 PRD 全量重建：记录 Agent Mode 文件维护、设置、TODO 模式和运行时上下文注入。"
+}
+

@@ -1,0 +1,15 @@
+{
+  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncAt": "2026-06-23",
+  "module": "home-plugin",
+  "lastChangedFiles": [
+    "electron/home-plugin-runner.ts",
+    "src/desktop-types.ts",
+    "src/components/chat/ProjectHomeSurface.tsx",
+    "src/components/project-order.ts",
+    "electron/main.ts",
+    "package.json"
+  ],
+  "notes": "首次 PRD 全量重建：记录 Home Plugin 扫描、沙箱、A2UI 输出、布局和内置 TODO 卡。"
+}
+

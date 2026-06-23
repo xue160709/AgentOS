@@ -1,0 +1,20 @@
+{
+  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncAt": "2026-06-23",
+  "module": "agentos",
+  "lastChangedFiles": [
+    "package.json",
+    "README.md",
+    "src/main.tsx",
+    "src/components/AppShell.tsx",
+    "src/components/AppShellWorkspace.tsx",
+    "src/desktop-seam.ts",
+    "src/desktop-api.ts",
+    "electron/main.ts",
+    "electron/preload.ts",
+    "src/i18n/i18n.tsx",
+    "src/app-metadata.ts"
+  ],
+  "notes": "首次 PRD 全量重建：定义 AgentOS 产品总览、项目工作单位与桌面安全桥接边界。"
+}
+

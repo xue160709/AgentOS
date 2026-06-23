@@ -136,6 +136,18 @@
 - [x] 优化专家信任点：补 worker ownership / 并行失败态 reduce 口径、release 证据包、`✅` 状态戳格式检查和 selector 已落地但未验收的 drift warning。
 - [ ] 后续增强：扩充 golden fixtures 的异常/边界场景，再把“每个需求至少正常路径 + 异常/边界路径”从文档规范升级为脚本门禁。
 
+## §14 产品 PRD 初始化与后续差距
+
+- [x] 2026-06-23：从当前代码、README、OpenSpec 基线和 `prd-old/` 历史线索初始化 `prd/` 模块化产品文档体系。
+  - 已创建：`prd/README.md`、10 个模块目录、每模块 `README.md` / `technical.md` / `acceptance.md` / `sync.json`，以及 `prd/.update-prd-state.json`。
+  - 说明：本轮只做 PRD as-built 与验收契约初始化，不修改业务代码，不把未正式验收场景标为 `✅`。
+- [ ] 正式验收：按模块执行 `project-verify`，把各 `prd/<module>/acceptance.md` 中的初始待验收状态转换为带证据的状态戳。
+  - 优先级建议：`workspace-session`、`chat-agent-runtime`、`file-context`、`model-settings` 先验已有单元测试覆盖模块；随后验 `agent-mode`、`home-plugin`、`task-home-plugin`、`desktop-shell-settings-release`。
+- [ ] 产品 TODO 重整：当前 TODO 仍以 agentic runtime 优化为主；下轮应按 `prd/` 模块拆出 AgentOS 产品 backlog、优先级和里程碑。
+- [ ] UI 验收选择器补强：为项目首页、Composer、Agent 设置、Home Plugin 卡片、任务卡、设置页和更新页补稳定 selector 或 Playwright 可观测路径。
+- [ ] 测试补齐：为 `agent-mode-files`、`home-plugin-runner` 沙箱、`task-home-plugin-manager`、自动更新与 speech helper 增加 fixture/单测或可复现 smoke。
+- [ ] 文案/行为待确认：`electron/project-content.ts` 中图片预览常量为 5MB，但错误文案写“图片超过 10MB”；需确认是调常量还是调文案。
+
 ## 验证记录
 
 ### 2026-06-17
@@ -157,4 +169,14 @@
 - 验证强度：quick（agentic runtime 规则/文档/脚本/fixture 维护）。
 - 验证命令：
   - `bash .codex/scripts/verify-agentic.sh` ✅（包含预期 selector 漂移 warning，未阻断）
+  - `git diff --check` ✅
+
+### 2026-06-23
+
+- 本轮：执行 `update-prd` 首次全量重建，创建 AgentOS 产品 `prd/` 文档体系与模块验收契约。
+- 验证类别：Codex 自检（文档/契约初始化）。
+- 验证命令：
+  - `bash .codex/scripts/agentic-lint.sh` ✅
+  - `python3 .codex/scripts/agentic_drift_check.py` ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `git diff --check` ✅

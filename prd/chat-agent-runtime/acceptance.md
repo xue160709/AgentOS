@@ -1,0 +1,88 @@
+# 聊天与 Agent 运行时验收契约
+
+> 唯一验收事实源。当前为 2026-06-23 as-built 初始 PRD 同步；由 project-verify 逐条执行并回写实现状态。
+> 对应 TODO：§14 产品 PRD 初始化与后续差距。
+
+## 验收契约
+
+### 需求：聊天提交构造完整 Agent 运行载荷
+系统 SHALL 将用户文本、附件、线程 ID、项目 cwd、权限模式、模型选择、sessionId 与必要上下文构造成 `ClaudeChatSubmitPayload` 后提交给主进程。
+
+#### 场景：用户提交有效聊天
+- GIVEN 用户在项目线程中输入非空文本或选择有效附件
+- WHEN 用户提交 Composer
+- THEN 系统创建或复用线程，写入用户消息与模型选择，并调用 `window.claudeChat.submit`
+
+> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜selector: role=textbox[name="聊天输入"]
+
+#### 场景：空提交
+- GIVEN Composer 文本为空且没有附件
+- WHEN 用户触发提交
+- THEN 系统不启动有效 Claude Agent 请求，并保持当前线程不新增空用户消息
+
+> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/chat-run.test.mjs
+
+### 需求：SDK 事件流转为可渲染 transcript
+系统 SHALL 将 Claude Agent SDK 的 assistant、thinking、tool、activity、result、error 和 cancelled 事件标准化写入当前线程 transcript。
+
+#### 场景：流式文本完成
+- GIVEN 一次已 accepted 的 Agent 请求正在运行
+- WHEN 主进程推送 session_start、assistant_delta 和 result 事件
+- THEN UI 将 assistant 文本合并为 done 消息，并保存 sessionId、model、cwd 和耗时
+
+> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/chat-run.test.mjs
+
+#### 场景：取消请求保留部分输出
+- GIVEN assistant 已产生部分流式文本
+- WHEN 用户取消当前请求
+- THEN transcript 保留已生成文本，并把该 assistant 消息标记为 cancelled
+
+> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/chat-run.test.mjs
+
+### 需求：权限与用户提问通过 UI 闸门处理
+系统 SHALL 在工具执行需要用户确认时展示权限请求，并将有效 `AskUserQuestion` 转为用户输入弹窗。
+
+#### 场景：工具请求权限
+- GIVEN SDK 请求执行未默认允许的工具
+- WHEN 权限事件到达 UI
+- THEN 系统暂停该工具决策，并展示允许或拒绝的用户操作入口
+
+> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜selector: role=dialog[name="权限请求"]
+
+#### 场景：Agent 提出选择题
+- GIVEN SDK 产生包含至少两个选项的 AskUserQuestion
+- WHEN 事件路由到 ChatPage
+- THEN 系统展示用户输入弹窗，并把用户选择返回运行时
+
+> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜selector: role=dialog[name="Agent 提问"]
+
+### 需求：Generative UI 在沙箱中渲染
+系统 SHALL 支持 `show-widget` Markdown fence，并在无网络和无表单能力的 sandbox iframe 中渲染交互组件。
+
+#### 场景：assistant 输出 show-widget
+- GIVEN assistant 消息包含合法 `show-widget` fence
+- WHEN transcript 渲染该消息
+- THEN 系统渲染沙箱组件，并允许组件通过受控消息触发后续用户输入
+
+> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜selector: iframe[title="Generative UI"]
+
+#### 场景：非法 widget 输出
+- GIVEN assistant 消息包含不合法或无法解析的 widget fence
+- WHEN transcript 渲染该消息
+- THEN 系统显示普通消息或错误态，不允许 widget 获得网络和表单能力
+
+> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: npm run typecheck
+
+## 平台专项验证（Electron + React）
+
+- 验证主进程事件只能影响归属线程。
+- 验证权限响应和 AskUserQuestion 不泄漏到其它线程。
+- 验证附件和模型图片能力联动。
+
+## 建议验证命令
+
+```bash
+npm run typecheck
+node --test electron/chat-run.test.mjs electron/claude-sdk-message-router.test.mjs
+```
+

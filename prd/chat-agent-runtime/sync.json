@@ -1,0 +1,22 @@
+{
+  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncAt": "2026-06-23",
+  "module": "chat-agent-runtime",
+  "lastChangedFiles": [
+    "src/claude-chat-types.ts",
+    "src/components/chat/ChatPage.tsx",
+    "src/components/chat/chat-run.ts",
+    "src/components/chat/Composer.tsx",
+    "src/components/chat/ChatThreadView.tsx",
+    "src/components/chat/Transcript.tsx",
+    "src/components/chat/AgentInputPromptModal.tsx",
+    "src/components/chat/GenerativeWidget.tsx",
+    "src/components/chat/generative-ui.ts",
+    "electron/claude-agent-runner.ts",
+    "electron/claude-agent-runner",
+    "electron/chat-run.test.mjs",
+    "electron/claude-sdk-message-router.test.mjs"
+  ],
+  "notes": "首次 PRD 全量重建：记录聊天提交、SDK 事件流、权限闸门、文件 diff、语音和 Generative UI。"
+}
+

@@ -1,0 +1,16 @@
+{
+  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncAt": "2026-06-23",
+  "module": "task-home-plugin",
+  "lastChangedFiles": [
+    "electron/task-home-plugin-manager.ts",
+    "electron/home-plugin-runner.ts",
+    "electron/claude-agent-runner.ts",
+    "src/desktop-types.ts",
+    "src/components/chat/ProjectHomeSurface.tsx",
+    "src/components/workspace-session.ts",
+    "electron/main.ts"
+  ],
+  "notes": "首次 PRD 全量重建：记录任务卡保存、运行、停止、调度、runtime 和 task-run 线程。"
+}
+

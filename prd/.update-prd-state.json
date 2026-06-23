@@ -1,0 +1,19 @@
+{
+  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncAt": "2026-06-23",
+  "workflow": "full-resync",
+  "modulesUpdated": [
+    "agentos",
+    "workspace-session",
+    "chat-agent-runtime",
+    "file-context",
+    "model-settings",
+    "persistence",
+    "agent-mode",
+    "home-plugin",
+    "task-home-plugin",
+    "desktop-shell-settings-release"
+  ],
+  "notes": "首次创建 prd/ 模块化产品文档体系；当前仓库无既有 prd/ 同步状态，基于代码、README、OpenSpec 和 prd-old 历史线索全量重建。包含未提交文档观察，acceptance 场景均待 project-verify 正式验收。"
+}
+
