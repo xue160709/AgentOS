@@ -46,3 +46,5 @@ package-lock.json
 /.codex
 /.cursor
 /openspec
+AGENTS.md
+TODO.md
