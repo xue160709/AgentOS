@@ -1,18 +1,15 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
-  "lastPrdSyncAt": "2026-06-23",
+  "lastPrdSyncCommit": "fe05e462a76283b9c314ab22f68fdc24f9f199d0",
+  "lastPrdSyncAt": "2026-06-24",
   "module": "workspace-session",
   "lastChangedFiles": [
     "src/components/types.ts",
     "src/components/workspace-session.ts",
     "src/components/AppShell.tsx",
-    "src/components/AppShellSidebar.tsx",
-    "src/components/AppShellWorkspace.tsx",
-    "src/components/project-order.ts",
     "src/chat-workspace-persistence.ts",
+    "src/workspace-snapshot-resolution.ts",
     "electron/chat-workspace-store.ts",
     "electron/workspace-session.test.mjs"
   ],
-  "notes": "首次 PRD 全量重建：记录项目、线程、侧栏偏好、Skill 运行线程和恢复规则。"
+  "notes": "增量同步，包含未提交代码观察：Workspace Session 接管 immediate durable save 与 debounce mirror 保存，durable fingerprint 排除 runtime-only 字段并推进 workspaceRevision。"
 }
-

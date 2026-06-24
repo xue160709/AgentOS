@@ -1,12 +1,11 @@
 {
-  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncCommit": "fe05e462a76283b9c314ab22f68fdc24f9f199d0",
   "lastPrdSyncAt": "2026-06-24",
   "workflow": "incremental",
   "modulesUpdated": [
-    "agent-mode",
-    "chat-agent-runtime",
-    "desktop-shell-settings-release",
-    "model-settings"
+    "persistence",
+    "workspace-session",
+    "file-context"
   ],
-  "notes": "增量同步，包含未提交代码观察：同步全局 MCP 定义与连接测试、项目 MCP 开关覆盖/tool policy、Chat 状态/权限/Transcript 展示、设置面板跳转，以及全局搜索设置、WebSearch native/AgentOS 路由和 DuckDuckGo/Brave/Tavily Provider 边界；正式 project-verify 尚未执行。"
+  "notes": "增量同步，包含未提交代码观察：同步 Workspace Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam、workspace revision clock、SQLite workspace_revision metadata 与持久化回归测试；本轮未执行正式 project-verify 重新盖戳。"
 }

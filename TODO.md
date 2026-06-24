@@ -147,6 +147,8 @@
 - [ ] UI 验收选择器补强：为项目首页、Composer、Agent 设置、Home Plugin 卡片、任务卡、设置页和更新页补稳定 selector 或 Playwright 可观测路径。
 - [ ] 测试补齐：为 `agent-mode-files`、`home-plugin-runner` 沙箱、`task-home-plugin-manager`、自动更新与 speech helper 增加 fixture/单测或可复现 smoke。
 - [x] 文案/行为待确认：`electron/project-content.ts` 图片预览限制按现有实现保持 5MB，并将错误文案从“图片超过 10MB”修正为“图片超过 5MB”；已补超限图片预览回归测试。
+- [x] Workspace 持久化架构加固：按架构评审排序完成 Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam 和 workspace revision clock；已同步 `CONTEXT.md`、`prd/` 与本 TODO。
+  - 证据：`src/workspace-snapshot-resolution.ts`、`src/components/workspace-session.ts`、`electron/chat-workspace-store.ts`、`electron/workspace-session.test.mjs`、`electron/chat-workspace-store.test.mjs`。
 
 ## §15 P1｜MCP 接入 backlog
 
@@ -361,3 +363,9 @@
   - `node --test electron/agent-mode-settings-store.test.mjs electron/claude-agent-runner-mcp.test.mjs electron/chat-run.test.mjs electron/desktop-seam.test.mjs` ✅（23/23）
   - `npm run test:electron` ✅（72/72）
   - `git diff --check` ✅
+- 本轮：按架构评审排序完成 Workspace 持久化四项加固：Workspace Snapshot Resolution 统一快照选择，Workspace Session 接管即时 localStorage durable snapshot 与防抖主进程 mirror，ChatWorkspaceStore 拆出 History Search Index internal seam，并加入 `workspaceRevision` 逻辑时钟与 SQLite metadata 迁移。
+- 验证类别：Codex 自检（持久化架构 + 回归测试；未执行正式 `project-verify` 盖戳）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/chat-workspace-store.test.mjs electron/workspace-session.test.mjs` ✅（14/14）
+  - `npm run test:electron` ✅（75/75）

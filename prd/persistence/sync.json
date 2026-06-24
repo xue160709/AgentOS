@@ -1,17 +1,16 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
-  "lastPrdSyncAt": "2026-06-23",
+  "lastPrdSyncCommit": "fe05e462a76283b9c314ab22f68fdc24f9f199d0",
+  "lastPrdSyncAt": "2026-06-24",
   "module": "persistence",
   "lastChangedFiles": [
+    "src/workspace-snapshot-resolution.ts",
     "src/chat-workspace-persistence.ts",
+    "src/components/types.ts",
     "src/components/workspace-session.ts",
     "electron/chat-workspace-store.ts",
-    "electron/claude-agent-settings.ts",
-    "electron/agent-mode-settings-store.ts",
-    "electron/desktop-preferences-store.ts",
     "electron/main.ts",
-    "electron/workspace-session.test.mjs"
+    "electron/workspace-session.test.mjs",
+    "electron/chat-workspace-store.test.mjs"
   ],
-  "notes": "首次 PRD 全量重建：记录工作区 JSON/SQLite/JSONL、独立设置 store 与恢复归一化。"
+  "notes": "增量同步，包含未提交代码观察：记录 Snapshot Resolution、workspaceRevision、即时 renderer durable snapshot、防抖主进程保存、SQLite workspace_revision metadata、History Search Index internal seam 与新增回归测试。"
 }
-
