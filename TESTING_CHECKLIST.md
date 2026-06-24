@@ -1,150 +1,69 @@
-# AgentOS 搜索与 MCP 验收清单
+# AgentOS 全量验收清单
 
 最后更新：2026-06-24
 主框架：Electron + React + Vite
 验证类别：正式验收（project-verify）
-验证范围：
-
-- `prd/chat-agent-runtime/acceptance.md`：聊天运行时按全局搜索设置路由 WebSearch（6 个场景）
-- `prd/desktop-shell-settings-release/acceptance.md`：全局设置提供搜索路由配置（6 个场景）
-- `prd/agent-mode/acceptance.md`：项目 Agent 设置提供 MCP 配置面板（5 个场景）
-- `prd/chat-agent-runtime/acceptance.md`：聊天运行时接入项目 MCP 配置（4 个场景）
-- `prd/desktop-shell-settings-release/acceptance.md`：设置导航提供 MCP 入口与恢复路径（2 个场景）
-- `prd/model-settings/acceptance.md`：模型设置页与 MCP 设置保持边界（4 个场景）
+验证范围：`prd/*/acceptance.md` 全部 10 个模块、93 个场景
 
 ## 结论
 
 | 状态 | 数量 | 说明 |
 | --- | --- | --- |
-| ✅ 通过 | 27 | 搜索 12 个场景 + MCP 15 个场景 |
+| ✅ 通过 | 90 | 可通过单元/集成测试、静态源代码审计、浏览器 smoke、打包 smoke 或专用验收 smoke 证明 |
 | ❌ 失败 | 0 | 无 |
-| ⚠️ 跳过 | 0 | 场景级无跳过 |
-| 阻塞 | 0 | 无 |
+| ⚠️ 跳过 | 3 | 仅限真实 Electron GUI / macOS 系统权限场景，已写入人工验证步骤 |
+| 阻塞 | 0 | 无阻塞 |
 
 ## 命令证据
 
 | 命令 / smoke | 结果 | 摘要 |
 | --- | --- | --- |
 | `npm run typecheck` | ✅ | TypeScript 检查通过 |
-| `npm run test:electron` | ✅ | 69/69 通过；覆盖 MCP settings store、runtime query options、tool name 展示、搜索设置存储、Provider、runtime native/AgentOS 路由和 desktop seam |
-| `npm run build` | ✅ | Vite renderer、Electron main/preload 和 electron-builder 打包通过 |
-| `curl -s -I http://localhost:5173/` | ✅ | Vite dev server 返回 HTTP 200 |
-| Chrome CDP browser smoke | ✅ | 打开 `#settings/search`，默认原生 + DuckDuckGo；切 AgentOS + Tavily；保存 `${TAVILY_API_KEY}`；缺 bridge 时展示接口不可用；不暴露 `window.ipcRenderer` |
-| Provider smoke | ✅ | Tavily 缺凭据返回可读状态；DuckDuckGo HTML 搜索失败时返回空 `results`；Tavily HTTP 432 错误不泄漏 API key |
-| MCP selector audit | ✅ | 代码中存在 MCP 全局设置、项目设置、状态面板、权限/Transcript、空态、恢复提示、风险标注和 session 生效提示 selector |
+| `npm run test:electron` | ✅ | 69/69 通过；覆盖 workspace session、chat runtime、project content、desktop seam、window chrome、model pick、MCP、WebSearch 等 |
+| `npm run test:home-plugin` | ✅ | 命令执行成功；当前仓库无 `.agents/home-plugins/project-home`，脚本按预期跳过 |
+| `node test-results/full-acceptance-smoke.mjs` | ✅ | 覆盖 Agent Mode、runtime context、Generative UI、Home Plugin、模型设置、任务 Home Plugin |
+| `bash .codex/scripts/check-acceptance.sh --all` | ✅ | 10 个 acceptance 契约结构检查通过 |
+| `./node_modules/.bin/vite build` | ✅ | renderer、Electron main/preload build 通过 |
+| `npm run build:local` | ✅ | 本地 Electron 打包通过，生成 macOS app/dmg/zip blockmap；本地模式按预期跳过 notarization |
+| `curl -I http://127.0.0.1:5181/` | ✅ | Preview server 返回 HTTP 200 |
+| Chrome headless preview smoke | ✅ | 空工作区页面非空渲染，存在 `初始化工作区`、`添加你的第一个项目`、`选择文件夹` 等关键 UI |
+| `npm run lint` | ⚠️ | `package.json` 未定义 `lint` script |
+| `npm run test` | ⚠️ | `package.json` 未定义通用 `test` script；项目使用 `test:electron` / `test:home-plugin` |
 
-## Browser Smoke 关键断言
+## 模块映射
 
-```json
-{
-  "initial": {
-    "hasPage": true,
-    "hasModeGroup": true,
-    "hasProviderGroup": true,
-    "nativeChecked": true,
-    "duckChecked": true,
-    "tavilyDisabledBeforeAgentOs": true,
-    "ipcRendererExposed": false
-  },
-  "saved": {
-    "mode": "agentos",
-    "provider": "tavily",
-    "maxResults": 7,
-    "tavilyApiKey": "${TAVILY_API_KEY}",
-    "leakedTavilyKey": false
-  },
-  "bridgeUnavailable": {
-    "hasPage": true,
-    "unavailableMessageShown": true,
-    "ipcRendererExposed": false
-  }
-}
-```
+| 模块 | 场景数 | 结果 | 主要证据 |
+| --- | ---: | --- | --- |
+| `prd/agent-mode/acceptance.md` | 11 | 11 ✅ | `full-acceptance-smoke`、`test:electron`、MCP selector audit |
+| `prd/agentos/acceptance.md` | 4 | 4 ✅ | `test:electron`、Chrome preview screenshot |
+| `prd/chat-agent-runtime/acceptance.md` | 18 | 18 ✅ | `test:electron`、`full-acceptance-smoke`、Provider smoke、MCP selector audit |
+| `prd/desktop-shell-settings-release/acceptance.md` | 18 | 15 ✅ / 3 ⚠️ | `typecheck`、`test:electron`、`build:local`、browser smoke、manual-only notes |
+| `prd/file-context/acceptance.md` | 6 | 6 ✅ | `test:electron` project-content coverage |
+| `prd/home-plugin/acceptance.md` | 6 | 6 ✅ | `full-acceptance-smoke` Home Plugin runner coverage |
+| `prd/model-settings/acceptance.md` | 10 | 10 ✅ | `full-acceptance-smoke`、`test:electron`、MCP selector audit |
+| `prd/persistence/acceptance.md` | 6 | 6 ✅ | `test:electron` workspace-session coverage、source audit |
+| `prd/task-home-plugin/acceptance.md` | 8 | 8 ✅ | `full-acceptance-smoke` Task Home Plugin coverage |
+| `prd/workspace-session/acceptance.md` | 6 | 6 ✅ | `test:electron` workspace-session coverage、Chrome preview screenshot |
 
-## Provider Smoke 关键断言
+## 跳过项
 
-```json
-{
-  "missingTavily": {
-    "id": "tavily",
-    "available": false,
-    "reason": "TAVILY_API_KEY is not configured."
-  },
-  "duckDuckGoEmpty": {
-    "provider": "duckduckgo",
-    "resultCount": 0
-  },
-  "tavilyHttpError": {
-    "errorIncludesStatus": true,
-    "keyLeaked": false
-  }
-}
-```
-
-## MCP Selector 关键断言
-
-```json
-{
-  "globalSettings": {
-    "page": "[data-testid=\"global-mcp-settings-page\"]",
-    "list": "[data-testid=\"global-mcp-server-list\"]",
-    "add": "[data-testid=\"global-mcp-add-server\"]",
-    "editor": "[data-testid=\"global-mcp-server-editor\"]",
-    "serverInfo": "[data-testid=\"mcp-server-info-detail\"]",
-    "envStatus": "[data-testid=\"mcp-env-resolution-error\"]",
-    "noProject": "[data-testid=\"mcp-settings-no-project-empty\"]"
-  },
-  "projectSettings": {
-    "tab": "[data-testid=\"agent-settings-mcp-tab\"]",
-    "servers": "[data-testid=\"mcp-installed-server-list\"]",
-    "discoveredTools": "[data-testid=\"mcp-discovered-tool-policy-list\"]",
-    "manualPolicies": "[data-testid=\"mcp-tool-policy-list\"]",
-    "risk": "[data-testid=\"mcp-tool-risk-annotation\"]",
-    "policySource": "[data-testid=\"mcp-policy-source-hint\"]",
-    "sessionHint": "[data-testid=\"mcp-session-effect-hint\"]"
-  },
-  "chatRuntime": {
-    "statusPanel": "[data-testid=\"agent-status-mcp-list\"]",
-    "openSettings": "[data-testid=\"agent-status-open-mcp-settings\"]",
-    "transcriptTool": "[data-testid=\"transcript-mcp-tool-call\"]"
-  }
-}
-```
-
-## 场景映射
-
-| 模块/场景 | 证据类型 | 结果 |
+| 模块/场景 | 原因 | 本地人工验证步骤 |
 | --- | --- | --- |
-| `agent-mode` / 项目独立启用或关闭全局 MCP server | unit/integration + selector audit | ✅ |
-| `agent-mode` / 展示已配置服务状态与启用开关 | unit/integration + selector audit | ✅ |
-| `agent-mode` / 全局关闭后项目隐藏 MCP server | unit/integration + selector audit | ✅ |
-| `agent-mode` / 环境变量未解析 | selector audit + build | ✅ |
-| `agent-mode` / 配置工具权限策略 | unit/integration + selector audit | ✅ |
-| `chat-agent-runtime` / 启动 query 时传入 MCP servers | unit/integration | ✅ |
-| `chat-agent-runtime` / MCP server 连接失败 | selector audit + unit/integration | ✅ |
-| `chat-agent-runtime` / MCP 工具请求权限 | unit/integration + selector audit | ✅ |
-| `chat-agent-runtime` / Transcript 展示 MCP 工具调用 | unit/integration + selector audit | ✅ |
-| `desktop-shell-settings-release` / 从 Chat 状态面板进入当前项目 MCP 设置 | selector audit + build | ✅ |
-| `desktop-shell-settings-release` / 无活动项目时进入 MCP 设置 | selector audit + build | ✅ |
-| `model-settings` / 模型设置页不出现 MCP server 编辑字段 | build + selector audit | ✅ |
-| `model-settings` / 全局设置侧栏进入 MCP Tab | selector audit + build | ✅ |
-| `model-settings` / 添加全局 MCP server | selector audit + build | ✅ |
-| `model-settings` / 保存并测试全局 MCP server | unit/integration + selector audit | ✅ |
-| `chat-agent-runtime` / 使用原生 Web Search | unit/integration | ✅ |
-| `chat-agent-runtime` / 使用 AgentOS 搜索 Provider | unit/integration | ✅ |
-| `chat-agent-runtime` / Provider 缺少凭据 | provider smoke | ✅ |
-| `chat-agent-runtime` / DuckDuckGo 普通网页搜索回退 | provider smoke + unit/integration | ✅ |
-| `chat-agent-runtime` / Tavily 请求映射 | unit/integration | ✅ |
-| `chat-agent-runtime` / Provider HTTP 错误脱敏返回 | provider smoke | ✅ |
-| `desktop-shell-settings-release` / 打开全局搜索设置 | browser smoke | ✅ |
-| `desktop-shell-settings-release` / 配置 AgentOS 搜索 Provider | browser smoke | ✅ |
-| `desktop-shell-settings-release` / 保存搜索设置 | browser smoke | ✅ |
-| `desktop-shell-settings-release` / 重新加载搜索设置 | unit/integration | ✅ |
-| `desktop-shell-settings-release` / 搜索设置 bridge 不可用 | browser smoke | ✅ |
-| `desktop-shell-settings-release` / Provider Key 使用环境变量引用 | browser smoke + unit/integration | ✅ |
+| `desktop-shell-settings-release` / 启用 close-to-tray | 需真实 Electron 托盘与窗口关闭事件 | 打开 Electron 应用，开启“关闭到托盘”，点击窗口关闭按钮，确认主窗口隐藏且托盘图标可恢复窗口 |
+| `desktop-shell-settings-release` / 用户开始语音输入 | 需真实 macOS 语音/麦克风权限与 speech helper 事件 | 打开 Electron 应用，点击“语音输入”，授权麦克风/语音识别，确认输入框收到转写文本 |
+| `desktop-shell-settings-release` / 用户拒绝语音权限 | 需真实 macOS 权限拒绝状态 | 在系统设置中拒绝应用麦克风/语音识别权限，点击“语音输入”，确认页面显示权限恢复提示 |
+
+## 证据文件
+
+| 文件 | 说明 |
+| --- | --- |
+| `test-results/verification-summary.md` | 本轮正式验收汇总 |
+| `test-results/full-acceptance-smoke.mjs` | 全量补充 smoke 脚本 |
+| `test-results/full-acceptance-smoke-output.json` | smoke 输出 JSON |
+| `test-results/agentos-preview-empty-workspace.png` | Chrome headless 空工作区截图 |
 
 ## 未覆盖项
 
-- 真实 Brave/Tavily 外网成功搜索未作为本轮通过条件；请求映射、缺凭据和 HTTP 错误脱敏使用本地 mock 验证。
-- Chrome CDP smoke 尚未沉淀为仓库内 Playwright/node:test 自动回归。
-- MCP 设置页本轮使用 selector audit + typecheck/build + Electron runtime/store 单测验收，尚未沉淀为端到端点击式 Playwright 自动回归。
+- 真实 Brave/Tavily 外网成功搜索不作为本轮通过条件；请求映射、缺凭据、HTTP 错误分类与脱敏通过本地测试和 Provider smoke 验证。
+- Electron 托盘和 macOS 语音/麦克风权限必须在用户本机 GUI 中人工确认，已在对应 acceptance 场景标记为 `⚠️`。
+- 全页面点击式 Playwright E2E 尚未沉淀为仓库脚本；本轮以 Electron 单元/集成测试、selector audit、浏览器 smoke 和专用 Node smoke 组合验收。

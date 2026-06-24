@@ -13,14 +13,14 @@
 - WHEN `WorkspaceSession.load` 恢复快照
 - THEN 系统自动修正活动线程引用，避免 UI 进入无效状态
 
-> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/workspace-session.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron（workspace-session）｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：显式项目首页选择
 - GIVEN 用户上次停留在项目首页而不是线程
 - WHEN 应用恢复工作区
 - THEN 系统保留项目首页选择，不强制跳到最新线程
 
-> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/workspace-session.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron（workspace-session）｜证据: TESTING_CHECKLIST.md｜
 
 ### 需求：工作区状态防抖保存到渲染层和主进程
 系统 SHALL 在渲染层状态变化后防抖保存到 localStorage，并同步写入 Electron 主进程 mirror。
@@ -30,14 +30,14 @@
 - WHEN 防抖保存触发
 - THEN 系统只保存最新快照，并取消较旧的待保存任务
 
-> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/workspace-session.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron（workspace-session）｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：关闭前仍有新快照
 - GIVEN 上一次保存仍在进行且用户又产生了新状态
 - WHEN `WorkspaceSession.close` 被调用
 - THEN 系统等待并保存最新快照后再关闭 session
 
-> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/workspace-session.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron（workspace-session）｜证据: TESTING_CHECKLIST.md｜
 
 ### 需求：主进程持久化支持 JSON、SQLite 和 JSONL
 系统 SHALL 将工作区镜像写入 JSON，并在 sqlite3 CLI 可用时写入紧凑线程索引；聊天 rollout SHALL 按线程和日期写入 JSONL。
@@ -47,14 +47,14 @@
 - WHEN 主进程保存工作区
 - THEN 系统继续保存 JSON 和 JSONL，并不阻塞主流程
 
-> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: npm run typecheck
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run typecheck + source audit（SQLite unavailable fallback）｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：清理工作区快照
 - GIVEN 开发者在设置中确认清理工作区数据
 - WHEN 清理操作执行
 - THEN 系统删除工作区和聊天记录存储，但不删除模型 Provider、Agent Mode 设置或用户项目目录
 
-> 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜selector: role=button[name="清理工作区数据"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜selector: role=button[name="清理工作区数据"]｜验证方式: npm run test:electron（workspace-session） + source audit｜证据: TESTING_CHECKLIST.md｜
 
 ## 平台专项验证（Electron + Node）
 

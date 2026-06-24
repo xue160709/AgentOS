@@ -142,7 +142,7 @@
   - 已创建：`prd/README.md`、10 个模块目录、每模块 `README.md` / `technical.md` / `acceptance.md` / `sync.json`，以及 `prd/.update-prd-state.json`。
   - 说明：本轮只做 PRD as-built 与验收契约初始化，不修改业务代码，不把未正式验收场景标为 `✅`。
 - [ ] 正式验收：按模块执行 `project-verify`，把各 `prd/<module>/acceptance.md` 中的初始待验收状态转换为带证据的状态戳。
-  - 优先级建议：`workspace-session`、`chat-agent-runtime`、`file-context`、`model-settings` 先验已有单元测试覆盖模块；随后验 `agent-mode`、`home-plugin`、`task-home-plugin`、`desktop-shell-settings-release`。
+  - 进展：2026-06-24 已完成全量 project-verify 回写；93 个场景中 90 个 ✅、0 个 ❌、3 个 ⚠️。剩余 3 个均为 `desktop-shell-settings-release` 的真实 Electron 托盘 / macOS 语音权限人工确认项，详见 `TESTING_CHECKLIST.md` 和 `test-results/verification-summary.md`。
 - [ ] 产品 TODO 重整：当前 TODO 仍以 agentic runtime 优化为主；下轮应按 `prd/` 模块拆出 AgentOS 产品 backlog、优先级和里程碑。
 - [ ] UI 验收选择器补强：为项目首页、Composer、Agent 设置、Home Plugin 卡片、任务卡、设置页和更新页补稳定 selector 或 Playwright 可观测路径。
 - [ ] 测试补齐：为 `agent-mode-files`、`home-plugin-runner` 沙箱、`task-home-plugin-manager`、自动更新与 speech helper 增加 fixture/单测或可复现 smoke。
@@ -330,3 +330,19 @@
   - `npm run test:electron` ✅（69/69）
   - `npm run build` ✅
   - MCP selector audit ✅
+- 本轮：按用户要求执行全量正式 `project-verify`，覆盖 `prd/*/acceptance.md` 全部 10 个模块、93 个场景，并将状态戳回写到各模块验收契约。
+- 验证类别：正式验收（project-verify，全量）。
+- 验收结果：90 个场景 ✅ 通过；0 个 ❌；3 个 ⚠️ 为真实 Electron 托盘 / macOS 语音权限人工确认项；无阻塞。
+- 证据：`TESTING_CHECKLIST.md`、`test-results/verification-summary.md`、`test-results/full-acceptance-smoke-output.json`、`test-results/agentos-preview-empty-workspace.png`。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅（69/69）
+  - `npm run test:home-plugin` ✅（当前无 `.agents/home-plugins/project-home`，脚本按预期跳过）
+  - `node test-results/full-acceptance-smoke.mjs` ✅
+  - `./node_modules/.bin/vite build` ✅
+  - `npm run build:local` ✅
+  - `curl -I http://127.0.0.1:5181/` ✅（HTTP 200）
+  - Chrome headless preview smoke ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `python3 .codex/scripts/agentic_drift_check.py` ✅
+  - `git diff --check` ✅
