@@ -244,7 +244,15 @@ const duckDuckGoInstantProvider: WebSearchProvider = {
       })
     }
 
-    return searchDuckDuckGoHtml(request)
+    try {
+      return await searchDuckDuckGoHtml(request)
+    } catch (error) {
+      safeConsoleWarn('[AgentOS/WebSearch] DuckDuckGo HTML fallback failed', {
+        queryLength: request.query.length,
+        error: summarizeErrorForLog(error),
+      })
+      return []
+    }
   },
 }
 

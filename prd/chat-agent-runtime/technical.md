@@ -67,7 +67,7 @@ Composer submit
 - MCP 或全局搜索设置变化会进入 runtime config signature，下一轮请求会重建 SDK session。
 - MCP server 失败、需要认证、命令不存在、环境变量缺失或 HTTP 401 时，Chat 侧应提供可恢复入口而不是只显示通用运行错误。
 - MCP tool 权限默认应走询问或显式 policy，不应因开启 Agent 权限绕过而全量自动允许。
-- DuckDuckGo Search 会先尝试 Instant Answer，普通 query 无结果时回退到 DuckDuckGo HTML 搜索结果；HTML 集成是实验性能力，可能遇到 bot challenge。
+- DuckDuckGo Search 会先尝试 Instant Answer，普通 query 无结果时回退到 DuckDuckGo HTML 搜索结果；HTML 集成是实验性能力，可能遇到 bot challenge 或网络不可达，此时返回空结果而不是工具错误。
 - Tavily/Brave 的认证、额度或套餐错误会映射为 `auth` / `quota` / `service` 等 Provider 错误，并在 `web_search` 工具输出与设置页测试结果中给出恢复建议。
 
 ## TODO 对应项

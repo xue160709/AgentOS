@@ -131,7 +131,7 @@
 #### 场景：DuckDuckGo 普通网页搜索回退
 - GIVEN 全局搜索设置选择 AgentOS 搜索 Provider 且 Provider 为 DuckDuckGo Search
 - WHEN `web_search` 查询一个 DuckDuckGo Instant Answer 未覆盖的普通网页搜索词
-- THEN 工具回退到 DuckDuckGo HTML 搜索结果，返回合法 JSON 输出，包含 Provider 信息和归一化后的 title、url、snippet、source；若 HTML 搜索也无结果则返回空 `results` 数组，不伪造搜索结果
+- THEN 工具回退到 DuckDuckGo HTML 搜索结果，返回合法 JSON 输出，包含 Provider 信息和归一化后的 title、url、snippet、source；若 HTML 搜索无结果、触发拦截或网络不可达则返回空 `results` 数组，不把整个工具调用标记为错误，也不伪造搜索结果
 
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: provider smoke + npm run test:electron｜证据: TESTING_CHECKLIST.md
 

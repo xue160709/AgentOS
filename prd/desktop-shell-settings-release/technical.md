@@ -78,7 +78,7 @@ search settings
 - MCP 设置跳转依赖当前项目；没有活动项目或项目路径失效时，入口应禁用或展示恢复路径。
 - MCP 连接测试可能启动子进程或访问网络，设置页应有加载、取消/超时、禁用和错误状态。
 - 搜索设置 bridge 不存在时页面展示可读错误；保存时会归一化 Provider、结果数和 Key 字段。
-- DuckDuckGo 不需要 Key，普通 query 会走 HTML 搜索回退但可能遇到 bot challenge；Brave/Tavily 需要 Key 或 `${ENV_NAME}` 引用，设置页 Provider Test 会展示 `configured / env-resolved / env-missing` 凭据状态和 auth/quota/bot-challenge/network/service 恢复提示。
+- DuckDuckGo 不需要 Key，普通 query 会走 HTML 搜索回退；若遇到 bot challenge 或网络不可达，运行时返回空结果而不是工具错误。Brave/Tavily 需要 Key 或 `${ENV_NAME}` 引用，设置页 Provider Test 会展示 `configured / env-resolved / env-missing` 凭据状态和 auth/quota/bot-challenge/network/service 恢复提示。
 
 ## TODO 对应项
 

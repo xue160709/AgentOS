@@ -38,7 +38,7 @@
       "defaultOpusSupportsImages": false
     },
     {
-      "id": "minimax",
+      "id": "minimax-global",
       "name": {
         "zh": "MiniMax",
         "en": "MiniMax"

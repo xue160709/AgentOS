@@ -4,10 +4,14 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { normalizeChatWorkspaceState } from '../src/chat-workspace-persistence'
+import {
+  chooseFreshestChatWorkspaceSnapshot,
+  normalizeChatWorkspaceState,
+  type ChatWorkspaceSnapshot,
+} from '../src/chat-workspace-persistence'
 import { migrateLegacySeedProjects } from '../src/project-path'
 import type {
   ChatHistorySearchDocumentKind,
@@ -110,24 +114,22 @@ export class ChatWorkspaceStore {
 
   read(): ChatWorkspaceState | null {
     const fromDb = this.readFromDatabase()
-    if (fromDb) return migrateLegacySeedProjects(fromDb)
-
-    if (!existsSync(this.filePath)) return null
-    try {
-      const raw = JSON.parse(readFileSync(this.filePath, 'utf8')) as unknown
-      return migrateLegacySeedProjects(normalizeChatWorkspaceState(raw))
-    } catch {
-      return null
-    }
+    const fromJson = this.readJsonSnapshot()
+    const selected = chooseFreshestChatWorkspaceSnapshot([
+      fromDb ? { state: fromDb, savedAt: this.fileModifiedAt(this.dbPath) } : null,
+      fromJson,
+    ])
+    return selected ? migrateLegacySeedProjects(selected.state) : null
   }
 
   async save(state: unknown): Promise<ChatWorkspaceState> {
     const normalized = normalizeChatWorkspaceState(state)
+    const savedAt = Date.now()
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await mkdir(this.sessionsDir, { recursive: true })
     await this.saveRolloutFiles(normalized)
     this.saveDatabaseIndex(normalized)
-    await writeFile(this.filePath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8')
+    await writeFile(this.filePath, `${JSON.stringify({ ...normalized, savedAt }, null, 2)}\n`, 'utf8')
     return normalized
   }
 
@@ -246,6 +248,27 @@ export class ChatWorkspaceStore {
       })
     } catch {
       return null
+    }
+  }
+
+  private readJsonSnapshot(): ChatWorkspaceSnapshot | null {
+    if (!existsSync(this.filePath)) return null
+    try {
+      const raw = JSON.parse(readFileSync(this.filePath, 'utf8')) as unknown
+      const savedAt = isRecord(raw) && typeof raw.savedAt === 'number' && Number.isFinite(raw.savedAt)
+        ? raw.savedAt
+        : this.fileModifiedAt(this.filePath)
+      return { state: normalizeChatWorkspaceState(raw), savedAt }
+    } catch {
+      return null
+    }
+  }
+
+  private fileModifiedAt(targetPath: string): number | undefined {
+    try {
+      return statSync(targetPath).mtimeMs
+    } catch {
+      return undefined
     }
   }
 

@@ -36,7 +36,9 @@ import type { AgentSettingsPanelId, WorkspaceProject } from '../types'
 
 const IS_DEV_BUILD = import.meta.env.DEV
 const REMOTE_PROVIDER_PRESETS_URL =
-  'https://raw.githubusercontent.com/xuezhirong/AgentOS/main/src/model-provider-presets.json'
+  typeof import.meta.env.VITE_MODEL_PROVIDER_PRESETS_URL === 'string'
+    ? import.meta.env.VITE_MODEL_PROVIDER_PRESETS_URL.trim()
+    : ''
 
 type ProviderPresetSource = 'remote' | 'local'
 
@@ -203,6 +205,10 @@ export function ClaudeAgentSettingsPage() {
     }
 
     async function loadProviderPresets() {
+      if (!REMOTE_PROVIDER_PRESETS_URL) {
+        applyCatalog(normalizePresetCatalog(LOCAL_PROVIDER_PRESET_CATALOG, locale), 'local')
+        return
+      }
       try {
         const response = await fetch(REMOTE_PROVIDER_PRESETS_URL, { cache: 'no-store' })
         if (!response.ok) throw new Error(`Preset request failed: ${response.status}`)

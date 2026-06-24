@@ -6,6 +6,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +20,7 @@ import {
   createId,
   loadChatWorkspaceState,
   persistChatWorkspaceState,
+  persistChatWorkspaceStateToLocalStorage,
   createDefaultChatWorkspaceState,
 } from '../chat-workspace-persistence'
 import {
@@ -562,8 +564,9 @@ export function AppShell() {
   }, [projectSkillProjectKey, showProjectSkillsInSidebar, t])
 
   // --- Autosave through Workspace Session / 通过 Workspace Session 自动保存 ---
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!chatWorkspace) return
+    persistChatWorkspaceStateToLocalStorage(chatWorkspace)
     workspaceSession.stage(chatWorkspace)
   }, [chatWorkspace, workspaceSession])
 

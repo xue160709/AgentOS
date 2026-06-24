@@ -223,6 +223,30 @@ test('DuckDuckGo provider falls back to HTML search when instant answers are emp
   }
 })
 
+test('DuckDuckGo provider returns an empty result instead of a tool error when both endpoints fail', async () => {
+  const { normalizeWebSearchRequest, searchWeb } = loadWebSearchProviderModule()
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url) => {
+    const parsedUrl = new URL(url)
+    calls.push(`${parsedUrl.hostname}${parsedUrl.pathname}`)
+    throw new Error(`TLS failed for ${parsedUrl.hostname}`)
+  }
+
+  try {
+    const response = await searchWeb(
+      normalizeWebSearchRequest({ query: 'Sam Altman news today 2026-06-24', freshness: 'day' }),
+      { AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo-instant' },
+    )
+
+    assert.equal(response.provider.name, 'DuckDuckGo Search')
+    assert.deepEqual(calls, ['api.duckduckgo.com/', 'html.duckduckgo.com/html'])
+    assert.deepEqual(response.results, [])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('web search provider executes Tavily through POST and returns normalized results', async () => {
   const { normalizeWebSearchRequest, searchWeb } = loadWebSearchProviderModule()
   const originalFetch = globalThis.fetch

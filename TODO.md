@@ -170,8 +170,8 @@
   - 证据：`electron/claude-agent-runner/mcp.ts`、`electron/claude-agent-runner.ts`、`src/components/chat/Transcript.tsx`。
 - [x] WebSearch 内置工具替换：用 SDK in-process MCP 暴露 AgentOS `web_search`，通过 `toolAliases.WebSearch` 把 Claude Code 内置 WebSearch 名称路由到内部搜索工具，并预留多 provider 扩展。
   - 进展：2026-06-24，本轮完成 provider registry、Brave / DuckDuckGo Instant Answer 首批 provider、内部 `agentos-web` MCP server、`WebSearch -> mcp__agentos-web__web_search` alias、内置 WebSearch 禁用和 runner 接入；本轮继续按全局搜索设置接入原生/AgentOS 路由选择，并补 Tavily Provider。验收契约 → `prd/chat-agent-runtime/acceptance.md`、`prd/desktop-shell-settings-release/acceptance.md`。
-- [x] WebSearch Provider 体验补强：为 DuckDuckGo bot challenge、Tavily/Brave 认证或配额错误、Provider 保存前连接测试和字段级恢复提示补 UI/运行时文案。
-  - 进展：2026-06-24，已实测 DuckDuckGo Instant Answer 可访问但普通 query 可能返回 0 条；本轮借鉴 OpenClaw 的 HTML 搜索页解析，为 DuckDuckGo 补 Instant Answer 空结果后的 HTML 回退和 bot challenge 错误；Tavily key 可识别但外部 smoke 返回 HTTP 432 usage limit。本轮继续补 `testGlobalWebSearchProvider` IPC、设置页 Test Provider、`configured / env-resolved / env-missing` 字段状态、auth/quota/bot-challenge/network/service 恢复文案和回归测试。
+- [x] WebSearch Provider 体验补强：为 DuckDuckGo bot challenge/网络不可达、Tavily/Brave 认证或配额错误、Provider 保存前连接测试和字段级恢复提示补 UI/运行时文案。
+  - 进展：2026-06-24，已实测 DuckDuckGo Instant Answer 可访问但普通 query 可能返回 0 条；本轮借鉴 OpenClaw 的 HTML 搜索页解析，为 DuckDuckGo 补 Instant Answer 空结果后的 HTML 回退，并在 DuckDuckGo endpoint 网络不可达时降级为空结果而不是工具错误；Tavily key 可识别但外部 smoke 返回 HTTP 432 usage limit。本轮继续补 `testGlobalWebSearchProvider` IPC、设置页 Test Provider、`configured / env-resolved / env-missing` 字段状态、auth/quota/bot-challenge/network/service 恢复文案和回归测试。
 - [ ] 权限与恢复交互：MCP 权限弹窗展示 server、tool、输入摘要和 policy 来源；server 失败、认证缺失、命令不存在、HTTP 401/403 时提供明确恢复路径。
   - 进展：权限弹窗已使用 `server · tool` 友好名并保留输入摘要；policy 来源与失败恢复路径仍待补。
 - [ ] Session 生效策略：定义 MCP 配置变化后是下一轮生效、新会话生效还是立即重建 session，并在 UI 中给出明确提示。
@@ -278,7 +278,7 @@
 
 ### 2026-06-24
 
-- 本轮：排查 DuckDuckGo Provider 普通新闻类 query 返回异常；对照 OpenClaw 后补 DuckDuckGo HTML 搜索回退、bot challenge 错误提示、设置页/PRD 文案和回归测试。
+- 本轮：排查 DuckDuckGo Provider 普通新闻类 query 返回异常；对照 OpenClaw 后补 DuckDuckGo HTML 搜索回退、bot challenge/网络失败降级、设置页/PRD 文案和回归测试。
 - 验证类别：debug 自检（未执行正式 `project-verify` 盖戳）。
 - 验证命令：
   - `npm run typecheck` ✅
@@ -286,7 +286,7 @@
   - `npm run test:electron` ✅（59 tests passed）
   - `bash .codex/scripts/check-acceptance.sh --all` ✅（结构检查通过；自动生成的正式验收临时文件已清理）
   - `git diff --check` ✅
-- 备注：外部 DuckDuckGo live `curl` 在当前 shell 环境返回 TLS code 35，未作为修复判定依据。
+- 备注：外部 DuckDuckGo live `curl` 在当前 shell 环境返回 TLS code 35；本轮已覆盖该路径，DuckDuckGo 两个 endpoint 都失败时返回空结果，不再让 `web_search` 工具调用标红。
 - 本轮：按用户指定范围执行搜索相关正式 `project-verify`，完成 `chat-agent-runtime` WebSearch runtime 6 个场景与 `desktop-shell-settings-release` 搜索设置 6 个场景验收盖戳。
 - 验证类别：正式验收（project-verify，搜索范围）。
 - 验收结果：12 个搜索相关场景 ✅ 通过；场景级无失败、无跳过、无阻塞。
@@ -309,3 +309,14 @@
   - `npm run test:electron` ✅（64 tests passed）
   - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `git diff --check` ✅
+- 本轮：修复模型 Provider 预设中 MiniMax 重复 `id` 导致 React key warning 的问题；远端 preset JSON 改为仅在 `VITE_MODEL_PROVIDER_PRESETS_URL` 显式配置时加载，避免默认请求失效 raw URL 产生 404 噪声；补 catalog ID 回归测试。
+- 验证类别：debug 自检（模型设置 UI 数据源 + 回归测试）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅（68 tests passed）
+- 本轮：修复新建对话重启后丢失的持久化 bug；renderer 每次工作区状态变更立即写 localStorage 快照，主进程恢复时在 SQLite 索引和 JSON 快照之间选择更新来源，避免旧 SQLite 覆盖新 JSON。
+- 验证类别：debug 自检（持久化恢复 + 回归测试，未执行正式 `project-verify` 盖戳）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/chat-workspace-store.test.mjs electron/workspace-session.test.mjs` ✅
+  - `npm run test:electron` ✅（69 tests passed）
