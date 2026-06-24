@@ -1,6 +1,6 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
-  "lastPrdSyncAt": "2026-06-23",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
+  "lastPrdSyncAt": "2026-06-24",
   "module": "home-plugin",
   "lastChangedFiles": [
     "electron/home-plugin-runner.ts",
@@ -10,6 +10,5 @@
     "electron/main.ts",
     "package.json"
   ],
-  "notes": "首次 PRD 全量重建：记录 Home Plugin 扫描、沙箱、A2UI 输出、布局和内置 TODO 卡。"
+  "notes": "全量同步：home-plugin acceptance 已通过；只读沙箱、A2UI 输出、布局和内置 TODO 卡完成验收状态同步，后续可补真实插件 action 回归和全页面 UI 截图。"
 }
-

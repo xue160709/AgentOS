@@ -39,7 +39,7 @@
 ## 测试与验收
 
 - 自动校验：`npm run test:home-plugin`。
-- 建议补充：针对 `runExtractor` 禁用能力、read limit、SQLite readonly 的单元测试。
+- 正式验收已覆盖 Home Plugin acceptance；建议继续补针对 `runExtractor` 禁用能力、read limit、SQLite readonly 和真实 action 的专项单元/回归测试。
 - 验收契约：`prd/home-plugin/acceptance.md`。
 
 ## 边界情况
@@ -51,12 +51,11 @@
 
 ## TODO 对应项
 
-- `TODO.md §14`：补沙箱安全和 A2UI UI 正式验收。
+- `TODO.md §14`：补真实 Home Plugin action 回归和全页面点击式 UI 截图。
 
 ## 最近同步
 
-- commit：`bb8d2b04de464f1a09decc875f2e869afe8885fb`
-- 日期：`2026-06-23`
-- 变化摘要：按 Home Plugin runner 和项目首页卡片实现补齐 as-built PRD。
-- 待确认：`test:home-plugin` 依赖 `.agents/skills/a2ui-project-home-panel`，缺失时脚本使用 `--allow-missing`。
-
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
+- 日期：`2026-06-24`
+- 变化摘要：同步全量 `project-verify` 与交互流程复查结果；Home Plugin acceptance 已通过，`test:home-plugin` 在当前无 `.agents/home-plugins/project-home` 时按 `--allow-missing` 预期跳过项目自定义插件。
+- 待确认：真实项目 Home Plugin action 回归和全页面点击式 UI 截图仍可补充。

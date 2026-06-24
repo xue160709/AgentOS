@@ -1,5 +1,5 @@
 {
-  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
   "lastPrdSyncAt": "2026-06-24",
   "module": "desktop-shell-settings-release",
   "lastChangedFiles": [
@@ -21,5 +21,5 @@
     "src/locales/en.json",
     "prd/desktop-shell-settings-release/acceptance.md"
   ],
-  "notes": "增量同步，包含未提交代码观察：记录全局 MCP 设置页、状态面板跳转项目 MCP 面板、全局 Search 设置页、受控 preload/IPC、globalWebSearchSettings 持久化、testGlobalWebSearchProvider、native/AgentOS 搜索模式、DuckDuckGo Search/Brave/Tavily Provider 配置、字段级凭据状态和安全边界；搜索相关 project-verify 已执行，release/packaged 与 MCP 剩余体验仍待补证据。"
+  "notes": "全量同步：desktop-shell-settings-release 当前 21 个场景中 18 个通过、3 个保留人工确认；搜索、MCP、设置导航、受控 preload、开发态更新和 packaged install 入口已验收，剩余 close-to-tray 与 macOS 语音权限 GUI 人工项，以及发布流程 live smoke。"
 }

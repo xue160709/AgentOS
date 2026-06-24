@@ -1,5 +1,5 @@
 {
-  "lastPrdSyncCommit": "fe05e462a76283b9c314ab22f68fdc24f9f199d0",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
   "lastPrdSyncAt": "2026-06-24",
   "module": "workspace-session",
   "lastChangedFiles": [
@@ -11,5 +11,5 @@
     "electron/chat-workspace-store.ts",
     "electron/workspace-session.test.mjs"
   ],
-  "notes": "增量同步，包含未提交代码观察：Workspace Session 接管 immediate durable save 与 debounce mirror 保存，durable fingerprint 排除 runtime-only 字段并推进 workspaceRevision。"
+  "notes": "全量同步：Workspace Session acceptance 已通过；immediate durable save、debounce mirror、runtime-only fingerprint 与 workspaceRevision 已完成验收状态同步，后续可补全页面点击式 E2E 截图。"
 }

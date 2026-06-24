@@ -28,9 +28,9 @@ Agent Mode 模块把一个本地项目初始化为 Agent 可以长期协作的�
 
 ## 还没做什么
 
-- 当前 Agent Mode 文件生成和设置保存有代码实现，但缺 UI 端正式验收截图。
+- Agent Mode acceptance 已完成正式验收状态同步；后续可补全页面点击式 E2E 截图与真实项目 fixture，提升回归证据可读性。
 - `AGENT.md` 与当前仓库 `AGENTS.md` 事实源口径需要在产品层继续统一解释。
-- MCP 已有基础项目开关与 tool policy 能力；字段级未解析修复提示、按 server 折叠分组、工具风险标注、policy 来源说明和失败恢复文案仍需补齐。
+- MCP 项目开关、tool policy、字段级未解析提示、按 server 分组、工具风险标注、policy 来源和失败恢复文案已完成实现与正式验收；真实外部 MCP server 进程/网络连通可作为后续 live smoke。
 
 ## 关键决策
 

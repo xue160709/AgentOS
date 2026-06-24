@@ -42,7 +42,7 @@
 
 ## 测试与验收
 
-- 当前缺专门的 Task Home Plugin 单元测试。
+- Task Home Plugin acceptance 已完成正式验收状态同步；当前仍缺专门的 Task Home Plugin 单元测试。
 - 建议补充：保存任务 fixture、Skills 空步骤、stopTask、reconcileInterruptedRuntime、interval nextRunAt。
 - 验收契约：`prd/task-home-plugin/acceptance.md`。
 
@@ -55,12 +55,11 @@
 
 ## TODO 对应项
 
-- `TODO.md §14`：补任务卡单测与正式验收。
+- `TODO.md §14`：补任务卡专项单测、真实长链路 GUI/E2E 和 Electron 存活期间定时任务回归证据。
 
 ## 最近同步
 
-- commit：`bb8d2b04de464f1a09decc875f2e869afe8885fb`
-- 日期：`2026-06-23`
-- 变化摘要：按任务卡管理器和项目首页任务 UI 补齐 as-built PRD。
-- 待确认：长期定时任务的用户承诺需继续明确为 Electron 存活期间有效。
-
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
+- 日期：`2026-06-24`
+- 变化摘要：同步全量 `project-verify` 与交互流程复查结果；Task Home Plugin acceptance 已通过，任务卡运行、停止、重启清理和定时递推均已纳入正式验收状态。
+- 待确认：长期定时任务的用户承诺仍限定为 Electron 进程存活期间有效，后续可补专项单测和真实 GUI/E2E。

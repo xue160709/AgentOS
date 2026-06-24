@@ -4,30 +4,30 @@
 
 AgentOS 是面向本地项目与长期任务的 Electron 桌面 Agent 工作台。当前产品以本地项目文件夹为工作单位，把项目、线程、Claude Agent SDK 运行、文件上下文、模型配置、Agent Mode、首页卡片和长期任务编排组织在同一个工作区内。
 
-本轮 PRD 是 2026-06-23 基于当前代码、README、OpenSpec 基线与历史 `prd-old/` 资料做的首次 `prd/` 全量重建。文档只描述当前代码真实存在的能力；尚未正式验收的场景在各模块 `acceptance.md` 中标为待 `project-verify`。
+本轮 PRD 是 2026-06-23 基于当前代码、README、OpenSpec 基线与历史 `prd-old/` 资料做的首次 `prd/` 全量重建。2026-06-24 已同步全量 `project-verify` 与交互流程复查结果：10 个模块共 98 个验收场景，95 个已通过、0 个失败、3 个保留为真实 Electron GUI / macOS 系统权限人工确认项。文档只描述当前代码真实存在的能力；验收事实源仍以各模块 `acceptance.md` 为准。
 
 ## 模块索引
 
 | 模块 | 状态 | 产品文档 | 技术文档 |
 | --- | --- | --- | --- |
-| 产品总览 | 已实现，待正式验收 | `agentos/README.md` | `agentos/technical.md` |
-| 工作区与会话 | 已实现，待正式验收 | `workspace-session/README.md` | `workspace-session/technical.md` |
-| 聊天与 Agent 运行时 | 已实现，待正式验收 | `chat-agent-runtime/README.md` | `chat-agent-runtime/technical.md` |
-| 本地文件上下文 | 已实现，待正式验收 | `file-context/README.md` | `file-context/technical.md` |
-| 模型与 Provider 设置 | 已实现，待正式验收 | `model-settings/README.md` | `model-settings/technical.md` |
-| 持久化 | 已实现，待正式验收 | `persistence/README.md` | `persistence/technical.md` |
-| Agent Mode | 已实现，待正式验收 | `agent-mode/README.md` | `agent-mode/technical.md` |
-| Home Plugin 数据卡片 | 已实现，待正式验收 | `home-plugin/README.md` | `home-plugin/technical.md` |
-| Task Home Plugin | 已实现，待正式验收 | `task-home-plugin/README.md` | `task-home-plugin/technical.md` |
-| 桌面外壳、设置与发布 | 已实现，待正式验收 | `desktop-shell-settings-release/README.md` | `desktop-shell-settings-release/technical.md` |
+| 产品总览 | 已实现，正式验收通过 | `agentos/README.md` | `agentos/technical.md` |
+| 工作区与会话 | 已实现，正式验收通过 | `workspace-session/README.md` | `workspace-session/technical.md` |
+| 聊天与 Agent 运行时 | 已实现，正式验收通过 | `chat-agent-runtime/README.md` | `chat-agent-runtime/technical.md` |
+| 本地文件上下文 | 已实现，正式验收通过 | `file-context/README.md` | `file-context/technical.md` |
+| 模型与 Provider 设置 | 已实现，正式验收通过 | `model-settings/README.md` | `model-settings/technical.md` |
+| 持久化 | 已实现，正式验收通过 | `persistence/README.md` | `persistence/technical.md` |
+| Agent Mode | 已实现，正式验收通过 | `agent-mode/README.md` | `agent-mode/technical.md` |
+| Home Plugin 数据卡片 | 已实现，正式验收通过 | `home-plugin/README.md` | `home-plugin/technical.md` |
+| Task Home Plugin | 已实现，正式验收通过 | `task-home-plugin/README.md` | `task-home-plugin/technical.md` |
+| 桌面外壳、设置与发布 | 已实现，18/21 通过，3 项人工确认 | `desktop-shell-settings-release/README.md` | `desktop-shell-settings-release/technical.md` |
 
 ## 当前重点
 
-- `TODO.md` 仍以 agentic runtime 优化清单为主，本轮已新增产品 PRD 初始化记录和后续差距。
-- 下一步应按模块执行 `project-verify`，把各 `acceptance.md` 的待验收状态转换为带证据的正式状态戳。
-- UI 选择器与端到端验收仍需逐步沉淀，尤其是 Agent Mode、Home Plugin、Task Home Plugin 和桌面发布相关流程。
-- Workspace 持久化已完成本轮架构加固：Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam 和 workspace revision clock 已落地，正式验收状态仍以各模块 `acceptance.md` 为准。
-- MCP 与 WebSearch 接入已完成主要实现与正式验收；仍需关注真实 Electron 托盘 / macOS 语音权限等人工确认项。
+- `TODO.md` 仍以 agentic runtime 优化清单为主，本轮已把产品验收剩余细节补回 §14，后续应继续拆成 AgentOS 产品 backlog。
+- 全量正式验收已执行并回写 `acceptance.md`：当前仅剩 `desktop-shell-settings-release` 的 close-to-tray、macOS 语音授权成功、macOS 语音权限拒绝 3 项人工确认。
+- 交互流程复查未发现新的阻断级状态机缺陷；剩余工作是把 Composer 语音/提交、权限弹窗、Generative UI、状态面板跳转、项目首页任务卡等全页面点击路径沉淀成可重复 E2E 脚本证据。
+- Workspace 持久化已完成本轮架构加固：Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam 和 workspace revision clock 已落地并通过正式验收状态同步。
+- MCP 与 WebSearch 接入已完成主要实现与正式验收；真实 Brave/Tavily 外网成功搜索、真实 MCP server 进程/网络连通仍属于可选 live smoke，不作为当前通过门槛。
 
 ## 文档规则
 

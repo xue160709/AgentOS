@@ -141,11 +141,16 @@
 - [x] 2026-06-23：从当前代码、README、OpenSpec 基线和 `prd-old/` 历史线索初始化 `prd/` 模块化产品文档体系。
   - 已创建：`prd/README.md`、10 个模块目录、每模块 `README.md` / `technical.md` / `acceptance.md` / `sync.json`，以及 `prd/.update-prd-state.json`。
   - 说明：本轮只做 PRD as-built 与验收契约初始化，不修改业务代码，不把未正式验收场景标为 `✅`。
-- [ ] 正式验收：按模块执行 `project-verify`，把各 `prd/<module>/acceptance.md` 中的初始待验收状态转换为带证据的状态戳。
-  - 进展：2026-06-24 已完成全量 project-verify 回写；93 个场景中 90 个 ✅、0 个 ❌、3 个 ⚠️。剩余 3 个均为 `desktop-shell-settings-release` 的真实 Electron 托盘 / macOS 语音权限人工确认项，详见 `TESTING_CHECKLIST.md` 和 `test-results/verification-summary.md`。
+- [ ] 正式验收收口：全量 `project-verify` 已完成，继续收口人工 GUI / 系统权限项。
+  - 进展：2026-06-24 已完成全量 project-verify 与 WebSearch API Key 池增量验收；当前累计 98 个场景中 95 个 ✅、0 个 ❌、3 个 ⚠️。剩余 3 个均在 `desktop-shell-settings-release`，详见 `TESTING_CHECKLIST.md`、`test-results/verification-summary.md` 与 `prd/desktop-shell-settings-release/acceptance.md`。
+  - [ ] 人工确认 close-to-tray：真实 Electron 托盘与窗口关闭事件下，关闭主窗口应隐藏到托盘且可恢复窗口。
+  - [ ] 人工确认 macOS 语音授权成功：真实 macOS Speech/Microphone 授权后，Composer 语音输入应把 partial/final 写入当前选区 draft range。
+  - [ ] 人工确认 macOS 语音权限拒绝：系统权限拒绝时，页面应展示权限恢复提示，主进程语音状态应落到 error。
 - [ ] 产品 TODO 重整：当前 TODO 仍以 agentic runtime 优化为主；下轮应按 `prd/` 模块拆出 AgentOS 产品 backlog、优先级和里程碑。
-- [ ] UI 验收选择器补强：为项目首页、Composer、Agent 设置、Home Plugin 卡片、任务卡、设置页和更新页补稳定 selector 或 Playwright 可观测路径。
-- [ ] 测试补齐：为 `agent-mode-files`、`home-plugin-runner` 沙箱、`task-home-plugin-manager`、自动更新与 speech helper 增加 fixture/单测或可复现 smoke。
+- [ ] UI/E2E 验收脚本补强：为项目首页、Composer、Agent 设置、Home Plugin 卡片、任务卡、设置页和更新页沉淀全页面点击式 Playwright/Electron GUI 脚本；当前正式验收主要依赖 Electron 单测、source audit、selector audit、browser smoke 与专用 Node smoke。
+- [ ] 交互流程专项验收：把 Composer 语音 start/partial/final/error/cancel/submit、权限弹窗 allow/deny/取消/重复响应、Generative UI 沙箱、Chat 状态面板到项目 MCP 设置跳转、项目切换/面板关闭后的 late async event 隔离，沉淀为可重复 GUI/E2E 证据。
+  - 复查结论：2026-06-24 已阅读 `ChatPage`、`chat-run`、`ClaudeAgentRunner`、`ProjectHomeSurface`、`AppShellWorkspace`、`ClaudeAgentSettingsPage` 与 speech helper 路径；代码层已有 request/thread ownership、generation guard、requestSeq、AbortController、pending permission deny 和项目路径隔离等防线，剩余是脚本化证据缺口。
+- [ ] 测试补齐：为 `agent-mode-files` fixture、真实 Home Plugin action 回归、`task-home-plugin-manager` 专项单测、真实 release/updater smoke、真实 MCP server 进程/网络连通和 speech helper GUI 路径增加可复现测试或人工验收记录。
 - [x] 文案/行为待确认：`electron/project-content.ts` 图片预览限制按现有实现保持 5MB，并将错误文案从“图片超过 10MB”修正为“图片超过 5MB”；已补超限图片预览回归测试。
 - [x] Workspace 持久化架构加固：按架构评审排序完成 Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam 和 workspace revision clock；已同步 `CONTEXT.md`、`prd/` 与本 TODO。
   - 证据：`src/workspace-snapshot-resolution.ts`、`src/components/workspace-session.ts`、`electron/chat-workspace-store.ts`、`electron/workspace-session.test.mjs`、`electron/chat-workspace-store.test.mjs`。
@@ -184,6 +189,8 @@
   - 证据：运行时 MCP signature 保持 session 重建策略；项目 MCP 面板新增 `mcp-session-effect-hint`，明确保存后下一轮 Agent 会话读取最新设置。
 - [x] 测试与验收补齐：增加 MCP 配置 normalize/store 单测、runner options 单测、tool name 展示单测、设置面板交互测试，以及 Chat 状态/权限/失败恢复的稳定选择器。
   - 证据：`npm run typecheck` ✅、`npm run test:electron` ✅（69/69）、`npm run build` ✅、MCP selector audit ✅；15 个 MCP 验收场景已在 `prd/*/acceptance.md` 盖戳。
+- [x] Release stdio MCP 命令解析：打包环境为 `npx`/`node`/`uvx` 等命令补用户级 Node 管理器与 Homebrew 常见 PATH，并在连接测试失败时展示可恢复 ENOENT 提示。
+  - 证据：`npm run typecheck` ✅、`node --test electron/claude-agent-runner-mcp.test.mjs` ✅、`npm run test:electron` ✅（79/79）、`git diff --check` ✅。
 
 ## 验证记录
 
@@ -405,3 +412,17 @@
   - `node --test electron/claude-agent-runner-web-search.test.mjs electron/agent-mode-settings-store.test.mjs` ✅（19/19）
   - `bash .codex/scripts/check-acceptance.sh desktop-shell-settings-release` ✅
   - `git diff --check` ✅
+- 本轮：执行 `update-prd` + `interaction-flow-review` 全项目同步，阅读最新验收证据与关键交互状态机，将 PRD/TODO 对齐到 98 个场景中 95 个 ✅、0 个 ❌、3 个 ⚠️ 的真实状态，并记录 close-to-tray、macOS 语音权限与全页面点击式 E2E 等剩余未验收细节。
+- 验证类别：Codex 自检（PRD/TODO 状态同步 + 交互流程证据复查）。
+- 验证命令：
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `python3 .codex/scripts/agentic_drift_check.py` ✅
+  - `node -e "for (const f of ['prd/.update-prd-state.json','prd/agentos/sync.json','prd/workspace-session/sync.json','prd/chat-agent-runtime/sync.json','prd/file-context/sync.json','prd/model-settings/sync.json','prd/persistence/sync.json','prd/agent-mode/sync.json','prd/home-plugin/sync.json','prd/task-home-plugin/sync.json','prd/desktop-shell-settings-release/sync.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')"` ✅
+  - `git diff --check` ✅
+- 本轮：修复 release 版 stdio MCP 添加失败（`spawn npx ENOENT`）：MCP runtime 在构造 SDK/probe 配置时补 release-safe PATH、解析 stdio 命令绝对路径，并把 PATH 传给 MCP server env；连接测试 ENOENT 文案补恢复提示。
+- 验证类别：debug 自检（MCP stdio runtime + 回归测试；未执行正式 `project-verify` 盖戳）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/claude-agent-runner-mcp.test.mjs` ✅
+  - `npm run test:electron` ✅（79/79）
+  - `git diff --check -- electron/claude-agent-runner/mcp.ts electron/claude-agent-runner/mcp-probe.ts electron/claude-agent-runner-mcp.test.mjs` ✅

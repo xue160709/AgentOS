@@ -1,5 +1,5 @@
 {
-  "lastPrdSyncCommit": "fe05e462a76283b9c314ab22f68fdc24f9f199d0",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
   "lastPrdSyncAt": "2026-06-24",
   "module": "persistence",
   "lastChangedFiles": [
@@ -12,5 +12,5 @@
     "electron/workspace-session.test.mjs",
     "electron/chat-workspace-store.test.mjs"
   ],
-  "notes": "增量同步，包含未提交代码观察：记录 Snapshot Resolution、workspaceRevision、即时 renderer durable snapshot、防抖主进程保存、SQLite workspace_revision metadata、History Search Index internal seam 与新增回归测试。"
+  "notes": "全量同步：persistence acceptance 已通过；Snapshot Resolution、workspaceRevision、即时 renderer durable snapshot、防抖保存、SQLite workspace_revision metadata 与 History Search Index internal seam 完成验收状态同步。"
 }

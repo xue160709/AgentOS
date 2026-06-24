@@ -28,8 +28,8 @@ Home Plugin 数据卡片模块让项目首页成为可视化工作台：项目�
 
 ## 还没做什么
 
-- 只读沙箱有代码约束，但缺正式安全验收证据。
-- A2UI 卡片 UI 的端到端截图和 action 回归仍需补。
+- Home Plugin acceptance 已完成正式验收状态同步；只读沙箱、A2UI 输出、内置 TODO 卡和基础首页渲染已有验收证据。
+- A2UI 卡片 action、真实项目自定义插件和全页面点击式 UI 截图仍可补充为后续回归证据。
 
 ## 关键决策
 
@@ -45,4 +45,3 @@ Home Plugin 数据卡片模块让项目首页成为可视化工作台：项目�
 - `task-home-plugin`：复用 Home Plugin 目录结构，但负责长期任务。
 - `workspace-session`：首页归属当前项目。
 - `chat-agent-runtime`：卡片定制通过专用聊天线程完成。
-

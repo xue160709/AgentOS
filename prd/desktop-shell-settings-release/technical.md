@@ -66,6 +66,7 @@ search settings
 - 自动测试：`electron/desktop-seam.test.mjs`、`electron/window-chrome.test.mjs`、`electron/agent-mode-settings-store.test.mjs`。
 - 搜索设置选择器：`[data-testid="global-web-search-settings-page"]`、`[data-testid="web-search-mode-options"]`、`[data-testid="web-search-provider-options"]`、`[data-testid="web-search-provider-test"]`、`[data-testid="web-search-provider-test-status"]`、`[data-testid="web-search-key-status"]`、`[data-testid="web-search-settings-save"]`。
 - 构建验证按需运行：`npm run build:local` 或 `npm run build`，不作为日常默认自检。
+- 正式验收当前剩余 3 个人工 GUI / 系统权限项：close-to-tray、macOS 语音授权成功、macOS 语音权限拒绝。详见 `acceptance.md` 和 `TESTING_CHECKLIST.md`。
 - 验收契约：`prd/desktop-shell-settings-release/acceptance.md`。
 
 ## 边界情况
@@ -82,13 +83,13 @@ search settings
 
 ## TODO 对应项
 
-- `TODO.md §14`：补 release、自动更新、语音 helper 和打包验证证据。
+- `TODO.md §14`：补 close-to-tray 与 macOS 语音权限人工确认、真实 release 渠道 live smoke 和全页面点击式 E2E。
 - `TODO.md §15`：MCP 复制、删除确认、字段级修复提示、无项目空态、设置导航和搜索 Provider 连接测试/恢复文案均已补齐并完成正式验收。
 
 ## 最近同步
 
-- commit：`a45dc7d89a7985e2f80903c9338f827ed58dd345`
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
 - 日期：`2026-06-24`
-- 变化摘要：同步未提交代码观察：全局设置新增 Search 分类和页面，preload/IPC/store 增加全局 WebSearch 设置读写与 Provider Test，运行时通过 resolver 读取该设置并影响 Agent 搜索路由；设置页可测试 DuckDuckGo/Brave/Tavily 并显示字段级凭据状态和恢复文案。
-- 已确认：搜索与 MCP 相关 `project-verify` 已执行。
-- 待确认：release/packaged 更新、语音 helper 仍待补证据。
+- 变化摘要：同步全量 `project-verify`、WebSearch API Key 池增量验收与交互流程复查结果；搜索、MCP、设置导航、自动更新开发态和 packaged install 入口已完成正式验收状态同步。
+- 已确认：搜索、MCP、设置页、受控 preload、开发态更新和 packaged build/source audit 均已验收。
+- 待确认：close-to-tray 真实托盘行为、macOS 语音授权成功、macOS 语音权限拒绝仍需人工 GUI；真实 release 渠道签名/公证/更新服务器仍需发布流程 live smoke。

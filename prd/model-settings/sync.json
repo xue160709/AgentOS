@@ -1,5 +1,5 @@
 {
-  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
   "lastPrdSyncAt": "2026-06-24",
   "module": "model-settings",
   "lastChangedFiles": [
@@ -11,5 +11,5 @@
     "src/components/chat/ProjectHomeSurface.tsx",
     "prd/model-settings/acceptance.md"
   ],
-  "notes": "增量同步，包含未提交代码观察：确认 MCP 不进入模型 Provider 表单；全局 MCP Tab 管理 server 定义、连接测试与总开关，项目 Agent 设置保存开关覆盖和 tool policy。"
+  "notes": "全量同步：model-settings acceptance 已通过；模型 Provider 与 MCP 边界、凭据脱敏、连接测试和 packaged 配置源完成验收状态同步，后续可补真实 Provider live smoke。"
 }

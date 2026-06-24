@@ -32,7 +32,7 @@
 
 ## 还没做什么
 
-- SQLite 可用性和 JSON fallback 已有代码路径，本轮新增 revision、空快照和搜索索引回归测试；正式验收状态仍以 `acceptance.md` 为准。
+- 持久化 acceptance 已完成正式验收状态同步；SQLite 可用性、JSON fallback、revision、空快照和搜索索引回归已有证据。
 - 数据迁移策略需要随后续格式变化持续补 technical 与测试。
 
 ## 关键决策

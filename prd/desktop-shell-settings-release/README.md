@@ -29,9 +29,10 @@
 
 ## 还没做什么
 
-- 发布/打包和自动更新需要在 release 场景下单独正式验收。
-- macOS 语音权限失败、helper 缺失和 packaged resource 路径需要补更多证据。
-- MCP 设置的复制、删除确认、无项目空态和字段级连接测试仍需补齐。
+- 桌面外壳 acceptance 已完成正式验收状态同步；当前 21 个场景中 18 个通过、3 个保留为真实 Electron GUI / macOS 系统权限人工确认项。
+- 剩余人工项：close-to-tray 真实托盘行为、macOS 语音授权成功路径、macOS 语音权限拒绝恢复路径。
+- 发布/打包和自动更新已有 build/local build/source audit 证据；真实 release 渠道、签名、公证和更新服务器仍需在发布流程中单独 live smoke。
+- MCP 设置复制、删除确认、无项目空态、字段级连接测试、搜索 Provider 设置与 Key 池已完成实现与正式验收。
 
 ## 关键决策
 

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
@@ -77,6 +78,50 @@ test('MCP runtime options convert project settings into Claude SDK query options
   assert.equal(runtime.mcpServers.remote.type, 'http')
   assert.equal(runtime.mcpServers.remote.headers.Authorization, 'Bearer remote_secret')
   assert.deepEqual(runtime.mcpServers.remote.tools, [{ name: 'search', permission_policy: 'always_ask' }])
+})
+
+test('MCP runtime resolves stdio command from release-safe executable PATH', () => {
+  if (process.platform === 'win32') return
+  const { buildMcpRuntimeOptions } = loadMcpModule()
+  const homeDir = mkdtempSync(join(tmpdir(), 'agentos-mcp-home-'))
+  const commandPath = join(homeDir, '.volta', 'bin', 'npx')
+  mkdirSync(dirname(commandPath), { recursive: true })
+  writeFileSync(commandPath, '#!/bin/sh\n')
+  chmodSync(commandPath, 0o755)
+
+  try {
+    const runtime = buildMcpRuntimeOptions(
+      {
+        mcpServers: [
+          {
+            name: 'chrome-dev',
+            enabled: true,
+            transport: 'stdio',
+            command: 'npx',
+            args: ['chrome-devtools-mcp@latest'],
+            env: {},
+            url: '',
+            headers: {},
+            alwaysLoad: false,
+          },
+        ],
+        mcpToolPolicies: {},
+      },
+      [],
+      {
+        HOME: homeDir,
+        PATH: '/missing-bin',
+      },
+    )
+
+    const server = runtime.mcpServers['chrome-dev']
+    const pathEntries = server.env.PATH.split(delimiter)
+    assert.equal(server.command, commandPath)
+    assert.equal(pathEntries[0], '/missing-bin')
+    assert.ok(pathEntries.includes(dirname(commandPath)))
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true })
+  }
 })
 
 test('MCP tool names are formatted for permission and transcript display', () => {

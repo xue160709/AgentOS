@@ -28,8 +28,8 @@
 ## 还没做什么
 
 - 远程 Provider 预设加载策略在当前代码中以本地预设为主要事实；若后续接远程源，需要更新 PRD 与验收。
-- API Key 展示、清理和迁移需要更多端到端安全验证。
-- MCP server 配置不应混入模型 Provider 表单；全局设置提供独立 MCP Tab 管理 server 定义，项目 Agent 设置只保存当前项目开关覆盖与 tool policy。
+- 模型设置 acceptance 已完成正式验收状态同步；API Key 不泄漏、Provider 候选和 packaged 配置源已有验收证据，后续可补全页面点击式安全回归。
+- MCP server 配置已与模型 Provider 表单分离；全局设置提供独立 MCP Tab 管理 server 定义，项目 Agent 设置只保存当前项目开关覆盖与 tool policy。
 
 ## 关键决策
 

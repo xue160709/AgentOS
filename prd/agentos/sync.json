@@ -1,5 +1,5 @@
 {
-  "lastPrdSyncCommit": "bb8d2b04de464f1a09decc875f2e869afe8885fb",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
   "lastPrdSyncAt": "2026-06-23",
   "module": "agentos",
   "lastChangedFiles": [
@@ -15,6 +15,5 @@
     "src/i18n/i18n.tsx",
     "src/app-metadata.ts"
   ],
-  "notes": "首次 PRD 全量重建：定义 AgentOS 产品总览、项目工作单位与桌面安全桥接边界。"
+  "notes": "全量同步：产品总览 acceptance 已通过；剩余未验收项集中在桌面托盘和 macOS 语音权限人工确认，产品 TODO 仍需重整为 AgentOS backlog。"
 }
-

@@ -1,5 +1,5 @@
 {
-  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
   "lastPrdSyncAt": "2026-06-24",
   "module": "agent-mode",
   "lastChangedFiles": [
@@ -14,5 +14,5 @@
     "electron/main.ts",
     "prd/agent-mode/acceptance.md"
   ],
-  "notes": "增量同步，包含未提交代码观察：项目 MCP 面板已落地全局 server 的项目开关覆盖、运行状态展示、连接测试缓存工具和 tool policy；字段级修复提示、分组/风险标注、失败恢复和正式 project-verify 仍待补。"
+  "notes": "全量同步：agent-mode acceptance 已通过；项目 MCP 面板、tool policy、字段级修复提示、分组/风险标注和失败恢复完成正式验收，后续可补 Agent Mode 文件 fixture、全页面 E2E 和真实 MCP live smoke。"
 }

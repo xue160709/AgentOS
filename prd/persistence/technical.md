@@ -76,7 +76,7 @@ React 状态变化
 
 ## 最近同步
 
-- commit：`fe05e462a76283b9c314ab22f68fdc24f9f199d0`
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
 - 日期：`2026-06-24`
-- 变化摘要：增量同步未提交代码观察：新增 Workspace Snapshot Resolution module、workspace revision clock、Workspace Session 即时 durable save、主进程 SQLite `workspace_revision` metadata、History Search Index internal seam 与持久化回归测试。
-- 待确认：本轮为 Codex 自检与单测覆盖，未执行正式 `project-verify` 重新盖戳。
+- 变化摘要：同步全量 `project-verify` 与交互流程复查结果；Workspace Snapshot Resolution、workspace revision clock、即时 durable save、SQLite `workspace_revision` metadata 与 History Search Index internal seam 已完成正式验收状态同步。
+- 待确认：后续数据格式变化时继续补迁移测试和 technical 说明。

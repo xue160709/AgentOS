@@ -23,7 +23,7 @@
 
 ## 还没做什么
 
-- 产品级 PRD 已补齐，但尚未执行正式 `project-verify`。
+- 产品级 PRD 已补齐并完成正式 `project-verify` 状态同步；剩余未验收项集中在桌面托盘和 macOS 语音权限人工确认，不在产品总览模块内。
 - 当前 `TODO.md` 仍偏 agentic runtime 优化，需要后续整理成产品 backlog。
 
 ## 关键决策
@@ -40,4 +40,3 @@
 - `workspace-session`：承载项目与线程工作区。
 - `desktop-shell-settings-release`：承载桌面宿主与原生能力。
 - `chat-agent-runtime`：承载 Agent 运行主链路。
-

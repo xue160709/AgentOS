@@ -123,7 +123,7 @@ async function probeStdioMcpServer(
     env: { ...process.env, ...(config.env ?? {}) },
     stdio: 'pipe',
   })
-  const rpc = createStdioRpcClient(child)
+  const rpc = createStdioRpcClient(child, config.command)
 
   try {
     const initialized = await rpc.request(
@@ -185,7 +185,7 @@ async function probeRemoteMcpServer(
   }
 }
 
-function createStdioRpcClient(child: ChildProcessWithoutNullStreams): {
+function createStdioRpcClient(child: ChildProcessWithoutNullStreams, command: string): {
   request(method: string, params: unknown, timeoutMs: number): Promise<unknown>
   notify(method: string, params?: unknown): void
   dispose(): void
@@ -219,7 +219,7 @@ function createStdioRpcClient(child: ChildProcessWithoutNullStreams): {
   })
 
   child.once('error', (error) => {
-    rejectAll(new Error(`启动失败：${error.message}`))
+    rejectAll(new Error(formatStdioSpawnError(command, error)))
   })
 
   child.once('exit', (code, signal) => {
@@ -261,6 +261,13 @@ function createStdioRpcClient(child: ChildProcessWithoutNullStreams): {
       killTimer.unref?.()
     },
   }
+}
+
+function formatStdioSpawnError(command: string, error: Error): string {
+  if (isNodeError(error) && error.code === 'ENOENT') {
+    return `启动失败：找不到 MCP 命令 ${command}（${error.message}）。请确认命令已安装，或在命令字段填写绝对路径。`
+  }
+  return `启动失败：${error.message}`
 }
 
 function handleJsonRpcLine(
@@ -431,6 +438,10 @@ function isJsonRpcError(value: unknown): value is { error: { code?: number; mess
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error
 }
 
 class NeedsAuthError extends Error {}

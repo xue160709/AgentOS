@@ -1,11 +1,18 @@
 {
-  "lastPrdSyncCommit": "fe05e462a76283b9c314ab22f68fdc24f9f199d0",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
   "lastPrdSyncAt": "2026-06-24",
-  "workflow": "incremental",
+  "workflow": "full-resync",
   "modulesUpdated": [
-    "persistence",
+    "agentos",
     "workspace-session",
-    "file-context"
+    "chat-agent-runtime",
+    "file-context",
+    "model-settings",
+    "persistence",
+    "agent-mode",
+    "home-plugin",
+    "task-home-plugin",
+    "desktop-shell-settings-release"
   ],
-  "notes": "增量同步，包含未提交代码观察：同步 Workspace Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam、workspace revision clock、SQLite workspace_revision metadata 与持久化回归测试；本轮未执行正式 project-verify 重新盖戳。"
+  "notes": "全量同步：对齐 2026-06-24 全量 project-verify 与 WebSearch API Key 池增量验收结果，当前 98 个场景中 95 个通过、0 个失败、3 个保留为桌面托盘和 macOS 语音权限人工确认；同步 interaction-flow-review 结论与 TODO 剩余验收细节。"
 }

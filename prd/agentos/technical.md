@@ -55,8 +55,7 @@ React renderer
 
 ## 最近同步
 
-- commit：`bb8d2b04de464f1a09decc875f2e869afe8885fb`
-- 日期：`2026-06-23`
-- 变化摘要：首次创建 `prd/` 产品文档体系。
-- 待确认：正式验收尚未执行。
-
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
+- 日期：`2026-06-24`
+- 变化摘要：同步全量 `project-verify` 与交互流程复查结果；产品总览 acceptance 已通过，剩余未验收项集中在桌面托盘和 macOS 语音权限人工确认。
+- 待确认：产品 TODO 仍需从 agentic runtime 清单重整为 AgentOS 产品 backlog。

@@ -1,5 +1,5 @@
 {
-  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
   "lastPrdSyncAt": "2026-06-24",
   "module": "chat-agent-runtime",
   "lastChangedFiles": [
@@ -17,5 +17,5 @@
     "src/desktop-types.ts",
     "prd/chat-agent-runtime/acceptance.md"
   ],
-  "notes": "增量同步，包含未提交代码观察：记录项目级 MCP runtime、状态面板跳转、MCP 权限/Transcript 友好展示、WebSearch native/AgentOS 路由、agentos-web alias、DuckDuckGo/Brave/Tavily Provider registry、DuckDuckGo HTML 搜索、Provider Test、env 凭据状态与 auth/quota/bot-challenge/network/service 恢复文案；搜索相关 project-verify 已执行，完整 Chat e2e 证据仍待补齐。"
+  "notes": "全量同步：Chat 运行时 acceptance 已通过，WebSearch API Key 池增量场景已盖戳；MCP/WebSearch 核心路径已正式验收，后续可补全页面点击式 E2E、Composer 语音 GUI、真实 Provider live smoke 和真实 MCP server live smoke。"
 }

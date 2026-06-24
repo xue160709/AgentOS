@@ -60,7 +60,7 @@
 
 ## 最近同步
 
-- commit：`fe05e462a76283b9c314ab22f68fdc24f9f199d0`
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
 - 日期：`2026-06-24`
-- 变化摘要：增量同步未提交代码观察：Workspace Session 接管即时 renderer durable save 与防抖主进程保存顺序，并用 durable fingerprint 推进 `workspaceRevision`。
-- 待确认：本轮为 Codex 自检与单测覆盖，未执行正式 `project-verify` 重新盖戳。
+- 变化摘要：同步全量 `project-verify` 与交互流程复查结果；Workspace Session 即时 renderer durable save、防抖主进程保存和 `workspaceRevision` 已完成正式验收状态同步。
+- 待确认：全页面点击式工作区 E2E 截图和产品 backlog 优先级仍可补充。

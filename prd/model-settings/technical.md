@@ -57,11 +57,11 @@
 
 ## TODO 对应项
 
-- `TODO.md §14`：补连接测试、密钥清理和 packaged 配置源正式验收。
-- `TODO.md §15`：MCP 全局定义、项目开关覆盖、状态展示和测试仍需持续补齐。
+- `TODO.md §14`：补全页面点击式安全回归、真实 Provider live smoke 和产品 backlog 重整。
+- `TODO.md §15`：MCP 全局定义、项目开关覆盖、状态展示和正式验收已完成。
 
 ## 最近同步
 
-- commit：`a45dc7d89a7985e2f80903c9338f827ed58dd345`
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
 - 日期：`2026-06-24`
-- 变化摘要：增量同步，包含未提交代码观察：模型 Provider 设置继续只管理模型访问；MCP server 定义、连接测试和总开关由独立全局 MCP 设置页承载，项目只保存开关覆盖与 tool policy。
+- 变化摘要：同步全量 `project-verify` 与交互流程复查结果；模型 Provider 设置 acceptance 已通过，MCP 与模型设置边界已完成正式验收。

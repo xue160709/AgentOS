@@ -31,9 +31,9 @@
 
 ## 还没做什么
 
-- 主流程已有单元测试；WebSearch 相关运行时与搜索设置场景已完成正式验收状态戳。
-- 端到端 UI 流式走查、权限弹窗和 Generative UI 截图证据仍需补齐。
-- WebSearch 的真实 Provider 可用性仍受第三方网络、额度和 bot challenge 影响；API Key 池用于在 Brave/Tavily 单个 Key 认证、配额、网络或服务失败时按顺序尝试后续 Key，后续新增 Provider 时需要补对应 smoke 与回归场景。
+- 聊天运行时 acceptance 已完成正式验收状态同步；流式、取消、权限、Generative UI、MCP 与 WebSearch 核心路径均已有单测、source audit、selector audit 或 smoke 证据。
+- 端到端 UI 流式走查、权限弹窗、Composer 语音交互和 Generative UI 截图证据仍需沉淀为全页面点击式 E2E 脚本。
+- WebSearch 的真实 Provider 可用性仍受第三方网络、额度和 bot challenge 影响；API Key 池用于在 Brave/Tavily 单个 Key 认证、配额、网络或服务失败时按顺序尝试后续 Key，真实外网成功搜索可作为 live smoke 后续补充。
 
 ## 关键决策
 

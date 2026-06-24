@@ -30,7 +30,7 @@ Task Home Plugin 模块把项目首页卡片升级为可长期运行的任务：
 
 ## 还没做什么
 
-- 任务卡运行链路复杂，仍需正式验收覆盖 Skills 缺步骤、手动停止、重启清理和定时递推。
+- Task Home Plugin acceptance 已完成正式验收状态同步；Skills 缺步骤、手动停止、重启清理和定时递推均已有验收证据。
 - 长周期后台执行依赖 Electron 进程存活，不是系统级守护进程。
 
 ## 关键决策
@@ -47,4 +47,3 @@ Task Home Plugin 模块把项目首页卡片升级为可长期运行的任务：
 - `home-plugin`：共享首页卡片展示与目录协议。
 - `chat-agent-runtime`：负责真正执行 Agent/Skills prompt。
 - `workspace-session`：接收并合并 `task-run` 线程。
-

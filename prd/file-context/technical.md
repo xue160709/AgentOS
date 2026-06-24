@@ -57,18 +57,18 @@ AppSearch 聊天历史搜索
 ## 边界情况
 
 - 预览必须限制在项目根内。
-- 文本预览上限为 5MB；图片读取常量为 5MB，但错误文案当前写成 10MB，后续可统一。
+- 文本预览上限为 5MB；图片读取常量和用户可见错误文案均按 5MB 对齐。
 - 搜索最多读取 5000 条、返回 24 条，深度上限 10。
 - AppSearch 的聊天历史搜索不读取项目文件树；索引损坏时应降级到工作区 JSON/rollout 扫描。
 - watch 会过滤忽略目录并防抖推送。
 
 ## TODO 对应项
 
-- `TODO.md §14`：补正式验收与文案/常量一致性确认。
+- `TODO.md §14`：补全页面点击式 E2E 与真实附件 UI 回归证据。
 
 ## 最近同步
 
-- commit：`fe05e462a76283b9c314ab22f68fdc24f9f199d0`
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
 - 日期：`2026-06-24`
-- 变化摘要：增量同步未提交代码观察：AppSearch 聊天历史分支由持久化模块的 History Search Index 承接，项目文件搜索与聊天索引保持不同 Module。
-- 待确认：本轮未执行 file-context 正式 `project-verify` 重新盖戳。
+- 变化摘要：同步全量 `project-verify` 与交互流程复查结果；file-context acceptance 已通过，5MB 图片文案/常量已对齐。
+- 待确认：全页面点击式 E2E 和真实附件 UI 回归证据仍可补充。

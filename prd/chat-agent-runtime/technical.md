@@ -56,6 +56,7 @@ Composer submit
 - 自动测试：`electron/chat-run.test.mjs`、`electron/claude-sdk-message-router.test.mjs`、`electron/claude-agent-runner-executable.test.mjs`、`electron/claude-agent-runner-mcp.test.mjs`、`electron/claude-agent-runner-web-search.test.mjs`。
 - 关键覆盖：流式文本、result-only、cancel、orphan event、thinking/tool/activity/task/prompt、context compaction、file diff、并发提交阻止。
 - WebSearch 覆盖：native 模式不注册 `agentos-web`；AgentOS 模式注册内部 MCP、alias `WebSearch`、禁用内置 `WebSearch`；Tavily POST 请求、DuckDuckGo 结果归一化、provider 状态、域名过滤、HTTP 错误分类、Brave/Tavily API Key 池顺序轮询、Provider Test 的 env-resolved/env-missing 分支。
+- 交互流程复查：`ChatRun` 维护 request/thread ownership 与 terminal cleanup；`ClaudeAgentRunner` 在取消、拒绝权限和异常退出时清理 pending request；`ChatPage` 的语音输入使用 generation guard、draft range 和 submit 前 finalize，降低 late event 污染当前输入的风险。
 - 验收契约：`prd/chat-agent-runtime/acceptance.md`。
 
 ## 边界情况
@@ -72,12 +73,12 @@ Composer submit
 
 ## TODO 对应项
 
-- `TODO.md §14`：正式验收、UI 选择器和 e2e 证据补齐。
+- `TODO.md §14`：全页面点击式 E2E、Composer 语音 GUI 路径、真实 Provider live smoke 和交互流程专项证据补齐。
 - `TODO.md §15`：MCP 与 WebSearch 接入 backlog，包括设置入口、SDK 参数接入、状态展示、工具权限、错误恢复、Provider 空结果/配额体验和测试。
 
 ## 最近同步
 
-- commit：`a45dc7d89a7985e2f80903c9338f827ed58dd345`
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
 - 日期：`2026-06-24`
-- 变化摘要：同步未提交代码观察：Chat 运行时已合成 MCP 与 WebSearch runtime options；全局搜索设置可选择 native 或 AgentOS Provider，AgentOS 模式通过 `agentos-web` alias 内置 `WebSearch`，Provider registry 支持 DuckDuckGo、Brave、Tavily；DuckDuckGo 已改为直接读取 HTML 搜索结果，不再调用 Instant Answer API；Provider Test 支持主进程 env 解析状态和 auth/quota/bot-challenge/network/service 恢复文案。
-- 待确认：搜索相关 `project-verify` 已执行；完整 Chat 端到端 UI 流式、权限弹窗和 Generative UI 证据仍待补齐。
+- 变化摘要：同步全量 `project-verify`、WebSearch API Key 池增量验收与交互流程复查结果；Chat 运行时 acceptance 已全部通过，MCP/WebSearch 核心路径完成正式验收。
+- 待确认：完整 Chat 全页面点击式 E2E、Composer 语音 GUI 路径、真实 Brave/Tavily 外网成功搜索和真实 MCP server live smoke 仍可补充。

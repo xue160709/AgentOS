@@ -52,7 +52,7 @@
 
 ## 测试与验收
 
-- 当前缺直接针对 Agent Mode 文件写入的单元测试；建议补 `agent-mode-files` fixture。
+- Agent Mode acceptance 已完成正式验收状态同步；当前仍缺直接针对 Agent Mode 文件写入的单元测试，建议补 `agent-mode-files` fixture。
 - 间接测试：`electron/model-pick.test.mjs` 覆盖 Skill 模型覆盖候选。
 - 验收契约：`prd/agent-mode/acceptance.md`。
 
@@ -65,16 +65,16 @@
 - MCP server 名称需要稳定、可用于 SDK tool name 前缀；重命名 server 会影响已保存的 tool policy。
 - 全局关闭的 server 不会出现在项目 MCP 面板，也不会传入 SDK runtime options。
 - 连接测试缓存按 server 配置签名过滤；server 修改后旧工具列表不再作为当前事实。
-- MCP 保存前后仍需继续补强删除确认、字段级环境变量修复提示和失败恢复引导。
+- MCP 删除确认、字段级环境变量修复提示、失败恢复引导、tool policy 分组和风险标注已完成实现与正式验收；后续 live smoke 可覆盖真实外部 MCP server。
 
 ## TODO 对应项
 
-- `TODO.md §14`：补 Agent Mode 文件 fixture 与 UI 正式验收。
-- `TODO.md §15`：补 MCP 字段级修复提示、tool policy 分组/风险标注、失败恢复文案、无项目空态和交互验收。
+- `TODO.md §14`：补 Agent Mode 文件 fixture、全页面点击式 E2E 和真实 MCP live smoke。
+- `TODO.md §15`：MCP 字段级修复提示、tool policy 分组/风险标注、失败恢复文案、无项目空态和正式验收已完成。
 
 ## 最近同步
 
-- commit：`a45dc7d89a7985e2f80903c9338f827ed58dd345`
+- commit：`27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f`
 - 日期：`2026-06-24`
-- 变化摘要：增量同步，包含未提交代码观察：项目 MCP 面板已消费全局启用 server，保存项目级 `mcpServerOverrides` 与 `mcpToolPolicies`，显示运行状态和连接测试缓存工具；全局定义和连接测试留在 `#settings/mcp`。
-- 待确认：正式 `project-verify` 尚未执行；字段级未解析提示、tool policy 分组/风险标注和失败恢复文案仍待增强。
+- 变化摘要：同步全量 `project-verify` 与交互流程复查结果；项目 MCP 面板、tool policy、状态恢复和设置跳转已正式验收，Agent Mode 模块 acceptance 已通过。
+- 待确认：Agent Mode 文件写入 fixture、全页面点击式 E2E 和真实外部 MCP live smoke 仍可补充。
