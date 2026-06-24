@@ -34,6 +34,8 @@ const SETTINGS_SIDEBAR_NAV_BASE: {
   disabled?: boolean
 }[] = [
   { id: 'general', labelKey: 'settingsCategory.models', icon: 'settings' },
+  { id: 'search', labelKey: 'settingsCategory.search', icon: 'search' },
+  { id: 'mcp', labelKey: 'settingsCategory.mcp', icon: 'server' },
   { id: 'skills', labelKey: 'settingsCategory.general', icon: 'chip' },
   { id: 'agent', labelKey: 'settingsCategory.agentMode', icon: 'agent' },
   { id: 'updates', labelKey: 'settingsCategory.updates', icon: 'refresh' },
@@ -66,6 +68,8 @@ export const VIEW_HEADING_KEYS: Record<Exclude<AppViewId, 'settings'>, string> =
 /** 设置分类对应的工作区标题键 / Workspace title key per settings category */
 export function settingsWorkspaceTitleKey(category: SettingsCategoryId): string {
   if (category === 'skills') return 'shell.workspaceSettingsGeneral'
+  if (category === 'search') return 'shell.workspaceSettingsSearch'
+  if (category === 'mcp') return 'shell.workspaceSettingsMcp'
   if (category === 'updates') return 'shell.workspaceSettingsUpdates'
   if (category === 'developer') return 'shell.workspaceSettingsDeveloper'
   if (category === 'agent') return 'shell.workspaceSettingsAgentMode'
@@ -98,6 +102,8 @@ export function settingsCategoryFromLocation(): SettingsCategoryId {
   const parts = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
   if (parts[0] !== 'settings') return DEFAULT_SETTINGS_CATEGORY
   const sub = parts[1]
+  if (sub === 'search') return 'search'
+  if (sub === 'mcp') return 'mcp'
   if (sub === 'skills') return 'skills'
   if (sub === 'updates') return 'updates'
   if (sub === 'developer' && isDeveloperSettingsEnabled()) return 'developer'

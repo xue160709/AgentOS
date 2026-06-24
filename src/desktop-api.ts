@@ -11,6 +11,12 @@ import type {
 import type { ChatWorkspaceState, FileTreeResult, ProjectFilePreviewResult } from './components/types'
 import type {
   AgentModeFilesResult,
+  AgentMcpGlobalSettings,
+  AgentMcpGlobalSettingsResult,
+  AgentMcpServerConfig,
+  AgentMcpServerProbeResult,
+  AgentWebSearchSettings,
+  AgentWebSearchSettingsResult,
   AgentModeProjectSettings,
   AgentModeSettingsResult,
   AgentModeStatusResult,
@@ -97,12 +103,23 @@ export type DesktopAPI = {
     locale?: AppUiLocale,
   ) => Promise<AgentModeStatusResult>
   getAgentModeSettings?: (rootPath: string) => Promise<AgentModeSettingsResult>
+  getGlobalMcpSettings?: () => Promise<AgentMcpGlobalSettingsResult>
+  saveGlobalMcpSettings?: (settings: Partial<AgentMcpGlobalSettings>) => Promise<AgentMcpGlobalSettingsResult>
+  testGlobalMcpServer?: (server: AgentMcpServerConfig) => Promise<AgentMcpServerProbeResult>
+  getGlobalWebSearchSettings?: () => Promise<AgentWebSearchSettingsResult>
+  saveGlobalWebSearchSettings?: (settings: Partial<AgentWebSearchSettings>) => Promise<AgentWebSearchSettingsResult>
   saveAgentModeSettings?: (
     rootPath: string,
     payload: Partial<
       Pick<
         AgentModeProjectSettings,
-        'user' | 'identity' | 'projectModelPick' | 'skillModelOverrides'
+        | 'user'
+        | 'identity'
+        | 'projectModelPick'
+        | 'skillModelOverrides'
+        | 'mcpServers'
+        | 'mcpServerOverrides'
+        | 'mcpToolPolicies'
       >
     >,
   ) => Promise<AgentModeSettingsResult>

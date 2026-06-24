@@ -26,7 +26,7 @@ AgentOS 是面向本地项目与长期任务的 Electron 桌面 Agent 工作台�
 - `TODO.md` 仍以 agentic runtime 优化清单为主，本轮已新增产品 PRD 初始化记录和后续差距。
 - 下一步应按模块执行 `project-verify`，把各 `acceptance.md` 的待验收状态转换为带证据的正式状态戳。
 - UI 选择器与端到端验收仍需逐步沉淀，尤其是 Agent Mode、Home Plugin、Task Home Plugin 和桌面发布相关流程。
-- MCP 接入已进入产品规划：优先补项目级 MCP 设置、Claude Agent SDK `mcpServers` 接入、Chat 状态展示、tool 权限策略和错误恢复；详细任务见 `TODO.md §15`。
+- MCP 与 WebSearch 接入已进入实现收尾：项目级 MCP、Chat 状态展示、MCP tool 友好展示、全局搜索设置、AgentOS WebSearch Provider 路由已落地；复制/删除确认、字段级连接测试、Provider 空结果/配额错误体验和正式验收仍见 `TODO.md §15`。
 
 ## 文档规则
 

@@ -403,6 +403,8 @@ export type ClaudeAgentStatusHealth = 'unconfigured' | 'idle' | 'running' | 'rea
 export type ClaudeAgentStatusMcpServer = {
   name: string
   status: string
+  error?: string
+  toolCount?: number
 }
 
 /** 单模型用量摘要 / Per-model usage summary */

@@ -11,6 +11,8 @@
 - 主进程通过 Claude Agent SDK 驱动运行，转发 assistant、thinking、tool、activity、result、error、cancelled 等事件。
 - UI 可以展示权限请求、Agent 提问弹窗、工具过程、thinking、文件 diff、上下文压缩边界和运行耗时。
 - 切换线程模型时支持清空旧 session，并用简短 handoff context 交接历史。
+- 运行时接入项目级 MCP server 配置、tool policy、状态探测和 `mcp__server__tool` 友好展示。
+- 全局搜索设置可决定 Claude Agent 使用原生 Web Search，或将 `WebSearch` 路由到 AgentOS 内部 `web_search` Provider；当前 Provider 包含 DuckDuckGo Instant Answer、Brave Search 和 Tavily。
 - 支持 `show-widget` 形式的 Generative UI 沙箱渲染。
 
 ## 用户流程
@@ -31,13 +33,14 @@
 
 - 主流程已有单元测试，但正式验收状态戳尚未回写。
 - 端到端 UI 流式走查、权限弹窗和 Generative UI 截图证据仍需补齐。
-- MCP 接入仍处于规划状态：当前只预留 MCP 状态读取与展示基础，尚未把项目级 `mcpServers` 配置传入 Claude Agent SDK，也未在 Chat 侧完整展示 MCP 工具来源、权限策略和失败恢复入口。
+- WebSearch Provider 的空结果、配额耗尽和认证失败目前以工具错误或空结果返回；后续需要更友好的恢复文案和连接测试入口。
 
 ## 关键决策
 
 - Chat Run seam 负责事件折叠和竞态处理，React 页面和 Electron transport 不拥有这些规则。
 - 主进程日志使用脱敏摘要，不输出 API Key、Token 或用户隐私原文。
 - MCP 运行时应优先复用 Claude Agent SDK 的 `mcpServers`、`mcpServerStatus()` 和现有权限闸门，不在 AgentOS 中重新实现 MCP JSON-RPC 客户端。
+- WebSearch 默认可保留 Claude Code 原生能力；只有用户在全局设置切到 AgentOS Provider 时才注册内部 `agentos-web` 并 alias `WebSearch`。
 
 ## 验收
 
@@ -48,4 +51,5 @@
 - `workspace-session`：提供线程生命周期和当前活动线程。
 - `model-settings`：解析 provider/model 与图片能力。
 - `file-context`：提供附件、预览和 `@` 搜索。
-- `agent-mode`：提供项目指令、记忆和 TODO 上下文；后续还应提供项目级 MCP server 配置与 tool policy。
+- `agent-mode`：提供项目指令、记忆、TODO 上下文、项目级 MCP server 开关覆盖与 tool policy。
+- `desktop-shell-settings-release`：提供全局搜索设置页、preload/IPC seam 和 Provider Key 持久化。

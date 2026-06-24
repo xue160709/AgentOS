@@ -1,17 +1,20 @@
 {
-  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
-  "lastPrdSyncAt": "2026-06-23",
+  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncAt": "2026-06-24",
   "module": "chat-agent-runtime",
   "lastChangedFiles": [
     "src/claude-chat-types.ts",
+    "src/components/AppAgentStatusPopover.tsx",
     "src/components/chat/ChatPage.tsx",
     "src/components/chat/Transcript.tsx",
-    "src/components/AppAgentStatusPopover.tsx",
-    "src/components/chat/chat-run.ts",
-    "src/components/chat/AgentInputPromptModal.tsx",
+    "src/components/chat/ProjectHomeSurface.tsx",
     "electron/claude-agent-runner.ts",
-    "electron/claude-agent-runner/sdk-message-router.ts",
+    "electron/claude-agent-runner/mcp.ts",
+    "electron/claude-agent-runner/web-search.ts",
+    "electron/claude-agent-runner/web-search-provider.ts",
+    "electron/claude-agent-runner-mcp.test.mjs",
+    "electron/claude-agent-runner-web-search.test.mjs",
     "prd/chat-agent-runtime/acceptance.md"
   ],
-  "notes": "规划增量：记录 MCP 运行时接入目标和验收契约，包括 SDK mcpServers、mcpServerStatus、MCP tool 展示、权限策略和错误恢复；当前未实现。"
+  "notes": "增量同步，包含未提交代码观察：记录项目级 MCP runtime、状态面板跳转、MCP 权限/Transcript 友好展示、WebSearch native/AgentOS 路由、agentos-web alias、DuckDuckGo/Brave/Tavily Provider registry、provider 空结果与 HTTP 错误边界；正式 project-verify 尚未执行。"
 }

@@ -32,7 +32,7 @@ import type {
   ClaudePermissionMode,
   ClaudePermissionResponsePayload,
 } from '../src/claude-chat-types'
-import type { AgentModeProjectSettings, AppUiLocale } from '../src/desktop-types'
+import type { AgentModeProjectSettings, AgentWebSearchSettings, AppUiLocale } from '../src/desktop-types'
 import { buildRuntimeContext, discoverAgentContext, resolvePromptWithContext } from './agent-context'
 import {
   buildSdkEnv,
@@ -45,7 +45,9 @@ import { ClaudeChatEventCoalescer } from './claude-agent-runner/event-coalescer'
 import { resolveClaudeCodeExecutablePath } from './claude-agent-runner/executable'
 import { fileDiffFromPostToolUse } from './claude-agent-runner/file-diff'
 import { buildSdkPromptInput, normalizeSubmitAttachments, resolveWorkspaceCwd } from './claude-agent-runner/input'
+import { buildMcpPermissionCopy, buildMcpRuntimeOptions, mergeMcpRuntimeOptions } from './claude-agent-runner/mcp'
 import { ClaudeSdkMessageRouter } from './claude-agent-runner/sdk-message-router'
+import { buildWebSearchRuntimeOptions, isAgentOsWebSearchServerName } from './claude-agent-runner/web-search'
 import {
   HOME_PLUGIN_CARD_CUSTOMIZATION_SYSTEM_PROMPT,
   HOME_PLUGIN_CUSTOMIZATION_SYSTEM_PROMPT,
@@ -109,7 +111,7 @@ type ThreadRuntimeState = {
   hostContextCwd?: string
   slashCommands?: string[]
   agents?: string[]
-  mcpServers?: { name: string; status: string }[]
+  mcpServers?: { name: string; status: string; error?: string; toolCount?: number }[]
   plugins?: string[]
   contextUsage?: ClaudeAgentStatusContextUsage
   lastUsage?: ClaudeAgentStatusSnapshot['lastUsage']
@@ -140,6 +142,7 @@ export class ClaudeAgentRunner {
     private readonly cwd: string,
     private readonly resolveConfig: (modelPick?: ChatModelPick) => ClaudeAgentResolvedConfig,
     private readonly resolveAgentModeSettings: (rootPath: string) => Promise<AgentModeProjectSettings>,
+    private readonly resolveWebSearchSettings: () => Promise<AgentWebSearchSettings>,
     private readonly resolveUiLocale: () => AppUiLocale,
     private readonly observeEvent?: (event: ClaudeChatEvent) => void,
   ) {
@@ -362,18 +365,29 @@ export class ClaudeAgentRunner {
     const abortController = new AbortController()
     const timeout = setTimeout(() => abortController.abort(), STATUS_PROBE_TIMEOUT_MS)
     const cwd = resolveWorkspaceCwd(payload.cwd ?? threadState?.cwd, this.cwd)
+    const sdkEnv = buildSdkEnv(config)
+    const agentModeSettings = await this.resolveAgentModeSettings(cwd).catch(() => undefined)
+    const webSearchSettings = await this.getWebSearchSettings()
+    const mcpRuntime = mergeMcpRuntimeOptions(
+      buildMcpRuntimeOptions(agentModeSettings, READ_ONLY_AUTO_ALLOWED_TOOLS, sdkEnv),
+      buildWebSearchRuntimeOptions(webSearchSettings, sdkEnv),
+    )
     const response = query({
       prompt: holdStatusProbeOpen(abortController.signal),
       options: {
         abortController,
+        allowedTools: mcpRuntime.allowedTools,
         cwd,
-        env: buildSdkEnv(config),
+        disallowedTools: mcpRuntime.disallowedTools,
+        env: sdkEnv,
         extraArgs: { 'replay-user-messages': null },
+        mcpServers: mcpRuntime.mcpServers,
         pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath({ appRoot: this.cwd }),
         permissionMode: 'default',
         resume: sessionId,
         settingSources: [],
         skills: 'all',
+        toolAliases: mcpRuntime.toolAliases,
         tools: DEFAULT_AGENT_TOOLS,
       },
     })
@@ -405,7 +419,14 @@ export class ClaudeAgentRunner {
       settledWithin(response.getContextUsage(), timeoutMs),
     ])
     if (mcpServers.status === 'fulfilled') {
-      threadState.mcpServers = mcpServers.value.map((server) => ({ name: server.name, status: server.status }))
+      threadState.mcpServers = mcpServers.value
+        .filter((server) => !isAgentOsWebSearchServerName(server.name))
+        .map((server) => ({
+          name: server.name,
+          status: server.status,
+          error: redactSensitiveStatusText(server.error),
+          toolCount: server.tools?.length,
+        }))
       const mcpToolNames = mcpServers.value.flatMap((server) => server.tools?.map((tool) => tool.name) ?? [])
       if (mcpToolNames.length > 0) threadState.tools = mergeUnique(threadState.tools, ...mcpToolNames)
     }
@@ -419,6 +440,17 @@ export class ClaudeAgentRunner {
       if (toolNames.length > 0) threadState.tools = mergeUnique(threadState.tools, ...toolNames)
     }
     threadState.updatedAt = Date.now()
+  }
+
+  private async getWebSearchSettings(): Promise<AgentWebSearchSettings | undefined> {
+    try {
+      return await this.resolveWebSearchSettings()
+    } catch (error) {
+      safeConsoleWarn('[ClaudeAgentRunner] failed to resolve web search settings', {
+        error: summarizeErrorForLog(error),
+      })
+      return undefined
+    }
   }
 
   /** 响应 UI 对权限或 AskUserQuestion 的决定 / Apply renderer decision for tool permission prompts */
@@ -509,6 +541,13 @@ export class ClaudeAgentRunner {
     const timeout = setTimeout(() => abortController.abort(), 30_000)
     const cwd = resolveWorkspaceCwd(payload.cwd ?? threadState.cwd, this.cwd)
     const pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath({ appRoot: this.cwd })
+    const sdkEnv = buildSdkEnv(config)
+    const agentModeSettings = await this.resolveAgentModeSettings(cwd).catch(() => undefined)
+    const webSearchSettings = await this.getWebSearchSettings()
+    const mcpRuntime = mergeMcpRuntimeOptions(
+      buildMcpRuntimeOptions(agentModeSettings, READ_ONLY_AUTO_ALLOWED_TOOLS, sdkEnv),
+      buildWebSearchRuntimeOptions(webSearchSettings, sdkEnv),
+    )
     let response: Query | undefined
 
     try {
@@ -518,12 +557,16 @@ export class ClaudeAgentRunner {
           abortController,
           cwd,
           enableFileCheckpointing: true,
-          env: buildSdkEnv(config),
+          allowedTools: mcpRuntime.allowedTools,
+          disallowedTools: mcpRuntime.disallowedTools,
+          env: sdkEnv,
           extraArgs: { 'replay-user-messages': null },
+          mcpServers: mcpRuntime.mcpServers,
           pathToClaudeCodeExecutable,
           permissionMode: 'default',
           resume: threadState.sessionId,
           settingSources: [],
+          toolAliases: mcpRuntime.toolAliases,
           tools: DEFAULT_AGENT_TOOLS,
         },
       })
@@ -556,11 +599,6 @@ export class ClaudeAgentRunner {
   private async run(prompt: string, attachments: ClaudeChatAttachment[], activeRequest: ActiveRequest): Promise<void> {
     const config = this.resolveConfig(activeRequest.modelPick)
     const threadState = this.getThreadRuntimeState(activeRequest.threadId)
-    const nextConfigSignature = getConfigSignature(config)
-    if (threadState.configSignature && threadState.configSignature !== nextConfigSignature) {
-      threadState.sessionId = undefined
-    }
-    threadState.configSignature = nextConfigSignature
     threadState.cwd = activeRequest.cwd
     threadState.lastError = undefined
     threadState.updatedAt = Date.now()
@@ -596,6 +634,17 @@ export class ClaudeAgentRunner {
         ...(await this.resolveAgentModeSettings(activeRequest.cwd)),
         ...(activeRequest.agentModeSettingsOverride ?? {}),
       }
+      const sdkEnv = buildSdkEnv(config)
+      const webSearchSettings = await this.getWebSearchSettings()
+      const mcpRuntime = mergeMcpRuntimeOptions(
+        buildMcpRuntimeOptions(agentModeSettings, READ_ONLY_AUTO_ALLOWED_TOOLS, sdkEnv),
+        buildWebSearchRuntimeOptions(webSearchSettings, sdkEnv),
+      )
+      const nextConfigSignature = JSON.stringify([getConfigSignature(config), mcpRuntime.configSignature])
+      if (threadState.configSignature && threadState.configSignature !== nextConfigSignature) {
+        threadState.sessionId = undefined
+      }
+      threadState.configSignature = nextConfigSignature
       const runtimeContext = await buildRuntimeContext(activeRequest.cwd, agentModeSettings, this.resolveUiLocale())
       this.captureHostContextCatalog(threadState, runtimeContext.catalog)
       const appendSystemPrompt = buildRequestAppendSystemPrompt(activeRequest, runtimeContext.appendSystemPrompt)
@@ -606,7 +655,6 @@ export class ClaudeAgentRunner {
             : undefined,
       })
       const promptInput = buildSdkPromptInput(withHandoffContext(resolvedPrompt, activeRequest.handoffContext), attachments)
-      const sdkEnv = buildSdkEnv(config)
       const pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath({ appRoot: this.cwd })
       if (attachments.length > 0) {
         this.emitActivity(
@@ -639,6 +687,9 @@ export class ClaudeAgentRunner {
             claudeCodeExecutablePath: pathToClaudeCodeExecutable,
             config: summarizeConfigForLog(config),
             sdkEnv: summarizeSdkEnvForLog(sdkEnv),
+            mcpServerCount: Object.keys(mcpRuntime.mcpServers ?? {}).length,
+            mcpUnresolvedEnvCount: mcpRuntime.unresolvedEnv.length,
+            toolAliasCount: Object.keys(mcpRuntime.toolAliases ?? {}).length,
           })
           response = query({
             prompt: promptInput,
@@ -646,9 +697,10 @@ export class ClaudeAgentRunner {
               abortController: activeRequest.abortController,
               agents: runtimeContext.agents,
               allowDangerouslySkipPermissions: activeRequest.permissionMode === 'bypassPermissions' ? true : undefined,
-              allowedTools: READ_ONLY_AUTO_ALLOWED_TOOLS,
+              allowedTools: mcpRuntime.allowedTools,
               canUseTool: (toolName, input, options) => this.handleCanUseTool(activeRequest, toolName, input, options),
               cwd: activeRequest.cwd,
+              disallowedTools: mcpRuntime.disallowedTools,
               enableFileCheckpointing: true,
               env: sdkEnv,
               extraArgs: { 'replay-user-messages': null },
@@ -667,6 +719,7 @@ export class ClaudeAgentRunner {
               },
               includeHookEvents: false,
               includePartialMessages: true,
+              mcpServers: mcpRuntime.mcpServers,
               // Third-party Anthropic-compatible endpoints such as SiliconFlow expect
               // custom models through ANTHROPIC_MODEL. Passing options.model makes
               // Claude Code treat the value as its own model flag and can trigger
@@ -685,6 +738,7 @@ export class ClaudeAgentRunner {
               toolConfig: {
                 askUserQuestion: { previewFormat: 'markdown' },
               },
+              toolAliases: mcpRuntime.toolAliases,
               tools: DEFAULT_AGENT_TOOLS,
             },
           })
@@ -871,18 +925,19 @@ export class ClaudeAgentRunner {
       return pendingResult
     }
 
+    const permissionCopy = buildMcpPermissionCopy(toolName, options.title, options.displayName)
     this.emit({
       type: 'permission_request',
       requestId: activeRequest.requestId,
       permissionRequestId,
       toolUseId,
       toolName,
-      title: options.title || `${toolName} 需要权限`,
-      displayName: options.displayName || toolName,
+      title: permissionCopy.title,
+      displayName: permissionCopy.displayName,
       description: options.description || '',
       inputPreview: previewValue(input),
     })
-    this.emitActivity(activeRequest, `permission-request-${permissionRequestId}`, '等待权限确认', 'running', options.displayName || toolName)
+    this.emitActivity(activeRequest, `permission-request-${permissionRequestId}`, '等待权限确认', 'running', permissionCopy.displayName)
     return pendingResult
   }
 
@@ -1119,6 +1174,15 @@ function previewValue(value: unknown): string {
   } catch {
     return truncate(String(value), 180)
   }
+}
+
+function redactSensitiveStatusText(value: string | undefined): string | undefined {
+  if (!value) return value
+  return value
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1***')
+    .replace(/\b(sk-ant-[A-Za-z0-9._-]+|ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g, '***')
+    .replace(/([?&](?:access_token|api_key|key|token)=)[^&\s]+/gi, '$1***')
+    .replace(/\b(authorization|api[-_ ]?key|token|password|secret)(["':=\s]+)([^,\s}]+)/gi, '$1$2***')
 }
 
 function truncate(value: string, maxLength: number): string {

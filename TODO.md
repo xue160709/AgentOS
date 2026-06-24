@@ -150,18 +150,34 @@
 
 ## §15 P1｜MCP 接入 backlog
 
-- [ ] 项目级 MCP 配置模型：为 Agent 设置增加 `mcpServers` 与 `mcpToolPolicies`，支持 stdio、HTTP、SSE，归一化 server 名称、command/args/env/url/headers/alwaysLoad，并兼容旧设置文件。
-- [ ] MCP 设置入口与导航：在项目首页 Agent 设置新增 MCP Tab，并在全局模型设置页明确“Provider 配置不是 MCP 配置”；从 Chat 状态面板提供“去当前项目 MCP 设置”的跳转，无项目时展示空态。
-- [ ] MCP 设置面板：MCP Tab 提供 server 列表、启用/禁用、新增/编辑/复制/删除、未保存状态、删除确认和空态引导。
+- [x] MCP 配置模型：增加全局 MCP server 定义与项目级 `mcpServerOverrides` / `mcpToolPolicies`，支持 stdio、HTTP、SSE，归一化 server 名称、command/args/env/url/headers/alwaysLoad，并兼容旧项目 MCP 设置文件。
+  - 证据：`src/desktop-types.ts`、`electron/agent-mode-settings-store.ts`、`electron/agent-mode-settings-store.test.mjs`。
+- [ ] MCP 设置入口与导航：全局设置新增独立 MCP Tab，提供 MCP 新增/编辑/删除与全局开关；项目首页 Agent 设置 MCP Tab 只提供当前项目开关覆盖；Chat 状态面板提供“去当前项目 MCP 设置”的跳转，无项目时展示空态。
+  - 进展：全局设置侧栏已新增独立 MCP Tab，并提供 MCP server 定义管理和全局开关；模型页不再展示 MCP 表单；项目首页 Agent 设置已新增 MCP Tab 且只保存项目开关覆盖；Chat 顶栏 Agent 状态面板已提供“打开 MCP 设置”入口。无项目空态仍待补。
+- [ ] MCP 设置面板：全局 MCP 面板提供 server 列表、启用/禁用、新增/编辑/复制/删除、未保存状态、删除确认和空态引导；项目 MCP Tab 展示全局已启用 server 的项目开关、状态和 tool policy。
+  - 进展：已支持 Cursor 风格全局 server 列表、启用/禁用、新增/编辑/删除、未保存状态和空态；新增/编辑进入 Codex 对齐的单 server 配置页；项目页已支持 Installed MCP Servers 状态列表与项目开关覆盖；复制与删除确认仍待补。
 - [ ] 密钥与环境变量体验：支持 `${ENV_NAME}` 引用，展示“已解析 / 未解析”状态；禁止在日志、状态面板和错误摘要中输出 token、API key 或完整 header 明文。
+  - 进展：运行时与全局 Save & Test 都会解析 `${ENV_NAME}`，缺失时返回 env 名称；UI 会提示引用数量；已避免在日志中输出 MCP header/env 明文。字段级“已解析/未解析”修复提示仍待补齐。
 - [ ] 连接测试与状态展示：实现保存前/保存后的 Test，展示 `connected / failed / needs-auth / pending / disabled`、serverInfo、工具数量和字段级修复提示。
+  - 进展：全局 MCP 编辑页已支持“保存并测试”，stdio 会启动 MCP handshake，HTTP/SSE 会发 JSON-RPC probe；测试结果缓存 `connected / failed / needs-auth / disabled`、serverInfo、工具数量和错误信息，并在全局列表显示工具数量/失败原因。字段级修复提示和 serverInfo 详细展开仍待补。
 - [ ] Tool policy 配置：连接成功后按 server 分组列出工具，支持 `每次询问 / 自动允许 / 禁用`；默认不全量自动允许，读写/破坏性工具需保持显式授权。
-- [ ] SDK 运行时接入：在主聊天 query 与 status probe 中传入项目级 `mcpServers`，复用 `mcpServerStatus()`，把允许的 MCP tool 转成 `allowedTools`，把禁用策略转成 `disallowedTools` 或 `canUseTool` 拦截。
-- [ ] Chat 可见状态：在 Composer 或 Agent 状态入口展示 MCP 可用数量；状态面板显示 server 状态、失败原因、工具数和“去设置修复”入口。
-- [ ] Tool 调用展示：把 `mcp__server__tool` 在 transcript、权限弹窗和日志摘要里展示为可读的 `server · tool`，同时保留完整名称用于排查。
+  - 进展：MCP Tab 已支持手动添加完整 tool 名称策略，并映射到 `allowedTools` / `disallowedTools`；全局连接测试成功后，项目 MCP Tab 会读取缓存工具列表并可直接设置 `每次询问 / 自动允许 / 禁用`。按 server 折叠分组与工具风险 annotation 提示仍待补。
+- [x] SDK 运行时接入：在主聊天 query 与 status probe 中传入项目级 `mcpServers`，复用 `mcpServerStatus()`，把允许的 MCP tool 转成 `allowedTools`，把禁用策略转成 `disallowedTools` 或 `canUseTool` 拦截。
+  - 证据：`electron/claude-agent-runner.ts`、`electron/claude-agent-runner/mcp.ts`、`electron/claude-agent-runner-mcp.test.mjs`。
+- [x] Chat 可见状态：在 Composer 或 Agent 状态入口展示 MCP 可用数量；状态面板显示 server 状态、失败原因、工具数和“去设置修复”入口。
+  - 证据：`src/components/AppAgentStatusPopover.tsx` 已展示 MCP server 状态、错误、工具数与设置跳转。
+- [x] Tool 调用展示：把 `mcp__server__tool` 在 transcript、权限弹窗和日志摘要里展示为可读的 `server · tool`，同时保留完整名称用于排查。
+  - 证据：`electron/claude-agent-runner/mcp.ts`、`electron/claude-agent-runner.ts`、`src/components/chat/Transcript.tsx`。
+- [x] WebSearch 内置工具替换：用 SDK in-process MCP 暴露 AgentOS `web_search`，通过 `toolAliases.WebSearch` 把 Claude Code 内置 WebSearch 名称路由到内部搜索工具，并预留多 provider 扩展。
+  - 进展：2026-06-24，本轮完成 provider registry、Brave / DuckDuckGo Instant Answer 首批 provider、内部 `agentos-web` MCP server、`WebSearch -> mcp__agentos-web__web_search` alias、内置 WebSearch 禁用和 runner 接入；本轮继续按全局搜索设置接入原生/AgentOS 路由选择，并补 Tavily Provider。验收契约 → `prd/chat-agent-runtime/acceptance.md`、`prd/desktop-shell-settings-release/acceptance.md`。
+- [ ] WebSearch Provider 体验补强：为 DuckDuckGo Instant Answer 空结果、Tavily/Brave 认证或配额错误、Provider 保存前连接测试和字段级恢复提示补 UI/运行时文案。
+  - 进展：2026-06-24，已实测 DuckDuckGo Instant Answer 可访问但普通 query 可能返回 0 条；Tavily key 可识别但外部 smoke 返回 HTTP 432 usage limit。已将这些边界补进 PRD/acceptance，后续需做产品化恢复体验。
 - [ ] 权限与恢复交互：MCP 权限弹窗展示 server、tool、输入摘要和 policy 来源；server 失败、认证缺失、命令不存在、HTTP 401/403 时提供明确恢复路径。
+  - 进展：权限弹窗已使用 `server · tool` 友好名并保留输入摘要；policy 来源与失败恢复路径仍待补。
 - [ ] Session 生效策略：定义 MCP 配置变化后是下一轮生效、新会话生效还是立即重建 session，并在 UI 中给出明确提示。
+  - 进展：运行时已把 MCP 配置纳入 session signature，配置变化会使下一轮重建 SDK session；UI 明确提示仍待补。
 - [ ] 测试与验收补齐：增加 MCP 配置 normalize/store 单测、runner options 单测、tool name 展示单测、设置面板交互测试，以及 Chat 状态/权限/失败恢复的稳定选择器。
+  - 进展：已覆盖 store 全局 MCP normalize/override、probe cache 失效过滤、runner options、tool name 展示、WebSearch provider/runtime 和全局搜索设置 store；设置面板交互测试、Chat 权限/失败恢复选择器仍待补。
 
 ## 验证记录
 
@@ -199,4 +215,63 @@
 - 验证类别：Codex 自检（文档/规划同步）。
 - 验证命令：
   - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `git diff --check` ✅
+- 本轮：实现 MCP 接入首个纵切：项目级 MCP 配置持久化、项目 Agent 设置 MCP Tab、Claude SDK query/status probe 运行时接入、Agent 状态面板 MCP 状态与设置跳转、MCP tool 友好展示，并增加 store/runtime 单测。
+- 验证类别：Codex 自检（产品代码 + 单测）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `git diff --check` ✅
+- 本轮：按“全局添加 MCP、项目只做独立开关覆盖”的产品决策重构 MCP 设置：全局 MCP 设置页管理 MCP server 定义和总开关；项目 Agent MCP 面板只显示全局已启用 server，并保存当前项目 `mcpServerOverrides`；runner 继续接收合成后的有效 MCP 列表。
+- 验证类别：Codex 自检（产品 UI + 存储模型 + 单测 + PRD/TODO 同步）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+- 本轮：补齐 MCP 设置体验：全局 MCP 设置页新增项目级 MCP 边界说明；项目 MCP 面板新增 Installed MCP Servers 状态列表、启用开关、刷新状态、工具数量/失败原因展示，并明确保存配置不会预安装 MCP server。
+- 验证类别：Codex 自检（产品 UI + PRD/TODO 同步）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `git diff --check` ✅
+- 本轮：优化 MCP 设置页到 Cursor 列表 + Codex 单 server 编辑形态：全局页显示 installed server、开关、未测试/连接失败/需要认证/工具数量状态；新增 Save & Test，stdio/HTTP probe 会缓存 serverInfo 与工具列表；项目 MCP policy 读取缓存工具并直接配置 ask/allow/deny。
+- 验证类别：Codex 自检（MCP UI + IPC/store + runner probe + 单测）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅
+- 本轮：按“全局设置里 MCP 独立成 Tab，不放到模型页”的产品决策调整全局设置导航：新增 `settings/mcp` 分类、侧栏 MCP 入口和独立 MCP 页面；模型页只保留 Provider 表单；同步 PRD/acceptance/TODO 中的旧“全局模型设置页”表述。
+- 验证类别：Codex 自检（设置路由 + UI 文案 + PRD/TODO 同步）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `git diff --check` ✅
+- 本轮：实现 WebSearch 试验版替换链路：新增 AgentOS web search provider registry、Brave / DuckDuckGo Instant Answer provider、SDK in-process MCP `agentos-web` server，并通过 `toolAliases.WebSearch` 将内置 WebSearch 名称路由到 `mcp__agentos-web__web_search`。
+- 验证类别：Codex 自检（Agent runtime + provider 纯逻辑 + TODO 同步）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/claude-agent-runner-mcp.test.mjs electron/claude-agent-runner-web-search.test.mjs` ✅
+  - `npm run test:electron` ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `git diff --check` ✅
+- 本轮：新增全局“搜索”设置页与 IPC/preload 存储链路，支持原生 Web Search 与 AgentOS Provider 模式切换；AgentOS 模式支持 DuckDuckGo Instant Answer、Brave Search、Tavily，并让 runner 按设置决定是否注册 `agentos-web`、alias `WebSearch` 与禁用内置 WebSearch。
+- 验证类别：Codex 自检（设置页 + Agent runtime + provider 纯逻辑 + PRD/TODO 同步）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `git diff --check` ✅
+- 本轮：执行 `update-prd` 增量同步，将全局搜索设置、WebSearch native/AgentOS 路由、DuckDuckGo/Brave/Tavily Provider、DuckDuckGo 空结果和 Tavily 配额错误边界同步到 `chat-agent-runtime` 与 `desktop-shell-settings-release` PRD，并新增对应验收场景；未执行正式 `project-verify` 盖戳。
+- 验证类别：Codex 自检（PRD/acceptance/TODO 同步）。
+- 验证命令：
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `node -e "for (const f of ['prd/.update-prd-state.json','prd/chat-agent-runtime/sync.json','prd/desktop-shell-settings-release/sync.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')"` ✅
+  - `git diff --check` ✅
+- 本轮：执行 `update-prd` 增量同步 MCP 相关 PRD，将项目 MCP 面板 as-built、全局 MCP 定义/连接测试、Chat 状态/权限/Transcript 展示、状态面板跳转和模型/MCP 边界同步到 `agent-mode`、`chat-agent-runtime`、`desktop-shell-settings-release`、`model-settings`；未执行正式 `project-verify` 盖戳。
+- 验证类别：Codex 自检（PRD/acceptance/TODO 同步）。
+- 验证命令：
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `node -e "for (const f of ['prd/.update-prd-state.json','prd/agent-mode/sync.json','prd/chat-agent-runtime/sync.json','prd/desktop-shell-settings-release/sync.json','prd/model-settings/sync.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')"` ✅
   - `git diff --check` ✅

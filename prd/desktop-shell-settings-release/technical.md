@@ -15,8 +15,11 @@
 | `electron-builder.config.cjs`、`electron-builder.json5` | 打包、发布和平台资源配置。 |
 | `docs/RELEASE.md`、`docs/release.sh` | 发布流程文档和脚本。 |
 | `electron/desktop-seam.test.mjs`、`electron/window-chrome.test.mjs` | 桌面 seam 与窗口 chrome 测试。 |
-| `src/components/setting/ClaudeAgentSettingsPage.tsx` | 全局模型设置页；后续只保留 MCP 边界说明或项目跳转，不直接编辑 MCP server。 |
-| `src/components/chat/ProjectHomeSurface.tsx`、`src/components/AppAgentStatusPopover.tsx` | 后续 MCP 设置入口与状态面板跳转的主要 UI seam。 |
+| `src/components/setting/ClaudeAgentSettingsPage.tsx` | 全局模型、MCP 与搜索设置页的渲染入口；搜索页承载 native/AgentOS 模式、Provider、结果数和 Provider Key 输入。 |
+| `src/components/setting/SettingsPage.tsx`、`src/components/app-shell-constants.ts` | 设置分类路由、侧栏入口和 `#settings/search` 解析。 |
+| `src/desktop-types.ts`、`src/desktop-api.ts`、`src/desktop-seam.ts` | 全局搜索设置类型、受控 desktop adapter 和 IPC channel 契约。 |
+| `electron/agent-mode-settings-store.ts`、`electron/agent-mode-settings-store.test.mjs` | 全局 MCP 与全局 WebSearch 设置持久化、归一化和 store 单测。 |
+| `src/components/chat/ProjectHomeSurface.tsx`、`src/components/AppAgentStatusPopover.tsx` | 项目 MCP 开关覆盖与状态面板跳转的主要 UI seam。 |
 
 ## 数据结构
 
@@ -24,7 +27,8 @@
 - `AppUpdaterState`：更新阶段、版本、release notes、进度和错误。
 - `SpeechRecognitionSnapshot` / `SpeechRecognitionEvent`：语音状态、partial/final/error。
 - `DESKTOP_SEAM_CAPABILITIES`：所有命名桌面能力。
-- MCP 设置入口规划：全局设置页、项目 Agent 设置模态、Chat 状态面板需要共享同一项目路径上下文；从无项目状态进入时应提示先打开项目。
+- MCP 设置入口：全局设置页管理 MCP server 定义、全局开关和连接测试缓存；项目 Agent 设置模态只保存当前项目开关覆盖和 tool policy；Chat 状态面板可跳转到当前项目 MCP 面板。
+- `AgentWebSearchSettings`：`mode` 为 `native` 或 `agentos`，`provider` 为 `duckduckgo-instant` / `brave` / `tavily`，并保存默认结果数、Brave/Tavily Key 或环境变量引用。
 
 ## 调用链路
 
@@ -39,6 +43,14 @@ packaged update
   -> appUpdaterService.scheduleUpdateChecks
   -> electron-updater
   -> app-updater:event 推送 UI
+
+search settings
+  -> #settings/search
+  -> GlobalWebSearchSettingsPage
+  -> window.desktop.getGlobalWebSearchSettings / saveGlobalWebSearchSettings
+  -> desktop:get-global-web-search-settings / desktop:save-global-web-search-settings
+  -> AgentModeSettingsStore.globalWebSearchSettings
+  -> ClaudeAgentRunner.resolveWebSearchSettings
 ```
 
 ## 日志与调试
@@ -46,10 +58,12 @@ packaged update
 - 自动更新错误写入 `AppUpdaterState.errorMessage`，UI 通过状态展示。
 - Speech helper stderr 进入 warn；helper 事件通过 Unix socket NDJSON 转 IPC。
 - 剪贴板 SVG/PNG 有大小与尺寸限制，避免异常大数据写入系统剪贴板。
+- 搜索设置页和主进程只记录是否保存、Provider id、结果数等摘要；Brave/Tavily API Key 不应进入日志、状态面板或错误摘要明文。
 
 ## 测试与验收
 
-- 自动测试：`electron/desktop-seam.test.mjs`、`electron/window-chrome.test.mjs`。
+- 自动测试：`electron/desktop-seam.test.mjs`、`electron/window-chrome.test.mjs`、`electron/agent-mode-settings-store.test.mjs`。
+- 搜索设置选择器：`[data-testid="global-web-search-settings-page"]`、`[data-testid="web-search-mode-options"]`、`[data-testid="web-search-provider-options"]`、`[data-testid="web-search-settings-save"]`。
 - 构建验证按需运行：`npm run build:local` 或 `npm run build`，不作为日常默认自检。
 - 验收契约：`prd/desktop-shell-settings-release/acceptance.md`。
 
@@ -62,15 +76,17 @@ packaged update
 - Apple 凭据缺 Team ID 时 notarization 被禁用并输出警告。
 - MCP 设置跳转依赖当前项目；没有活动项目或项目路径失效时，入口应禁用或展示恢复路径。
 - MCP 连接测试可能启动子进程或访问网络，设置页应有加载、取消/超时、禁用和错误状态。
+- 搜索设置 bridge 不存在时页面展示可读错误；保存时会归一化 Provider、结果数和 Key 字段。
+- DuckDuckGo 不需要 Key 但可能返回空结果；Brave/Tavily 需要 Key 或 `${ENV_NAME}` 引用，后续应补连接测试和字段级错误提示。
 
 ## TODO 对应项
 
 - `TODO.md §14`：补 release、自动更新、语音 helper 和打包验证证据。
-- `TODO.md §15`：补 MCP 设置入口、状态面板跳转、无项目空态和设置导航验收。
+- `TODO.md §15`：补 MCP 复制、删除确认、字段级修复提示、无项目空态、搜索 Provider 连接测试和设置导航正式验收。
 
 ## 最近同步
 
-- commit：`3d41483b2fe8edaa5b9068e0ec952da5cb05bce7`
-- 日期：`2026-06-23`
-- 变化摘要：补充 MCP 设置入口规划，明确全局设置、项目 Agent 设置和 Chat 状态面板之间的导航关系。
-- 待确认：全局设置页是否需要展示 MCP 总开关，或只提供跳转/说明。
+- commit：`a45dc7d89a7985e2f80903c9338f827ed58dd345`
+- 日期：`2026-06-24`
+- 变化摘要：同步未提交代码观察：全局设置新增 Search 分类和页面，preload/IPC/store 增加全局 WebSearch 设置读写，运行时通过 resolver 读取该设置并影响 Agent 搜索路由。
+- 待确认：正式 `project-verify` 尚未执行；搜索 Provider 保存前连接测试、空结果提示和 Provider 配额/认证错误恢复仍待增强。

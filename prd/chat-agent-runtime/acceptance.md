@@ -81,28 +81,73 @@
 - WHEN 用户提交聊天并启动 Claude Agent SDK query
 - THEN 主进程将项目级 `mcpServers` 传入 query options，并按 tool policy 构造 `allowedTools` 或拦截禁用工具
 
-> 实现状态：⬜ 未实现｜验证方式: node --test electron/claude-agent-runner-mcp.test.mjs
+> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-mcp.test.mjs
 
 #### 场景：MCP server 连接失败
 - GIVEN 当前项目配置的 MCP server 启动失败、认证缺失或 HTTP 401
 - WHEN Chat 状态面板刷新运行时状态
 - THEN UI 展示对应 server 的 failed 或 needs-auth 状态、脱敏错误摘要和进入 MCP 设置的修复入口
 
-> 实现状态：⬜ 未实现｜selector: [data-testid="agent-status-mcp-list"]
+> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="agent-status-mcp-list"]
 
 #### 场景：MCP 工具请求权限
 - GIVEN Claude Agent SDK 请求调用 `mcp__server__tool` 且该工具策略为每次询问
 - WHEN 权限事件到达 UI
 - THEN 权限弹窗展示 server 名称、tool 名称、输入摘要和允许/拒绝操作，且不泄漏密钥或完整 header
 
-> 实现状态：⬜ 未实现｜selector: role=dialog[name="MCP 权限请求"]
+> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: role=dialog[name="MCP 权限请求"]
 
 #### 场景：Transcript 展示 MCP 工具调用
 - GIVEN assistant 调用了名称为 `mcp__github__create_issue` 的工具
 - WHEN transcript 渲染该工具事件
 - THEN UI 以可读形式展示 `github · create_issue`，并在详情中保留完整工具名用于排查
 
-> 实现状态：⬜ 未实现｜selector: [data-testid="transcript-mcp-tool-call"]
+> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="transcript-mcp-tool-call"]
+
+### 需求：聊天运行时按全局搜索设置路由 WebSearch
+系统 SHALL 在启动 Claude Agent SDK query 时读取全局搜索设置，并据此决定是否使用 Claude Code 原生 WebSearch 或 AgentOS `web_search` Provider。
+
+#### 场景：使用原生 Web Search
+- GIVEN 全局搜索设置选择原生 Web Search
+- WHEN 用户提交一次可能触发联网搜索的 Agent 请求
+- THEN 主进程不注册内部 `agentos-web` MCP server，不设置 `toolAliases.WebSearch`，也不把内置 `WebSearch` 加入禁用列表
+
+> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs
+
+#### 场景：使用 AgentOS 搜索 Provider
+- GIVEN 全局搜索设置选择 AgentOS 搜索 Provider，并选择 DuckDuckGo Instant Answer、Brave Search 或 Tavily
+- WHEN 用户提交一次可能触发联网搜索的 Agent 请求
+- THEN 主进程注册内部 `agentos-web` MCP server，将 `toolAliases.WebSearch` 指向 `mcp__agentos-web__web_search`，并禁用内置 `WebSearch`
+
+> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-mcp.test.mjs electron/claude-agent-runner-web-search.test.mjs
+
+#### 场景：Provider 缺少凭据
+- GIVEN 全局搜索设置选择 Brave Search 或 Tavily 但对应 API Key 未配置
+- WHEN AgentOS `web_search` 被调用
+- THEN 工具返回可读错误，并且日志和 transcript 不输出 API Key 或完整 header 明文
+
+> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs
+
+#### 场景：DuckDuckGo Instant Answer 无结果
+- GIVEN 全局搜索设置选择 AgentOS 搜索 Provider 且 Provider 为 DuckDuckGo Instant Answer
+- WHEN `web_search` 查询一个 DuckDuckGo Instant Answer 未覆盖的普通网页搜索词
+- THEN 工具返回合法 JSON 输出，包含 Provider 信息和空 `results` 数组，不抛出运行时异常，也不伪造搜索结果
+
+> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs
+
+#### 场景：Tavily 请求映射
+- GIVEN 全局搜索设置选择 AgentOS 搜索 Provider 且 Provider 为 Tavily，并配置有效或可解析的 Tavily API Key
+- WHEN `web_search` 携带 query、max_results、allowed_domains 和 freshness 调用
+- THEN 主进程向 Tavily `/search` 发起 POST 请求，传入 Bearer 认证、`max_results`、include/exclude domains 和 time_range 映射，并将结果归一化为 title、url、snippet、source 和 publishedAt
+
+> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs
+
+#### 场景：Provider HTTP 错误脱敏返回
+- GIVEN Brave 或 Tavily Provider 返回认证、套餐、配额或其它 HTTP 错误
+- WHEN AgentOS `web_search` 被调用
+- THEN 工具返回可读错误文本，日志只记录 provider、queryLength 和脱敏错误摘要，不输出 API Key、Bearer token 或完整 header
+
+> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs；外部 smoke 可能因 Provider 配额跳过
 
 ## 平台专项验证（Electron + React）
 
@@ -110,6 +155,7 @@
 - 验证权限响应和 AskUserQuestion 不泄漏到其它线程。
 - 验证附件和模型图片能力联动。
 - 验证 MCP server 状态、tool policy 和权限响应只作用于当前项目/线程；日志和 UI 摘要不得输出 MCP token、header 或连接串明文。
+- 验证全局搜索设置变化会进入 runtime config signature，使下一轮 Agent 请求按最新搜索路由创建 SDK session；Provider Key 不进入日志明文。
 
 ## 建议验证命令
 

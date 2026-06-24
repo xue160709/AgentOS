@@ -107,6 +107,69 @@ export type AgentModeFileChange = {
   status: AgentModeFileStatus
 }
 
+/** Agent Mode 项目级 MCP 连接传输类型 / Project-level MCP server transport type */
+export type AgentMcpServerTransport = 'stdio' | 'http' | 'sse'
+
+/** Agent Mode 项目级 MCP 服务配置（脱敏、可持久化）/ Persisted project-level MCP server config */
+export type AgentMcpServerConfig = {
+  name: string
+  enabled: boolean
+  transport: AgentMcpServerTransport
+  command: string
+  args: string[]
+  env: Record<string, string>
+  cwd: string
+  url: string
+  headers: Record<string, string>
+  alwaysLoad: boolean
+}
+
+export type AgentMcpServerProbeStatus = 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'
+
+export type AgentMcpToolDescriptor = {
+  name: string
+  description?: string
+  annotations?: {
+    readOnly?: boolean
+    destructive?: boolean
+    openWorld?: boolean
+  }
+}
+
+export type AgentMcpServerProbeSnapshot = {
+  serverName: string
+  status: AgentMcpServerProbeStatus
+  checkedAt: string
+  configSignature: string
+  serverInfo?: {
+    name: string
+    version?: string
+  }
+  tools: AgentMcpToolDescriptor[]
+  error?: string
+}
+
+export type AgentMcpServerProbeCache = Record<string, AgentMcpServerProbeSnapshot>
+
+export type AgentMcpServerProbeResult =
+  | {
+      ok: true
+      snapshot: AgentMcpServerProbeSnapshot
+    }
+  | {
+      ok: false
+      snapshot?: AgentMcpServerProbeSnapshot
+      message: string
+    }
+
+/** MCP tool permission policy stored at project scope / 项目级 MCP tool 权限策略 */
+export type AgentMcpToolPolicy = 'ask' | 'allow' | 'deny'
+
+export type AgentMcpToolPolicies = Record<string, AgentMcpToolPolicy>
+
+/** Per-project enablement override for globally defined MCP servers. */
+export type AgentMcpServerOverrides = Record<string, { enabled: boolean }>
+
 /** Agent Mode 项目级开关与身份文案 / Project-level Agent Mode toggles and identity copy */
 export type AgentModeProjectSettings = {
   enabled: boolean
@@ -115,7 +178,51 @@ export type AgentModeProjectSettings = {
   identity: string
   projectModelPick?: ChatModelPick
   skillModelOverrides: Record<string, ChatModelPick>
+  /** Effective globally-defined MCP servers visible to this project. */
+  mcpServers: AgentMcpServerConfig[]
+  /** Project-local enabled overrides by MCP server name. */
+  mcpServerOverrides: AgentMcpServerOverrides
+  mcpToolPolicies: AgentMcpToolPolicies
+  /** Cached global MCP connection tests, keyed by global server name. */
+  mcpServerProbeCache: AgentMcpServerProbeCache
 }
+
+export type AgentMcpGlobalSettings = {
+  mcpServers: AgentMcpServerConfig[]
+  mcpServerProbeCache: AgentMcpServerProbeCache
+}
+
+export type AgentMcpGlobalSettingsResult =
+  | {
+      ok: true
+      settings: AgentMcpGlobalSettings
+    }
+  | {
+      ok: false
+      message: string
+    }
+
+export type AgentWebSearchMode = 'native' | 'agentos'
+
+export type AgentWebSearchProviderId = 'duckduckgo-instant' | 'brave' | 'tavily'
+
+export type AgentWebSearchSettings = {
+  mode: AgentWebSearchMode
+  provider: AgentWebSearchProviderId
+  maxResults: number
+  braveApiKey: string
+  tavilyApiKey: string
+}
+
+export type AgentWebSearchSettingsResult =
+  | {
+      ok: true
+      settings: AgentWebSearchSettings
+    }
+  | {
+      ok: false
+      message: string
+    }
 
 /** Agent Mode 状态查询结果 / Agent Mode status query result */
 export type AgentModeStatusResult =

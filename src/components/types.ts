@@ -18,10 +18,10 @@ import type {
 export type AppViewId = 'home' | 'docs' | 'settings'
 
 /** 设置页侧栏路由 `#settings/<id>` / Settings sidebar route fragment `#settings/<id>` */
-export type SettingsCategoryId = 'general' | 'skills' | 'updates' | 'agent' | 'developer'
+export type SettingsCategoryId = 'general' | 'search' | 'mcp' | 'skills' | 'updates' | 'agent' | 'developer'
 
 /** Agent Mode 首页模态设置页签 / Agent Mode home modal settings panel id */
-export type AgentSettingsPanelId = 'project' | 'context' | 'general' | 'card-order' | 'skills'
+export type AgentSettingsPanelId = 'project' | 'context' | 'mcp' | 'general' | 'card-order' | 'skills'
 
 /** 消息气泡渲染状态 / Chat bubble render status */
 export type MessageStatus = 'done' | 'streaming' | 'error' | 'cancelled'

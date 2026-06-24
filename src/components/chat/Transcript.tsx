@@ -594,6 +594,7 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
   const hasDetails = Boolean(item.inputPreview?.trim())
   const inlineDetail = summarizeInlineToolInput(item) ?? item.detail
   const [isOpen, setIsOpen] = useState(item.status === 'running')
+  const isMcpTool = item.name.startsWith('mcp__')
 
   useEffect(() => {
     setIsOpen(item.status === 'running')
@@ -603,7 +604,7 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
     <>
       <span className={`status-row__chevron${hasDetails ? '' : ' status-row__chevron--hidden'}`} aria-hidden="true" />
       <span className="tool-row__dot" />
-      <span className="tool-row__name">{item.name}</span>
+      <span className="tool-row__name">{formatToolDisplayName(item.name)}</span>
       <span className="tool-row__status">{statusLabel[item.status]}</span>
       {inlineDetail ? <span className="tool-row__detail">{inlineDetail}</span> : null}
     </>
@@ -612,16 +613,17 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
   if (!hasDetails) {
     return (
       <div className={`tool-row tool-row--${item.status} tool-row--static`} data-transcript-item-id={item.id}>
-        <div className="status-row__summary status-row__summary--static">{summary}</div>
+        <div className="status-row__summary status-row__summary--static" data-testid={isMcpTool ? 'transcript-mcp-tool-call' : undefined}>{summary}</div>
       </div>
     )
   }
 
   return (
     <details
-      className={`tool-row tool-row--${item.status}`}
-      data-transcript-item-id={item.id}
-      open={isOpen}
+    className={`tool-row tool-row--${item.status}`}
+    data-transcript-item-id={item.id}
+    data-testid={isMcpTool ? 'transcript-mcp-tool-call' : undefined}
+    open={isOpen}
       onToggle={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen(event.currentTarget.open))}
     >
       <summary className="status-row__summary">{summary}</summary>
@@ -631,6 +633,12 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
 })
 
 const INLINE_TOOL_INPUT_NAMES = new Set(['Bash', 'Read', 'Glob', 'Grep', 'LS'])
+
+function formatToolDisplayName(toolName: string): string {
+  const match = /^mcp__(.+?)__(.+)$/.exec(toolName)
+  if (!match) return toolName
+  return `${match[1]} · ${match[2]}`
+}
 
 function summarizeInlineToolInput(item: ChatToolItem): string | undefined {
   if (!INLINE_TOOL_INPUT_NAMES.has(item.name)) return undefined

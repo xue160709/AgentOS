@@ -29,13 +29,13 @@
 
 - 远程 Provider 预设加载策略在当前代码中以本地预设为主要事实；若后续接远程源，需要更新 PRD 与验收。
 - API Key 展示、清理和迁移需要更多端到端安全验证。
-- MCP server 配置不应混入模型 Provider 表单；后续需要在项目 Agent 设置中提供 MCP 面板，同时在模型设置页避免用户误以为 Base URL/Provider 等同于 MCP 工具配置。
+- MCP server 配置不应混入模型 Provider 表单；全局设置提供独立 MCP Tab 管理 server 定义，项目 Agent 设置只保存当前项目开关覆盖与 tool policy。
 
 ## 关键决策
 
 - Provider 主模型是运行时和连接测试的核心字段，档位模型作为候选补充。
 - 无凭据 Provider 不进入聊天模型候选，避免用户选择不可运行模型。
-- 全局模型设置只管理模型访问与模型候选；MCP 属于项目级工具能力，应由 Agent 设置保存 server 和 tool policy。
+- 全局模型设置只管理模型访问与模型候选；MCP server 定义由全局 MCP 设置页保存，项目 Agent 设置只保存本项目启用开关和 tool policy。
 
 ## 验收
 
@@ -44,5 +44,5 @@
 ## 关联模块
 
 - `chat-agent-runtime`：运行时解析模型配置。
-- `agent-mode`：保存项目默认模型、Skill 覆盖和后续项目级 MCP 配置。
+- `agent-mode`：保存项目默认模型、Skill 覆盖、项目级 MCP 开关覆盖和 tool policy。
 - `persistence`：模型设置独立保存，不写入工作区快照。

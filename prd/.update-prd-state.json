@@ -1,12 +1,12 @@
 {
-  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
-  "lastPrdSyncAt": "2026-06-23",
+  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncAt": "2026-06-24",
   "workflow": "incremental",
   "modulesUpdated": [
-    "chat-agent-runtime",
     "agent-mode",
-    "model-settings",
-    "desktop-shell-settings-release"
+    "chat-agent-runtime",
+    "desktop-shell-settings-release",
+    "model-settings"
   ],
-  "notes": "规划增量：根据 MCP 接入讨论更新 chat-agent-runtime、agent-mode、model-settings 与 desktop-shell-settings-release PRD/acceptance，并在 TODO.md 新增 §15 MCP backlog；未修改业务代码，未把 MCP 写成已实现能力。"
+  "notes": "增量同步，包含未提交代码观察：同步全局 MCP 定义与连接测试、项目 MCP 开关覆盖/tool policy、Chat 状态/权限/Transcript 展示、设置面板跳转，以及全局搜索设置、WebSearch native/AgentOS 路由和 DuckDuckGo/Brave/Tavily Provider 边界；正式 project-verify 尚未执行。"
 }

@@ -57,28 +57,42 @@
 > 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: node --test electron/model-pick.test.mjs
 
 ### 需求：模型设置页与 MCP 设置保持边界
-系统 SHALL 让全局模型设置页只管理模型 Provider 和模型候选，不在 Provider 表单内保存 MCP server 配置。
+系统 SHALL 在全局设置中提供独立的 MCP Tab 管理全局 MCP server；模型 Provider 页只管理模型配置，且不得混入 MCP server 字段。
 
 #### 场景：模型设置页不出现 MCP server 编辑字段
 - GIVEN 用户打开全局模型与 Provider 设置页
 - WHEN 用户编辑 Provider 配置
-- THEN 页面只展示 Provider 凭据、Base URL、模型档位和图片能力，不展示 MCP command、args、headers 或 tool policy 编辑字段
+- THEN Provider 表单只展示 Provider 凭据、Base URL、模型档位和图片能力，不展示 MCP command、args、headers 或 tool policy 编辑字段
 
-> 实现状态：⬜ 未实现｜selector: role=region[name="模型与 Provider 设置"]
+> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: role=region[name="模型与 Provider 设置"]
 
-#### 场景：用户需要配置 MCP
-- GIVEN 用户在全局模型设置页寻找 MCP 配置
-- WHEN 当前存在活动项目
-- THEN 页面提供说明或跳转入口，引导用户进入当前项目的 Agent 设置 MCP 面板
+#### 场景：全局设置侧栏进入 MCP Tab
+- GIVEN 用户打开全局设置
+- WHEN 用户点击侧栏中的 MCP
+- THEN 系统进入独立的全局 MCP 设置页，而不是在模型页内展示 MCP 表单
 
-> 实现状态：⬜ 未实现｜selector: [data-testid="mcp-settings-boundary-note"]
+> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: [data-settings-category="mcp"] + [data-testid="global-mcp-settings-page"]
+
+#### 场景：添加全局 MCP server
+- GIVEN 用户打开全局 MCP 设置页
+- WHEN 用户在全局 MCP 服务列表点击 New MCP Server，填写 server 名称、command、args、工作目录、环境变量或 URL/header 后保存
+- THEN 系统把该 MCP server 作为全局定义保存，并允许用户在列表中设置全局启用或停用开关
+
+> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="global-mcp-add-server"] + [data-testid="global-mcp-server-editor"] + [data-testid="global-mcp-server-list"]
+
+#### 场景：保存并测试全局 MCP server
+- GIVEN 用户正在编辑一个全局 MCP server
+- WHEN 用户点击“保存并测试”
+- THEN 系统先保存全局定义，再执行 MCP initialize/tools/list 连接测试，并在全局列表显示 connected、failed、needs-auth、disabled 或未测试状态；连接成功时显示工具数量
+
+> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="global-mcp-server-editor"] + [data-testid="global-mcp-server-list"]
 
 ## 平台专项验证（Electron + React）
 
 - 验证密钥不出现在日志、PRD 和测试输出中。
 - 验证 packaged 环境强制 settings 配置来源。
 - 验证图片能力影响附件提交。
-- 验证 `ClaudeAgentSettings` 与 `ClaudeAgentModelProvider` 不持久化 `mcpServers` 或 MCP header/token 字段。
+- 验证 `ClaudeAgentSettings` 与 `ClaudeAgentModelProvider` 不持久化 `mcpServers` 或 MCP header/token 字段；全局 MCP 定义走独立桌面设置接口。
 
 ## 建议验证命令
 

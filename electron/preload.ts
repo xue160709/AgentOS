@@ -134,6 +134,21 @@ const desktopAdapter = {
   getAgentModeSettings(rootPath: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getAgentModeSettings, rootPath)
   },
+  getGlobalMcpSettings() {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getGlobalMcpSettings)
+  },
+  saveGlobalMcpSettings(settings: unknown) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveGlobalMcpSettings, settings)
+  },
+  testGlobalMcpServer(server: unknown) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.testGlobalMcpServer, server)
+  },
+  getGlobalWebSearchSettings() {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getGlobalWebSearchSettings)
+  },
+  saveGlobalWebSearchSettings(settings: unknown) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveGlobalWebSearchSettings, settings)
+  },
   saveAgentModeSettings(rootPath: string, payload: unknown) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveAgentModeSettings, rootPath, payload)
   },

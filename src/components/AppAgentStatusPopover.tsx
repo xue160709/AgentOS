@@ -16,6 +16,7 @@ type AppAgentStatusPopoverProps = {
   snapshot: ClaudeAgentStatusSnapshot | null
   onOpenChange: (open: boolean) => void
   onRefresh: () => void
+  onOpenMcpSettings?: () => void
 }
 
 const CONTEXT_COLORS = ['#7c8cff', '#4fb286', '#d99a48', '#a477d4', '#de6d75', '#6ca6c1']
@@ -28,6 +29,7 @@ export function AppAgentStatusPopover({
   snapshot,
   onOpenChange,
   onRefresh,
+  onOpenMcpSettings,
 }: AppAgentStatusPopoverProps) {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement>(null)
@@ -125,7 +127,7 @@ export function AppAgentStatusPopover({
                 <CapabilityList label={t('statusPanel.skills')} items={snapshot.skills} />
                 <CapabilityList label={t('statusPanel.commands')} items={snapshot.slashCommands} />
                 <CapabilityList label={t('statusPanel.tools')} items={snapshot.tools} />
-                <McpList servers={snapshot.mcpServers} />
+                <McpList servers={snapshot.mcpServers} onOpenMcpSettings={onOpenMcpSettings} />
               </StatusDetails>
               <StatusDetails title={t('statusPanel.diagnosticSection')}>
                 <StatusRow label={t('statusPanel.route')} value={t(`statusPanel.routeValue.${snapshot.route}`)} />
@@ -245,19 +247,50 @@ function CapabilityList({ label, items }: { label: string; items: string[] | und
   )
 }
 
-function McpList({ servers }: { servers: ClaudeAgentStatusSnapshot['mcpServers'] }) {
+function McpList({
+  servers,
+  onOpenMcpSettings,
+}: {
+  servers: ClaudeAgentStatusSnapshot['mcpServers']
+  onOpenMcpSettings?: () => void
+}) {
   const { t } = useI18n()
-  if (!servers) return <p className="agent-status-panel__section-empty">{t('statusPanel.capabilityUnavailable')}</p>
-  if (servers.length === 0) return <p className="agent-status-panel__section-empty">{t('statusPanel.noMcp')}</p>
+  const action = onOpenMcpSettings ? (
+    <button
+      type="button"
+      className="agent-status-panel__link-button"
+      data-testid="agent-status-open-mcp-settings"
+      onClick={onOpenMcpSettings}
+    >
+      {t('statusPanel.openMcpSettings')}
+    </button>
+  ) : null
+  if (!servers) {
+    return (
+      <div className="agent-status-panel__mcp-list" data-testid="agent-status-mcp-list">
+        <p className="agent-status-panel__section-empty">{t('statusPanel.capabilityUnavailable')}</p>
+        {action}
+      </div>
+    )
+  }
+  if (servers.length === 0) {
+    return (
+      <div className="agent-status-panel__mcp-list" data-testid="agent-status-mcp-list">
+        <p className="agent-status-panel__section-empty">{t('statusPanel.noMcp')}</p>
+        {action}
+      </div>
+    )
+  }
   return (
-    <div className="agent-status-panel__mcp-list">
+    <div className="agent-status-panel__mcp-list" data-testid="agent-status-mcp-list">
       {servers.map((server) => (
         <div className="agent-status-panel__mcp-row" key={server.name}>
           <span className={`agent-status-panel__mcp-dot agent-status-panel__mcp-dot--${mcpTone(server.status)}`} aria-hidden="true" />
-          <span>{server.name}</span>
-          <span>{server.status}</span>
+          <span title={server.error || undefined}>{server.name}</span>
+          <span>{formatMcpServerStatus(server, t)}</span>
         </div>
       ))}
+      {action}
     </div>
   )
 }
@@ -316,5 +349,17 @@ function contextCategoryLabel(name: string, t: (path: string) => string): string
 function mcpTone(status: string): ClaudeAgentStatusHealth {
   if (status === 'connected') return 'ready'
   if (status === 'failed') return 'error'
+  if (status === 'needs-auth') return 'error'
   return 'partial'
+}
+
+function formatMcpServerStatus(
+  server: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>[number],
+  t: (path: string, params?: Record<string, string | number>) => string,
+): string {
+  if (server.status === 'connected' && typeof server.toolCount === 'number') {
+    return t('statusPanel.mcpConnectedTools', { count: server.toolCount })
+  }
+  if (server.error) return `${server.status}: ${server.error}`
+  return server.status
 }

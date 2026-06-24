@@ -57,35 +57,49 @@
 > 实现状态：⚠️ 跳过（初始 PRD 同步 2026-06-23，待 project-verify）｜验证方式: npm run typecheck
 
 ### 需求：项目 Agent 设置提供 MCP 配置面板
-系统 SHALL 在项目 Agent 设置中提供 MCP 面板，用于管理当前项目的 MCP server、连接测试和工具权限策略。
+系统 SHALL 在项目 Agent 设置中提供 MCP 面板，用于选择当前项目启用哪些全局 MCP server、查看连接状态并管理项目级工具权限策略。
 
-#### 场景：新增 stdio MCP server
-- GIVEN 用户已打开某个项目的 Agent 设置
-- WHEN 用户进入 MCP 面板并新增 stdio server，填写 server 名称、command、args 和环境变量引用后保存
-- THEN 系统将该 server 保存到当前项目设置中，并在 server 列表展示为已启用但尚未验证的配置
+#### 场景：项目独立启用或关闭全局 MCP server
+- GIVEN 全局设置中已存在并启用一个 MCP server
+- WHEN 用户在项目 Agent 设置的 MCP 面板切换该 server 并保存
+- THEN 系统只保存当前项目的 `mcpServerOverrides`，不修改全局 MCP server 定义或全局开关
 
-> 实现状态：⬜ 未实现｜selector: role=tab[name="MCP"] + role=button[name="新增 MCP Server"]
+> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: [data-testid="agent-settings-mcp-tab"] + [data-testid="mcp-installed-server-list"]
+
+#### 场景：展示已配置服务状态与启用开关
+- GIVEN 用户已在全局设置中启用一个或多个 MCP server
+- WHEN 用户打开项目 Agent 设置的 MCP 面板
+- THEN 面板展示 Installed MCP Servers 列表，每个 server 显示启用开关、当前连接状态、失败原因或工具数量；应用不会在保存配置时自动预安装 MCP server
+
+> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: [data-testid="mcp-installed-server-list"]
+
+#### 场景：全局关闭后项目隐藏 MCP server
+- GIVEN 某个 MCP server 在全局设置中被关闭
+- WHEN 用户打开任一项目的 MCP 面板
+- THEN 该 server 不出现在项目 MCP 列表中，也不会传入 Claude Agent SDK runtime options
+
+> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: [data-testid="mcp-installed-server-list"]
 
 #### 场景：环境变量未解析
 - GIVEN 用户配置的 MCP server 使用 `${ENV_NAME}` 引用密钥或连接串
 - WHEN 系统测试连接时发现该环境变量不存在
 - THEN MCP 面板在对应字段附近显示未解析状态，不启动有效工具调用，并提供可修复的错误提示
 
-> 实现状态：⬜ 未实现｜selector: [data-testid="mcp-env-resolution-error"]
+> 实现状态：⚠️ 部分实现（运行时解析、全局连接测试失败摘要与脱敏已接入，字段级状态待补）｜selector: [data-testid="mcp-env-resolution-error"]
 
 #### 场景：配置工具权限策略
 - GIVEN 某个 MCP server 已连接并返回工具列表
 - WHEN 用户把某个工具设置为“自动允许”或“禁用”并保存
 - THEN 系统按完整 `mcp__server__tool` 名称保存该项目的 tool policy，且不会影响其它项目
 
-> 实现状态：⬜ 未实现｜selector: [data-testid="mcp-tool-policy-list"]
+> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify；全局连接测试缓存工具后项目页可直接选择策略）｜selector: [data-testid="mcp-discovered-tool-policy-list"] + [data-testid="mcp-tool-policy-list"]
 
 ## 平台专项验证（Electron + React）
 
 - 验证文件写入只影响项目根目标文件和 AgentOS 标记块。
 - 验证 USER/IDENTITY 设置不泄漏到其它项目。
 - 验证项目默认模型和 Skill 覆盖按回退顺序生效。
-- 验证 MCP server 配置与 tool policy 按项目隔离保存；日志和状态摘要不得输出 token、API key、完整 header 或连接串明文。
+- 验证 MCP server 定义只在全局保存，项目只保存 `mcpServerOverrides` 与 tool policy；日志和状态摘要不得输出 token、API key、完整 header 或连接串明文。
 
 ## 建议验证命令
 

@@ -2333,6 +2333,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           agentModeEnabled={agentModeEnabled}
           todoEnabled={todoEnabled}
           agentModeLoading={agentModeLoading}
+          agentStatusSnapshot={agentStatusSnapshot}
           agentSettingsOpen={agentSettingsOpen}
           agentSettingsPanel={agentSettingsPanel}
           onOpenAgentSettings={onOpenAgentSettings}
@@ -2352,6 +2353,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           onOpenProjectFile={onOpenProjectFile}
           onRunProjectSkill={onRunProjectSkill}
           onStopProjectSkillRun={onStopProjectSkillRun}
+          onRefreshAgentStatus={onRefreshAgentStatus}
         />
       )}
       {showThreadView && hasVisibleTasks ? (

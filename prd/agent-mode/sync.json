@@ -1,14 +1,18 @@
 {
-  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
-  "lastPrdSyncAt": "2026-06-23",
+  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncAt": "2026-06-24",
   "module": "agent-mode",
   "lastChangedFiles": [
+    "electron/agent-mode-settings-store.ts",
+    "electron/agent-mode-settings-store.test.mjs",
+    "electron/claude-agent-runner/mcp-probe.ts",
     "src/desktop-types.ts",
     "src/desktop-api.ts",
-    "electron/agent-mode-settings-store.ts",
+    "src/desktop-seam.ts",
     "src/components/chat/ProjectHomeSurface.tsx",
+    "src/components/setting/ClaudeAgentSettingsPage.tsx",
     "electron/main.ts",
     "prd/agent-mode/acceptance.md"
   ],
-  "notes": "规划增量：记录项目级 MCP 设置归属、server 配置、环境变量引用、连接测试、tool policy 和验收契约；当前未实现。"
+  "notes": "增量同步，包含未提交代码观察：项目 MCP 面板已落地全局 server 的项目开关覆盖、运行状态展示、连接测试缓存工具和 tool policy；字段级修复提示、分组/风险标注、失败恢复和正式 project-verify 仍待补。"
 }

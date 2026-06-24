@@ -4,6 +4,7 @@
  */
 
 import type { ReactNode } from 'react'
+import type { ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
 import { useI18n } from '../../i18n/i18n'
 import type { HomePluginRunItem } from '../../desktop-types'
 import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
@@ -19,6 +20,7 @@ type ChatStartViewProps = {
   agentModeEnabled: boolean
   todoEnabled: boolean
   agentModeLoading: boolean
+  agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
   agentSettingsOpen: boolean
   agentSettingsPanel: AgentSettingsPanelId
   onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
@@ -35,6 +37,7 @@ type ChatStartViewProps = {
   onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
+  onRefreshAgentStatus: (refresh?: boolean) => void
 }
 
 /** 项目主页空状态 / Project home empty rail */
@@ -47,6 +50,7 @@ export function ChatStartView({
   agentModeEnabled,
   todoEnabled,
   agentModeLoading,
+  agentStatusSnapshot,
   agentSettingsOpen,
   agentSettingsPanel,
   onOpenAgentSettings,
@@ -63,6 +67,7 @@ export function ChatStartView({
   onOpenProjectFile,
   onRunProjectSkill,
   onStopProjectSkillRun,
+  onRefreshAgentStatus,
 }: ChatStartViewProps) {
   const { t } = useI18n()
 
@@ -87,6 +92,7 @@ export function ChatStartView({
             agent={agentMode}
             todoEnabled={todoEnabled}
             loading={agentModeLoading}
+            agentStatusSnapshot={agentStatusSnapshot}
             agentSettingsOpen={agentSettingsOpen}
             agentSettingsPanel={agentSettingsPanel}
             onOpenAgentSettings={onOpenAgentSettings}
@@ -102,6 +108,7 @@ export function ChatStartView({
             onOpenProjectFile={onOpenProjectFile}
             onRunProjectSkill={onRunProjectSkill}
             onStopProjectSkillRun={onStopProjectSkillRun}
+            onRefreshAgentStatus={onRefreshAgentStatus}
           />
         ) : (
           <ProjectHomeProjectSelector

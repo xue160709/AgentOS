@@ -13,6 +13,7 @@ import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-
 import type {
   AgentProjectDocumentsResult,
   AgentModeProjectSettings,
+  AgentMcpServerProbeResult,
   AppUiLocale,
   DesktopPreferences,
   HomePluginRunOptions,
@@ -24,9 +25,10 @@ import type {
   ProjectContextResult,
 } from '../src/desktop-types'
 import { ensureAgentModeFiles, getAgentModeStatus, setAgentModeState } from './agent-mode-files'
-import { AgentModeSettingsStore } from './agent-mode-settings-store'
+import { AgentModeSettingsStore, getDefaultWebSearchSettings, normalizeAgentMcpServers } from './agent-mode-settings-store'
 import { discoverAgentContext, searchAgentKnowledge } from './agent-context'
 import { ClaudeAgentRunner } from './claude-agent-runner'
+import { probeMcpServer } from './claude-agent-runner/mcp-probe'
 import { ClaudeAgentSettingsStore } from './claude-agent-settings'
 import { ChatWorkspaceStore } from './chat-workspace-store'
 import { DesktopPreferencesStore } from './desktop-preferences-store'
@@ -226,6 +228,10 @@ function createWindow() {
     process.env.APP_ROOT,
     (modelPick) => getClaudeAgentSettingsStore().resolve(modelPick),
     (rootPath) => getAgentModeSettingsStore().resolve(rootPath),
+    async () => {
+      const result = await getAgentModeSettingsStore().getGlobalWebSearchSettings()
+      return result.ok ? result.settings : getDefaultWebSearchSettings()
+    },
     () => normalizeUiLocale(getDesktopPreferencesStore().read().locale),
     (event) => taskHomePluginManager?.handleClaudeEvent(event),
   )
@@ -803,6 +809,32 @@ if (gotSingleInstanceLock) {
     )
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getAgentModeSettings, (_event, rootPath: string) => {
       return getAgentModeSettingsStore().getResult(rootPath)
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getGlobalMcpSettings, () => {
+      return getAgentModeSettingsStore().getGlobalMcpSettings()
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveGlobalMcpSettings, (_event, payload: unknown) => {
+      return getAgentModeSettingsStore().saveGlobalMcpSettings(isRecord(payload) ? payload : {})
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.testGlobalMcpServer, async (_event, payload: unknown): Promise<AgentMcpServerProbeResult> => {
+      const [server] = normalizeAgentMcpServers([payload])
+      if (!server) {
+        return { ok: false, message: 'MCP 服务配置无效' }
+      }
+      const result = await probeMcpServer(server)
+      if (result.snapshot) {
+        const saved = await getAgentModeSettingsStore().saveGlobalMcpProbeSnapshot(result.snapshot)
+        if (!saved.ok && result.ok) {
+          return { ok: false, snapshot: result.snapshot, message: saved.message }
+        }
+      }
+      return result
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getGlobalWebSearchSettings, () => {
+      return getAgentModeSettingsStore().getGlobalWebSearchSettings()
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveGlobalWebSearchSettings, (_event, payload: unknown) => {
+      return getAgentModeSettingsStore().saveGlobalWebSearchSettings(isRecord(payload) ? payload : {})
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveAgentModeSettings, (_event, rootPath: string, payload: Partial<AgentModeProjectSettings>) => {
       return getAgentModeSettingsStore().saveSettings(rootPath, payload)

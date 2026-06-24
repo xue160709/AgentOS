@@ -1,14 +1,15 @@
 {
-  "lastPrdSyncCommit": "3d41483b2fe8edaa5b9068e0ec952da5cb05bce7",
-  "lastPrdSyncAt": "2026-06-23",
+  "lastPrdSyncCommit": "a45dc7d89a7985e2f80903c9338f827ed58dd345",
+  "lastPrdSyncAt": "2026-06-24",
   "module": "model-settings",
   "lastChangedFiles": [
     "electron/claude-agent-settings.ts",
+    "electron/agent-mode-settings-store.ts",
     "src/claude-chat-types.ts",
     "src/model-pick.ts",
     "src/components/setting/ClaudeAgentSettingsPage.tsx",
     "src/components/chat/ProjectHomeSurface.tsx",
     "prd/model-settings/acceptance.md"
   ],
-  "notes": "规划增量：补充 MCP 与 Provider 设置边界及验收契约，明确 MCP 不进入全局模型设置主表单，而进入项目 Agent 设置。"
+  "notes": "增量同步，包含未提交代码观察：确认 MCP 不进入模型 Provider 表单；全局 MCP Tab 管理 server 定义、连接测试与总开关，项目 Agent 设置保存开关覆盖和 tool policy。"
 }

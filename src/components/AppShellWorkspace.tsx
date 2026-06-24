@@ -191,9 +191,12 @@ export function AppShellWorkspace({
   }, [])
 
   const openAgentSettings = useCallback((panel: AgentSettingsPanelId) => {
+    if (activeViewId !== 'home') {
+      window.location.hash = ''
+    }
     setAgentSettingsPanel(panel)
     setAgentSettingsOpen(true)
-  }, [])
+  }, [activeViewId])
 
   const refreshAgentStatus = useCallback(async (refresh = false) => {
     const getStatus = window.claudeChat?.getStatus
@@ -432,6 +435,10 @@ export function AppShellWorkspace({
               snapshot={agentStatusSnapshot}
               onOpenChange={setAgentStatusOpen}
               onRefresh={() => void refreshAgentStatus(true)}
+              onOpenMcpSettings={() => {
+                setAgentStatusOpen(false)
+                openAgentSettings('mcp')
+              }}
             />
             <button
               type="button"
@@ -498,6 +505,7 @@ export function AppShellWorkspace({
             activeProject={activeProject}
             showProjectSkillsInSidebar={showProjectSkillsInSidebar}
             onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
+            onOpenAgentSettings={openAgentSettings}
           />
           {filePreview ? (
             <ProjectFilePreviewOverlay preview={filePreview} onClose={() => setFilePreview(null)} />
