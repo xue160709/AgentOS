@@ -132,6 +132,7 @@ export function AppShell() {
     workspaceSessionRef.current = new WorkspaceSession({
       load: loadChatWorkspaceState,
       save: persistChatWorkspaceState,
+      saveImmediately: persistChatWorkspaceStateToLocalStorage,
     })
   }
   const workspaceSession = workspaceSessionRef.current
@@ -566,7 +567,6 @@ export function AppShell() {
   // --- Autosave through Workspace Session / 通过 Workspace Session 自动保存 ---
   useLayoutEffect(() => {
     if (!chatWorkspace) return
-    persistChatWorkspaceStateToLocalStorage(chatWorkspace)
     workspaceSession.stage(chatWorkspace)
   }, [chatWorkspace, workspaceSession])
 

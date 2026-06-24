@@ -28,17 +28,21 @@ import {
   stripRuntimeProjectFields,
 } from './project-path'
 import { restoreWorkspaceSessionState } from './components/workspace-session'
+import {
+  CHAT_WORKSPACE_SAVED_AT_FIELD,
+  CHAT_WORKSPACE_REVISION_FIELD,
+  readWorkspaceRevision,
+  readWorkspaceSavedAt,
+  resolveChatWorkspaceSnapshot,
+  withNextWorkspaceRevision,
+  workspaceRevisionOf,
+  type ChatWorkspaceSnapshot,
+} from './workspace-snapshot-resolution'
 
 // --- Factories & selectors / 默认值与查询 ---
 
 /** localStorage 主键（桌面端另有 JSON 文件）/ Primary storage key; Electron mirrors JSON file */
 export const CHAT_WORKSPACE_STORAGE_KEY = 'CodeX-UI-Template-chat-workspace-v1'
-const CHAT_WORKSPACE_SAVED_AT_FIELD = 'savedAt'
-
-export type ChatWorkspaceSnapshot = {
-  state: ChatWorkspaceState
-  savedAt?: number
-}
 
 /** 新建空 ChatState / Fresh chat transcript shell */
 export function createEmptyChatState(modelPick?: ChatModelPick): ChatState {
@@ -65,8 +69,8 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
     try {
       const raw = await window.desktop.getChatWorkspace()
       if (raw != null) {
-        const selected = chooseFreshestChatWorkspaceSnapshot([
-          { state: normalizeChatWorkspaceState(raw) },
+        const selected = resolveChatWorkspaceSnapshot([
+          createChatWorkspaceSnapshot(raw, 'desktop-mirror'),
           fromLocal,
         ])
         const finalized = await finalizeChatWorkspaceState(selected?.state ?? normalizeChatWorkspaceState(raw))
@@ -100,6 +104,7 @@ export async function finalizeChatWorkspaceState(state: ChatWorkspaceState): Pro
     JSON.stringify(stripRuntimeProjectFields(next)) !== JSON.stringify(stripRuntimeProjectFields(state))
   if (changed && typeof window !== 'undefined' && window.desktop?.saveChatWorkspace) {
     try {
+      next = withNextWorkspaceRevision(next, workspaceRevisionOf(state))
       await window.desktop.saveChatWorkspace(next)
     } catch {
       /* ignore */
@@ -138,8 +143,6 @@ async function annotateProjectPathAvailability(state: ChatWorkspaceState): Promi
 /** 写入 localStorage 并尽力同步主进程 / Persist locally and best-effort mirror to main */
 export async function persistChatWorkspaceState(state: ChatWorkspaceState): Promise<void> {
   const toSave = stripRuntimeProjectFields(state)
-  persistChatWorkspaceStateToLocalStorage(toSave)
-
   const save = typeof window !== 'undefined' ? window.desktop?.saveChatWorkspace : undefined
   if (save) {
     try {
@@ -153,9 +156,11 @@ export async function persistChatWorkspaceState(state: ChatWorkspaceState): Prom
 /** 同步写入 renderer 本地快照，用于覆盖退出前主进程 mirror 尚未完成的窗口。 */
 export function persistChatWorkspaceStateToLocalStorage(state: ChatWorkspaceState): void {
   try {
+    const toSave = stripRuntimeProjectFields(state)
     const payload = {
-      ...stripRuntimeProjectFields(state),
+      ...toSave,
       [CHAT_WORKSPACE_SAVED_AT_FIELD]: Date.now(),
+      [CHAT_WORKSPACE_REVISION_FIELD]: workspaceRevisionOf(toSave),
     }
     localStorage.setItem(CHAT_WORKSPACE_STORAGE_KEY, JSON.stringify(payload))
   } catch {
@@ -168,10 +173,7 @@ function loadChatWorkspaceFromLocalStorage(): ChatWorkspaceSnapshot | null {
     const raw = localStorage.getItem(CHAT_WORKSPACE_STORAGE_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as unknown
-    return {
-      state: normalizeChatWorkspaceState(parsed),
-      savedAt: readWorkspaceSavedAt(parsed),
-    }
+    return createChatWorkspaceSnapshot(parsed, 'renderer-local')
   } catch {
     /* ignore */
   }
@@ -183,79 +185,20 @@ export function createDefaultChatWorkspaceState(): ChatWorkspaceState {
   return {
     activeProjectId: '',
     activeThreadId: '',
+    workspaceRevision: 0,
     projects: [],
     threads: [],
     sidebarPrefs: createDefaultSidebarPrefs(),
   }
 }
 
-export function chooseFreshestChatWorkspaceSnapshot(
-  snapshots: Array<ChatWorkspaceSnapshot | null | undefined>,
-): ChatWorkspaceSnapshot | null {
-  let best: ChatWorkspaceSnapshot | null = null
-  let bestFreshness = -Infinity
-  let bestCompleteness = -Infinity
-
-  for (const snapshot of snapshots) {
-    if (!snapshot) continue
-    if (best && isEmptyWorkspaceSnapshot(snapshot.state) !== isEmptyWorkspaceSnapshot(best.state)) {
-      if (!isEmptyWorkspaceSnapshot(snapshot.state)) {
-        best = snapshot
-        bestFreshness = chatWorkspaceSnapshotFreshness(snapshot)
-        bestCompleteness = chatWorkspaceSnapshotCompleteness(snapshot.state)
-      }
-      continue
-    }
-    const freshness = chatWorkspaceSnapshotFreshness(snapshot)
-    const completeness = chatWorkspaceSnapshotCompleteness(snapshot.state)
-    if (freshness > bestFreshness || (freshness === bestFreshness && completeness >= bestCompleteness)) {
-      best = snapshot
-      bestFreshness = freshness
-      bestCompleteness = completeness
-    }
+function createChatWorkspaceSnapshot(value: unknown, source: string): ChatWorkspaceSnapshot {
+  return {
+    state: normalizeChatWorkspaceState(value),
+    savedAt: readWorkspaceSavedAt(value),
+    revision: readWorkspaceRevision(value),
+    source,
   }
-
-  return best
-}
-
-export function chatWorkspaceSnapshotFreshness(snapshot: ChatWorkspaceSnapshot): number {
-  return Math.max(snapshot.savedAt ?? 0, chatWorkspaceStateMaxUpdatedAt(snapshot.state))
-}
-
-function readWorkspaceSavedAt(value: unknown): number | undefined {
-  if (!isRecord(value)) return undefined
-  return toOptionalFiniteNumber(value[CHAT_WORKSPACE_SAVED_AT_FIELD])
-}
-
-function chatWorkspaceStateMaxUpdatedAt(state: ChatWorkspaceState): number {
-  let max = 0
-  for (const project of state.projects) {
-    max = Math.max(max, project.createdAt, project.updatedAt, project.pinnedAt ?? 0)
-  }
-  for (const thread of state.threads) {
-    max = Math.max(max, thread.createdAt, thread.updatedAt, thread.pinnedAt ?? 0, thread.archivedAt ?? 0)
-    for (const item of thread.chatState.items) {
-      max = Math.max(
-        max,
-        item.type === 'message' ? item.createdAt ?? 0 : 0,
-        item.type === 'message' ? item.startedAt ?? 0 : 0,
-        item.type === 'message' ? item.completedAt ?? 0 : 0,
-        item.type === 'context_compaction' ? item.createdAt ?? 0 : 0,
-        item.type === 'context_compaction' ? item.updatedAt ?? 0 : 0,
-      )
-    }
-    max = Math.max(max, thread.chatState.tasks?.updatedAt ?? 0)
-  }
-  return max
-}
-
-function chatWorkspaceSnapshotCompleteness(state: ChatWorkspaceState): number {
-  const transcriptItems = state.threads.reduce((sum, thread) => sum + thread.chatState.items.length, 0)
-  return state.projects.length * 10_000 + state.threads.length * 100 + transcriptItems
-}
-
-function isEmptyWorkspaceSnapshot(state: ChatWorkspaceState): boolean {
-  return state.projects.length === 0 && state.threads.length === 0
 }
 
 function normalizeSidebarPrefs(value: unknown, projectIds: Set<string>): WorkspaceSidebarPrefs {
@@ -309,7 +252,10 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
   })
 
   if (projects.length === 0) {
-    return migrateLegacySeedProjects(createDefaultChatWorkspaceState())
+    return {
+      ...migrateLegacySeedProjects(createDefaultChatWorkspaceState()),
+      workspaceRevision: readWorkspaceRevision(value) ?? 0,
+    }
   }
   const projectIds = new Set(projects.map((project) => project.id))
   const threads = value.threads.flatMap((thread): WorkspaceThread[] => {
@@ -338,6 +284,7 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
   const sidebarPrefs = normalizeSidebarPrefs(value, projectIds)
 
   return {
+    workspaceRevision: readWorkspaceRevision(value) ?? 0,
     activeProjectId: typeof value.activeProjectId === 'string' ? value.activeProjectId : '',
     activeThreadId: typeof value.activeThreadId === 'string' ? value.activeThreadId : '',
     projects,

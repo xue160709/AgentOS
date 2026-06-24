@@ -131,3 +131,70 @@ test('Chat Workspace Store prefers newer JSON snapshot when SQLite index is stal
     assert.equal(restored.threads[0].chatState.items[0].content, 'new content that must survive restart')
   })
 })
+
+test('Chat Workspace Store uses workspace revision before savedAt when both snapshots have revisions', { skip: !hasSqlite() }, async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    await store.save({ ...createWorkspaceState(), workspaceRevision: 7 })
+
+    const olderRevisionJson = createWorkspaceState({
+      activeThreadId: 'thread-new',
+      threads: [createThread('thread-new', 500), createThread('thread-old', 100)],
+    })
+    await writeFile(
+      join(userDataPath, 'chat-workspace.json'),
+      `${JSON.stringify({ ...olderRevisionJson, workspaceRevision: 6, savedAt: Date.now() + 60_000 }, null, 2)}\n`,
+      'utf8',
+    )
+
+    const restored = store.read()
+    assert.ok(restored)
+    assert.equal(restored.workspaceRevision, 7)
+    assert.equal(restored.activeThreadId, 'thread-old')
+  })
+})
+
+test('Chat Workspace Store does not resurrect stale SQLite rows after an empty workspace save', { skip: !hasSqlite() }, async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    await store.save(createWorkspaceState())
+    await store.save({
+      workspaceRevision: 20,
+      activeProjectId: '',
+      activeThreadId: '',
+      projects: [],
+      threads: [],
+      sidebarPrefs: {
+        collapsed: false,
+        collapsedProjectIds: [],
+        projectOrderIds: [],
+      },
+    })
+
+    const restored = store.read()
+    assert.ok(restored)
+    assert.equal(restored.workspaceRevision, 20)
+    assert.deepEqual(restored.projects, [])
+    assert.deepEqual(restored.threads, [])
+  })
+})
+
+test('Chat Workspace Store history search index remains substitutable for chat search', async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    await store.save(createWorkspaceState({
+      activeThreadId: 'thread-new',
+      threads: [createThread('thread-new', 500), createThread('thread-old', 100)],
+    }))
+
+    const result = store.searchChatHistory('', 'survive restart', { limit: 8 })
+    assert.equal(result.ok, true)
+    assert.equal(result.items[0]?.threadId, 'thread-new')
+  })
+})

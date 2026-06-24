@@ -6,10 +6,17 @@ import type {
   WorkspaceProject,
   WorkspaceThread,
 } from './types'
+import { stripRuntimeProjectFields } from '../project-path'
+import {
+  withWorkspaceRevision,
+  workspaceDurableFingerprint,
+  workspaceRevisionOf,
+} from '../workspace-snapshot-resolution'
 
 export type WorkspaceSessionOptions = {
   load: () => Promise<ChatWorkspaceState>
   save: (state: ChatWorkspaceState) => Promise<void>
+  saveImmediately?: (state: ChatWorkspaceState) => void | Promise<void>
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => unknown
   cancelScheduled?: (handle: unknown) => void
@@ -93,6 +100,7 @@ export function restoreWorkspaceSessionState(state: ChatWorkspaceState): ChatWor
 export class WorkspaceSession {
   private readonly loadState: WorkspaceSessionOptions['load']
   private readonly saveState: WorkspaceSessionOptions['save']
+  private readonly saveImmediateState: NonNullable<WorkspaceSessionOptions['saveImmediately']>
   private readonly now: () => number
   private readonly schedule: NonNullable<WorkspaceSessionOptions['schedule']>
   private readonly cancelScheduled: NonNullable<WorkspaceSessionOptions['cancelScheduled']>
@@ -100,12 +108,15 @@ export class WorkspaceSession {
   private saveHandle: unknown
   private flushPromise: Promise<void> | null = null
   private pendingSave: ChatWorkspaceState | null = null
+  private lastDurableFingerprint = ''
+  private revisionFloor = 0
   private cleared = false
   private disposed = false
 
   constructor(options: WorkspaceSessionOptions) {
     this.loadState = options.load
     this.saveState = options.save
+    this.saveImmediateState = options.saveImmediately ?? (() => {})
     this.now = options.now ?? Date.now
     this.schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs))
     this.cancelScheduled = options.cancelScheduled ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>))
@@ -113,7 +124,9 @@ export class WorkspaceSession {
   }
 
   async load(): Promise<ChatWorkspaceState> {
-    return this.restore(await this.loadState())
+    const restored = this.restore(await this.loadState())
+    this.revisionFloor = Math.max(this.revisionFloor, workspaceRevisionOf(restored))
+    return restored
   }
 
   restore(state: ChatWorkspaceState): ChatWorkspaceState {
@@ -139,8 +152,11 @@ export class WorkspaceSession {
   stage(state: ChatWorkspaceState): void {
     if (this.disposed) return
     if (this.cleared && isEmptyWorkspace(state)) return
+    const durableState = this.prepareDurableSave(state)
+    if (!durableState) return
     this.cleared = false
-    this.pendingSave = state
+    this.pendingSave = durableState
+    void this.saveImmediateState(durableState)
     this.cancelSaveTimer()
     this.saveHandle = this.schedule(() => {
       this.saveHandle = undefined
@@ -514,6 +530,18 @@ export class WorkspaceSession {
       this.pendingSave = null
       await this.saveState(pending)
     }
+  }
+
+  private prepareDurableSave(state: ChatWorkspaceState): ChatWorkspaceState | null {
+    const stripped = stripRuntimeProjectFields(state)
+    const fingerprint = workspaceDurableFingerprint(stripped)
+    if (fingerprint === this.lastDurableFingerprint) return null
+
+    const revision = Math.max(workspaceRevisionOf(stripped), this.revisionFloor) + 1
+    const durableState = withWorkspaceRevision(stripped, revision)
+    this.revisionFloor = revision
+    this.lastDurableFingerprint = fingerprint
+    return durableState
   }
 }
 

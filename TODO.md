@@ -353,3 +353,11 @@
   - `node --test electron/desktop-seam.test.mjs` ✅
   - `npm run test:electron` ✅（70/70）
   - `git diff --check` ✅
+- 本轮：修复项目 MCP 设置交互复查发现的问题：项目设置加载结果按项目路径/请求代际隔离，项目 MCP 探测在切换项目或关闭面板后不再写回旧状态，自动测试与保存状态拆分，测试中不再显示“正在保存”或误锁保存/取消/开关。
+- 验证类别：Codex 自检（MCP 项目设置状态机 + 回归测试；未执行正式 `project-verify` 盖戳）。
+- 验证命令：
+  - `npm run typecheck -- --pretty false` ✅
+  - `node --test electron/desktop-seam.test.mjs` ✅
+  - `node --test electron/agent-mode-settings-store.test.mjs electron/claude-agent-runner-mcp.test.mjs electron/chat-run.test.mjs electron/desktop-seam.test.mjs` ✅（23/23）
+  - `npm run test:electron` ✅（72/72）
+  - `git diff --check` ✅

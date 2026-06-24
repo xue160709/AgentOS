@@ -8,10 +8,16 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
-  chooseFreshestChatWorkspaceSnapshot,
   normalizeChatWorkspaceState,
-  type ChatWorkspaceSnapshot,
 } from '../src/chat-workspace-persistence'
+import {
+  readWorkspaceRevision,
+  readWorkspaceSavedAt,
+  resolveChatWorkspaceSnapshot,
+  withNextWorkspaceRevision,
+  workspaceRevisionOf,
+  type ChatWorkspaceSnapshot,
+} from '../src/workspace-snapshot-resolution'
 import { migrateLegacySeedProjects } from '../src/project-path'
 import type {
   ChatHistorySearchDocumentKind,
@@ -63,6 +69,7 @@ type WorkspaceMetaRow = {
   activeProjectId: string
   activeThreadId: string
   sidebarPrefsJson: string
+  workspaceRevision: number | null
 }
 
 type SearchDocument = {
@@ -104,19 +111,27 @@ export class ChatWorkspaceStore {
   private readonly filePath: string
   private readonly dbPath: string
   private readonly sessionsDir: string
+  private readonly historySearchIndex: HistorySearchIndex
   private sqliteAvailable: boolean | null = null
 
   constructor(userDataPath: string) {
     this.filePath = path.join(userDataPath, WORKSPACE_FILE_NAME)
     this.dbPath = path.join(userDataPath, WORKSPACE_DB_NAME)
     this.sessionsDir = path.join(userDataPath, SESSIONS_DIR_NAME)
+    this.historySearchIndex = new HistorySearchIndex({
+      dbPath: this.dbPath,
+      canUseSqlite: () => this.canUseSqlite(),
+      runSql: (sql) => this.runSql(sql),
+      selectJson: <T>(sql: string) => this.selectJson<T>(sql),
+      readWorkspace: () => this.read(),
+    })
   }
 
   read(): ChatWorkspaceState | null {
     const fromDb = this.readFromDatabase()
     const fromJson = this.readJsonSnapshot()
-    const selected = chooseFreshestChatWorkspaceSnapshot([
-      fromDb ? { state: fromDb, savedAt: this.fileModifiedAt(this.dbPath) } : null,
+    const selected = resolveChatWorkspaceSnapshot([
+      fromDb ? { state: fromDb, savedAt: this.fileModifiedAt(this.dbPath), source: 'sqlite-index' } : null,
       fromJson,
     ])
     return selected ? migrateLegacySeedProjects(selected.state) : null
@@ -124,67 +139,25 @@ export class ChatWorkspaceStore {
 
   async save(state: unknown): Promise<ChatWorkspaceState> {
     const normalized = normalizeChatWorkspaceState(state)
+    const toSave = workspaceRevisionOf(normalized) > 0 ? normalized : withNextWorkspaceRevision(normalized)
     const savedAt = Date.now()
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await mkdir(this.sessionsDir, { recursive: true })
-    await this.saveRolloutFiles(normalized)
-    this.saveDatabaseIndex(normalized)
-    await writeFile(this.filePath, `${JSON.stringify({ ...normalized, savedAt }, null, 2)}\n`, 'utf8')
-    return normalized
+    await this.saveRolloutFiles(toSave)
+    this.saveDatabaseIndex(toSave)
+    await writeFile(this.filePath, `${JSON.stringify({ ...toSave, savedAt }, null, 2)}\n`, 'utf8')
+    return toSave
   }
 
   searchChatHistory(projectId: string, query: string, options: ChatHistorySearchOptions = {}): ChatHistorySearchResult {
-    const normalizedProjectId = typeof projectId === 'string' ? projectId.trim() : ''
-    const normalizedQuery = typeof query === 'string' ? query.trim() : ''
-    if (!normalizedQuery) {
-      return { ok: true, projectId: normalizedProjectId, items: [] }
-    }
-
-    const limit = normalizeHistorySearchLimit(options.limit)
-    const includeArchived = options.includeArchived === true
-
-    if (this.canUseSqlite() && existsSync(this.dbPath)) {
-      let sqliteItems: ChatHistorySearchItem[] = []
-      try {
-        this.rebuildSearchIndexIfMissing()
-        sqliteItems = this.searchChatHistoryWithSqlite(normalizedProjectId, normalizedQuery, includeArchived, limit)
-      } catch {
-        /* FTS can be unavailable even when sqlite3 exists. */
-      }
-      try {
-        sqliteItems = mergeHistorySearchItems([
-          ...sqliteItems,
-          ...this.searchChatHistoryWithSqliteLike(normalizedProjectId, normalizedQuery, includeArchived, limit),
-        ]).slice(0, limit)
-      } catch {
-        /* Fall through to JSON/rollout scan. */
-      }
-      if (sqliteItems.length > 0) return { ok: true, projectId: normalizedProjectId, items: sqliteItems }
-    }
-
-    try {
-      const state = this.read()
-      if (!state) return { ok: true, projectId: normalizedProjectId, items: [] }
-      const documents = buildSearchDocuments(state).filter((document) => !normalizedProjectId || document.projectId === normalizedProjectId)
-      return {
-        ok: true,
-        projectId: normalizedProjectId,
-        items: searchDocumentsToItems(documents, normalizedQuery, includeArchived, limit),
-      }
-    } catch (error) {
-      return {
-        ok: false,
-        projectId: normalizedProjectId,
-        message: error instanceof Error ? error.message : 'Chat history search failed.',
-      }
-    }
+    return this.historySearchIndex.search(projectId, query, options)
   }
 
   private readFromDatabase(): ChatWorkspaceState | null {
     if (!existsSync(this.dbPath) || !this.canUseSqlite()) return null
 
     try {
-      this.ensureThreadMetadataColumns()
+      this.ensureWorkspaceSchemaColumns()
       const projects = this.selectJson<ProjectRow>(
         [
           'SELECT',
@@ -213,12 +186,14 @@ export class ChatWorkspaceStore {
           'SELECT',
           'active_project_id AS activeProjectId,',
           'active_thread_id AS activeThreadId,',
-          'sidebar_prefs_json AS sidebarPrefsJson',
+          'sidebar_prefs_json AS sidebarPrefsJson,',
+          'workspace_revision AS workspaceRevision',
           'FROM workspace_meta WHERE id = 1',
         ].join(' '),
       )[0]
 
       return normalizeChatWorkspaceState({
+        workspaceRevision: meta?.workspaceRevision ?? 0,
         activeProjectId: meta?.activeProjectId ?? projects[0]?.id ?? '',
         activeThreadId: meta?.activeThreadId ?? '',
         projects: projects.map((project): WorkspaceProject => ({
@@ -255,10 +230,12 @@ export class ChatWorkspaceStore {
     if (!existsSync(this.filePath)) return null
     try {
       const raw = JSON.parse(readFileSync(this.filePath, 'utf8')) as unknown
-      const savedAt = isRecord(raw) && typeof raw.savedAt === 'number' && Number.isFinite(raw.savedAt)
-        ? raw.savedAt
-        : this.fileModifiedAt(this.filePath)
-      return { state: normalizeChatWorkspaceState(raw), savedAt }
+      return {
+        state: normalizeChatWorkspaceState(raw),
+        savedAt: readWorkspaceSavedAt(raw) ?? this.fileModifiedAt(this.filePath),
+        revision: readWorkspaceRevision(raw),
+        source: 'json-snapshot',
+      }
     } catch {
       return null
     }
@@ -276,7 +253,7 @@ export class ChatWorkspaceStore {
     if (!this.canUseSqlite()) return
 
     try {
-      this.ensureThreadMetadataColumns()
+      this.ensureWorkspaceSchemaColumns()
       const existingRolloutPaths = this.readThreadRolloutPathMap()
       const statements: string[] = [
         'PRAGMA foreign_keys = ON;',
@@ -285,7 +262,8 @@ export class ChatWorkspaceStore {
           active_project_id TEXT NOT NULL,
           active_thread_id TEXT NOT NULL,
           sidebar_prefs_json TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
+          updated_at INTEGER NOT NULL,
+          workspace_revision INTEGER NOT NULL DEFAULT 0
         );`,
         `CREATE TABLE IF NOT EXISTS projects (
           id TEXT PRIMARY KEY,
@@ -326,6 +304,8 @@ export class ChatWorkspaceStore {
 
       if (state.projects.length > 0) {
         statements.push(`DELETE FROM projects WHERE id NOT IN (${state.projects.map((project) => sqlValue(project.id)).join(', ')});`)
+      } else {
+        statements.push('DELETE FROM projects;')
       }
       if (state.threads.length > 0) {
         statements.push(`DELETE FROM threads WHERE id NOT IN (${state.threads.map((thread) => sqlValue(thread.id)).join(', ')});`)
@@ -334,15 +314,16 @@ export class ChatWorkspaceStore {
       }
 
       statements.push(
-        `INSERT INTO workspace_meta (id, active_project_id, active_thread_id, sidebar_prefs_json, updated_at)
+        `INSERT INTO workspace_meta (id, active_project_id, active_thread_id, sidebar_prefs_json, updated_at, workspace_revision)
          VALUES (1, ${sqlValue(state.activeProjectId)}, ${sqlValue(state.activeThreadId)}, ${sqlValue(
            JSON.stringify(state.sidebarPrefs),
-         )}, ${Date.now()})
+         )}, ${Date.now()}, ${sqlValue(workspaceRevisionOf(state))})
          ON CONFLICT(id) DO UPDATE SET
            active_project_id = excluded.active_project_id,
            active_thread_id = excluded.active_thread_id,
            sidebar_prefs_json = excluded.sidebar_prefs_json,
-           updated_at = excluded.updated_at;`,
+           updated_at = excluded.updated_at,
+           workspace_revision = excluded.workspace_revision;`,
       )
 
       for (const project of state.projects) {
@@ -403,115 +384,10 @@ export class ChatWorkspaceStore {
 
       statements.push('COMMIT;')
       this.runSql(statements.join('\n'))
-      this.saveSearchIndex(state)
+      this.historySearchIndex.save(state)
     } catch {
       /* Keep the compatibility JSON snapshot as the durable fallback. */
     }
-  }
-
-  private saveSearchIndex(state: ChatWorkspaceState): void {
-    if (!this.canUseSqlite()) return
-
-    const documents = buildSearchDocuments(state)
-    const tableStatements = [
-      `CREATE TABLE IF NOT EXISTS search_documents (
-        id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        path TEXT NOT NULL,
-        title TEXT NOT NULL,
-        subtitle TEXT NOT NULL,
-        body TEXT NOT NULL,
-        metadata_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      );`,
-      'CREATE INDEX IF NOT EXISTS idx_search_documents_project_updated ON search_documents(project_id, updated_at DESC);',
-      'CREATE INDEX IF NOT EXISTS idx_search_documents_thread ON search_documents(thread_id, kind);',
-      'BEGIN;',
-      'DELETE FROM search_documents;',
-      ...documents.map((document) => insertSearchDocumentSql('search_documents', document)),
-      'COMMIT;',
-    ]
-    this.runSql(tableStatements.join('\n'))
-
-    try {
-      const ftsStatements = [
-        `CREATE VIRTUAL TABLE IF NOT EXISTS search_documents_fts USING fts5(
-          id UNINDEXED,
-          kind UNINDEXED,
-          project_id UNINDEXED,
-          thread_id UNINDEXED,
-          path UNINDEXED,
-          title,
-          subtitle,
-          body,
-          metadata_json UNINDEXED,
-          updated_at UNINDEXED,
-          tokenize = 'unicode61'
-        );`,
-        'BEGIN;',
-        'DELETE FROM search_documents_fts;',
-        ...documents.map((document) => insertSearchDocumentSql('search_documents_fts', document)),
-        'COMMIT;',
-      ]
-      this.runSql(ftsStatements.join('\n'))
-    } catch {
-      /* FTS5 is optional; JSON/rollout search remains available. */
-    }
-  }
-
-  private rebuildSearchIndexIfMissing(): void {
-    if (!existsSync(this.dbPath) || !this.canUseSqlite()) return
-    try {
-      const documentCount = Number(this.selectJson<{ count: number }>('SELECT COUNT(*) AS count FROM search_documents')[0]?.count ?? 0)
-      const threadCount = Number(this.selectJson<{ count: number }>('SELECT COUNT(*) AS count FROM threads')[0]?.count ?? 0)
-      if (documentCount > 0 || threadCount === 0) return
-    } catch {
-      /* Missing table or old schema: rebuild below. */
-    }
-
-    const state = this.read()
-    if (state) this.saveSearchIndex(state)
-  }
-
-  private searchChatHistoryWithSqlite(projectId: string, query: string, includeArchived: boolean, limit: number): ChatHistorySearchItem[] {
-    const ftsQuery = buildFtsQuery(query)
-    if (!ftsQuery) return []
-    const rowLimit = Math.min(MAX_HISTORY_SEARCH_LIMIT * 6, Math.max(limit * 6, limit))
-    const rows = this.selectJson<SearchDocumentRow>(
-      [
-        'SELECT',
-        'id, kind, project_id AS projectId, thread_id AS threadId, path, title, subtitle, body,',
-        'metadata_json AS metadataJson, updated_at AS updatedAt, bm25(search_documents_fts) AS rank',
-        'FROM search_documents_fts',
-        `WHERE search_documents_fts MATCH ${sqlValue(ftsQuery)}${projectId ? ` AND project_id = ${sqlValue(projectId)}` : ''}`,
-        'ORDER BY rank ASC, updated_at DESC',
-        `LIMIT ${rowLimit}`,
-      ].join(' '),
-    )
-    return searchDocumentsToItems(rows.map(rowToSearchDocument), query, includeArchived, limit)
-  }
-
-  private searchChatHistoryWithSqliteLike(projectId: string, query: string, includeArchived: boolean, limit: number): ChatHistorySearchItem[] {
-    const rowLimit = Math.min(MAX_HISTORY_SEARCH_LIMIT * 6, Math.max(limit * 6, limit))
-    const pattern = sqlLikePattern(query)
-    const rows = this.selectJson<SearchDocumentRow>(
-      [
-        'SELECT',
-        'id, kind, project_id AS projectId, thread_id AS threadId, path, title, subtitle, body,',
-        'metadata_json AS metadataJson, updated_at AS updatedAt',
-        'FROM search_documents',
-        `WHERE ${projectId ? `project_id = ${sqlValue(projectId)} AND ` : ''}(`,
-        `title LIKE ${sqlValue(pattern)} ESCAPE '\\' OR`,
-        `subtitle LIKE ${sqlValue(pattern)} ESCAPE '\\' OR`,
-        `body LIKE ${sqlValue(pattern)} ESCAPE '\\'`,
-        ')',
-        'ORDER BY updated_at DESC',
-        `LIMIT ${rowLimit}`,
-      ].join(' '),
-    )
-    return searchDocumentsToItems(rows.map(rowToSearchDocument), query, includeArchived, limit)
   }
 
   private async saveRolloutFiles(state: ChatWorkspaceState): Promise<void> {
@@ -582,9 +458,14 @@ export class ChatWorkspaceStore {
     }
   }
 
-  private ensureThreadMetadataColumns(): void {
+  private ensureWorkspaceSchemaColumns(): void {
     if (!existsSync(this.dbPath) || !this.canUseSqlite()) return
     try {
+      const metaColumns = this.selectJson<{ name: string }>('PRAGMA table_info(workspace_meta)')
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'workspace_revision')) {
+        this.runSql('ALTER TABLE workspace_meta ADD COLUMN workspace_revision INTEGER NOT NULL DEFAULT 0;')
+      }
+
       const columns = this.selectJson<{ name: string }>('PRAGMA table_info(threads)')
       if (columns.length > 0 && !columns.some((column) => column.name === 'purpose')) {
         this.runSql('ALTER TABLE threads ADD COLUMN purpose TEXT;')
@@ -631,6 +512,182 @@ export class ChatWorkspaceStore {
     }).trim()
     if (!output) return []
     return JSON.parse(output) as T[]
+  }
+}
+
+type HistorySearchIndexOptions = {
+  dbPath: string
+  canUseSqlite: () => boolean
+  runSql: (sql: string) => void
+  selectJson: <T>(sql: string) => T[]
+  readWorkspace: () => ChatWorkspaceState | null
+}
+
+class HistorySearchIndex {
+  private readonly dbPath: string
+  private readonly canUseSqlite: () => boolean
+  private readonly runSql: (sql: string) => void
+  private readonly selectJson: <T>(sql: string) => T[]
+  private readonly readWorkspace: () => ChatWorkspaceState | null
+
+  constructor(options: HistorySearchIndexOptions) {
+    this.dbPath = options.dbPath
+    this.canUseSqlite = options.canUseSqlite
+    this.runSql = options.runSql
+    this.selectJson = options.selectJson
+    this.readWorkspace = options.readWorkspace
+  }
+
+  save(state: ChatWorkspaceState): void {
+    if (!this.canUseSqlite()) return
+
+    const documents = buildSearchDocuments(state)
+    const tableStatements = [
+      `CREATE TABLE IF NOT EXISTS search_documents (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        title TEXT NOT NULL,
+        subtitle TEXT NOT NULL,
+        body TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );`,
+      'CREATE INDEX IF NOT EXISTS idx_search_documents_project_updated ON search_documents(project_id, updated_at DESC);',
+      'CREATE INDEX IF NOT EXISTS idx_search_documents_thread ON search_documents(thread_id, kind);',
+      'BEGIN;',
+      'DELETE FROM search_documents;',
+      ...documents.map((document) => insertSearchDocumentSql('search_documents', document)),
+      'COMMIT;',
+    ]
+    this.runSql(tableStatements.join('\n'))
+
+    try {
+      const ftsStatements = [
+        `CREATE VIRTUAL TABLE IF NOT EXISTS search_documents_fts USING fts5(
+          id UNINDEXED,
+          kind UNINDEXED,
+          project_id UNINDEXED,
+          thread_id UNINDEXED,
+          path UNINDEXED,
+          title,
+          subtitle,
+          body,
+          metadata_json UNINDEXED,
+          updated_at UNINDEXED,
+          tokenize = 'unicode61'
+        );`,
+        'BEGIN;',
+        'DELETE FROM search_documents_fts;',
+        ...documents.map((document) => insertSearchDocumentSql('search_documents_fts', document)),
+        'COMMIT;',
+      ]
+      this.runSql(ftsStatements.join('\n'))
+    } catch {
+      /* FTS5 is optional; JSON/rollout search remains available. */
+    }
+  }
+
+  search(projectId: string, query: string, options: ChatHistorySearchOptions = {}): ChatHistorySearchResult {
+    const normalizedProjectId = typeof projectId === 'string' ? projectId.trim() : ''
+    const normalizedQuery = typeof query === 'string' ? query.trim() : ''
+    if (!normalizedQuery) {
+      return { ok: true, projectId: normalizedProjectId, items: [] }
+    }
+
+    const limit = normalizeHistorySearchLimit(options.limit)
+    const includeArchived = options.includeArchived === true
+
+    if (this.canUseSqlite() && existsSync(this.dbPath)) {
+      let sqliteItems: ChatHistorySearchItem[] = []
+      try {
+        this.rebuildIfMissing()
+        sqliteItems = this.searchWithSqlite(normalizedProjectId, normalizedQuery, includeArchived, limit)
+      } catch {
+        /* FTS can be unavailable even when sqlite3 exists. */
+      }
+      try {
+        sqliteItems = mergeHistorySearchItems([
+          ...sqliteItems,
+          ...this.searchWithSqliteLike(normalizedProjectId, normalizedQuery, includeArchived, limit),
+        ]).slice(0, limit)
+      } catch {
+        /* Fall through to JSON/rollout scan. */
+      }
+      if (sqliteItems.length > 0) return { ok: true, projectId: normalizedProjectId, items: sqliteItems }
+    }
+
+    try {
+      const state = this.readWorkspace()
+      if (!state) return { ok: true, projectId: normalizedProjectId, items: [] }
+      const documents = buildSearchDocuments(state).filter((document) => !normalizedProjectId || document.projectId === normalizedProjectId)
+      return {
+        ok: true,
+        projectId: normalizedProjectId,
+        items: searchDocumentsToItems(documents, normalizedQuery, includeArchived, limit),
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        projectId: normalizedProjectId,
+        message: error instanceof Error ? error.message : 'Chat history search failed.',
+      }
+    }
+  }
+
+  private rebuildIfMissing(): void {
+    if (!existsSync(this.dbPath) || !this.canUseSqlite()) return
+    try {
+      const documentCount = Number(this.selectJson<{ count: number }>('SELECT COUNT(*) AS count FROM search_documents')[0]?.count ?? 0)
+      const threadCount = Number(this.selectJson<{ count: number }>('SELECT COUNT(*) AS count FROM threads')[0]?.count ?? 0)
+      if (documentCount > 0 || threadCount === 0) return
+    } catch {
+      /* Missing table or old schema: rebuild below. */
+    }
+
+    const state = this.readWorkspace()
+    if (state) this.save(state)
+  }
+
+  private searchWithSqlite(projectId: string, query: string, includeArchived: boolean, limit: number): ChatHistorySearchItem[] {
+    const ftsQuery = buildFtsQuery(query)
+    if (!ftsQuery) return []
+    const rowLimit = Math.min(MAX_HISTORY_SEARCH_LIMIT * 6, Math.max(limit * 6, limit))
+    const rows = this.selectJson<SearchDocumentRow>(
+      [
+        'SELECT',
+        'id, kind, project_id AS projectId, thread_id AS threadId, path, title, subtitle, body,',
+        'metadata_json AS metadataJson, updated_at AS updatedAt, bm25(search_documents_fts) AS rank',
+        'FROM search_documents_fts',
+        `WHERE search_documents_fts MATCH ${sqlValue(ftsQuery)}${projectId ? ` AND project_id = ${sqlValue(projectId)}` : ''}`,
+        'ORDER BY rank ASC, updated_at DESC',
+        `LIMIT ${rowLimit}`,
+      ].join(' '),
+    )
+    return searchDocumentsToItems(rows.map(rowToSearchDocument), query, includeArchived, limit)
+  }
+
+  private searchWithSqliteLike(projectId: string, query: string, includeArchived: boolean, limit: number): ChatHistorySearchItem[] {
+    const rowLimit = Math.min(MAX_HISTORY_SEARCH_LIMIT * 6, Math.max(limit * 6, limit))
+    const pattern = sqlLikePattern(query)
+    const rows = this.selectJson<SearchDocumentRow>(
+      [
+        'SELECT',
+        'id, kind, project_id AS projectId, thread_id AS threadId, path, title, subtitle, body,',
+        'metadata_json AS metadataJson, updated_at AS updatedAt',
+        'FROM search_documents',
+        `WHERE ${projectId ? `project_id = ${sqlValue(projectId)} AND ` : ''}(`,
+        `title LIKE ${sqlValue(pattern)} ESCAPE '\\' OR`,
+        `subtitle LIKE ${sqlValue(pattern)} ESCAPE '\\' OR`,
+        `body LIKE ${sqlValue(pattern)} ESCAPE '\\'`,
+        ')',
+        'ORDER BY updated_at DESC',
+        `LIMIT ${rowLimit}`,
+      ].join(' '),
+    )
+    return searchDocumentsToItems(rows.map(rowToSearchDocument), query, includeArchived, limit)
   }
 }
 

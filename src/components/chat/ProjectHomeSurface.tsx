@@ -78,6 +78,7 @@ type HomeCardItem =
 type HomeGridItem =
   | { kind: 'card'; card: HomeCardItem }
   | { kind: 'filler'; id: string; span: 1 | 2; tone: 'grid' | 'signal' | 'trace' }
+type ProjectMcpOperation = 'idle' | 'saving' | 'testing'
 type HomeGridFillerItem = Extract<HomeGridItem, { kind: 'filler' }>
 
 type HomeCardLayout = {
@@ -281,19 +282,41 @@ export function ProjectHomeSurface({
   const [draftMcpToolPolicies, setDraftMcpToolPolicies] = useState<AgentMcpToolPolicies>({})
   const [mcpServerProbeCache, setMcpServerProbeCache] = useState<AgentMcpServerProbeCache>({})
   const [mcpSettingsStatus, setMcpSettingsStatus] = useState('')
-  const [mcpSettingsSaving, setMcpSettingsSaving] = useState(false)
+  const [mcpSettingsOperation, setMcpSettingsOperation] = useState<ProjectMcpOperation>('idle')
   const autoTestedProjectMcpSignatureRef = useRef('')
+  const agentSettingsLoadSeqRef = useRef(0)
+  const projectMcpProbeSeqRef = useRef(0)
+  const projectPathRef = useRef(project.path)
+  const agentSettingsOpenRef = useRef(agentSettingsOpen)
+  const agentSettingsPanelRef = useRef(agentSettingsPanel)
   const [cardOrderSaving, setCardOrderSaving] = useState(false)
   const [cardOrderStatus, setCardOrderStatus] = useState('')
   const [modelRows, setModelRows] = useState<ModelPickMenuRow[]>([])
   const [modelSettingsSnapshot, setModelSettingsSnapshot] = useState<ClaudeAgentSettingsSnapshot | null>(null)
   const [deletingSlug, setDeletingSlug] = useState('')
   const addMenuRef = useRef<HTMLDivElement>(null)
+  projectPathRef.current = project.path
+  agentSettingsOpenRef.current = agentSettingsOpen
+  agentSettingsPanelRef.current = agentSettingsPanel
   const mcpStatusServers = useMemo(() => {
     if (!agentStatusSnapshot) return undefined
     if (agentStatusSnapshot.cwd && !sameProjectPath(agentStatusSnapshot.cwd, project.path)) return undefined
     return agentStatusSnapshot.mcpServers
   }, [agentStatusSnapshot, project.path])
+
+  useEffect(() => {
+    autoTestedProjectMcpSignatureRef.current = ''
+    agentSettingsLoadSeqRef.current += 1
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation('idle')
+    setMcpSettingsStatus('')
+  }, [project.path])
+
+  useEffect(() => {
+    if (agentSettingsOpen && agentSettingsPanel === 'mcp') return
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation((operation) => (operation === 'testing' ? 'idle' : operation))
+  }, [agentSettingsOpen, agentSettingsPanel])
 
   const loadHomePlugins = useCallback(async () => {
     const runHomePlugin = window.desktop?.runHomePlugin
@@ -379,8 +402,13 @@ export function ProjectHomeSurface({
   }, [applyModelSettings])
 
   const loadAgentSkillModelSettings = useCallback(async () => {
+    const requestProjectPath = project.path
+    const requestSeq = agentSettingsLoadSeqRef.current + 1
+    agentSettingsLoadSeqRef.current = requestSeq
+    const isCurrentRequest = () => agentSettingsLoadSeqRef.current === requestSeq && projectPathRef.current === requestProjectPath
     const getAgentModeSettings = window.desktop?.getAgentModeSettings
     if (!getAgentModeSettings) {
+      if (!isCurrentRequest()) return
       setProjectModelPick(undefined)
       setDraftProjectModelPick(undefined)
       setSkillModelOverrides({})
@@ -398,7 +426,8 @@ export function ProjectHomeSurface({
       return
     }
     try {
-      const result = await getAgentModeSettings(project.path)
+      const result = await getAgentModeSettings(requestProjectPath)
+      if (!isCurrentRequest()) return
       if (!result.ok) {
         setSkillSettingsStatus(result.message)
         setProjectSettingsStatus(result.message)
@@ -425,6 +454,7 @@ export function ProjectHomeSurface({
       setSkillSettingsStatus(t('settings.agentMode.loaded'))
       setProjectSettingsStatus(t('settings.agentMode.loaded'))
     } catch (error) {
+      if (!isCurrentRequest()) return
       setSkillSettingsStatus(error instanceof Error ? error.message : String(error))
       setProjectSettingsStatus(error instanceof Error ? error.message : String(error))
       setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
@@ -757,6 +787,9 @@ export function ProjectHomeSurface({
       setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
       return
     }
+    const requestProjectPath = project.path
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation((operation) => (operation === 'testing' ? 'idle' : operation))
     const nextOverrides = overridesFromMcpServers(draftMcpServers)
     const nextPolicies = normalizeMcpPoliciesForSave(draftMcpToolPolicies)
     const validationError = validateMcpSettings(draftMcpServers, nextPolicies, t)
@@ -764,13 +797,14 @@ export function ProjectHomeSurface({
       setMcpSettingsStatus(validationError)
       return
     }
-    setMcpSettingsSaving(true)
+    setMcpSettingsOperation('saving')
     setMcpSettingsStatus(t('settings.agentMode.saving'))
     try {
-      const result = await saveAgentModeSettings(project.path, {
+      const result = await saveAgentModeSettings(requestProjectPath, {
         mcpServerOverrides: nextOverrides,
         mcpToolPolicies: nextPolicies,
       })
+      if (projectPathRef.current !== requestProjectPath) return
       if (!result.ok) {
         setMcpSettingsStatus(result.message)
         return
@@ -786,30 +820,42 @@ export function ProjectHomeSurface({
       setDraftMcpToolPolicies(policies)
       setMcpServerProbeCache(result.settings.mcpServerProbeCache ?? {})
       setMcpSettingsStatus(t('settings.agentMode.saved'))
-      window.dispatchEvent(new CustomEvent('agentos:project-agent-settings-changed', { detail: { projectPath: project.path } }))
+      window.dispatchEvent(new CustomEvent('agentos:project-agent-settings-changed', { detail: { projectPath: requestProjectPath } }))
     } catch (error) {
+      if (projectPathRef.current !== requestProjectPath) return
       setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
     } finally {
-      setMcpSettingsSaving(false)
+      if (projectPathRef.current === requestProjectPath) setMcpSettingsOperation('idle')
     }
   }
 
   const refreshProjectMcpProbeStatus = useCallback(async (servers: AgentMcpServerConfig[]) => {
     const enabledServers = servers.filter((server) => server.enabled)
     if (enabledServers.length === 0) return
+    const requestProjectPath = project.path
+    const requestSeq = projectMcpProbeSeqRef.current + 1
+    projectMcpProbeSeqRef.current = requestSeq
+    const isCurrentProbe = () =>
+      projectMcpProbeSeqRef.current === requestSeq &&
+      projectPathRef.current === requestProjectPath &&
+      agentSettingsOpenRef.current &&
+      agentSettingsPanelRef.current === 'mcp'
     const testGlobalMcpServer = window.desktop?.testGlobalMcpServer
     if (!testGlobalMcpServer) {
+      if (!isCurrentProbe()) return
       setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
       return
     }
-    setMcpSettingsSaving(true)
+    setMcpSettingsOperation('testing')
     setMcpSettingsStatus(t('workspace.agentSettingsMcpTestingEnabled', { count: enabledServers.length }))
     let tested = 0
     let connected = 0
     try {
       for (const server of enabledServers) {
+        if (!isCurrentProbe()) return
         setMcpSettingsStatus(t('settings.mcp.testing', { name: server.name }))
         const result = await testGlobalMcpServer(server)
+        if (!isCurrentProbe()) return
         const snapshot = result.snapshot
         if (snapshot) {
           setMcpServerProbeCache((current) => ({
@@ -822,11 +868,12 @@ export function ProjectHomeSurface({
       }
       setMcpSettingsStatus(t('workspace.agentSettingsMcpTestEnabledDone', { tested, connected }))
     } catch (error) {
+      if (!isCurrentProbe()) return
       setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
     } finally {
-      setMcpSettingsSaving(false)
+      if (isCurrentProbe()) setMcpSettingsOperation('idle')
     }
-  }, [t])
+  }, [project.path, t])
 
   const refreshMcpStatus = useCallback(() => {
     void refreshProjectMcpProbeStatus(mcpServers)
@@ -837,10 +884,11 @@ export function ProjectHomeSurface({
     if (!agentSettingsOpen || agentSettingsPanel !== 'mcp') return
     const enabledServers = mcpServers.filter((server) => server.enabled)
     const signature = enabledServers.map((server) => `${server.name}:${buildMcpServerConfigSignature(server)}`).join('|')
-    if (!signature || autoTestedProjectMcpSignatureRef.current === signature) return
-    autoTestedProjectMcpSignatureRef.current = signature
+    const signatureKey = `${project.path}:${signature}`
+    if (!signature || autoTestedProjectMcpSignatureRef.current === signatureKey) return
+    autoTestedProjectMcpSignatureRef.current = signatureKey
     void refreshProjectMcpProbeStatus(enabledServers)
-  }, [agentSettingsOpen, agentSettingsPanel, mcpServers, refreshProjectMcpProbeStatus])
+  }, [agentSettingsOpen, agentSettingsPanel, mcpServers, project.path, refreshProjectMcpProbeStatus])
 
   const saveSortOrder = async () => {
     setCardOrderSaving(true)
@@ -1103,7 +1151,7 @@ export function ProjectHomeSurface({
           draftMcpToolPolicies={draftMcpToolPolicies}
           mcpServerProbeCache={mcpServerProbeCache}
           mcpSettingsStatus={mcpSettingsStatus}
-          mcpSettingsSaving={mcpSettingsSaving}
+          mcpSettingsOperation={mcpSettingsOperation}
           mcpStatusServers={mcpStatusServers}
           onDraftMcpServersChange={setDraftMcpServers}
           onDraftMcpServerOverridesChange={setDraftMcpServerOverrides}
@@ -2057,7 +2105,7 @@ function AgentSettingsModal({
   draftMcpToolPolicies,
   mcpServerProbeCache,
   mcpSettingsStatus,
-  mcpSettingsSaving,
+  mcpSettingsOperation,
   mcpStatusServers,
   onDraftMcpServersChange,
   onDraftMcpServerOverridesChange,
@@ -2117,7 +2165,7 @@ function AgentSettingsModal({
   draftMcpToolPolicies: AgentMcpToolPolicies
   mcpServerProbeCache: AgentMcpServerProbeCache
   mcpSettingsStatus: string
-  mcpSettingsSaving: boolean
+  mcpSettingsOperation: ProjectMcpOperation
   mcpStatusServers?: ClaudeAgentStatusSnapshot['mcpServers']
   onDraftMcpServersChange: (servers: AgentMcpServerConfig[]) => void
   onDraftMcpServerOverridesChange: (overrides: AgentMcpServerOverrides) => void
@@ -2254,7 +2302,7 @@ function AgentSettingsModal({
                 draftPolicies={draftMcpToolPolicies}
                 probeCache={mcpServerProbeCache}
                 status={mcpSettingsStatus}
-                saving={mcpSettingsSaving}
+                operation={mcpSettingsOperation}
                 statusServers={mcpStatusServers}
                 onDraftServersChange={onDraftMcpServersChange}
                 onDraftOverridesChange={onDraftMcpServerOverridesChange}
@@ -2343,13 +2391,13 @@ function AgentSettingsGeneralPanel({
   )
 }
 
-function SaveFeedback({ status, dirty, saving }: { status: string; dirty: boolean; saving: boolean }) {
+function SaveFeedback({ status, dirty, saving, busy = saving }: { status: string; dirty: boolean; saving: boolean; busy?: boolean }) {
   const { t } = useI18n()
   const passiveStatus = !status || status === t('settings.agentMode.loaded') || status === t('settings.agentMode.saved')
-  const message = dirty && !saving && passiveStatus
+  const message = dirty && !busy && passiveStatus
     ? t('workspace.agentSettingsUnsavedChanges')
     : status || t('workspace.agentSettingsNoChanges')
-  const tone = saving
+  const tone = busy
     ? ' is-saving'
     : dirty && passiveStatus
       ? ' is-dirty'
@@ -2359,7 +2407,7 @@ function SaveFeedback({ status, dirty, saving }: { status: string; dirty: boolea
 
   return (
     <p className={`agent-settings-save-feedback${tone}`} role="status" aria-live="polite">
-      <IconInline name={saving ? 'refresh' : dirty && passiveStatus ? 'save' : status === t('settings.agentMode.saved') ? 'check' : 'check'} />
+      <IconInline name={busy ? 'refresh' : dirty && passiveStatus ? 'save' : status === t('settings.agentMode.saved') ? 'check' : 'check'} />
       <span>{message}</span>
     </p>
   )
@@ -2734,7 +2782,7 @@ function McpSettingsPanel({
   draftPolicies,
   probeCache,
   status,
-  saving,
+  operation,
   statusServers,
   onDraftServersChange,
   onDraftOverridesChange,
@@ -2751,7 +2799,7 @@ function McpSettingsPanel({
   draftPolicies: AgentMcpToolPolicies
   probeCache: AgentMcpServerProbeCache
   status: string
-  saving: boolean
+  operation: ProjectMcpOperation
   statusServers?: ClaudeAgentStatusSnapshot['mcpServers']
   onDraftServersChange: (servers: AgentMcpServerConfig[]) => void
   onDraftOverridesChange: (overrides: AgentMcpServerOverrides) => void
@@ -2761,6 +2809,8 @@ function McpSettingsPanel({
   onSave: () => void
 }) {
   const { t } = useI18n()
+  const saving = operation === 'saving'
+  const testing = operation === 'testing'
   const discoveredTools = useMemo<DiscoveredMcpToolOption[]>(() => {
     return draftServers.flatMap((server) => {
       if (!server.enabled) return []
@@ -2832,7 +2882,7 @@ function McpSettingsPanel({
               <h4 id="agent-settings-mcp-installed-heading">{t('workspace.agentSettingsMcpInstalledHeading')}</h4>
               <p>{t('workspace.agentSettingsMcpInstallHint')}</p>
             </div>
-            <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={onRefreshStatus}>
+            <button type="button" className="agent-card-secondary-button" disabled={saving || testing} onClick={onRefreshStatus}>
               <IconInline name="refresh" />
               <span>{t('workspace.agentSettingsMcpRefreshStatus')}</span>
             </button>
@@ -3002,7 +3052,7 @@ function McpSettingsPanel({
         </section>
 
         <div className="agent-settings-panel-actions">
-          <SaveFeedback status={status} dirty={isDirty} saving={saving} />
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} busy={saving || testing} />
           <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
             reset()
             onClose()

@@ -281,6 +281,8 @@ export type ProjectFilePreviewResult =
 
 /** 完整聊天工作区状态（活动项目/线程与列表）/ Full chat workspace snapshot */
 export type ChatWorkspaceState = {
+  /** 工作区逻辑修订号，用于跨 adapter 判断快照新旧 / Logical workspace revision for adapter freshness */
+  workspaceRevision: number
   activeProjectId: string
   activeThreadId: string
   projects: WorkspaceProject[]
