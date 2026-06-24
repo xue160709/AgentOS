@@ -26,7 +26,7 @@
 - `ChatState.items`：message、tool、thinking、activity、context_compaction、file_diff 的 transcript 联合。
 - `ThreadRunState`：UI 侧进行中、等待中和提问中状态。
 - `McpRuntimeOptions`：合成 `mcpServers`、`allowedTools`、`disallowedTools`、`toolAliases`、配置签名和未解析环境变量。
-- `AgentWebSearchSettings`：全局搜索模式、Provider、默认结果数、Brave/Tavily Key 或 `${ENV_NAME}` 引用。
+- `AgentWebSearchSettings`：全局搜索模式、Provider、默认结果数、Brave/Tavily API Key 池或 `${ENV_NAME}` 引用；旧单 Key 字段会兼容迁移为单元素池。
 - `AgentWebSearchProviderTestResult`：Provider 测试结果、凭据状态、错误分类和恢复提示。
 - `WebSearchRequest` / `WebSearchResponse`：内部 `agentos-web` MCP 工具的请求和 JSON 输出结构。
 
@@ -55,7 +55,7 @@ Composer submit
 
 - 自动测试：`electron/chat-run.test.mjs`、`electron/claude-sdk-message-router.test.mjs`、`electron/claude-agent-runner-executable.test.mjs`、`electron/claude-agent-runner-mcp.test.mjs`、`electron/claude-agent-runner-web-search.test.mjs`。
 - 关键覆盖：流式文本、result-only、cancel、orphan event、thinking/tool/activity/task/prompt、context compaction、file diff、并发提交阻止。
-- WebSearch 覆盖：native 模式不注册 `agentos-web`；AgentOS 模式注册内部 MCP、alias `WebSearch`、禁用内置 `WebSearch`；Tavily POST 请求、DuckDuckGo 结果归一化、provider 状态、域名过滤、HTTP 错误分类、Provider Test 的 env-resolved/env-missing 分支。
+- WebSearch 覆盖：native 模式不注册 `agentos-web`；AgentOS 模式注册内部 MCP、alias `WebSearch`、禁用内置 `WebSearch`；Tavily POST 请求、DuckDuckGo 结果归一化、provider 状态、域名过滤、HTTP 错误分类、Brave/Tavily API Key 池顺序轮询、Provider Test 的 env-resolved/env-missing 分支。
 - 验收契约：`prd/chat-agent-runtime/acceptance.md`。
 
 ## 边界情况
@@ -68,7 +68,7 @@ Composer submit
 - MCP server 失败、需要认证、命令不存在、环境变量缺失或 HTTP 401 时，Chat 侧应提供可恢复入口而不是只显示通用运行错误。
 - MCP tool 权限默认应走询问或显式 policy，不应因开启 Agent 权限绕过而全量自动允许。
 - DuckDuckGo Search 直接读取 DuckDuckGo HTML 搜索结果；HTML 集成是实验性能力，可能遇到 bot challenge 或网络不可达，此时返回空结果而不是工具错误。
-- Tavily/Brave 的认证、额度或套餐错误会映射为 `auth` / `quota` / `service` 等 Provider 错误，并在 `web_search` 工具输出与设置页测试结果中给出恢复建议。
+- Tavily/Brave 的认证、额度或套餐错误会映射为 `auth` / `quota` / `service` 等 Provider 错误；当 Provider 配置了多个 API Key 时，运行时会对可恢复错误按用户排序尝试后续 Key，并在 `web_search` 工具输出与设置页测试结果中给出脱敏恢复建议。
 
 ## TODO 对应项
 

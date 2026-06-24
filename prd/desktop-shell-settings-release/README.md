@@ -9,7 +9,7 @@
 - 主窗口配置默认尺寸、最小尺寸、标题栏、平台窗口 chrome、外链处理和 single instance 行为。
 - preload 暴露 `window.desktop` 与 `window.claudeChat`，不暴露通用 `ipcRenderer`。
 - 设置页包含模型、搜索、MCP、Project Skills、Agent Mode USER/IDENTITY、更新和开发者入口。
-- 全局“搜索”设置页可选择原生 Web Search 或 AgentOS 搜索 Provider，并配置 DuckDuckGo Search、Brave Search、Tavily、默认结果数、Provider Key 引用和 Provider 连接测试。
+- 全局“搜索”设置页可选择原生 Web Search 或 AgentOS 搜索 Provider，并配置 DuckDuckGo Search、Brave Search、Tavily、默认结果数、Brave/Tavily Provider API Key 池和 Provider 连接测试。
 - 桌面偏好保存 close-to-tray、open-at-login、eye comfort 和 locale，并影响托盘、登录项、渲染 class 与语言。
 - GitHub Releases 自动更新只在 packaged 环境启用，支持检查、下载、下载完成和安装入口。
 - macOS Apple Speech helper 通过独立 `.app` 和 Unix socket 传输 status/partial/final/error。

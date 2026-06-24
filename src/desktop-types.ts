@@ -210,8 +210,11 @@ export type AgentWebSearchSettings = {
   mode: AgentWebSearchMode
   provider: AgentWebSearchProviderId
   maxResults: number
+  /** Legacy single-key fields kept for older settings payloads. New code should read the pools below. */
   braveApiKey: string
   tavilyApiKey: string
+  braveApiKeys: string[]
+  tavilyApiKeys: string[]
 }
 
 export type AgentWebSearchSettingsResult =
@@ -247,6 +250,8 @@ export type AgentWebSearchProviderTestResult =
       providerName: string
       credentialStatus: AgentWebSearchCredentialStatus
       resultCount: number
+      credentialAttemptCount?: number
+      credentialFallbackCount?: number
       checkedAt: string
       message: string
     }

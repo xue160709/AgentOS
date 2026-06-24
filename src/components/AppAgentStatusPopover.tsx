@@ -347,19 +347,20 @@ function contextCategoryLabel(name: string, t: (path: string) => string): string
 }
 
 function mcpTone(status: string): ClaudeAgentStatusHealth {
-  if (status === 'connected') return 'ready'
-  if (status === 'failed') return 'error'
-  if (status === 'needs-auth') return 'error'
-  return 'partial'
+  const normalized = status.trim().toLowerCase()
+  if (normalized === 'connected') return 'ready'
+  if (normalized === 'pending' || normalized === 'untested') return 'partial'
+  return 'error'
 }
 
 function formatMcpServerStatus(
   server: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>[number],
   t: (path: string, params?: Record<string, string | number>) => string,
 ): string {
-  if (server.status === 'connected' && typeof server.toolCount === 'number') {
-    return t('statusPanel.mcpConnectedTools', { count: server.toolCount })
+  const normalized = server.status.trim().toLowerCase()
+  if (normalized === 'connected') {
+    return t('statusPanel.mcpConnectedTools', { count: server.toolCount ?? 0 })
   }
-  if (server.error) return `${server.status}: ${server.error}`
-  return server.status
+  if (normalized === 'pending' || normalized === 'untested') return t('statusPanel.mcpPending')
+  return t('statusPanel.mcpDisconnected')
 }

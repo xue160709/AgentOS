@@ -164,6 +164,8 @@ export async function testWebSearchProviderSettings(
       providerName: providerStatus.name,
       credentialStatus,
       resultCount: response.results.length,
+      credentialAttemptCount: response.credential?.attempted,
+      credentialFallbackCount: response.credential?.fallbackCount,
       checkedAt,
       message: `${providerStatus.name} provider test completed.`,
     }
@@ -183,6 +185,8 @@ export async function testWebSearchProviderSettings(
 }
 
 function normalizeRuntimeWebSearchSettings(settings: AgentWebSearchSettings | undefined): AgentWebSearchSettings {
+  const braveApiKeys = normalizeSecretSettingPool(settings?.braveApiKeys, settings?.braveApiKey)
+  const tavilyApiKeys = normalizeSecretSettingPool(settings?.tavilyApiKeys, settings?.tavilyApiKey)
   return {
     mode: settings?.mode === 'agentos' ? 'agentos' : 'native',
     provider:
@@ -190,8 +194,10 @@ function normalizeRuntimeWebSearchSettings(settings: AgentWebSearchSettings | un
         ? settings.provider
         : 'duckduckgo',
     maxResults: clampMaxResults(settings?.maxResults),
-    braveApiKey: settings?.braveApiKey?.trim() ?? '',
-    tavilyApiKey: settings?.tavilyApiKey?.trim() ?? '',
+    braveApiKey: braveApiKeys[0] ?? '',
+    tavilyApiKey: tavilyApiKeys[0] ?? '',
+    braveApiKeys,
+    tavilyApiKeys,
   }
 }
 
@@ -202,14 +208,29 @@ function buildProviderEnv(settings: AgentWebSearchSettings, env: WebSearchEnv): 
     WEB_SEARCH_PROVIDER: settings.provider,
   }
   if (settings.provider === 'brave') {
-    const apiKey = resolveSecretSetting(settings.braveApiKey, env)
-    if (apiKey) nextEnv.BRAVE_SEARCH_API_KEY = apiKey
+    const apiKeys = resolveSecretSettingPool(settings.braveApiKeys, env)
+    if (apiKeys.length > 0) {
+      nextEnv.BRAVE_SEARCH_API_KEYS = JSON.stringify(apiKeys)
+      nextEnv.BRAVE_SEARCH_API_KEY = apiKeys[0]
+    }
   }
   if (settings.provider === 'tavily') {
-    const apiKey = resolveSecretSetting(settings.tavilyApiKey, env)
-    if (apiKey) nextEnv.TAVILY_API_KEY = apiKey
+    const apiKeys = resolveSecretSettingPool(settings.tavilyApiKeys, env)
+    if (apiKeys.length > 0) {
+      nextEnv.TAVILY_API_KEYS = JSON.stringify(apiKeys)
+      nextEnv.TAVILY_API_KEY = apiKeys[0]
+    }
   }
   return nextEnv
+}
+
+function normalizeSecretSettingPool(keys: string[] | undefined, legacyKey: string | undefined): string[] {
+  const source = Array.isArray(keys) ? keys : legacyKey ? [legacyKey] : []
+  return source.map((key) => key.trim()).filter(Boolean)
+}
+
+function resolveSecretSettingPool(values: string[], env: WebSearchEnv): string[] {
+  return values.map((value) => resolveSecretSetting(value, env)).filter(Boolean)
 }
 
 function resolveSecretSetting(value: string, env: WebSearchEnv): string {
@@ -221,11 +242,13 @@ function resolveSecretSetting(value: string, env: WebSearchEnv): string {
 
 function resolveWebSearchCredentialStatus(settings: AgentWebSearchSettings, env: WebSearchEnv): AgentWebSearchCredentialStatus {
   if (settings.provider === 'duckduckgo') return 'not-required'
-  const rawValue = settings.provider === 'brave' ? settings.braveApiKey : settings.tavilyApiKey
-  const trimmed = rawValue.trim()
-  if (!trimmed) return 'missing'
+  const rawValues = settings.provider === 'brave' ? settings.braveApiKeys : settings.tavilyApiKeys
+  const trimmedValues = rawValues.map((value) => value.trim()).filter(Boolean)
+  if (trimmedValues.length === 0) return 'missing'
 
-  const references = Array.from(trimmed.matchAll(/\$\{([A-Z_a-z][A-Z_a-z0-9]*)\}/g)).map((match) => match[1])
+  const references = trimmedValues.flatMap((value) =>
+    Array.from(value.matchAll(/\$\{([A-Z_a-z][A-Z_a-z0-9]*)\}/g)).map((match) => match[1]),
+  )
   if (references.length === 0) return 'configured'
 
   const unresolved = references.some((variable) => !env[variable]?.trim())

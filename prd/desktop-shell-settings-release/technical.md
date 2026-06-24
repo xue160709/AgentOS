@@ -28,7 +28,7 @@
 - `SpeechRecognitionSnapshot` / `SpeechRecognitionEvent`：语音状态、partial/final/error。
 - `DESKTOP_SEAM_CAPABILITIES`：所有命名桌面能力。
 - MCP 设置入口：全局设置页管理 MCP server 定义、全局开关和连接测试缓存；项目 Agent 设置模态只保存当前项目开关覆盖和 tool policy；Chat 状态面板可跳转到当前项目 MCP 面板。
-- `AgentWebSearchSettings`：`mode` 为 `native` 或 `agentos`，`provider` 为 `duckduckgo` / `brave` / `tavily`，并保存默认结果数、Brave/Tavily Key 或环境变量引用；旧值 `duckduckgo-instant` 会归一化为 `duckduckgo`。
+- `AgentWebSearchSettings`：`mode` 为 `native` 或 `agentos`，`provider` 为 `duckduckgo` / `brave` / `tavily`，并保存默认结果数、Brave/Tavily API Key 池或环境变量引用；旧值 `duckduckgo-instant` 会归一化为 `duckduckgo`，旧版单 Key 字段会迁移为单元素池。
 - `AgentWebSearchProviderTestResult`：搜索 Provider 连接测试的成功/失败、凭据状态、错误分类和恢复建议。
 
 ## 调用链路
@@ -59,7 +59,7 @@ search settings
 - 自动更新错误写入 `AppUpdaterState.errorMessage`，UI 通过状态展示。
 - Speech helper stderr 进入 warn；helper 事件通过 Unix socket NDJSON 转 IPC。
 - 剪贴板 SVG/PNG 有大小与尺寸限制，避免异常大数据写入系统剪贴板。
-- 搜索设置页和主进程只记录是否保存、Provider id、结果数等摘要；Brave/Tavily API Key 不应进入日志、状态面板或错误摘要明文。
+- 搜索设置页和主进程只记录是否保存、Provider id、结果数、Key 池条目数量和脱敏 keyIndex 等摘要；Brave/Tavily API Key 不应进入日志、状态面板或错误摘要明文。
 
 ## 测试与验收
 
@@ -78,7 +78,7 @@ search settings
 - MCP 设置跳转依赖当前项目；没有活动项目或项目路径失效时，入口应禁用或展示恢复路径。
 - MCP 连接测试可能启动子进程或访问网络，设置页应有加载、取消/超时、禁用和错误状态。
 - 搜索设置 bridge 不存在时页面展示可读错误；保存时会归一化 Provider、结果数和 Key 字段。
-- DuckDuckGo 不需要 Key，普通 query 会直接读取 HTML 搜索结果；若遇到 bot challenge 或网络不可达，运行时返回空结果而不是工具错误。Brave/Tavily 需要 Key 或 `${ENV_NAME}` 引用，设置页 Provider Test 会展示 `configured / env-resolved / env-missing` 凭据状态和 auth/quota/bot-challenge/network/service 恢复提示。
+- DuckDuckGo 不需要 Key，普通 query 会直接读取 HTML 搜索结果；若遇到 bot challenge 或网络不可达，运行时返回空结果而不是工具错误。Brave/Tavily 需要至少一个 Key 或 `${ENV_NAME}` 引用，设置页 Provider Test 会展示 `configured / env-resolved / env-missing` 凭据状态、Key 池测试结果和 auth/quota/bot-challenge/network/service 恢复提示。
 
 ## TODO 对应项
 

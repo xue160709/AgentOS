@@ -27,6 +27,12 @@ export type WebSearchResultItem = {
   publishedAt?: string
 }
 
+export type WebSearchCredentialUsage = {
+  keyCount: number
+  attempted: number
+  fallbackCount: number
+}
+
 export type WebSearchResponse = {
   query: string
   provider: {
@@ -35,6 +41,7 @@ export type WebSearchResponse = {
   }
   generatedAt: string
   results: WebSearchResultItem[]
+  credential?: WebSearchCredentialUsage
 }
 
 export type WebSearchProviderStatus = {
@@ -90,7 +97,7 @@ type WebSearchProvider = {
   requiresCredential: boolean
   isAvailable: (env: WebSearchEnv) => boolean
   unavailableReason: (env: WebSearchEnv) => string
-  search: (request: WebSearchRequest, env: WebSearchEnv) => Promise<WebSearchResultItem[]>
+  search: (request: WebSearchRequest, env: WebSearchEnv) => Promise<WebSearchResultItem[] | { results: WebSearchResultItem[]; credential?: WebSearchCredentialUsage }>
 }
 
 type WebSearchLogContext = {
@@ -101,6 +108,13 @@ type WebSearchLogContext = {
   allowedDomainCount: number
   blockedDomainCount: number
   freshness?: string
+}
+
+type ApiKeyAttemptFailure = {
+  keyIndex: number
+  kind: WebSearchProviderErrorKind
+  message: string
+  recoveryHint?: string
 }
 
 type BraveSearchResponse = {
@@ -145,36 +159,17 @@ const braveProvider: WebSearchProvider = {
   id: 'brave',
   name: 'Brave Search',
   requiresCredential: true,
-  isAvailable: (env) => Boolean(resolveBraveApiKey(env)),
+  isAvailable: (env) => resolveBraveApiKeys(env).length > 0,
   unavailableReason: () => 'BRAVE_SEARCH_API_KEY is not configured.',
   async search(request, env) {
-    const apiKey = resolveBraveApiKey(env)
-    if (!apiKey) throw new Error('BRAVE_SEARCH_API_KEY is not configured.')
-
-    const url = new URL('https://api.search.brave.com/res/v1/web/search')
-    url.searchParams.set('q', request.query)
-    url.searchParams.set('count', String(request.maxResults))
-    url.searchParams.set('safesearch', 'moderate')
-    url.searchParams.set('text_decorations', 'false')
-    const freshness = normalizeBraveFreshness(request.freshness)
-    if (freshness) url.searchParams.set('freshness', freshness)
-
-    const body = await fetchJson<BraveSearchResponse>(url, {
-      headers: {
-        Accept: 'application/json',
-        'X-Subscription-Token': apiKey,
-      },
+    return searchWithApiKeyPool({
+      providerId: 'brave',
+      providerName: 'Brave Search',
+      missingCredentialMessage: 'BRAVE_SEARCH_API_KEY is not configured.',
+      keys: resolveBraveApiKeys(env),
+      request,
+      searchWithKey: (apiKey) => searchBraveWithApiKey(request, apiKey),
     })
-
-    return (body.web?.results ?? [])
-      .map((item) => ({
-        title: cleanText(item.title) || cleanText(item.profile?.name) || item.url || 'Untitled result',
-        url: item.url?.trim() ?? '',
-        snippet: cleanText(item.description),
-        source: cleanText(item.profile?.name) || domainFromUrl(item.url ?? ''),
-        publishedAt: item.page_age,
-      }))
-      .filter((item) => Boolean(item.url))
   },
 }
 
@@ -182,44 +177,17 @@ const tavilyProvider: WebSearchProvider = {
   id: 'tavily',
   name: 'Tavily',
   requiresCredential: true,
-  isAvailable: (env) => Boolean(resolveTavilyApiKey(env)),
+  isAvailable: (env) => resolveTavilyApiKeys(env).length > 0,
   unavailableReason: () => 'TAVILY_API_KEY is not configured.',
   async search(request, env) {
-    const apiKey = resolveTavilyApiKey(env)
-    if (!apiKey) throw new Error('TAVILY_API_KEY is not configured.')
-
-    const payload: Record<string, unknown> = {
-      query: request.query,
-      max_results: request.maxResults,
-      search_depth: 'basic',
-      include_answer: false,
-      include_images: false,
-      include_raw_content: false,
-    }
-    const timeRange = normalizeTavilyTimeRange(request.freshness)
-    if (timeRange) payload.time_range = timeRange
-    if (request.allowedDomains.length > 0) payload.include_domains = request.allowedDomains
-    if (request.blockedDomains.length > 0) payload.exclude_domains = request.blockedDomains
-
-    const body = await fetchJson<TavilySearchResponse>(new URL('https://api.tavily.com/search'), {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+    return searchWithApiKeyPool({
+      providerId: 'tavily',
+      providerName: 'Tavily',
+      missingCredentialMessage: 'TAVILY_API_KEY is not configured.',
+      keys: resolveTavilyApiKeys(env),
+      request,
+      searchWithKey: (apiKey) => searchTavilyWithApiKey(request, apiKey),
     })
-
-    return (body.results ?? [])
-      .map((item) => ({
-        title: cleanText(item.title) || item.url || 'Untitled result',
-        url: item.url?.trim() ?? '',
-        snippet: cleanText(item.content),
-        source: domainFromUrl(item.url ?? ''),
-        publishedAt: cleanText(item.published_date) || undefined,
-      }))
-      .filter((item) => Boolean(item.url))
   },
 }
 
@@ -247,6 +215,114 @@ const duckDuckGoProvider: WebSearchProvider = {
       return []
     }
   },
+}
+
+async function searchBraveWithApiKey(request: WebSearchRequest, apiKey: string): Promise<WebSearchResultItem[]> {
+  const url = new URL('https://api.search.brave.com/res/v1/web/search')
+  url.searchParams.set('q', request.query)
+  url.searchParams.set('count', String(request.maxResults))
+  url.searchParams.set('safesearch', 'moderate')
+  url.searchParams.set('text_decorations', 'false')
+  const freshness = normalizeBraveFreshness(request.freshness)
+  if (freshness) url.searchParams.set('freshness', freshness)
+
+  const body = await fetchJson<BraveSearchResponse>(url, {
+    headers: {
+      Accept: 'application/json',
+      'X-Subscription-Token': apiKey,
+    },
+  })
+
+  return (body.web?.results ?? [])
+    .map((item) => ({
+      title: cleanText(item.title) || cleanText(item.profile?.name) || item.url || 'Untitled result',
+      url: item.url?.trim() ?? '',
+      snippet: cleanText(item.description),
+      source: cleanText(item.profile?.name) || domainFromUrl(item.url ?? ''),
+      publishedAt: item.page_age,
+    }))
+    .filter((item) => Boolean(item.url))
+}
+
+async function searchTavilyWithApiKey(request: WebSearchRequest, apiKey: string): Promise<WebSearchResultItem[]> {
+  const payload: Record<string, unknown> = {
+    query: request.query,
+    max_results: request.maxResults,
+    search_depth: 'basic',
+    include_answer: false,
+    include_images: false,
+    include_raw_content: false,
+  }
+  const timeRange = normalizeTavilyTimeRange(request.freshness)
+  if (timeRange) payload.time_range = timeRange
+  if (request.allowedDomains.length > 0) payload.include_domains = request.allowedDomains
+  if (request.blockedDomains.length > 0) payload.exclude_domains = request.blockedDomains
+
+  const body = await fetchJson<TavilySearchResponse>(new URL('https://api.tavily.com/search'), {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  return (body.results ?? [])
+    .map((item) => ({
+      title: cleanText(item.title) || item.url || 'Untitled result',
+      url: item.url?.trim() ?? '',
+      snippet: cleanText(item.content),
+      source: domainFromUrl(item.url ?? ''),
+      publishedAt: cleanText(item.published_date) || undefined,
+    }))
+    .filter((item) => Boolean(item.url))
+}
+
+async function searchWithApiKeyPool(options: {
+  providerId: string
+  providerName: string
+  missingCredentialMessage: string
+  keys: string[]
+  request: WebSearchRequest
+  searchWithKey: (apiKey: string) => Promise<WebSearchResultItem[]>
+}): Promise<{ results: WebSearchResultItem[]; credential?: WebSearchCredentialUsage }> {
+  if (options.keys.length === 0) throw new Error(options.missingCredentialMessage)
+
+  const failures: ApiKeyAttemptFailure[] = []
+  for (const [index, apiKey] of options.keys.entries()) {
+    const keyIndex = index + 1
+    try {
+      const results = await options.searchWithKey(apiKey)
+      if (failures.length > 0) {
+        safeConsoleInfo('[AgentOS/WebSearch] provider key fallback success', {
+          provider: options.providerId,
+          keyIndex,
+          failedAttempts: failures.length,
+        })
+      }
+      return {
+        results,
+        credential:
+          options.keys.length > 1 || failures.length > 0
+            ? { keyCount: options.keys.length, attempted: keyIndex, fallbackCount: failures.length }
+            : undefined,
+      }
+    } catch (error) {
+      const summary = summarizeWebSearchProviderError(error)
+      failures.push({ keyIndex, kind: summary.kind, message: summary.message, recoveryHint: summary.recoveryHint })
+      if (options.keys.length === 1 || !isRetryableApiKeyPoolError(summary.kind)) throw error
+
+      safeConsoleWarn('[AgentOS/WebSearch] provider key attempt failed', {
+        provider: options.providerId,
+        keyIndex,
+        errorKind: summary.kind,
+        error: summarizeErrorForLog(error),
+      })
+    }
+  }
+
+  throw createApiKeyPoolError(options.providerName, failures)
 }
 
 const WEB_SEARCH_PROVIDERS = [braveProvider, tavilyProvider, duckDuckGoProvider] as const
@@ -318,11 +394,15 @@ export function summarizeWebSearchProviderError(error: unknown): WebSearchProvid
 }
 
 export function buildWebSearchConfigSignature(env: WebSearchEnv): string {
+  const braveKeyCount = resolveBraveApiKeys(env).length
+  const tavilyKeyCount = resolveTavilyApiKeys(env).length
   return JSON.stringify({
     provider: requestedProviderId(env) || 'auto',
-    hasBraveKey: Boolean(resolveBraveApiKey(env)),
-    hasTavilyKey: Boolean(resolveTavilyApiKey(env)),
-    version: 2,
+    hasBraveKey: braveKeyCount > 0,
+    hasTavilyKey: tavilyKeyCount > 0,
+    braveKeyCount,
+    tavilyKeyCount,
+    version: 3,
   })
 }
 
@@ -339,12 +419,15 @@ export async function searchWeb(request: WebSearchRequest, env: WebSearchEnv = p
   safeConsoleInfo('[AgentOS/WebSearch] search enter', logContext)
 
   try {
-    const rawResults = await provider.search(request, env)
+    const providerOutput = await provider.search(request, env)
+    const rawResults = Array.isArray(providerOutput) ? providerOutput : providerOutput.results
+    const credential = Array.isArray(providerOutput) ? undefined : providerOutput.credential
     const results = filterWebSearchResults(rawResults, request).slice(0, request.maxResults)
     safeConsoleInfo('[AgentOS/WebSearch] search success', {
       ...logContext,
       resultCount: results.length,
       rawResultCount: rawResults.length,
+      credential: credential ? { keyCount: credential.keyCount, attempted: credential.attempted, fallbackCount: credential.fallbackCount } : undefined,
       ms: Date.now() - startedAt,
     })
     return {
@@ -352,6 +435,7 @@ export async function searchWeb(request: WebSearchRequest, env: WebSearchEnv = p
       provider: { id: provider.id, name: provider.name },
       generatedAt: new Date().toISOString(),
       results,
+      ...(credential ? { credential } : {}),
     }
   } catch (error) {
     safeConsoleError('[AgentOS/WebSearch] search failed', {
@@ -377,6 +461,7 @@ export function formatWebSearchToolOutput(response: WebSearchResponse): string {
     {
       source: 'AgentOS web_search',
       provider: response.provider,
+      ...(response.credential ? { credential: response.credential } : {}),
       query: response.query,
       generatedAt: response.generatedAt,
       results: response.results.map((item, index) => ({
@@ -432,12 +517,59 @@ function normalizeRequestedProviderId(value: string): string {
   return value
 }
 
-function resolveBraveApiKey(env: WebSearchEnv): string {
-  return env.BRAVE_SEARCH_API_KEY?.trim() || env.BRAVE_API_KEY?.trim() || ''
+function resolveBraveApiKeys(env: WebSearchEnv): string[] {
+  return normalizeApiKeyPoolEnv(env.BRAVE_SEARCH_API_KEYS, env.BRAVE_SEARCH_API_KEY, env.BRAVE_API_KEY)
 }
 
-function resolveTavilyApiKey(env: WebSearchEnv): string {
-  return env.TAVILY_API_KEY?.trim() || ''
+function resolveTavilyApiKeys(env: WebSearchEnv): string[] {
+  return normalizeApiKeyPoolEnv(env.TAVILY_API_KEYS, env.TAVILY_API_KEY)
+}
+
+function normalizeApiKeyPoolEnv(...values: Array<string | undefined>): string[] {
+  return values.flatMap((value) => parseApiKeyPoolValue(value)).filter(Boolean)
+}
+
+function parseApiKeyPoolValue(value: string | undefined): string[] {
+  const trimmed = value?.trim()
+  if (!trimmed) return []
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      if (Array.isArray(parsed)) return parsed.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
+    } catch {
+      /* fall through to delimiter parsing */
+    }
+  }
+  return trimmed
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function isRetryableApiKeyPoolError(kind: WebSearchProviderErrorKind): boolean {
+  return kind === 'auth' || kind === 'quota' || kind === 'network' || kind === 'service'
+}
+
+function createApiKeyPoolError(providerName: string, failures: ApiKeyAttemptFailure[]): WebSearchProviderError {
+  const summary = summarizeApiKeyPoolFailures(failures)
+  const lastRetryable = [...failures].reverse().find((failure) => isRetryableApiKeyPoolError(failure.kind))
+  return new WebSearchProviderError(
+    `${providerName} API key pool failed after ${failures.length} attempt(s). Error kinds: ${summary}.`,
+    {
+      kind: lastRetryable?.kind ?? 'unknown',
+      recoveryHint: `Check ${providerName} API key pool order, validity, and quota, then test the provider again.`,
+    },
+  )
+}
+
+function summarizeApiKeyPoolFailures(failures: ApiKeyAttemptFailure[]): string {
+  const counts = new Map<WebSearchProviderErrorKind, number>()
+  for (const failure of failures) {
+    counts.set(failure.kind, (counts.get(failure.kind) ?? 0) + 1)
+  }
+  return Array.from(counts.entries())
+    .map(([kind, count]) => `${kind}=${count}`)
+    .join(', ')
 }
 
 async function fetchJson<T>(url: URL, init: RequestInit): Promise<T> {

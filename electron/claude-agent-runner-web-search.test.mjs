@@ -293,6 +293,51 @@ test('web search provider executes Tavily through POST and returns normalized re
   }
 })
 
+test('web search provider falls back through Brave API key pool', async () => {
+  const { normalizeWebSearchRequest, searchWeb } = loadWebSearchProviderModule()
+  const originalFetch = globalThis.fetch
+  const seenKeys = []
+  globalThis.fetch = async (url, init) => {
+    assert.equal(new URL(url).hostname, 'api.search.brave.com')
+    seenKeys.push(init.headers['X-Subscription-Token'])
+    if (seenKeys.length === 1) {
+      return {
+        ok: false,
+        status: 429,
+        text: async () => JSON.stringify({ message: 'Rate limit reached' }),
+      }
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        web: {
+          results: [
+            {
+              title: 'AgentOS search',
+              url: 'https://example.com/search',
+              description: 'fallback ok',
+              profile: { name: 'Example' },
+            },
+          ],
+        },
+      }),
+    }
+  }
+
+  try {
+    const response = await searchWeb(
+      normalizeWebSearchRequest({ query: 'agentos search', max_results: 1 }),
+      { AGENTOS_WEB_SEARCH_PROVIDER: 'brave', BRAVE_SEARCH_API_KEYS: JSON.stringify(['brave-old', 'brave-next']) },
+    )
+
+    assert.deepEqual(seenKeys, ['brave-old', 'brave-next'])
+    assert.deepEqual(response.credential, { keyCount: 2, attempted: 2, fallbackCount: 1 })
+    assert.equal(response.results[0].url, 'https://example.com/search')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('web search provider maps HTTP quota errors and does not leak credentials', async () => {
   const { normalizeWebSearchRequest, searchWeb, summarizeWebSearchProviderError } = loadWebSearchProviderModule()
   const originalFetch = globalThis.fetch
@@ -315,6 +360,41 @@ test('web search provider maps HTTP quota errors and does not leak credentials',
         assert.match(summary.message, /Tavily quota or plan limit was reached/)
         assert.match(summary.message, /Monthly request limit reached/)
         assert.doesNotMatch(summary.message, /tvly-secret-value/)
+        return true
+      },
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('web search provider aggregates API key pool failures without leaking credentials', async () => {
+  const { normalizeWebSearchRequest, searchWeb, summarizeWebSearchProviderError } = loadWebSearchProviderModule()
+  const originalFetch = globalThis.fetch
+  const statuses = [401, 432]
+  globalThis.fetch = async () => {
+    const status = statuses.shift() ?? 432
+    return {
+      ok: false,
+      status,
+      text: async () => JSON.stringify({ detail: status === 401 ? 'bad credential' : 'plan limit' }),
+    }
+  }
+
+  try {
+    await assert.rejects(
+      () =>
+        searchWeb(
+          normalizeWebSearchRequest({ query: 'claude agent sdk', max_results: 1 }),
+          { AGENTOS_WEB_SEARCH_PROVIDER: 'tavily', TAVILY_API_KEYS: JSON.stringify(['tvly-secret-one', 'tvly-secret-two']) },
+        ),
+      (error) => {
+        const summary = summarizeWebSearchProviderError(error)
+        assert.equal(summary.kind, 'quota')
+        assert.match(summary.message, /Tavily API key pool failed after 2 attempt/)
+        assert.match(summary.message, /auth=1/)
+        assert.match(summary.message, /quota=1/)
+        assert.doesNotMatch(summary.message, /tvly-secret-one|tvly-secret-two/)
         return true
       },
     )
@@ -353,6 +433,50 @@ test('web search provider test resolves environment references before probing', 
     assert.equal(result.providerId, 'tavily')
     assert.equal(result.credentialStatus, 'env-resolved')
     assert.equal(result.resultCount, 1)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('web search provider test reports key pool fallback metadata', async () => {
+  const { testWebSearchProviderSettings } = loadWebSearchRuntimeModule()
+  const originalFetch = globalThis.fetch
+  const seenKeys = []
+  globalThis.fetch = async (url, init) => {
+    assert.equal(new URL(url).hostname, 'api.tavily.com')
+    seenKeys.push(init.headers.Authorization)
+    if (seenKeys.length === 1) {
+      return {
+        ok: false,
+        status: 432,
+        text: async () => JSON.stringify({ detail: 'usage limit' }),
+      }
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        results: [{ title: 'Connectivity', url: 'https://example.com/result', content: 'ok' }],
+      }),
+    }
+  }
+
+  try {
+    const result = await testWebSearchProviderSettings(
+      {
+        mode: 'agentos',
+        provider: 'tavily',
+        maxResults: 3,
+        braveApiKey: '',
+        tavilyApiKey: '',
+        tavilyApiKeys: ['${OLD_TAVILY_KEY}', '${NEXT_TAVILY_KEY}'],
+      },
+      { OLD_TAVILY_KEY: 'old-tavily-key', NEXT_TAVILY_KEY: 'next-tavily-key' },
+    )
+
+    assert.equal(result.ok, true)
+    assert.deepEqual(seenKeys, ['Bearer old-tavily-key', 'Bearer next-tavily-key'])
+    assert.equal(result.credentialAttemptCount, 2)
+    assert.equal(result.credentialFallbackCount, 1)
   } finally {
     globalThis.fetch = originalFetch
   }

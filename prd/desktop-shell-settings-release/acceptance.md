@@ -152,6 +152,27 @@
 
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: browser smoke + npm run test:electron｜证据: TESTING_CHECKLIST.md｜
 
+#### 场景：配置 Provider API Key 池
+- GIVEN 用户在搜索设置页选择 AgentOS 搜索 Provider，并选择 Brave Search 或 Tavily
+- WHEN 用户新增、删除或重排 Provider API Key 条目
+- THEN 页面以列表形式展示 Key 池，保留用户定义的优先级顺序，每个条目支持明文 Key 或 `${ENV_NAME}` 引用，并为新增、删除、上移、下移和 Key 输入提供稳定可访问控件
+
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜selector: [data-testid="web-search-key-pool"]｜证据: test-results/verification-summary.md｜
+
+#### 场景：保存并重载 Provider API Key 池
+- GIVEN 用户已为 Brave Search 或 Tavily 配置多个 Provider API Key 条目
+- WHEN 用户保存搜索设置并重新打开全局搜索设置页或应用重新读取设置文件
+- THEN 系统通过受控 preload IPC 保存 Key 池数组，并按原顺序展示；旧版单 Key 配置会迁移为单元素 Key 池，空白条目会被归一化移除，日志和状态摘要不展示 Key 明文
+
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜selector: [data-testid="web-search-settings-save"]｜证据: test-results/verification-summary.md｜
+
+#### 场景：测试 Provider API Key 池
+- GIVEN Brave Search 或 Tavily 配置了多个 Provider API Key 条目，且至少一个条目可用
+- WHEN 用户点击 Test Provider
+- THEN 系统按 Key 池顺序测试并在首个成功 Key 返回时展示连接成功；若前置 Key 失败，结果文案说明已尝试后续 Key，但不展示 Key 明文
+
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜selector: [data-testid="web-search-provider-test-status"]｜证据: test-results/verification-summary.md｜
+
 ## 平台专项验证（Electron + native helper）
 
 - 验证开发环境不触发真实更新下载。

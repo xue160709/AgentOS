@@ -3575,6 +3575,64 @@ button.app-file-tree-row {
   color: var(--color-token-error-foreground);
 }
 
+.web-search-key-pool {
+  display: grid;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.web-search-key-pool__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: calc(var(--spacing) * 1.5);
+  align-items: center;
+}
+
+.web-search-key-pool__input {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.web-search-key-pool__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 0.75);
+}
+
+.web-search-key-pool__button {
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0;
+  justify-content: center;
+}
+
+.web-search-key-pool__button--danger {
+  color: var(--color-token-error-foreground);
+}
+
+.web-search-key-pool__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--spacing) * 2);
+}
+
+.web-search-key-pool__footer .settings-field-row__hint {
+  min-width: 0;
+}
+
+@media (max-width: 620px) {
+  .web-search-key-pool__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .web-search-key-pool__footer {
+    display: grid;
+    justify-items: start;
+  }
+}
+
 .settings-provider-body__actions-row {
   display: flex;
   flex-wrap: wrap;

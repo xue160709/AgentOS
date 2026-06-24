@@ -304,6 +304,8 @@ export function getDefaultWebSearchSettings(): AgentWebSearchSettings {
     maxResults: 5,
     braveApiKey: '',
     tavilyApiKey: '',
+    braveApiKeys: [],
+    tavilyApiKeys: [],
   }
 }
 
@@ -536,13 +538,22 @@ export function normalizeWebSearchSettings(value: unknown): AgentWebSearchSettin
   const defaults = getDefaultWebSearchSettings()
   if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults
   const record = value as Record<string, unknown>
+  const braveApiKeys = normalizeApiKeyPool(record.braveApiKeys, record.braveApiKey)
+  const tavilyApiKeys = normalizeApiKeyPool(record.tavilyApiKeys, record.tavilyApiKey)
   return {
     mode: record.mode === 'agentos' ? 'agentos' : 'native',
     provider: normalizeWebSearchProvider(record.provider),
     maxResults: clampNumber(record.maxResults, 1, 10, defaults.maxResults),
-    braveApiKey: typeof record.braveApiKey === 'string' ? record.braveApiKey.trim() : '',
-    tavilyApiKey: typeof record.tavilyApiKey === 'string' ? record.tavilyApiKey.trim() : '',
+    braveApiKey: braveApiKeys[0] ?? '',
+    tavilyApiKey: tavilyApiKeys[0] ?? '',
+    braveApiKeys,
+    tavilyApiKeys,
   }
+}
+
+function normalizeApiKeyPool(poolValue: unknown, legacyValue: unknown): string[] {
+  const source = Array.isArray(poolValue) ? poolValue : typeof legacyValue === 'string' ? [legacyValue] : []
+  return source.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
 }
 
 function normalizeWebSearchProvider(value: unknown): AgentWebSearchProviderId {

@@ -149,6 +149,20 @@
 
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: provider smoke｜证据: TESTING_CHECKLIST.md｜
 
+#### 场景：API Key 池按顺序轮询
+- GIVEN 全局搜索设置选择 AgentOS 搜索 Provider 且 Provider 为 Brave Search 或 Tavily，并配置多个 API Key 或 `${ENV_NAME}` 引用
+- WHEN 当前优先级最高的 Key 返回认证失败、配额/套餐限制、429、网络超时或服务错误，且后续 Key 可用
+- THEN `web_search` 使用同一次请求参数按顺序尝试下一个 Key，最终返回成功 Key 的归一化搜索结果；日志只记录 provider、keyIndex、errorKind、queryLength 和耗时，不输出任何 API Key 或完整 header
+
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: unit/integration: node --test electron/claude-agent-runner-web-search.test.mjs + npm run test:electron｜证据: test-results/verification-summary.md｜
+
+#### 场景：API Key 池全部失败时脱敏汇总
+- GIVEN Brave Search 或 Tavily 的 API Key 池中所有已解析 Key 都不可用，或所有 `${ENV_NAME}` 引用均未解析
+- WHEN AgentOS `web_search` 被调用
+- THEN 工具返回可读的聚合失败摘要，说明失败数量和主要错误类型，并给出恢复建议；日志和 transcript 不输出 API Key、Bearer token、完整 header 或完整请求体
+
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: unit/integration: node --test electron/claude-agent-runner-web-search.test.mjs + npm run test:electron｜证据: test-results/verification-summary.md｜
+
 ## 平台专项验证（Electron + React）
 
 - 验证主进程事件只能影响归属线程。

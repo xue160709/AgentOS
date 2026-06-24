@@ -62,16 +62,27 @@ const DEFAULT_WEB_SEARCH_SETTINGS: AgentWebSearchSettings = {
   maxResults: 5,
   braveApiKey: '',
   tavilyApiKey: '',
+  braveApiKeys: [],
+  tavilyApiKeys: [],
 }
 
 function normalizeWebSearchSettingsDraft(settings: AgentWebSearchSettings): AgentWebSearchSettings {
+  const braveApiKeys = normalizeApiKeyPoolDraft(settings.braveApiKeys, settings.braveApiKey)
+  const tavilyApiKeys = normalizeApiKeyPoolDraft(settings.tavilyApiKeys, settings.tavilyApiKey)
   return {
     mode: settings.mode === 'agentos' ? 'agentos' : 'native',
     provider: WEB_SEARCH_PROVIDERS.includes(settings.provider) ? settings.provider : 'duckduckgo',
     maxResults: clampUiNumber(settings.maxResults, 1, 10, DEFAULT_WEB_SEARCH_SETTINGS.maxResults),
-    braveApiKey: settings.braveApiKey.trim(),
-    tavilyApiKey: settings.tavilyApiKey.trim(),
+    braveApiKey: braveApiKeys[0] ?? '',
+    tavilyApiKey: tavilyApiKeys[0] ?? '',
+    braveApiKeys,
+    tavilyApiKeys,
   }
+}
+
+function normalizeApiKeyPoolDraft(keys: string[] | undefined, legacyKey: string): string[] {
+  const source = Array.isArray(keys) ? keys : [legacyKey]
+  return source.map((key) => key.trim()).filter(Boolean)
 }
 
 type TranslateFn = (path: string, vars?: Record<string, string | number>) => string
@@ -79,6 +90,15 @@ type GlobalMcpOperation = 'idle' | 'saving' | 'testing'
 
 function formatWebSearchProviderTestStatus(result: AgentWebSearchProviderTestResult, t: TranslateFn): string {
   if (result.ok) {
+    const fallbackCount = result.credentialFallbackCount ?? 0
+    if (fallbackCount > 0) {
+      return t('settings.search.testConnectedWithFallback', {
+        provider: result.providerName,
+        count: result.resultCount,
+        attempts: result.credentialAttemptCount ?? fallbackCount + 1,
+        fallbackCount,
+      })
+    }
     return t('settings.search.testConnected', {
       provider: result.providerName,
       count: result.resultCount,
@@ -100,10 +120,30 @@ function getWebSearchCredentialHint(
   if (result?.providerId === settings.provider) return t(`settings.search.credential.${result.credentialStatus}`)
   if (settings.provider === 'duckduckgo') return t('settings.search.credential.notRequired')
 
-  const key = settings.provider === 'brave' ? settings.braveApiKey.trim() : settings.tavilyApiKey.trim()
-  if (!key) return t('settings.search.credential.missing')
-  if (/\$\{[A-Z_a-z][A-Z_a-z0-9]*\}/.test(key)) return t('settings.search.credential.envPending')
+  const keys = normalizeApiKeyPoolDraft(getWebSearchApiKeyPool(settings, settings.provider), '')
+  if (keys.length === 0) return t('settings.search.credential.missing')
+  if (keys.some((key) => /\$\{[A-Z_a-z][A-Z_a-z0-9]*\}/.test(key))) return t('settings.search.credential.envPending')
   return t('settings.search.credential.configured')
+}
+
+function getWebSearchApiKeyPool(settings: AgentWebSearchSettings, provider: AgentWebSearchProviderId): string[] {
+  if (provider === 'brave') return settings.braveApiKeys.length > 0 ? settings.braveApiKeys : settings.braveApiKey ? [settings.braveApiKey] : []
+  if (provider === 'tavily') return settings.tavilyApiKeys.length > 0 ? settings.tavilyApiKeys : settings.tavilyApiKey ? [settings.tavilyApiKey] : []
+  return []
+}
+
+function withWebSearchApiKeyPool(
+  settings: AgentWebSearchSettings,
+  provider: AgentWebSearchProviderId,
+  keys: string[],
+): AgentWebSearchSettings {
+  if (provider === 'brave') {
+    return { ...settings, braveApiKeys: keys, braveApiKey: keys.find((key) => key.trim())?.trim() ?? '' }
+  }
+  if (provider === 'tavily') {
+    return { ...settings, tavilyApiKeys: keys, tavilyApiKey: keys.find((key) => key.trim())?.trim() ?? '' }
+  }
+  return settings
 }
 
 function clampUiNumber(value: string | number, min: number, max: number, fallback: number): number {
@@ -1221,12 +1261,22 @@ export function GlobalWebSearchSettingsPage() {
   const [providerTestResult, setProviderTestResult] = useState<AgentWebSearchProviderTestResult | null>(null)
   const dirty = JSON.stringify(savedSettings) !== JSON.stringify(draftSettings)
   const usingAgentOs = draftSettings.mode === 'agentos'
+  const activeKeyProvider = draftSettings.provider === 'brave' || draftSettings.provider === 'tavily' ? draftSettings.provider : null
+  const activeApiKeys = activeKeyProvider ? getWebSearchApiKeyPool(draftSettings, activeKeyProvider) : []
+  const visibleApiKeys = activeApiKeys.length > 0 ? activeApiKeys : ['']
   const credentialHint = getWebSearchCredentialHint(draftSettings, providerTestResult, t)
 
   const updateDraftSettings = useCallback((updater: (current: AgentWebSearchSettings) => AgentWebSearchSettings) => {
     setProviderTestResult(null)
     setDraftSettings(updater)
   }, [])
+
+  const updateWebSearchApiKeyPool = useCallback(
+    (provider: AgentWebSearchProviderId, updater: (keys: string[]) => string[]) => {
+      updateDraftSettings((current) => withWebSearchApiKeyPool(current, provider, updater(getWebSearchApiKeyPool(current, provider))))
+    },
+    [updateDraftSettings],
+  )
 
   const loadWebSearchSettings = useCallback(async () => {
     const getGlobalWebSearchSettings = window.desktop?.getGlobalWebSearchSettings
@@ -1399,36 +1449,102 @@ export function GlobalWebSearchSettingsPage() {
               />
             </label>
 
-            {draftSettings.provider === 'brave' ? (
-              <label className="agent-mcp-field agent-mcp-field--wide" htmlFor="web-search-brave-key">
-                <span>{t('settings.search.braveApiKey')}</span>
-                <input
-                  id="web-search-brave-key"
-                  className="settings-input"
-                  value={draftSettings.braveApiKey}
-                  disabled={saving || testingProvider || !usingAgentOs}
-                  spellCheck={false}
-                  placeholder="${BRAVE_SEARCH_API_KEY}"
-                  onChange={(event) => updateDraftSettings((current) => ({ ...current, braveApiKey: event.target.value }))}
-                />
-                <small className="settings-field-row__hint" data-testid="web-search-key-status">{credentialHint}</small>
-              </label>
-            ) : null}
-
-            {draftSettings.provider === 'tavily' ? (
-              <label className="agent-mcp-field agent-mcp-field--wide" htmlFor="web-search-tavily-key">
-                <span>{t('settings.search.tavilyApiKey')}</span>
-                <input
-                  id="web-search-tavily-key"
-                  className="settings-input"
-                  value={draftSettings.tavilyApiKey}
-                  disabled={saving || testingProvider || !usingAgentOs}
-                  spellCheck={false}
-                  placeholder="${TAVILY_API_KEY}"
-                  onChange={(event) => updateDraftSettings((current) => ({ ...current, tavilyApiKey: event.target.value }))}
-                />
-                <small className="settings-field-row__hint" data-testid="web-search-key-status">{credentialHint}</small>
-              </label>
+            {activeKeyProvider ? (
+              <div className="agent-mcp-field agent-mcp-field--wide" data-testid="web-search-key-pool">
+                <span>{t(`settings.search.${activeKeyProvider}ApiKeyPool`)}</span>
+                <div
+                  className="web-search-key-pool"
+                  role="list"
+                  aria-label={t('settings.search.apiKeyPoolAria', { provider: t(`settings.search.provider.${activeKeyProvider}.title`) })}
+                >
+                  {visibleApiKeys.map((apiKey, index) => {
+                    const rowId = `web-search-${activeKeyProvider}-key-${index}`
+                    const moveDisabled = saving || testingProvider || !usingAgentOs
+                    return (
+                      <div className="web-search-key-pool__row" role="listitem" key={`${activeKeyProvider}-${index}`}>
+                        <label className="sr-only" htmlFor={rowId}>
+                          {t('settings.search.apiKeyPoolItemLabel', { index: index + 1 })}
+                        </label>
+                        <input
+                          id={rowId}
+                          className="settings-input web-search-key-pool__input"
+                          data-testid={`web-search-key-pool-input-${index}`}
+                          value={apiKey}
+                          disabled={saving || testingProvider || !usingAgentOs}
+                          spellCheck={false}
+                          placeholder={activeKeyProvider === 'brave' ? '${BRAVE_SEARCH_API_KEY}' : '${TAVILY_API_KEY}'}
+                          onChange={(event) =>
+                            updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
+                              const next = keys.length > 0 ? [...keys] : ['']
+                              next[index] = event.target.value
+                              return next
+                            })
+                          }
+                        />
+                        <div className="web-search-key-pool__actions">
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-compact web-search-key-pool__button"
+                            aria-label={t('settings.search.apiKeyMoveUp', { index: index + 1 })}
+                            disabled={moveDisabled || index === 0}
+                            onClick={() =>
+                              updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
+                                const next = [...keys]
+                                const previous = next[index - 1]
+                                next[index - 1] = next[index]
+                                next[index] = previous
+                                return next
+                              })
+                            }
+                          >
+                            <IconInline name="arrowUp" />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-compact web-search-key-pool__button"
+                            aria-label={t('settings.search.apiKeyMoveDown', { index: index + 1 })}
+                            disabled={moveDisabled || index >= visibleApiKeys.length - 1}
+                            onClick={() =>
+                              updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
+                                const next = [...keys]
+                                const currentValue = next[index]
+                                next[index] = next[index + 1]
+                                next[index + 1] = currentValue
+                                return next
+                              })
+                            }
+                          >
+                            <IconInline name="arrowDown" />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-compact web-search-key-pool__button web-search-key-pool__button--danger"
+                            aria-label={t('settings.search.apiKeyRemove', { index: index + 1 })}
+                            disabled={saving || testingProvider || !usingAgentOs}
+                            onClick={() =>
+                              updateWebSearchApiKeyPool(activeKeyProvider, (keys) => keys.filter((_key, keyIndex) => keyIndex !== index))
+                            }
+                          >
+                            <IconInline name="trash" />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="web-search-key-pool__footer">
+                  <small className="settings-field-row__hint" data-testid="web-search-key-status">{credentialHint}</small>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-compact"
+                    disabled={saving || testingProvider || !usingAgentOs}
+                    onClick={() => updateWebSearchApiKeyPool(activeKeyProvider, (keys) => [...keys, ''])}
+                  >
+                    <IconInline name="plus" />
+                    <span>{t('settings.search.apiKeyAdd')}</span>
+                  </button>
+                </div>
+              </div>
             ) : null}
           </div>
 

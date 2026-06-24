@@ -174,6 +174,10 @@
   - 进展：2026-06-24，本轮完成 provider registry、Brave / DuckDuckGo Search 首批 provider、内部 `agentos-web` MCP server、`WebSearch -> mcp__agentos-web__web_search` alias、内置 WebSearch 禁用和 runner 接入；本轮继续按全局搜索设置接入原生/AgentOS 路由选择，并补 Tavily Provider。验收契约 → `prd/chat-agent-runtime/acceptance.md`、`prd/desktop-shell-settings-release/acceptance.md`。
 - [x] WebSearch Provider 体验补强：为 DuckDuckGo bot challenge/网络不可达、Tavily/Brave 认证或配额错误、Provider 保存前连接测试和字段级恢复提示补 UI/运行时文案。
   - 进展：2026-06-24，已按 OpenClaw 的 DuckDuckGo HTML 搜索页解析路线调整，DuckDuckGo 不再调用 Instant Answer API；HTML endpoint 网络不可达时降级为空结果而不是工具错误，默认请求超时为 20 秒；Tavily key 可识别但外部 smoke 返回 HTTP 432 usage limit。本轮继续补 `testGlobalWebSearchProvider` IPC、设置页 Test Provider、`configured / env-resolved / env-missing` 字段状态、auth/quota/bot-challenge/network/service 恢复文案和回归测试。
+- [x] WebSearch API Key 池：Brave Search 与 Tavily Provider 支持多个 API Key / `${ENV_NAME}` 引用，运行时在单个 Key 认证、配额、429、网络或服务失败时按顺序轮询后续 Key；设置页支持 Key 池新增、删除、排序、保存重载和 Provider Test 脱敏汇总。
+  - 验收契约 → `prd/chat-agent-runtime/acceptance.md`、`prd/desktop-shell-settings-release/acceptance.md`
+  - 产品发现：2026-06-24，确认轮询发生在 AgentOS Provider 内部，不依赖 Claude Agent SDK native WebSearch；范围覆盖所有需要 API Key 的搜索 Provider（Brave/Tavily），DuckDuckGo 不受影响。
+  - 证据：`npm run typecheck` ✅、`node --test electron/claude-agent-runner-web-search.test.mjs electron/agent-mode-settings-store.test.mjs` ✅、`npm run test:electron` ✅、WebSearch Key Pool selector/source audit ✅、`bash .codex/scripts/check-acceptance.sh chat-agent-runtime` ✅、`bash .codex/scripts/check-acceptance.sh desktop-shell-settings-release` ✅。新增 5 个 acceptance 场景已由正式 `project-verify` 盖状态戳。
 - [x] 权限与恢复交互：MCP 权限弹窗展示 server、tool、输入摘要和 policy 来源；server 失败、认证缺失、命令不存在、HTTP 401/403 时提供明确恢复路径。
   - 证据：权限/Transcript 继续使用 `server · tool` 友好名；项目策略 UI 展示默认/项目/手动来源；状态与全局编辑页展示 auth/env/command/url 恢复提示。
 - [x] Session 生效策略：定义 MCP 配置变化后是下一轮生效、新会话生效还是立即重建 session，并在 UI 中给出明确提示。
@@ -369,3 +373,28 @@
   - `npm run typecheck` ✅
   - `node --test electron/chat-workspace-store.test.mjs electron/workspace-session.test.mjs` ✅（14/14）
   - `npm run test:electron` ✅（75/75）
+- 本轮：按用户反馈轻量调整 Agent 状态面板：MCP 服务优先显示项目连接测试缓存，连接成功显示绿灯和 tools 数，未测试/运行时 pending 显示橙灯“待检测”，失败/认证类状态显示红灯“未连接”；项目首页隐藏 Agent 状态面板入口，对话流中保留入口；从状态面板打开 MCP 设置会先回到项目首页再展示弹窗。
+- 验证类别：Codex 自检（Agent 状态 UI + 交互状态边界；未执行正式 `project-verify` 盖戳）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/desktop-seam.test.mjs` ✅
+  - `git diff --check` ✅
+- 本轮：实现 WebSearch API Key 池：Brave Search 与 Tavily Provider 支持多个明文 Key / `${ENV_NAME}` 引用，AgentOS Provider 内部在认证、配额、429、网络或服务失败时按顺序尝试后续 Key；搜索设置页改为 Key 池列表，支持新增、删除、排序、保存重载和 Provider Test fallback 提示。
+- 验证类别：Codex 自检（WebSearch Provider runtime + 设置页 Key 池 UI + store 迁移；随后已执行正式 `project-verify`，见下条记录）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/claude-agent-runner-web-search.test.mjs electron/agent-mode-settings-store.test.mjs` ✅（19/19）
+  - `bash .codex/scripts/check-acceptance.sh chat-agent-runtime` ✅
+  - `bash .codex/scripts/check-acceptance.sh desktop-shell-settings-release` ✅
+  - `git diff --check` ✅
+- 本轮：按用户要求对 WebSearch API Key 池执行正式 `project-verify`，覆盖 `prd/chat-agent-runtime/acceptance.md` 的 2 个新增 Provider 轮询场景和 `prd/desktop-shell-settings-release/acceptance.md` 的 3 个设置页 Key 池场景。
+- 验证类别：正式验收（project-verify，WebSearch API Key 池增量范围）。
+- 验收结果：5 个新增场景 ✅ 通过；0 个 ❌；0 个 ⚠️；无阻塞。`chat-agent-runtime` 累计 20/20 ✅，`desktop-shell-settings-release` 累计 18 ✅ / 3 ⚠️（原有真实 Electron GUI / macOS 权限人工项）。
+- 证据：`TESTING_CHECKLIST.md`、`test-results/verification-summary.md`。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/claude-agent-runner-web-search.test.mjs electron/agent-mode-settings-store.test.mjs` ✅（19/19）
+  - `npm run test:electron` ✅（78/78）
+  - WebSearch Key Pool selector/source audit ✅（23 checks）
+  - `bash .codex/scripts/check-acceptance.sh chat-agent-runtime` ✅
+  - `bash .codex/scripts/check-acceptance.sh desktop-shell-settings-release` ✅
