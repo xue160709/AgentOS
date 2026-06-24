@@ -744,7 +744,6 @@
           "description": "Requires a Tavily API key and is tuned for agent-oriented search snippets."
         }
       },
-      "maxResults": "Default result count",
       "braveApiKey": "Brave API key or environment reference",
       "tavilyApiKey": "Tavily API key or environment reference",
       "braveApiKeyPool": "Brave API key pool",

@@ -398,3 +398,10 @@
   - WebSearch Key Pool selector/source audit ✅（23 checks）
   - `bash .codex/scripts/check-acceptance.sh chat-agent-runtime` ✅
   - `bash .codex/scripts/check-acceptance.sh desktop-shell-settings-release` ✅
+- 本轮：按用户反馈移除 WebSearch 设置页中无可靠生效路径的“默认结果数”配置；全局搜索设置不再保存/展示该字段，运行时仍保留单次 `web_search.max_results` 参数和固定兜底。
+- 验证类别：Codex 自检（WebSearch 设置 UI + runtime/store 类型与回归测试；未执行正式 `project-verify` 盖戳）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/claude-agent-runner-web-search.test.mjs electron/agent-mode-settings-store.test.mjs` ✅（19/19）
+  - `bash .codex/scripts/check-acceptance.sh desktop-shell-settings-release` ✅
+  - `git diff --check` ✅

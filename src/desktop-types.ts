@@ -209,7 +209,6 @@ export type AgentWebSearchProviderId = 'duckduckgo' | 'brave' | 'tavily'
 export type AgentWebSearchSettings = {
   mode: AgentWebSearchMode
   provider: AgentWebSearchProviderId
-  maxResults: number
   /** Legacy single-key fields kept for older settings payloads. New code should read the pools below. */
   braveApiKey: string
   tavilyApiKey: string

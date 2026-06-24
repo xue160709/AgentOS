@@ -26,7 +26,7 @@
 - `ChatState.items`：message、tool、thinking、activity、context_compaction、file_diff 的 transcript 联合。
 - `ThreadRunState`：UI 侧进行中、等待中和提问中状态。
 - `McpRuntimeOptions`：合成 `mcpServers`、`allowedTools`、`disallowedTools`、`toolAliases`、配置签名和未解析环境变量。
-- `AgentWebSearchSettings`：全局搜索模式、Provider、默认结果数、Brave/Tavily API Key 池或 `${ENV_NAME}` 引用；旧单 Key 字段会兼容迁移为单元素池。
+- `AgentWebSearchSettings`：全局搜索模式、Provider、Brave/Tavily API Key 池或 `${ENV_NAME}` 引用；旧单 Key 字段会兼容迁移为单元素池。
 - `AgentWebSearchProviderTestResult`：Provider 测试结果、凭据状态、错误分类和恢复提示。
 - `WebSearchRequest` / `WebSearchResponse`：内部 `agentos-web` MCP 工具的请求和 JSON 输出结构。
 

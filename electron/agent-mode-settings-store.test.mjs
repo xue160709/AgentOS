@@ -122,7 +122,6 @@ test('agent mode settings persist global web search settings', async () => {
     assert.deepEqual(result.settings, {
       mode: 'agentos',
       provider: 'tavily',
-      maxResults: 10,
       braveApiKey: '${BRAVE_SEARCH_API_KEY}',
       tavilyApiKey: 'tvly-test-key',
       braveApiKeys: ['${BRAVE_SEARCH_API_KEY}'],
@@ -139,7 +138,6 @@ test('agent mode settings persist global web search settings', async () => {
     const pooled = await store.saveGlobalWebSearchSettings({
       mode: 'agentos',
       provider: 'brave',
-      maxResults: 2,
       braveApiKeys: [' first-brave ', '', '${SECOND_BRAVE_KEY}'],
       tavilyApiKeys: [' tvly-one ', 'tvly-two'],
     })
@@ -152,7 +150,6 @@ test('agent mode settings persist global web search settings', async () => {
     const legacyDuckDuckGo = await store.saveGlobalWebSearchSettings({
       mode: 'agentos',
       provider: 'duckduckgo-instant',
-      maxResults: 5,
       braveApiKey: '',
       tavilyApiKey: '',
     })

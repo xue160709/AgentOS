@@ -420,11 +420,10 @@ test('web search provider test resolves environment references before probing', 
   try {
     const result = await testWebSearchProviderSettings(
       {
-        mode: 'agentos',
-        provider: 'tavily',
-        maxResults: 3,
-        braveApiKey: '',
-        tavilyApiKey: '${TAVILY_SEARCH_KEY}',
+      mode: 'agentos',
+      provider: 'tavily',
+      braveApiKey: '',
+      tavilyApiKey: '${TAVILY_SEARCH_KEY}',
       },
       { TAVILY_SEARCH_KEY: 'resolved-tavily-key' },
     )
@@ -463,11 +462,10 @@ test('web search provider test reports key pool fallback metadata', async () => 
   try {
     const result = await testWebSearchProviderSettings(
       {
-        mode: 'agentos',
-        provider: 'tavily',
-        maxResults: 3,
-        braveApiKey: '',
-        tavilyApiKey: '',
+      mode: 'agentos',
+      provider: 'tavily',
+      braveApiKey: '',
+      tavilyApiKey: '',
         tavilyApiKeys: ['${OLD_TAVILY_KEY}', '${NEXT_TAVILY_KEY}'],
       },
       { OLD_TAVILY_KEY: 'old-tavily-key', NEXT_TAVILY_KEY: 'next-tavily-key' },
@@ -492,11 +490,10 @@ test('web search provider test reports unresolved environment references without
   try {
     const result = await testWebSearchProviderSettings(
       {
-        mode: 'agentos',
-        provider: 'tavily',
-        maxResults: 3,
-        braveApiKey: '',
-        tavilyApiKey: '${MISSING_TAVILY_KEY}',
+      mode: 'agentos',
+      provider: 'tavily',
+      braveApiKey: '',
+      tavilyApiKey: '${MISSING_TAVILY_KEY}',
       },
       {},
     )
@@ -518,7 +515,6 @@ test('web search runtime leaves native WebSearch untouched', () => {
     {
       mode: 'native',
       provider: 'brave',
-      maxResults: 10,
       braveApiKey: '${BRAVE_SEARCH_API_KEY}',
       tavilyApiKey: '',
     },
@@ -543,7 +539,6 @@ test('web search runtime aliases WebSearch to AgentOS provider when enabled', ()
     {
       mode: 'agentos',
       provider: 'brave',
-      maxResults: 7,
       braveApiKey: '${BRAVE_SEARCH_API_KEY}',
       tavilyApiKey: '',
     },
@@ -556,7 +551,7 @@ test('web search runtime aliases WebSearch to AgentOS provider when enabled', ()
   assert.deepEqual(runtime.toolAliases, { WebSearch: AGENTOS_WEB_SEARCH_MCP_TOOL_NAME })
   assert.match(runtime.configSignature, /"mode":"agentos"/)
   assert.match(runtime.configSignature, /"providerId":"brave"/)
-  assert.match(runtime.configSignature, /"defaultMaxResults":7/)
+  assert.doesNotMatch(runtime.configSignature, /defaultMaxResults/)
 })
 
 test('web search runtime tool errors include recovery hints', async () => {
@@ -573,7 +568,6 @@ test('web search runtime tool errors include recovery hints', async () => {
       {
         mode: 'agentos',
         provider: 'tavily',
-        maxResults: 1,
         braveApiKey: '',
         tavilyApiKey: 'tvly-secret-value',
       },

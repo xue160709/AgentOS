@@ -63,7 +63,7 @@ export function buildWebSearchRuntimeOptions(settings: AgentWebSearchSettings | 
     WEB_SEARCH_TOOL_SCHEMA,
     async (args) => {
       try {
-        const request = normalizeWebSearchRequest(args, normalizedSettings.maxResults)
+        const request = normalizeWebSearchRequest(args)
         const response = await searchWeb(request, webSearchEnv)
         return {
           content: [{ type: 'text' as const, text: formatWebSearchToolOutput(response) }],
@@ -99,11 +99,10 @@ export function buildWebSearchRuntimeOptions(settings: AgentWebSearchSettings | 
     },
     configSignature: JSON.stringify({
       mode: 'agentos',
-      defaultMaxResults: normalizedSettings.maxResults,
       provider: buildWebSearchConfigSignature(webSearchEnv),
       available: status.available,
       providerId: status.id,
-      version: 2,
+      version: 3,
     }),
     unresolvedEnv: [],
   }
@@ -154,7 +153,6 @@ export async function testWebSearchProviderSettings(
           query: 'AgentOS web search connectivity',
           max_results: 1,
         },
-        normalizedSettings.maxResults,
       ),
       webSearchEnv,
     )
@@ -193,7 +191,6 @@ function normalizeRuntimeWebSearchSettings(settings: AgentWebSearchSettings | un
       settings?.provider === 'brave' || settings?.provider === 'tavily' || settings?.provider === 'duckduckgo'
         ? settings.provider
         : 'duckduckgo',
-    maxResults: clampMaxResults(settings?.maxResults),
     braveApiKey: braveApiKeys[0] ?? '',
     tavilyApiKey: tavilyApiKeys[0] ?? '',
     braveApiKeys,
@@ -259,9 +256,4 @@ function recoveryHintForUnavailableProvider(credentialStatus: AgentWebSearchCred
   if (credentialStatus === 'missing') return 'Add an API key or a ${ENV_NAME} reference, then test the provider again.'
   if (credentialStatus === 'env-missing') return 'Check that the referenced environment variable is available to the Electron main process.'
   return 'Check provider settings and try again.'
-}
-
-function clampMaxResults(value: number | undefined): number {
-  if (!Number.isFinite(value)) return 5
-  return Math.min(10, Math.max(1, Math.floor(Number(value))))
 }

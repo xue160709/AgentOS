@@ -125,16 +125,16 @@
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: browser smoke｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：保存搜索设置
-- GIVEN 用户修改搜索模式、Provider、默认结果数或 Provider Key 引用
+- GIVEN 用户修改搜索模式、Provider 或 Provider Key 引用
 - WHEN 用户点击保存搜索设置
 - THEN 系统通过受控 preload IPC 保存全局搜索设置，并在页面展示保存成功或可读错误，不泄漏 API Key 明文
 
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: browser smoke｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：重新加载搜索设置
-- GIVEN 用户已保存搜索模式、Provider、默认结果数和 Provider Key 引用
+- GIVEN 用户已保存搜索模式、Provider 和 Provider Key 引用
 - WHEN 用户重新打开全局搜索设置页或应用重新读取设置文件
-- THEN 系统展示上次保存的搜索设置，并将非法 Provider、越界结果数和多余空白归一化为安全值
+- THEN 系统展示上次保存的搜索设置，并将非法 Provider 和多余空白 Key 归一化为安全值
 
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron｜证据: TESTING_CHECKLIST.md｜
 

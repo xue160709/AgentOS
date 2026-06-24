@@ -744,7 +744,6 @@
           "description": "需要 Tavily API Key，适合面向 Agent 的搜索摘要。"
         }
       },
-      "maxResults": "默认结果数",
       "braveApiKey": "Brave API Key 或环境变量引用",
       "tavilyApiKey": "Tavily API Key 或环境变量引用",
       "braveApiKeyPool": "Brave API Key 池",

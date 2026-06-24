@@ -59,7 +59,6 @@ type GlobalMcpSettingsPageProps = {
 const DEFAULT_WEB_SEARCH_SETTINGS: AgentWebSearchSettings = {
   mode: 'native',
   provider: 'duckduckgo',
-  maxResults: 5,
   braveApiKey: '',
   tavilyApiKey: '',
   braveApiKeys: [],
@@ -72,7 +71,6 @@ function normalizeWebSearchSettingsDraft(settings: AgentWebSearchSettings): Agen
   return {
     mode: settings.mode === 'agentos' ? 'agentos' : 'native',
     provider: WEB_SEARCH_PROVIDERS.includes(settings.provider) ? settings.provider : 'duckduckgo',
-    maxResults: clampUiNumber(settings.maxResults, 1, 10, DEFAULT_WEB_SEARCH_SETTINGS.maxResults),
     braveApiKey: braveApiKeys[0] ?? '',
     tavilyApiKey: tavilyApiKeys[0] ?? '',
     braveApiKeys,
@@ -144,12 +142,6 @@ function withWebSearchApiKeyPool(
     return { ...settings, tavilyApiKeys: keys, tavilyApiKey: keys.find((key) => key.trim())?.trim() ?? '' }
   }
   return settings
-}
-
-function clampUiNumber(value: string | number, min: number, max: number, fallback: number): number {
-  const numberValue = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numberValue)) return fallback
-  return Math.min(max, Math.max(min, Math.floor(numberValue)))
 }
 
 // --- Snapshot helpers / 快照辅助 ---
@@ -1429,27 +1421,8 @@ export function GlobalWebSearchSettingsPage() {
             ))}
           </div>
 
-          <div className="agent-mcp-row__grid">
-            <label className="agent-mcp-field" htmlFor="web-search-max-results">
-              <span>{t('settings.search.maxResults')}</span>
-              <input
-                id="web-search-max-results"
-                className="settings-input"
-                type="number"
-                min={1}
-                max={10}
-                value={draftSettings.maxResults}
-                disabled={saving || testingProvider || !usingAgentOs}
-                onChange={(event) =>
-                  updateDraftSettings((current) => ({
-                    ...current,
-                    maxResults: clampUiNumber(event.target.value, 1, 10, current.maxResults),
-                  }))
-                }
-              />
-            </label>
-
-            {activeKeyProvider ? (
+          {activeKeyProvider ? (
+            <div className="agent-mcp-row__grid">
               <div className="agent-mcp-field agent-mcp-field--wide" data-testid="web-search-key-pool">
                 <span>{t(`settings.search.${activeKeyProvider}ApiKeyPool`)}</span>
                 <div
@@ -1545,8 +1518,8 @@ export function GlobalWebSearchSettingsPage() {
                   </button>
                 </div>
               </div>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
 
           {usingAgentOs && draftSettings.provider === 'duckduckgo' ? (
             <p className="settings-provider-test-status" data-testid="web-search-key-status">{credentialHint}</p>

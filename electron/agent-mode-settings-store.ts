@@ -301,7 +301,6 @@ export function getDefaultWebSearchSettings(): AgentWebSearchSettings {
   return {
     mode: 'native',
     provider: 'duckduckgo',
-    maxResults: 5,
     braveApiKey: '',
     tavilyApiKey: '',
     braveApiKeys: [],
@@ -543,7 +542,6 @@ export function normalizeWebSearchSettings(value: unknown): AgentWebSearchSettin
   return {
     mode: record.mode === 'agentos' ? 'agentos' : 'native',
     provider: normalizeWebSearchProvider(record.provider),
-    maxResults: clampNumber(record.maxResults, 1, 10, defaults.maxResults),
     braveApiKey: braveApiKeys[0] ?? '',
     tavilyApiKey: tavilyApiKeys[0] ?? '',
     braveApiKeys,
@@ -560,12 +558,6 @@ function normalizeWebSearchProvider(value: unknown): AgentWebSearchProviderId {
   if (value === 'brave' || value === 'tavily' || value === 'duckduckgo') return value
   if (value === 'duckduckgo-instant') return 'duckduckgo'
   return 'duckduckgo'
-}
-
-function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  const numberValue = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numberValue)) return fallback
-  return Math.min(max, Math.max(min, Math.floor(numberValue)))
 }
 
 function normalizeStringArray(value: unknown): string[] {
