@@ -149,6 +149,9 @@ const desktopAdapter = {
   saveGlobalWebSearchSettings(settings: unknown) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveGlobalWebSearchSettings, settings)
   },
+  testGlobalWebSearchProvider(settings: unknown) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.testGlobalWebSearchProvider, settings)
+  },
   saveAgentModeSettings(rootPath: string, payload: unknown) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveAgentModeSettings, rootPath, payload)
   },

@@ -14,8 +14,8 @@
 | `src/components/AppAgentStatusPopover.tsx` | Agent 状态面板；展示 MCP server 状态、失败摘要、工具数量和进入项目 MCP 设置的跳转。 |
 | `electron/claude-agent-runner.ts` | Claude Agent SDK query 封装、权限闸门、session 与事件转发。 |
 | `electron/claude-agent-runner/mcp.ts` | 项目级 MCP server、tool policy、环境变量模板和 runtime options 合成。 |
-| `electron/claude-agent-runner/web-search.ts` | 按全局搜索设置生成 native 或 AgentOS Provider WebSearch runtime options。 |
-| `electron/claude-agent-runner/web-search-provider.ts` | DuckDuckGo Instant Answer、Brave Search、Tavily Provider registry、请求归一化和结果格式化。 |
+| `electron/claude-agent-runner/web-search.ts` | 按全局搜索设置生成 native 或 AgentOS Provider WebSearch runtime options，并提供 Provider 连接测试入口。 |
+| `electron/claude-agent-runner/web-search-provider.ts` | DuckDuckGo Search（Instant Answer + HTML 回退）、Brave Search、Tavily Provider registry、请求归一化、结果格式化和 Provider 错误分类。 |
 | `electron/claude-agent-runner/*` | SDK 消息路由、输入归一化、配置、diff、事件合并等子模块。 |
 | `electron/claude-sdk-message-router.test.mjs`、`electron/chat-run.test.mjs`、`electron/claude-agent-runner-mcp.test.mjs`、`electron/claude-agent-runner-web-search.test.mjs` | 运行时关键测试。 |
 
@@ -27,6 +27,7 @@
 - `ThreadRunState`：UI 侧进行中、等待中和提问中状态。
 - `McpRuntimeOptions`：合成 `mcpServers`、`allowedTools`、`disallowedTools`、`toolAliases`、配置签名和未解析环境变量。
 - `AgentWebSearchSettings`：全局搜索模式、Provider、默认结果数、Brave/Tavily Key 或 `${ENV_NAME}` 引用。
+- `AgentWebSearchProviderTestResult`：Provider 测试结果、凭据状态、错误分类和恢复提示。
 - `WebSearchRequest` / `WebSearchResponse`：内部 `agentos-web` MCP 工具的请求和 JSON 输出结构。
 
 ## 调用链路
@@ -54,7 +55,7 @@ Composer submit
 
 - 自动测试：`electron/chat-run.test.mjs`、`electron/claude-sdk-message-router.test.mjs`、`electron/claude-agent-runner-executable.test.mjs`、`electron/claude-agent-runner-mcp.test.mjs`、`electron/claude-agent-runner-web-search.test.mjs`。
 - 关键覆盖：流式文本、result-only、cancel、orphan event、thinking/tool/activity/task/prompt、context compaction、file diff、并发提交阻止。
-- WebSearch 覆盖：native 模式不注册 `agentos-web`；AgentOS 模式注册内部 MCP、alias `WebSearch`、禁用内置 `WebSearch`；Tavily POST 请求、DuckDuckGo 结果归一化、provider 状态和域名过滤。
+- WebSearch 覆盖：native 模式不注册 `agentos-web`；AgentOS 模式注册内部 MCP、alias `WebSearch`、禁用内置 `WebSearch`；Tavily POST 请求、DuckDuckGo 结果归一化、provider 状态、域名过滤、HTTP 错误分类、Provider Test 的 env-resolved/env-missing 分支。
 - 验收契约：`prd/chat-agent-runtime/acceptance.md`。
 
 ## 边界情况
@@ -66,8 +67,8 @@ Composer submit
 - MCP 或全局搜索设置变化会进入 runtime config signature，下一轮请求会重建 SDK session。
 - MCP server 失败、需要认证、命令不存在、环境变量缺失或 HTTP 401 时，Chat 侧应提供可恢复入口而不是只显示通用运行错误。
 - MCP tool 权限默认应走询问或显式 policy，不应因开启 Agent 权限绕过而全量自动允许。
-- DuckDuckGo Instant Answer 可访问但不是通用网页搜索；普通 query 可能返回 0 条。
-- Tavily/Brave 的认证、额度或套餐错误会作为 Provider HTTP 错误进入 `web_search` 工具输出；后续需要把 401/403/432 等错误映射成更友好的恢复建议。
+- DuckDuckGo Search 会先尝试 Instant Answer，普通 query 无结果时回退到 DuckDuckGo HTML 搜索结果；HTML 集成是实验性能力，可能遇到 bot challenge。
+- Tavily/Brave 的认证、额度或套餐错误会映射为 `auth` / `quota` / `service` 等 Provider 错误，并在 `web_search` 工具输出与设置页测试结果中给出恢复建议。
 
 ## TODO 对应项
 
@@ -78,5 +79,5 @@ Composer submit
 
 - commit：`a45dc7d89a7985e2f80903c9338f827ed58dd345`
 - 日期：`2026-06-24`
-- 变化摘要：同步未提交代码观察：Chat 运行时已合成 MCP 与 WebSearch runtime options；全局搜索设置可选择 native 或 AgentOS Provider，AgentOS 模式通过 `agentos-web` alias 内置 `WebSearch`，Provider registry 支持 DuckDuckGo、Brave、Tavily。
-- 待确认：正式 `project-verify` 尚未执行；Provider 连接测试、DuckDuckGo 空结果提示和 Tavily/Brave 配额/认证错误恢复文案仍待增强。
+- 变化摘要：同步未提交代码观察：Chat 运行时已合成 MCP 与 WebSearch runtime options；全局搜索设置可选择 native 或 AgentOS Provider，AgentOS 模式通过 `agentos-web` alias 内置 `WebSearch`，Provider registry 支持 DuckDuckGo、Brave、Tavily；DuckDuckGo 普通 query 已从纯 Instant Answer 扩展为 HTML 搜索回退；Provider Test 支持主进程 env 解析状态和 auth/quota/bot-challenge/network/service 恢复文案。
+- 待确认：搜索相关 `project-verify` 已执行；完整 Chat 端到端 UI 流式、权限弹窗和 Generative UI 证据仍待补齐。

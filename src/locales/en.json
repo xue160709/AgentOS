@@ -363,11 +363,16 @@
     "agentSettingsMcpStatusWaiting": "Waiting for the next Agent session to connect",
     "agentSettingsMcpStatusConnected": "Connected",
     "agentSettingsMcpStatusConnectedTools": "Connected · {{count}} tools enabled",
+    "agentSettingsMcpStatusRuntimeConnected": "Current session connected",
+    "agentSettingsMcpStatusRuntimeConnectedTools": "Current session connected · {{count}} tools enabled",
+    "agentSettingsMcpStatusProjectAvailableTools": "Available for this project · {{count}} tools",
     "agentSettingsMcpStatusFailed": "Connection failed",
     "agentSettingsMcpStatusFailedDetail": "Connection failed: {{message}}",
     "agentSettingsMcpStatusNeedsAuth": "Authentication required",
     "agentSettingsMcpStatusNeedsAuthDetail": "Authentication required: {{message}}",
     "agentSettingsMcpStatusRuntime": "Status: {{status}}",
+    "agentSettingsMcpTestingEnabled": "Testing {{count}} enabled MCP servers...",
+    "agentSettingsMcpTestEnabledDone": "Tested {{tested}} MCP servers; {{connected}} available.",
     "agentSettingsSkillDefaultModel": "No fixed model (use project/default model)",
     "agentSettingsSkillModelFor": "Choose the run model for {{name}}",
     "agentSettingsUnsavedChanges": "Unsaved changes",
@@ -661,8 +666,10 @@
       "saving": "Saving MCP settings…",
       "saved": "MCP settings saved",
       "testing": "Testing {{name}}…",
+      "testingEnabled": "Testing {{count}} enabled MCP servers…",
       "testingShort": "Testing",
       "testConnected": "{{name}} connected with {{count}} tools",
+      "testEnabledDone": "Tested {{tested}} MCP servers; {{connected}} available.",
       "notTested": "Connection not tested yet",
       "backToList": "Back to list",
       "saveAndTest": "Save and test",
@@ -692,8 +699,8 @@
       "providerAria": "Search provider",
       "provider": {
         "duckduckgo-instant": {
-          "title": "DuckDuckGo Instant Answer",
-          "description": "No API key required; useful as a fallback. Results are lightweight and not a full search results page."
+          "title": "DuckDuckGo Search",
+          "description": "No API key required; tries Instant Answer first, then falls back to DuckDuckGo HTML results for normal queries (experimental)."
         },
         "brave": {
           "title": "Brave Search",
@@ -713,7 +720,31 @@
       "saved": "Search settings saved",
       "reverted": "Restored the last saved search settings",
       "revert": "Revert",
-      "save": "Save search settings"
+      "save": "Save search settings",
+      "test": "Test provider",
+      "testing": "Testing search provider…",
+      "testingShort": "Testing",
+      "testConnected": "{{provider}} is available and returned {{count}} result(s)",
+      "testFailed": "{{provider}} test failed: {{message}}",
+      "testBridgeUnavailable": "Search provider test bridge is unavailable.",
+      "nativeTestUnavailable": "Native Web Search is executed by Claude Code, so AgentOS provider testing is not required.",
+      "credential": {
+        "notRequired": "DuckDuckGo Search does not require an API key.",
+        "missing": "Enter an API key or ${ENV_NAME} reference before testing.",
+        "configured": "The saved key will be used and will not be shown in logs or status text.",
+        "envPending": "This is an environment variable reference; the main process resolves it during testing.",
+        "envResolved": "The environment variable was resolved in the main process.",
+        "envMissing": "The environment variable was not resolved in the main process. Check the name or launch environment."
+      },
+      "recovery": {
+        "missing-credential": "Add an API key or environment reference, then try again.",
+        "auth": "Check that the API key is valid or that the environment variable points to the right credential.",
+        "quota": "Check the provider plan or quota, or switch to another provider temporarily.",
+        "bot-challenge": "DuckDuckGo returned a bot challenge; switch to Brave or Tavily.",
+        "network": "Check network connectivity, then try again.",
+        "service": "The provider service is unavailable. Try later or switch providers.",
+        "unknown": "Check the provider settings, then try again."
+      }
     },
     "models": {
       "pageTitle": "Models",

@@ -23,7 +23,7 @@ function loadWebSearchProviderModule() {
   const module = { exports: {} }
   const localRequire = (specifier) => {
     if (specifier === './config') return { summarizeErrorForLog: (error) => ({ message: error?.message ?? String(error) }) }
-    if (specifier === '../safe-console') return { safeConsoleInfo() {}, safeConsoleError() {} }
+    if (specifier === '../safe-console') return { safeConsoleInfo() {}, safeConsoleError() {}, safeConsoleWarn() {} }
     return require(specifier)
   }
   Function('exports', 'module', 'require', outputText)(module.exports, module, localRequire)
@@ -165,6 +165,64 @@ test('web search provider executes through fetch and returns normalized results'
   }
 })
 
+test('DuckDuckGo provider falls back to HTML search when instant answers are empty', async () => {
+  const { normalizeWebSearchRequest, searchWeb } = loadWebSearchProviderModule()
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url, init) => {
+    const parsedUrl = new URL(url)
+    calls.push(`${parsedUrl.hostname}${parsedUrl.pathname}`)
+    if (parsedUrl.hostname === 'api.duckduckgo.com') {
+      return {
+        ok: true,
+        json: async () => ({
+          Results: [],
+          RelatedTopics: [],
+        }),
+      }
+    }
+    assert.equal(parsedUrl.hostname, 'html.duckduckgo.com')
+    assert.match(init.headers['User-Agent'], /Mozilla\/5\.0/)
+    return {
+      ok: true,
+      text: async () => `
+        <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fnews%3Fq%3Dsam" class="result__a">
+          Sam &amp; OpenAI News
+        </a>
+        <a class="result__snippet">Fresh&nbsp;search &hellip; with details</a>
+        <a class="result__a" href="https://example.org/direct">Direct result</a>
+        <a class="result__snippet">Second snippet</a>
+      `,
+    }
+  }
+
+  try {
+    const response = await searchWeb(
+      normalizeWebSearchRequest({ query: 'Sam Altman news', max_results: 2, freshness: 'week' }),
+      { AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo-instant' },
+    )
+
+    assert.equal(response.provider.name, 'DuckDuckGo Search')
+    assert.deepEqual(calls, ['api.duckduckgo.com/', 'html.duckduckgo.com/html'])
+    assert.deepEqual(response.results, [
+      {
+        title: 'Sam & OpenAI News',
+        url: 'https://example.com/news?q=sam',
+        snippet: 'Fresh search ... with details',
+        source: 'example.com',
+      },
+      {
+        title: 'Direct result',
+        url: 'https://example.org/direct',
+        snippet: 'Second snippet',
+        source: 'example.org',
+      },
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('web search provider executes Tavily through POST and returns normalized results', async () => {
   const { normalizeWebSearchRequest, searchWeb } = loadWebSearchProviderModule()
   const originalFetch = globalThis.fetch
@@ -218,6 +276,100 @@ test('web search provider executes Tavily through POST and returns normalized re
   }
 })
 
+test('web search provider maps HTTP quota errors and does not leak credentials', async () => {
+  const { normalizeWebSearchRequest, searchWeb, summarizeWebSearchProviderError } = loadWebSearchProviderModule()
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 432,
+    text: async () => JSON.stringify({ detail: { error: 'Monthly request limit reached' } }),
+  })
+
+  try {
+    await assert.rejects(
+      () =>
+        searchWeb(
+          normalizeWebSearchRequest({ query: 'claude agent sdk', max_results: 1 }),
+          { AGENTOS_WEB_SEARCH_PROVIDER: 'tavily', TAVILY_API_KEY: 'tvly-secret-value' },
+        ),
+      (error) => {
+        const summary = summarizeWebSearchProviderError(error)
+        assert.equal(summary.kind, 'quota')
+        assert.match(summary.message, /Tavily quota or plan limit was reached/)
+        assert.match(summary.message, /Monthly request limit reached/)
+        assert.doesNotMatch(summary.message, /tvly-secret-value/)
+        return true
+      },
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('web search provider test resolves environment references before probing', async () => {
+  const { testWebSearchProviderSettings } = loadWebSearchRuntimeModule()
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    assert.equal(new URL(url).hostname, 'api.tavily.com')
+    assert.equal(init.headers.Authorization, 'Bearer resolved-tavily-key')
+    return {
+      ok: true,
+      json: async () => ({
+        results: [{ title: 'Connectivity', url: 'https://example.com/result', content: 'ok' }],
+      }),
+    }
+  }
+
+  try {
+    const result = await testWebSearchProviderSettings(
+      {
+        mode: 'agentos',
+        provider: 'tavily',
+        maxResults: 3,
+        braveApiKey: '',
+        tavilyApiKey: '${TAVILY_SEARCH_KEY}',
+      },
+      { TAVILY_SEARCH_KEY: 'resolved-tavily-key' },
+    )
+
+    assert.equal(result.ok, true)
+    assert.equal(result.providerId, 'tavily')
+    assert.equal(result.credentialStatus, 'env-resolved')
+    assert.equal(result.resultCount, 1)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('web search provider test reports unresolved environment references without fetching', async () => {
+  const { testWebSearchProviderSettings } = loadWebSearchRuntimeModule()
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => {
+    throw new Error('fetch should not be called for missing credentials')
+  }
+
+  try {
+    const result = await testWebSearchProviderSettings(
+      {
+        mode: 'agentos',
+        provider: 'tavily',
+        maxResults: 3,
+        braveApiKey: '',
+        tavilyApiKey: '${MISSING_TAVILY_KEY}',
+      },
+      {},
+    )
+
+    assert.equal(result.ok, false)
+    assert.equal(result.providerId, 'tavily')
+    assert.equal(result.credentialStatus, 'env-missing')
+    assert.equal(result.errorKind, 'missing-credential')
+    assert.match(result.message, /TAVILY_API_KEY is not configured/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('web search runtime leaves native WebSearch untouched', () => {
   const { buildWebSearchRuntimeOptions } = loadWebSearchRuntimeModule()
 
@@ -264,4 +416,36 @@ test('web search runtime aliases WebSearch to AgentOS provider when enabled', ()
   assert.match(runtime.configSignature, /"mode":"agentos"/)
   assert.match(runtime.configSignature, /"providerId":"brave"/)
   assert.match(runtime.configSignature, /"defaultMaxResults":7/)
+})
+
+test('web search runtime tool errors include recovery hints', async () => {
+  const { AGENTOS_WEB_SEARCH_SERVER_NAME, buildWebSearchRuntimeOptions } = loadWebSearchRuntimeModule()
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 432,
+    text: async () => JSON.stringify({ detail: 'Monthly request limit reached' }),
+  })
+
+  try {
+    const runtime = buildWebSearchRuntimeOptions(
+      {
+        mode: 'agentos',
+        provider: 'tavily',
+        maxResults: 1,
+        braveApiKey: '',
+        tavilyApiKey: 'tvly-secret-value',
+      },
+      {},
+    )
+    const tool = runtime.mcpServers[AGENTOS_WEB_SEARCH_SERVER_NAME].instance.tools[0]
+    const result = await tool.handler({ query: 'claude agent sdk', max_results: 1 })
+
+    assert.equal(result.isError, true)
+    assert.match(result.content[0].text, /AgentOS web_search failed \(quota\)/)
+    assert.match(result.content[0].text, /Recovery:/)
+    assert.doesNotMatch(result.content[0].text, /tvly-secret-value/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })

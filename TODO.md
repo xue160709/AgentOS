@@ -146,7 +146,7 @@
 - [ ] 产品 TODO 重整：当前 TODO 仍以 agentic runtime 优化为主；下轮应按 `prd/` 模块拆出 AgentOS 产品 backlog、优先级和里程碑。
 - [ ] UI 验收选择器补强：为项目首页、Composer、Agent 设置、Home Plugin 卡片、任务卡、设置页和更新页补稳定 selector 或 Playwright 可观测路径。
 - [ ] 测试补齐：为 `agent-mode-files`、`home-plugin-runner` 沙箱、`task-home-plugin-manager`、自动更新与 speech helper 增加 fixture/单测或可复现 smoke。
-- [ ] 文案/行为待确认：`electron/project-content.ts` 中图片预览常量为 5MB，但错误文案写“图片超过 10MB”；需确认是调常量还是调文案。
+- [x] 文案/行为待确认：`electron/project-content.ts` 图片预览限制按现有实现保持 5MB，并将错误文案从“图片超过 10MB”修正为“图片超过 5MB”；已补超限图片预览回归测试。
 
 ## §15 P1｜MCP 接入 backlog
 
@@ -159,7 +159,7 @@
 - [ ] 密钥与环境变量体验：支持 `${ENV_NAME}` 引用，展示“已解析 / 未解析”状态；禁止在日志、状态面板和错误摘要中输出 token、API key 或完整 header 明文。
   - 进展：运行时与全局 Save & Test 都会解析 `${ENV_NAME}`，缺失时返回 env 名称；UI 会提示引用数量；已避免在日志中输出 MCP header/env 明文。字段级“已解析/未解析”修复提示仍待补齐。
 - [ ] 连接测试与状态展示：实现保存前/保存后的 Test，展示 `connected / failed / needs-auth / pending / disabled`、serverInfo、工具数量和字段级修复提示。
-  - 进展：全局 MCP 编辑页已支持“保存并测试”，stdio 会启动 MCP handshake，HTTP/SSE 会发 JSON-RPC probe；测试结果缓存 `connected / failed / needs-auth / disabled`、serverInfo、工具数量和错误信息，并在全局列表显示工具数量/失败原因。字段级修复提示和 serverInfo 详细展开仍待补。
+  - 进展：全局 MCP 编辑页已支持“保存并测试”，stdio 会启动 MCP handshake，HTTP/SSE 会发 JSON-RPC probe；测试结果缓存 `connected / failed / needs-auth / disabled`、serverInfo、工具数量和错误信息，并在全局列表显示工具数量/失败原因。2026-06-24 补充进入全局 MCP 设置和项目 MCP 设置时自动重测已启用 MCP；项目页在当前会话状态缺失时回退显示全局测试缓存，避免把可用服务误显示为等待会话。字段级修复提示和 serverInfo 详细展开仍待补。
 - [ ] Tool policy 配置：连接成功后按 server 分组列出工具，支持 `每次询问 / 自动允许 / 禁用`；默认不全量自动允许，读写/破坏性工具需保持显式授权。
   - 进展：MCP Tab 已支持手动添加完整 tool 名称策略，并映射到 `allowedTools` / `disallowedTools`；全局连接测试成功后，项目 MCP Tab 会读取缓存工具列表并可直接设置 `每次询问 / 自动允许 / 禁用`。按 server 折叠分组与工具风险 annotation 提示仍待补。
 - [x] SDK 运行时接入：在主聊天 query 与 status probe 中传入项目级 `mcpServers`，复用 `mcpServerStatus()`，把允许的 MCP tool 转成 `allowedTools`，把禁用策略转成 `disallowedTools` 或 `canUseTool` 拦截。
@@ -170,14 +170,14 @@
   - 证据：`electron/claude-agent-runner/mcp.ts`、`electron/claude-agent-runner.ts`、`src/components/chat/Transcript.tsx`。
 - [x] WebSearch 内置工具替换：用 SDK in-process MCP 暴露 AgentOS `web_search`，通过 `toolAliases.WebSearch` 把 Claude Code 内置 WebSearch 名称路由到内部搜索工具，并预留多 provider 扩展。
   - 进展：2026-06-24，本轮完成 provider registry、Brave / DuckDuckGo Instant Answer 首批 provider、内部 `agentos-web` MCP server、`WebSearch -> mcp__agentos-web__web_search` alias、内置 WebSearch 禁用和 runner 接入；本轮继续按全局搜索设置接入原生/AgentOS 路由选择，并补 Tavily Provider。验收契约 → `prd/chat-agent-runtime/acceptance.md`、`prd/desktop-shell-settings-release/acceptance.md`。
-- [ ] WebSearch Provider 体验补强：为 DuckDuckGo Instant Answer 空结果、Tavily/Brave 认证或配额错误、Provider 保存前连接测试和字段级恢复提示补 UI/运行时文案。
-  - 进展：2026-06-24，已实测 DuckDuckGo Instant Answer 可访问但普通 query 可能返回 0 条；Tavily key 可识别但外部 smoke 返回 HTTP 432 usage limit。已将这些边界补进 PRD/acceptance，后续需做产品化恢复体验。
+- [x] WebSearch Provider 体验补强：为 DuckDuckGo bot challenge、Tavily/Brave 认证或配额错误、Provider 保存前连接测试和字段级恢复提示补 UI/运行时文案。
+  - 进展：2026-06-24，已实测 DuckDuckGo Instant Answer 可访问但普通 query 可能返回 0 条；本轮借鉴 OpenClaw 的 HTML 搜索页解析，为 DuckDuckGo 补 Instant Answer 空结果后的 HTML 回退和 bot challenge 错误；Tavily key 可识别但外部 smoke 返回 HTTP 432 usage limit。本轮继续补 `testGlobalWebSearchProvider` IPC、设置页 Test Provider、`configured / env-resolved / env-missing` 字段状态、auth/quota/bot-challenge/network/service 恢复文案和回归测试。
 - [ ] 权限与恢复交互：MCP 权限弹窗展示 server、tool、输入摘要和 policy 来源；server 失败、认证缺失、命令不存在、HTTP 401/403 时提供明确恢复路径。
   - 进展：权限弹窗已使用 `server · tool` 友好名并保留输入摘要；policy 来源与失败恢复路径仍待补。
 - [ ] Session 生效策略：定义 MCP 配置变化后是下一轮生效、新会话生效还是立即重建 session，并在 UI 中给出明确提示。
-  - 进展：运行时已把 MCP 配置纳入 session signature，配置变化会使下一轮重建 SDK session；UI 明确提示仍待补。
+  - 进展：运行时已把 MCP 配置纳入 session signature，配置变化会使下一轮重建 SDK session；2026-06-24 项目 MCP 状态改为区分“项目可用（全局测试通过）”与“当前会话已连接”，符合“全局开且项目未关即项目可用”的用户模型。更细的 session 重建提示仍待补。
 - [ ] 测试与验收补齐：增加 MCP 配置 normalize/store 单测、runner options 单测、tool name 展示单测、设置面板交互测试，以及 Chat 状态/权限/失败恢复的稳定选择器。
-  - 进展：已覆盖 store 全局 MCP normalize/override、probe cache 失效过滤、runner options、tool name 展示、WebSearch provider/runtime 和全局搜索设置 store；设置面板交互测试、Chat 权限/失败恢复选择器仍待补。
+  - 进展：已覆盖 store 全局 MCP normalize/override、probe cache 失效过滤、runner options、tool name 展示、WebSearch provider/runtime、全局搜索设置 store，以及搜索设置 provider test seam/UI 状态守卫；MCP 设置面板交互测试、Chat 权限/失败恢复选择器仍待补。
 
 ## 验证记录
 
@@ -274,4 +274,38 @@
 - 验证命令：
   - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `node -e "for (const f of ['prd/.update-prd-state.json','prd/agent-mode/sync.json','prd/chat-agent-runtime/sync.json','prd/desktop-shell-settings-release/sync.json','prd/model-settings/sync.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')"` ✅
+  - `git diff --check` ✅
+
+### 2026-06-24
+
+- 本轮：排查 DuckDuckGo Provider 普通新闻类 query 返回异常；对照 OpenClaw 后补 DuckDuckGo HTML 搜索回退、bot challenge 错误提示、设置页/PRD 文案和回归测试。
+- 验证类别：debug 自检（未执行正式 `project-verify` 盖戳）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/claude-agent-runner-web-search.test.mjs` ✅
+  - `npm run test:electron` ✅（59 tests passed）
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅（结构检查通过；自动生成的正式验收临时文件已清理）
+  - `git diff --check` ✅
+- 备注：外部 DuckDuckGo live `curl` 在当前 shell 环境返回 TLS code 35，未作为修复判定依据。
+- 本轮：按用户指定范围执行搜索相关正式 `project-verify`，完成 `chat-agent-runtime` WebSearch runtime 6 个场景与 `desktop-shell-settings-release` 搜索设置 6 个场景验收盖戳。
+- 验证类别：正式验收（project-verify，搜索范围）。
+- 验收结果：12 个搜索相关场景 ✅ 通过；场景级无失败、无跳过、无阻塞。
+- 证据：`TESTING_CHECKLIST.md`。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅
+  - `curl -s -I http://localhost:5173/` ✅（HTTP 200）
+  - Chrome CDP browser smoke ✅
+  - Provider smoke ✅
+- 本轮：调整 MCP 状态模型与设置入口行为：全局 MCP 设置和项目 MCP 设置进入时自动重测已启用 MCP；项目页按“全局启用 + 项目未关闭 = 项目可用”合成状态，并用“当前会话已连接”区分运行时实际连接。
+- 验证类别：Codex 自检（MCP 设置 UI 状态 + 类型检查）。
+- 验证命令：
+  - `npm run typecheck` ✅
+- 本轮：完成 WebSearch Provider 体验补强：新增 Provider Test IPC/UI、主进程 `${ENV_NAME}` 解析状态、DuckDuckGo/Brave/Tavily 统一错误分类与恢复文案，并补 HTTP quota/auth 类错误、env-resolved/env-missing 和设置页 seam/UI 回归测试。
+- 验证类别：Codex 自检（WebSearch runtime + 设置页 seam + PRD/TODO 同步）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/claude-agent-runner-web-search.test.mjs electron/desktop-seam.test.mjs electron/agent-mode-settings-store.test.mjs` ✅
+  - `npm run test:electron` ✅（64 tests passed）
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `git diff --check` ✅

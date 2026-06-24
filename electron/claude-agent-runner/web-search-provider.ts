@@ -6,7 +6,7 @@
  */
 
 import { summarizeErrorForLog } from './config'
-import { safeConsoleError, safeConsoleInfo } from '../safe-console'
+import { safeConsoleError, safeConsoleInfo, safeConsoleWarn } from '../safe-console'
 
 export type WebSearchEnv = Record<string, string | undefined>
 
@@ -41,6 +41,35 @@ export type WebSearchProviderStatus = {
   name: string
   available: boolean
   reason?: string
+}
+
+export type WebSearchProviderErrorKind =
+  | 'missing-credential'
+  | 'auth'
+  | 'quota'
+  | 'bot-challenge'
+  | 'network'
+  | 'service'
+  | 'unknown'
+
+export type WebSearchProviderErrorSummary = {
+  message: string
+  kind: WebSearchProviderErrorKind
+  recoveryHint?: string
+}
+
+export class WebSearchProviderError extends Error {
+  readonly kind: WebSearchProviderErrorKind
+  readonly status?: number
+  readonly recoveryHint?: string
+
+  constructor(message: string, options: { kind: WebSearchProviderErrorKind; status?: number; recoveryHint?: string }) {
+    super(message)
+    this.name = 'WebSearchProviderError'
+    this.kind = options.kind
+    this.status = options.status
+    this.recoveryHint = options.recoveryHint
+  }
 }
 
 export type WebSearchToolArgs = {
@@ -99,10 +128,22 @@ type DuckDuckGoInstantAnswer = {
   Results?: DuckDuckGoTopic[]
 }
 
+type DuckDuckGoHtmlResult = {
+  title: string
+  url: string
+  snippet: string
+}
+
 const DEFAULT_MAX_RESULTS = 5
 const MAX_RESULTS_LIMIT = 10
 const WEB_SEARCH_TIMEOUT_MS = 10_000
 const PROVIDER_ENV_NAMES = ['AGENTOS_WEB_SEARCH_PROVIDER', 'WEB_SEARCH_PROVIDER'] as const
+const DUCKDUCKGO_HTML_ENDPOINT = 'https://html.duckduckgo.com/html'
+const DUCKDUCKGO_HTML_USER_AGENT =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+const DUCKDUCKGO_HTML_SAFE_SEARCH_MODERATE = '-1'
+const DUCKDUCKGO_HTML_CACHE_TTL_MS = 5 * 60 * 1000
+const duckDuckGoHtmlCache = new Map<string, { insertedAt: number; results: WebSearchResultItem[] }>()
 
 const braveProvider: WebSearchProvider = {
   id: 'brave',
@@ -188,43 +229,22 @@ const tavilyProvider: WebSearchProvider = {
 
 const duckDuckGoInstantProvider: WebSearchProvider = {
   id: 'duckduckgo-instant',
-  name: 'DuckDuckGo Instant Answer',
+  name: 'DuckDuckGo Search',
   requiresCredential: false,
   isAvailable: () => typeof fetch === 'function',
   unavailableReason: () => 'global fetch is not available in this runtime.',
   async search(request) {
-    const url = new URL('https://api.duckduckgo.com/')
-    url.searchParams.set('q', request.query)
-    url.searchParams.set('format', 'json')
-    url.searchParams.set('no_html', '1')
-    url.searchParams.set('skip_disambig', '1')
-
-    const body = await fetchJson<DuckDuckGoInstantAnswer>(url, {
-      headers: { Accept: 'application/json' },
-    })
-    const results: WebSearchResultItem[] = []
-
-    if (body.AbstractURL) {
-      results.push({
-        title: cleanText(body.Heading) || request.query,
-        url: body.AbstractURL,
-        snippet: cleanText(body.AbstractText),
-        source: domainFromUrl(body.AbstractURL),
+    try {
+      const instantResults = await searchDuckDuckGoInstantAnswers(request)
+      if (instantResults.length > 0) return instantResults
+    } catch (error) {
+      safeConsoleWarn('[AgentOS/WebSearch] DuckDuckGo Instant Answer fallback', {
+        queryLength: request.query.length,
+        error: summarizeErrorForLog(error),
       })
     }
 
-    for (const topic of flattenDuckDuckGoTopics([...(body.Results ?? []), ...(body.RelatedTopics ?? [])])) {
-      const url = topic.FirstURL?.trim() ?? ''
-      if (!url) continue
-      results.push({
-        title: titleFromDuckDuckGoText(topic.Text) || domainFromUrl(url) || 'Untitled result',
-        url,
-        snippet: cleanText(topic.Text),
-        source: domainFromUrl(url),
-      })
-    }
-
-    return dedupeResults(results).slice(0, request.maxResults)
+    return searchDuckDuckGoHtml(request)
   },
 }
 
@@ -261,6 +281,39 @@ export function resolveWebSearchProviderStatus(env: WebSearchEnv): WebSearchProv
     available,
     reason: available ? undefined : provider.unavailableReason(env),
   }
+}
+
+export function summarizeWebSearchProviderError(error: unknown): WebSearchProviderErrorSummary {
+  if (error instanceof WebSearchProviderError) {
+    return {
+      message: error.message,
+      kind: error.kind,
+      recoveryHint: error.recoveryHint,
+    }
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  if (/BRAVE_SEARCH_API_KEY|TAVILY_API_KEY/.test(message) && /not configured/i.test(message)) {
+    return {
+      message,
+      kind: 'missing-credential',
+      recoveryHint: 'Add an API key or a ${ENV_NAME} reference in Search settings.',
+    }
+  }
+  if (/bot-detection challenge/i.test(message)) {
+    return {
+      message,
+      kind: 'bot-challenge',
+      recoveryHint: 'Switch to Brave Search or Tavily for an API-backed provider.',
+    }
+  }
+  if (/aborted|timeout|fetch failed|network/i.test(message)) {
+    return {
+      message,
+      kind: 'network',
+      recoveryHint: 'Check network connectivity or try another provider.',
+    }
+  }
+  return { message, kind: 'unknown' }
 }
 
 export function buildWebSearchConfigSignature(env: WebSearchEnv): string {
@@ -371,11 +424,205 @@ async function fetchJson<T>(url: URL, init: RequestInit): Promise<T> {
   const timeout = setTimeout(() => controller.abort(), WEB_SEARCH_TIMEOUT_MS)
   try {
     const response = await fetch(url, { ...init, signal: controller.signal })
-    if (!response.ok) throw new Error(`HTTP ${response.status} from ${url.hostname}`)
+    if (!response.ok) throw await createProviderHttpError(response, url)
     return (await response.json()) as T
   } finally {
     clearTimeout(timeout)
   }
+}
+
+async function fetchText(url: URL, init: RequestInit): Promise<string> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), WEB_SEARCH_TIMEOUT_MS)
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal })
+    if (!response.ok) throw await createProviderHttpError(response, url)
+    return await response.text()
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function createProviderHttpError(response: Response, url: URL): Promise<WebSearchProviderError> {
+  const providerName = providerNameFromHostname(url.hostname)
+  const bodyHint = sanitizeProviderErrorHint(await readProviderErrorText(response))
+  const suffix = bodyHint ? ` Provider message: ${bodyHint}.` : ''
+
+  if (response.status === 401 || response.status === 403) {
+    return new WebSearchProviderError(
+      `${providerName} authentication failed (HTTP ${response.status}).${suffix}`,
+      {
+        kind: 'auth',
+        status: response.status,
+        recoveryHint: `Check the ${providerName} API key or environment variable reference, then test the provider again.`,
+      },
+    )
+  }
+
+  if (response.status === 402 || response.status === 429 || response.status === 432) {
+    return new WebSearchProviderError(
+      `${providerName} quota or plan limit was reached (HTTP ${response.status}).${suffix}`,
+      {
+        kind: 'quota',
+        status: response.status,
+        recoveryHint: `Check ${providerName} usage limits or switch to another search provider.`,
+      },
+    )
+  }
+
+  if (response.status >= 500) {
+    return new WebSearchProviderError(
+      `${providerName} service is unavailable (HTTP ${response.status}).${suffix}`,
+      {
+        kind: 'service',
+        status: response.status,
+        recoveryHint: `Retry later or switch to another search provider.`,
+      },
+    )
+  }
+
+  return new WebSearchProviderError(
+    `${providerName} request failed (HTTP ${response.status}).${suffix}`,
+    {
+      kind: 'unknown',
+      status: response.status,
+      recoveryHint: `Check the provider settings and try again.`,
+    },
+  )
+}
+
+async function readProviderErrorText(response: Response): Promise<string> {
+  try {
+    return (await response.text()).slice(0, 1000)
+  } catch {
+    return ''
+  }
+}
+
+function sanitizeProviderErrorHint(raw: string): string {
+  const text = extractProviderErrorHint(raw).replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  if (/(bearer|api[_ -]?key|token|authorization|tvly-|sk-[A-Za-z0-9_-]+)/i.test(text)) return ''
+  return text.slice(0, 180)
+}
+
+function extractProviderErrorHint(raw: string): string {
+  if (!raw.trim()) return ''
+  try {
+    const data = JSON.parse(raw) as unknown
+    const found = findProviderErrorMessage(data)
+    if (found) return found
+  } catch {
+    /* fall back to plain text */
+  }
+  return stripHtml(raw).slice(0, 240)
+}
+
+function findProviderErrorMessage(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (!value || typeof value !== 'object') return ''
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findProviderErrorMessage(item)
+      if (found) return found
+    }
+    return ''
+  }
+  const record = value as Record<string, unknown>
+  for (const key of ['message', 'error', 'error_description', 'detail']) {
+    const found = findProviderErrorMessage(record[key])
+    if (found) return found
+  }
+  return ''
+}
+
+function providerNameFromHostname(hostname: string): string {
+  if (hostname.includes('tavily')) return 'Tavily'
+  if (hostname.includes('brave')) return 'Brave Search'
+  if (hostname.includes('duckduckgo')) return 'DuckDuckGo'
+  return hostname
+}
+
+async function searchDuckDuckGoInstantAnswers(request: WebSearchRequest): Promise<WebSearchResultItem[]> {
+  const url = new URL('https://api.duckduckgo.com/')
+  url.searchParams.set('q', request.query)
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('no_html', '1')
+  url.searchParams.set('skip_disambig', '1')
+
+  const body = await fetchJson<DuckDuckGoInstantAnswer>(url, {
+    headers: { Accept: 'application/json' },
+  })
+  const results: WebSearchResultItem[] = []
+
+  if (body.AbstractURL) {
+    results.push({
+      title: cleanText(body.Heading) || request.query,
+      url: body.AbstractURL,
+      snippet: cleanText(body.AbstractText),
+      source: domainFromUrl(body.AbstractURL),
+    })
+  }
+
+  for (const topic of flattenDuckDuckGoTopics([...(body.Results ?? []), ...(body.RelatedTopics ?? [])])) {
+    const url = topic.FirstURL?.trim() ?? ''
+    if (!url) continue
+    results.push({
+      title: titleFromDuckDuckGoText(topic.Text) || domainFromUrl(url) || 'Untitled result',
+      url,
+      snippet: cleanText(topic.Text),
+      source: domainFromUrl(url),
+    })
+  }
+
+  return dedupeResults(results).slice(0, request.maxResults)
+}
+
+async function searchDuckDuckGoHtml(request: WebSearchRequest): Promise<WebSearchResultItem[]> {
+  const cacheKey = JSON.stringify({
+    query: request.query,
+    maxResults: request.maxResults,
+    allowedDomains: request.allowedDomains,
+    blockedDomains: request.blockedDomains,
+  })
+  const cached = duckDuckGoHtmlCache.get(cacheKey)
+  if (cached && Date.now() - cached.insertedAt < DUCKDUCKGO_HTML_CACHE_TTL_MS) {
+    return cached.results
+  }
+
+  const url = new URL(DUCKDUCKGO_HTML_ENDPOINT)
+  url.searchParams.set('q', request.query)
+  url.searchParams.set('kp', DUCKDUCKGO_HTML_SAFE_SEARCH_MODERATE)
+
+  const html = await fetchText(url, {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent': DUCKDUCKGO_HTML_USER_AGENT,
+    },
+  })
+  if (isDuckDuckGoBotChallenge(html)) {
+    throw new WebSearchProviderError(
+      'DuckDuckGo returned a bot-detection challenge.',
+      {
+        kind: 'bot-challenge',
+        recoveryHint: 'Switch to Brave Search or Tavily for API-backed web search.',
+      },
+    )
+  }
+
+  const results = parseDuckDuckGoHtml(html)
+    .map((item) => ({
+      title: cleanText(item.title) || domainFromUrl(item.url) || 'Untitled result',
+      url: item.url,
+      snippet: cleanText(item.snippet),
+      source: domainFromUrl(item.url),
+    }))
+    .filter((item) => Boolean(item.url))
+    .slice(0, request.maxResults)
+
+  const deduped = dedupeResults(results)
+  duckDuckGoHtmlCache.set(cacheKey, { insertedAt: Date.now(), results: deduped })
+  return deduped
 }
 
 function normalizeBraveFreshness(value: string | undefined): string {
@@ -414,6 +661,83 @@ function titleFromDuckDuckGoText(value: string | undefined): string {
   const text = cleanText(value)
   if (!text) return ''
   return text.split(' - ')[0]?.trim() || text.slice(0, 80)
+}
+
+function parseDuckDuckGoHtml(html: string): DuckDuckGoHtmlResult[] {
+  const results: DuckDuckGoHtmlResult[] = []
+  const resultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")([^>]*)>([\s\S]*?)<\/a>/gi
+  const nextResultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*>/i
+  const snippetRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*")[^>]*>([\s\S]*?)<\/a>/i
+
+  for (const match of html.matchAll(resultRegex)) {
+    const rawAttributes = match[1] ?? ''
+    const rawTitle = match[2] ?? ''
+    const rawUrl = readHrefAttribute(rawAttributes)
+    const matchEnd = (match.index ?? 0) + match[0].length
+    const trailingHtml = html.slice(matchEnd)
+    const nextResultIndex = trailingHtml.search(nextResultRegex)
+    const scopedTrailingHtml = nextResultIndex >= 0 ? trailingHtml.slice(0, nextResultIndex) : trailingHtml
+    const rawSnippet = snippetRegex.exec(scopedTrailingHtml)?.[1] ?? ''
+    const title = decodeHtmlEntities(stripHtml(rawTitle))
+    const url = decodeDuckDuckGoUrl(decodeHtmlEntities(rawUrl))
+    const snippet = decodeHtmlEntities(stripHtml(rawSnippet))
+
+    if (title && url) {
+      results.push({ title, url, snippet })
+    }
+  }
+
+  return results
+}
+
+function readHrefAttribute(tagAttributes: string): string {
+  return /\bhref="([^"]*)"/i.exec(tagAttributes)?.[1] ?? ''
+}
+
+function decodeDuckDuckGoUrl(rawUrl: string): string {
+  try {
+    const normalized = rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl
+    const parsed = new URL(normalized)
+    const redirectTarget = parsed.searchParams.get('uddg')
+    return redirectTarget || normalized
+  } catch {
+    return rawUrl
+  }
+}
+
+function isDuckDuckGoBotChallenge(html: string): boolean {
+  if (/class="[^"]*\bresult__a\b[^"]*"/i.test(html)) return false
+  return /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html)
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, '/')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&ndash;/g, '-')
+    .replace(/&mdash;/g, '--')
+    .replace(/&hellip;/g, '...')
+    .replace(/&#(\d+);/g, (_match, code: string) => decodeHtmlCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => decodeHtmlCodePoint(Number.parseInt(code, 16)))
+}
+
+function decodeHtmlCodePoint(codePoint: number): string {
+  try {
+    return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : ''
+  } catch {
+    return ''
+  }
+}
+
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
 function clampMaxResults(value: number | undefined, fallback = DEFAULT_MAX_RESULTS): number {

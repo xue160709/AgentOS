@@ -46,6 +46,7 @@ export const DESKTOP_INVOKE_CHANNELS = {
   testGlobalMcpServer: 'desktop:test-global-mcp-server',
   getGlobalWebSearchSettings: 'desktop:get-global-web-search-settings',
   saveGlobalWebSearchSettings: 'desktop:save-global-web-search-settings',
+  testGlobalWebSearchProvider: 'desktop:test-global-web-search-provider',
   saveAgentModeSettings: 'desktop:save-agent-mode-settings',
   readAgentProjectDocuments: 'desktop:read-agent-project-documents',
   saveAgentProjectDocuments: 'desktop:save-agent-project-documents',

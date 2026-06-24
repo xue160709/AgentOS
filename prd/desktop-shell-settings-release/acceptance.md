@@ -115,42 +115,42 @@
 - WHEN 用户点击“搜索”
 - THEN 系统打开搜索设置页，展示原生 Web Search 与 AgentOS 搜索 Provider 两种模式，并说明该设置影响 Agent 运行时联网搜索
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜selector: [data-testid="global-web-search-settings-page"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: browser smoke｜证据: TESTING_CHECKLIST.md
 
 #### 场景：配置 AgentOS 搜索 Provider
 - GIVEN 用户在搜索设置页选择 AgentOS 搜索 Provider
-- WHEN 用户选择 DuckDuckGo Instant Answer、Brave Search 或 Tavily
+- WHEN 用户选择 DuckDuckGo Search、Brave Search 或 Tavily
 - THEN 系统展示对应 Provider 的配置要求，Brave 与 Tavily 展示 API Key/环境变量输入，DuckDuckGo 展示无需 Key 的提示
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜selector: [data-testid="web-search-provider-options"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: browser smoke｜证据: TESTING_CHECKLIST.md
 
 #### 场景：保存搜索设置
 - GIVEN 用户修改搜索模式、Provider、默认结果数或 Provider Key 引用
 - WHEN 用户点击保存搜索设置
 - THEN 系统通过受控 preload IPC 保存全局搜索设置，并在页面展示保存成功或可读错误，不泄漏 API Key 明文
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜selector: [data-testid="web-search-settings-save"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: browser smoke｜证据: TESTING_CHECKLIST.md
 
 #### 场景：重新加载搜索设置
 - GIVEN 用户已保存搜索模式、Provider、默认结果数和 Provider Key 引用
 - WHEN 用户重新打开全局搜索设置页或应用重新读取设置文件
 - THEN 系统展示上次保存的搜索设置，并将非法 Provider、越界结果数和多余空白归一化为安全值
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/agent-mode-settings-store.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron｜证据: TESTING_CHECKLIST.md
 
 #### 场景：搜索设置 bridge 不可用
 - GIVEN 渲染层缺少 `window.desktop.getGlobalWebSearchSettings` 或 `window.desktop.saveGlobalWebSearchSettings`
 - WHEN 用户打开或保存搜索设置
 - THEN 页面展示可读 bridge 不可用提示，不尝试调用通用 IPC，也不丢失当前草稿状态
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜selector: [data-testid="global-web-search-settings-page"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: browser smoke｜证据: TESTING_CHECKLIST.md
 
 #### 场景：Provider Key 使用环境变量引用
 - GIVEN 用户在 Brave 或 Tavily Key 输入框填写 `${ENV_NAME}` 引用
 - WHEN 用户保存搜索设置并启动下一轮 Agent 请求
 - THEN 设置文件保存引用文本，运行时只在主进程环境中解析该引用，UI、日志和状态摘要不展示解析后的 Key 明文
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/agent-mode-settings-store.test.mjs electron/claude-agent-runner-web-search.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: browser smoke + npm run test:electron｜证据: TESTING_CHECKLIST.md
 
 ## 平台专项验证（Electron + native helper）
 

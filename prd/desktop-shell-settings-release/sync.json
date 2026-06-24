@@ -7,6 +7,7 @@
     "electron/preload.ts",
     "electron/agent-mode-settings-store.ts",
     "electron/agent-mode-settings-store.test.mjs",
+    "electron/desktop-seam.test.mjs",
     "src/desktop-types.ts",
     "src/desktop-api.ts",
     "src/desktop-seam.ts",
@@ -20,5 +21,5 @@
     "src/locales/en.json",
     "prd/desktop-shell-settings-release/acceptance.md"
   ],
-  "notes": "增量同步，包含未提交代码观察：记录全局 MCP 设置页、状态面板跳转项目 MCP 面板、全局 Search 设置页、受控 preload/IPC、globalWebSearchSettings 持久化、native/AgentOS 搜索模式、DuckDuckGo/Brave/Tavily Provider 配置和安全边界；正式 project-verify 尚未执行。"
+  "notes": "增量同步，包含未提交代码观察：记录全局 MCP 设置页、状态面板跳转项目 MCP 面板、全局 Search 设置页、受控 preload/IPC、globalWebSearchSettings 持久化、testGlobalWebSearchProvider、native/AgentOS 搜索模式、DuckDuckGo Search/Brave/Tavily Provider 配置、字段级凭据状态和安全边界；搜索相关 project-verify 已执行，release/packaged 与 MCP 剩余体验仍待补证据。"
 }

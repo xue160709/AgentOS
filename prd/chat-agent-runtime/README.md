@@ -12,7 +12,7 @@
 - UI 可以展示权限请求、Agent 提问弹窗、工具过程、thinking、文件 diff、上下文压缩边界和运行耗时。
 - 切换线程模型时支持清空旧 session，并用简短 handoff context 交接历史。
 - 运行时接入项目级 MCP server 配置、tool policy、状态探测和 `mcp__server__tool` 友好展示。
-- 全局搜索设置可决定 Claude Agent 使用原生 Web Search，或将 `WebSearch` 路由到 AgentOS 内部 `web_search` Provider；当前 Provider 包含 DuckDuckGo Instant Answer、Brave Search 和 Tavily。
+- 全局搜索设置可决定 Claude Agent 使用原生 Web Search，或将 `WebSearch` 路由到 AgentOS 内部 `web_search` Provider；当前 Provider 包含 DuckDuckGo Search（Instant Answer + HTML 回退）、Brave Search 和 Tavily，并支持 Provider 连接测试与可恢复错误分类。
 - 支持 `show-widget` 形式的 Generative UI 沙箱渲染。
 
 ## 用户流程
@@ -31,9 +31,9 @@
 
 ## 还没做什么
 
-- 主流程已有单元测试，但正式验收状态戳尚未回写。
+- 主流程已有单元测试；WebSearch 相关运行时与搜索设置场景已完成正式验收状态戳。
 - 端到端 UI 流式走查、权限弹窗和 Generative UI 截图证据仍需补齐。
-- WebSearch Provider 的空结果、配额耗尽和认证失败目前以工具错误或空结果返回；后续需要更友好的恢复文案和连接测试入口。
+- WebSearch 的真实 Provider 可用性仍受第三方网络、额度和 bot challenge 影响；后续新增 Provider 时需要补对应 smoke 与回归场景。
 
 ## 关键决策
 

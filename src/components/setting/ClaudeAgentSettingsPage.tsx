@@ -29,6 +29,7 @@ import type {
   AgentMcpServerTransport,
   AgentWebSearchMode,
   AgentWebSearchProviderId,
+  AgentWebSearchProviderTestResult,
   AgentWebSearchSettings,
 } from '../../desktop-types'
 import type { AgentSettingsPanelId, WorkspaceProject } from '../types'
@@ -69,6 +70,37 @@ function normalizeWebSearchSettingsDraft(settings: AgentWebSearchSettings): Agen
     braveApiKey: settings.braveApiKey.trim(),
     tavilyApiKey: settings.tavilyApiKey.trim(),
   }
+}
+
+type TranslateFn = (path: string, vars?: Record<string, string | number>) => string
+
+function formatWebSearchProviderTestStatus(result: AgentWebSearchProviderTestResult, t: TranslateFn): string {
+  if (result.ok) {
+    return t('settings.search.testConnected', {
+      provider: result.providerName,
+      count: result.resultCount,
+    })
+  }
+  const recovery = t(`settings.search.recovery.${result.errorKind}`)
+  return `${t('settings.search.testFailed', {
+    provider: result.providerName,
+    message: result.message,
+  })} ${recovery}`
+}
+
+function getWebSearchCredentialHint(
+  settings: AgentWebSearchSettings,
+  result: AgentWebSearchProviderTestResult | null,
+  t: TranslateFn,
+): string {
+  if (settings.mode !== 'agentos') return ''
+  if (result?.providerId === settings.provider) return t(`settings.search.credential.${result.credentialStatus}`)
+  if (settings.provider === 'duckduckgo-instant') return t('settings.search.credential.notRequired')
+
+  const key = settings.provider === 'brave' ? settings.braveApiKey.trim() : settings.tavilyApiKey.trim()
+  if (!key) return t('settings.search.credential.missing')
+  if (/\$\{[A-Z_a-z][A-Z_a-z0-9]*\}/.test(key)) return t('settings.search.credential.envPending')
+  return t('settings.search.credential.configured')
 }
 
 function clampUiNumber(value: string | number, min: number, max: number, fallback: number): number {
@@ -923,6 +955,7 @@ export function GlobalMcpSettingsPage({
   } | null>(null)
   const [globalMcpStatus, setGlobalMcpStatus] = useState('')
   const [globalMcpSaving, setGlobalMcpSaving] = useState(false)
+  const autoTestedGlobalMcpSignatureRef = useRef('')
   const globalMcpDirty = JSON.stringify(globalMcpServers) !== JSON.stringify(draftGlobalMcpServers)
 
   const loadGlobalMcpSettings = useCallback(async () => {
@@ -1016,6 +1049,40 @@ export function GlobalMcpSettingsPage({
     }
   }, [t])
 
+  const testEnabledGlobalMcpServers = useCallback(async (servers: AgentMcpServerConfig[]) => {
+    const enabledServers = servers.filter((server) => server.enabled)
+    if (enabledServers.length === 0) return
+    const testServer = window.desktop?.testGlobalMcpServer
+    if (!testServer) {
+      setGlobalMcpStatus(t('settings.mcp.bridgeUnavailable'))
+      return
+    }
+    setGlobalMcpSaving(true)
+    setGlobalMcpStatus(t('settings.mcp.testingEnabled', { count: enabledServers.length }))
+    let tested = 0
+    let connected = 0
+    try {
+      for (const server of enabledServers) {
+        setGlobalMcpStatus(t('settings.mcp.testing', { name: server.name }))
+        const result = await testServer(server)
+        const snapshot = result.snapshot
+        if (snapshot) {
+          setGlobalMcpProbeCache((current) => ({
+            ...current,
+            [snapshot.serverName]: snapshot,
+          }))
+        }
+        tested += 1
+        if (result.ok && snapshot?.status === 'connected') connected += 1
+      }
+      setGlobalMcpStatus(t('settings.mcp.testEnabledDone', { tested, connected }))
+    } catch (error) {
+      setGlobalMcpStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setGlobalMcpSaving(false)
+    }
+  }, [t])
+
   const saveAndTestGlobalMcpEditor = useCallback(async (server: AgentMcpServerConfig, shouldTest: boolean) => {
     const nextServers =
       editingGlobalMcpServer?.index === null
@@ -1073,6 +1140,15 @@ export function GlobalMcpSettingsPage({
     void loadGlobalMcpSettings()
   }, [loadGlobalMcpSettings])
 
+  useEffect(() => {
+    if (editingGlobalMcpServer || globalMcpDirty) return
+    const enabledServers = globalMcpServers.filter((server) => server.enabled)
+    const signature = enabledServers.map((server) => `${server.name}:${buildGlobalMcpServerConfigSignature(server)}`).join('|')
+    if (!signature || autoTestedGlobalMcpSignatureRef.current === signature) return
+    autoTestedGlobalMcpSignatureRef.current = signature
+    void testEnabledGlobalMcpServers(enabledServers)
+  }, [editingGlobalMcpServer, globalMcpDirty, globalMcpServers, testEnabledGlobalMcpServers])
+
   return (
     <section
       className="app-main-inner settings-page settings-page--mcp"
@@ -1114,8 +1190,16 @@ export function GlobalWebSearchSettingsPage() {
   const [draftSettings, setDraftSettings] = useState<AgentWebSearchSettings>(DEFAULT_WEB_SEARCH_SETTINGS)
   const [status, setStatus] = useState('')
   const [saving, setSaving] = useState(false)
+  const [testingProvider, setTestingProvider] = useState(false)
+  const [providerTestResult, setProviderTestResult] = useState<AgentWebSearchProviderTestResult | null>(null)
   const dirty = JSON.stringify(savedSettings) !== JSON.stringify(draftSettings)
   const usingAgentOs = draftSettings.mode === 'agentos'
+  const credentialHint = getWebSearchCredentialHint(draftSettings, providerTestResult, t)
+
+  const updateDraftSettings = useCallback((updater: (current: AgentWebSearchSettings) => AgentWebSearchSettings) => {
+    setProviderTestResult(null)
+    setDraftSettings(updater)
+  }, [])
 
   const loadWebSearchSettings = useCallback(async () => {
     const getGlobalWebSearchSettings = window.desktop?.getGlobalWebSearchSettings
@@ -1131,6 +1215,7 @@ export function GlobalWebSearchSettingsPage() {
       }
       setSavedSettings(result.settings)
       setDraftSettings(result.settings)
+      setProviderTestResult(null)
       setStatus(t('settings.search.loaded'))
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error))
@@ -1160,6 +1245,31 @@ export function GlobalWebSearchSettingsPage() {
       setSaving(false)
     }
   }, [draftSettings, t])
+
+  const testWebSearchProvider = useCallback(async () => {
+    const testGlobalWebSearchProvider = window.desktop?.testGlobalWebSearchProvider
+    if (!testGlobalWebSearchProvider) {
+      setStatus(t('settings.search.testBridgeUnavailable'))
+      return
+    }
+    if (!usingAgentOs) {
+      setProviderTestResult(null)
+      setStatus(t('settings.search.nativeTestUnavailable'))
+      return
+    }
+    setTestingProvider(true)
+    setStatus(t('settings.search.testing'))
+    try {
+      const result = await testGlobalWebSearchProvider(normalizeWebSearchSettingsDraft(draftSettings))
+      setProviderTestResult(result)
+      setStatus(formatWebSearchProviderTestStatus(result, t))
+    } catch (error) {
+      setProviderTestResult(null)
+      setStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setTestingProvider(false)
+    }
+  }, [draftSettings, t, usingAgentOs])
 
   useEffect(() => {
     void loadWebSearchSettings()
@@ -1194,8 +1304,8 @@ export function GlobalWebSearchSettingsPage() {
                 name="web-search-mode"
                 value={mode}
                 checked={draftSettings.mode === mode}
-                disabled={saving}
-                onChange={() => setDraftSettings((current) => ({ ...current, mode }))}
+                disabled={saving || testingProvider}
+                onChange={() => updateDraftSettings((current) => ({ ...current, mode }))}
               />
               <span>
                 <strong>{t(`settings.search.mode.${mode}.title`)}</strong>
@@ -1211,6 +1321,16 @@ export function GlobalWebSearchSettingsPage() {
               <h4>{t('settings.search.providerHeading')}</h4>
               <p>{t('settings.search.providerCaption')}</p>
             </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-compact"
+              data-testid="web-search-provider-test"
+              disabled={saving || testingProvider || !usingAgentOs}
+              onClick={() => void testWebSearchProvider()}
+            >
+              <IconInline name={providerTestResult?.ok ? 'check' : 'refresh'} />
+              <span>{testingProvider ? t('settings.search.testingShort') : t('settings.search.test')}</span>
+            </button>
           </div>
 
           <div className="agent-mcp-list" role="radiogroup" aria-label={t('settings.search.providerAria')}>
@@ -1221,8 +1341,8 @@ export function GlobalWebSearchSettingsPage() {
                   name="web-search-provider"
                   value={provider}
                   checked={draftSettings.provider === provider}
-                  disabled={saving || !usingAgentOs}
-                  onChange={() => setDraftSettings((current) => ({ ...current, provider }))}
+                  disabled={saving || testingProvider || !usingAgentOs}
+                  onChange={() => updateDraftSettings((current) => ({ ...current, provider }))}
                 />
                 <span>
                   <strong>{t(`settings.search.provider.${provider}.title`)}</strong>
@@ -1242,9 +1362,9 @@ export function GlobalWebSearchSettingsPage() {
                 min={1}
                 max={10}
                 value={draftSettings.maxResults}
-                disabled={saving || !usingAgentOs}
+                disabled={saving || testingProvider || !usingAgentOs}
                 onChange={(event) =>
-                  setDraftSettings((current) => ({
+                  updateDraftSettings((current) => ({
                     ...current,
                     maxResults: clampUiNumber(event.target.value, 1, 10, current.maxResults),
                   }))
@@ -1259,11 +1379,12 @@ export function GlobalWebSearchSettingsPage() {
                   id="web-search-brave-key"
                   className="settings-input"
                   value={draftSettings.braveApiKey}
-                  disabled={saving || !usingAgentOs}
+                  disabled={saving || testingProvider || !usingAgentOs}
                   spellCheck={false}
                   placeholder="${BRAVE_SEARCH_API_KEY}"
-                  onChange={(event) => setDraftSettings((current) => ({ ...current, braveApiKey: event.target.value }))}
+                  onChange={(event) => updateDraftSettings((current) => ({ ...current, braveApiKey: event.target.value }))}
                 />
+                <small className="settings-field-row__hint" data-testid="web-search-key-status">{credentialHint}</small>
               </label>
             ) : null}
 
@@ -1274,21 +1395,36 @@ export function GlobalWebSearchSettingsPage() {
                   id="web-search-tavily-key"
                   className="settings-input"
                   value={draftSettings.tavilyApiKey}
-                  disabled={saving || !usingAgentOs}
+                  disabled={saving || testingProvider || !usingAgentOs}
                   spellCheck={false}
                   placeholder="${TAVILY_API_KEY}"
-                  onChange={(event) => setDraftSettings((current) => ({ ...current, tavilyApiKey: event.target.value }))}
+                  onChange={(event) => updateDraftSettings((current) => ({ ...current, tavilyApiKey: event.target.value }))}
                 />
+                <small className="settings-field-row__hint" data-testid="web-search-key-status">{credentialHint}</small>
               </label>
             ) : null}
           </div>
+
+          {usingAgentOs && draftSettings.provider === 'duckduckgo-instant' ? (
+            <p className="settings-provider-test-status" data-testid="web-search-key-status">{credentialHint}</p>
+          ) : null}
+
+          {providerTestResult ? (
+            <p
+              className={`settings-provider-test-status ${providerTestResult.ok ? 'is-success' : 'is-error'}`}
+              data-testid="web-search-provider-test-status"
+            >
+              {formatWebSearchProviderTestStatus(providerTestResult, t)}
+            </p>
+          ) : null}
         </div>
 
         <div className="settings-footer settings-footer--inline">
           <span>{status}</span>
           <div className="settings-footer__actions">
-            <button type="button" className="btn btn-ghost" disabled={saving || !dirty} onClick={() => {
+            <button type="button" className="btn btn-ghost" disabled={saving || testingProvider || !dirty} onClick={() => {
               setDraftSettings(savedSettings)
+              setProviderTestResult(null)
               setStatus(t('settings.search.reverted'))
             }}>
               {t('settings.search.revert')}
@@ -1297,7 +1433,7 @@ export function GlobalWebSearchSettingsPage() {
               type="button"
               className="btn btn-primary"
               data-testid="web-search-settings-save"
-              disabled={saving || !dirty}
+              disabled={saving || testingProvider || !dirty}
               onClick={() => void saveWebSearchSettings()}
             >
               <IconInline name="save" />

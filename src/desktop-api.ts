@@ -16,6 +16,7 @@ import type {
   AgentMcpServerConfig,
   AgentMcpServerProbeResult,
   AgentWebSearchSettings,
+  AgentWebSearchProviderTestResult,
   AgentWebSearchSettingsResult,
   AgentModeProjectSettings,
   AgentModeSettingsResult,
@@ -108,6 +109,7 @@ export type DesktopAPI = {
   testGlobalMcpServer?: (server: AgentMcpServerConfig) => Promise<AgentMcpServerProbeResult>
   getGlobalWebSearchSettings?: () => Promise<AgentWebSearchSettingsResult>
   saveGlobalWebSearchSettings?: (settings: Partial<AgentWebSearchSettings>) => Promise<AgentWebSearchSettingsResult>
+  testGlobalWebSearchProvider?: (settings: Partial<AgentWebSearchSettings>) => Promise<AgentWebSearchProviderTestResult>
   saveAgentModeSettings?: (
     rootPath: string,
     payload: Partial<

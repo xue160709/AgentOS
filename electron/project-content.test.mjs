@@ -259,6 +259,11 @@ test('Project Content desktop implementation owns tree, preview, search, and pat
     assert.equal(escapedPreview.ok, false)
     assert.equal(escapedPreview.message, '只能预览当前项目内的文件')
 
+    await writeFile(join(rootPath, 'src', 'large.png'), Buffer.alloc(5 * 1024 * 1024 + 1))
+    const largeImagePreview = await content.readProjectFilePreview(rootPath, 'src/large.png')
+    assert.equal(largeImagePreview.ok, false)
+    assert.equal(largeImagePreview.message, '图片超过 5MB，暂不在应用内预览')
+
     const search = await content.searchProjectFiles(rootPath, 'read')
     assert.equal(search.ok, true)
     assert.deepEqual(search.items.map((item) => item.relativePath), ['src/README.md'])

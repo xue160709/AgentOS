@@ -71,3 +71,17 @@ test('Desktop seam contract drives preload forwarding and main registration', ()
   assert.doesNotMatch(preload, /ipcRenderer\.invoke\(['"](?:desktop|desktop-preferences|chat-workspace|app-updater):/)
   assert.doesNotMatch(registrationSource, /ipcMain\.handle\(['"](?:desktop|desktop-preferences|chat-workspace|app-updater):/)
 })
+
+test('Web search settings expose provider test seam and UI status hooks', () => {
+  const desktopApi = readFileSync(resolve(root, 'src/desktop-api.ts'), 'utf8')
+  const preload = readFileSync(resolve(root, 'electron/preload.ts'), 'utf8')
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const settingsPage = readFileSync(resolve(root, 'src/components/setting/ClaudeAgentSettingsPage.tsx'), 'utf8')
+
+  assert.match(desktopApi, /testGlobalWebSearchProvider\?:/)
+  assert.match(preload, /DESKTOP_INVOKE_CHANNELS\.testGlobalWebSearchProvider/)
+  assert.match(main, /DESKTOP_INVOKE_CHANNELS\.testGlobalWebSearchProvider/)
+  assert.match(settingsPage, /data-testid="web-search-provider-test"/)
+  assert.match(settingsPage, /data-testid="web-search-provider-test-status"/)
+  assert.match(settingsPage, /data-testid="web-search-key-status"/)
+})

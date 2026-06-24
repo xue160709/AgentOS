@@ -23,12 +23,14 @@ import type {
   ProjectContextEntry,
   ProjectContextSkippedEntry,
   ProjectContextResult,
+  AgentWebSearchProviderTestResult,
 } from '../src/desktop-types'
 import { ensureAgentModeFiles, getAgentModeStatus, setAgentModeState } from './agent-mode-files'
-import { AgentModeSettingsStore, getDefaultWebSearchSettings, normalizeAgentMcpServers } from './agent-mode-settings-store'
+import { AgentModeSettingsStore, getDefaultWebSearchSettings, normalizeAgentMcpServers, normalizeWebSearchSettings } from './agent-mode-settings-store'
 import { discoverAgentContext, searchAgentKnowledge } from './agent-context'
 import { ClaudeAgentRunner } from './claude-agent-runner'
 import { probeMcpServer } from './claude-agent-runner/mcp-probe'
+import { testWebSearchProviderSettings } from './claude-agent-runner/web-search'
 import { ClaudeAgentSettingsStore } from './claude-agent-settings'
 import { ChatWorkspaceStore } from './chat-workspace-store'
 import { DesktopPreferencesStore } from './desktop-preferences-store'
@@ -836,6 +838,13 @@ if (gotSingleInstanceLock) {
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveGlobalWebSearchSettings, (_event, payload: unknown) => {
       return getAgentModeSettingsStore().saveGlobalWebSearchSettings(isRecord(payload) ? payload : {})
     })
+    ipcMain.handle(
+      DESKTOP_INVOKE_CHANNELS.testGlobalWebSearchProvider,
+      async (_event, payload: unknown): Promise<AgentWebSearchProviderTestResult> => {
+        const settings = normalizeWebSearchSettings(isRecord(payload) ? payload : {})
+        return testWebSearchProviderSettings(settings, process.env)
+      },
+    )
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveAgentModeSettings, (_event, rootPath: string, payload: Partial<AgentModeProjectSettings>) => {
       return getAgentModeSettingsStore().saveSettings(rootPath, payload)
     })

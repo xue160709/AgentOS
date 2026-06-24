@@ -14,7 +14,8 @@
     "electron/claude-agent-runner/web-search-provider.ts",
     "electron/claude-agent-runner-mcp.test.mjs",
     "electron/claude-agent-runner-web-search.test.mjs",
+    "src/desktop-types.ts",
     "prd/chat-agent-runtime/acceptance.md"
   ],
-  "notes": "增量同步，包含未提交代码观察：记录项目级 MCP runtime、状态面板跳转、MCP 权限/Transcript 友好展示、WebSearch native/AgentOS 路由、agentos-web alias、DuckDuckGo/Brave/Tavily Provider registry、provider 空结果与 HTTP 错误边界；正式 project-verify 尚未执行。"
+  "notes": "增量同步，包含未提交代码观察：记录项目级 MCP runtime、状态面板跳转、MCP 权限/Transcript 友好展示、WebSearch native/AgentOS 路由、agentos-web alias、DuckDuckGo/Brave/Tavily Provider registry、DuckDuckGo HTML 回退、Provider Test、env 凭据状态与 auth/quota/bot-challenge/network/service 恢复文案；搜索相关 project-verify 已执行，完整 Chat e2e 证据仍待补齐。"
 }

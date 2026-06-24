@@ -112,42 +112,42 @@
 - WHEN 用户提交一次可能触发联网搜索的 Agent 请求
 - THEN 主进程不注册内部 `agentos-web` MCP server，不设置 `toolAliases.WebSearch`，也不把内置 `WebSearch` 加入禁用列表
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron｜证据: TESTING_CHECKLIST.md
 
 #### 场景：使用 AgentOS 搜索 Provider
-- GIVEN 全局搜索设置选择 AgentOS 搜索 Provider，并选择 DuckDuckGo Instant Answer、Brave Search 或 Tavily
+- GIVEN 全局搜索设置选择 AgentOS 搜索 Provider，并选择 DuckDuckGo Search、Brave Search 或 Tavily
 - WHEN 用户提交一次可能触发联网搜索的 Agent 请求
 - THEN 主进程注册内部 `agentos-web` MCP server，将 `toolAliases.WebSearch` 指向 `mcp__agentos-web__web_search`，并禁用内置 `WebSearch`
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-mcp.test.mjs electron/claude-agent-runner-web-search.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron｜证据: TESTING_CHECKLIST.md
 
 #### 场景：Provider 缺少凭据
 - GIVEN 全局搜索设置选择 Brave Search 或 Tavily 但对应 API Key 未配置
 - WHEN AgentOS `web_search` 被调用
 - THEN 工具返回可读错误，并且日志和 transcript 不输出 API Key 或完整 header 明文
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: provider smoke + npm run test:electron｜证据: TESTING_CHECKLIST.md
 
-#### 场景：DuckDuckGo Instant Answer 无结果
-- GIVEN 全局搜索设置选择 AgentOS 搜索 Provider 且 Provider 为 DuckDuckGo Instant Answer
+#### 场景：DuckDuckGo 普通网页搜索回退
+- GIVEN 全局搜索设置选择 AgentOS 搜索 Provider 且 Provider 为 DuckDuckGo Search
 - WHEN `web_search` 查询一个 DuckDuckGo Instant Answer 未覆盖的普通网页搜索词
-- THEN 工具返回合法 JSON 输出，包含 Provider 信息和空 `results` 数组，不抛出运行时异常，也不伪造搜索结果
+- THEN 工具回退到 DuckDuckGo HTML 搜索结果，返回合法 JSON 输出，包含 Provider 信息和归一化后的 title、url、snippet、source；若 HTML 搜索也无结果则返回空 `results` 数组，不伪造搜索结果
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: provider smoke + npm run test:electron｜证据: TESTING_CHECKLIST.md
 
 #### 场景：Tavily 请求映射
 - GIVEN 全局搜索设置选择 AgentOS 搜索 Provider 且 Provider 为 Tavily，并配置有效或可解析的 Tavily API Key
 - WHEN `web_search` 携带 query、max_results、allowed_domains 和 freshness 调用
 - THEN 主进程向 Tavily `/search` 发起 POST 请求，传入 Bearer 认证、`max_results`、include/exclude domains 和 time_range 映射，并将结果归一化为 title、url、snippet、source 和 publishedAt
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron｜证据: TESTING_CHECKLIST.md
 
 #### 场景：Provider HTTP 错误脱敏返回
 - GIVEN Brave 或 Tavily Provider 返回认证、套餐、配额或其它 HTTP 错误
 - WHEN AgentOS `web_search` 被调用
 - THEN 工具返回可读错误文本，日志只记录 provider、queryLength 和脱敏错误摘要，不输出 API Key、Bearer token 或完整 header
 
-> 实现状态：⚠️ 跳过（Codex 自检 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-web-search.test.mjs；外部 smoke 可能因 Provider 配额跳过
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: provider smoke｜证据: TESTING_CHECKLIST.md
 
 ## 平台专项验证（Electron + React）
 

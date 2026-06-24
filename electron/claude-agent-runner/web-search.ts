@@ -6,13 +6,19 @@
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod/v4'
-import type { AgentWebSearchSettings } from '../../src/desktop-types'
+import type {
+  AgentWebSearchCredentialStatus,
+  AgentWebSearchProviderErrorKind,
+  AgentWebSearchProviderTestResult,
+  AgentWebSearchSettings,
+} from '../../src/desktop-types'
 import {
   buildWebSearchConfigSignature,
   formatWebSearchToolOutput,
   normalizeWebSearchRequest,
   resolveWebSearchProviderStatus,
   searchWeb,
+  summarizeWebSearchProviderError,
   type WebSearchEnv,
 } from './web-search-provider'
 
@@ -63,10 +69,11 @@ export function buildWebSearchRuntimeOptions(settings: AgentWebSearchSettings | 
           content: [{ type: 'text' as const, text: formatWebSearchToolOutput(response) }],
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
+        const summary = summarizeWebSearchProviderError(error)
+        const recovery = summary.recoveryHint ? ` Recovery: ${summary.recoveryHint}` : ''
         return {
           isError: true,
-          content: [{ type: 'text' as const, text: `AgentOS web_search failed: ${message}` }],
+          content: [{ type: 'text' as const, text: `AgentOS web_search failed (${summary.kind}): ${summary.message}${recovery}` }],
         }
       }
     },
@@ -106,6 +113,75 @@ export function isAgentOsWebSearchServerName(name: string): boolean {
   return name === AGENTOS_WEB_SEARCH_SERVER_NAME
 }
 
+export async function testWebSearchProviderSettings(
+  settings: AgentWebSearchSettings | undefined,
+  env: WebSearchEnv,
+): Promise<AgentWebSearchProviderTestResult> {
+  const normalizedSettings = normalizeRuntimeWebSearchSettings(settings)
+  const checkedAt = new Date().toISOString()
+  if (normalizedSettings.mode === 'native') {
+    return {
+      ok: true,
+      providerId: normalizedSettings.provider,
+      providerName: 'Native Web Search',
+      credentialStatus: 'not-required',
+      resultCount: 0,
+      checkedAt,
+      message: 'Native Web Search is handled by Claude Code.',
+    }
+  }
+
+  const webSearchEnv = buildProviderEnv(normalizedSettings, env)
+  const credentialStatus = resolveWebSearchCredentialStatus(normalizedSettings, env)
+  const providerStatus = resolveWebSearchProviderStatus(webSearchEnv)
+  if (!providerStatus.available) {
+    return {
+      ok: false,
+      providerId: normalizedSettings.provider,
+      providerName: providerStatus.name,
+      credentialStatus,
+      errorKind: credentialStatus === 'missing' || credentialStatus === 'env-missing' ? 'missing-credential' : 'unknown',
+      checkedAt,
+      message: providerStatus.reason ?? 'Search provider is unavailable.',
+      recoveryHint: recoveryHintForUnavailableProvider(credentialStatus),
+    }
+  }
+
+  try {
+    const response = await searchWeb(
+      normalizeWebSearchRequest(
+        {
+          query: 'AgentOS web search connectivity',
+          max_results: 1,
+        },
+        normalizedSettings.maxResults,
+      ),
+      webSearchEnv,
+    )
+    return {
+      ok: true,
+      providerId: normalizedSettings.provider,
+      providerName: providerStatus.name,
+      credentialStatus,
+      resultCount: response.results.length,
+      checkedAt,
+      message: `${providerStatus.name} provider test completed.`,
+    }
+  } catch (error) {
+    const summary = summarizeWebSearchProviderError(error)
+    return {
+      ok: false,
+      providerId: normalizedSettings.provider,
+      providerName: providerStatus.name,
+      credentialStatus,
+      errorKind: summary.kind as AgentWebSearchProviderErrorKind,
+      checkedAt,
+      message: summary.message,
+      recoveryHint: summary.recoveryHint,
+    }
+  }
+}
+
 function normalizeRuntimeWebSearchSettings(settings: AgentWebSearchSettings | undefined): AgentWebSearchSettings {
   return {
     mode: settings?.mode === 'agentos' ? 'agentos' : 'native',
@@ -141,6 +217,25 @@ function resolveSecretSetting(value: string, env: WebSearchEnv): string {
   if (!trimmed) return ''
   const resolved = trimmed.replace(/\$\{([A-Z_a-z][A-Z_a-z0-9]*)\}/g, (_match, variable: string) => env[variable]?.trim() ?? '')
   return resolved.trim()
+}
+
+function resolveWebSearchCredentialStatus(settings: AgentWebSearchSettings, env: WebSearchEnv): AgentWebSearchCredentialStatus {
+  if (settings.provider === 'duckduckgo-instant') return 'not-required'
+  const rawValue = settings.provider === 'brave' ? settings.braveApiKey : settings.tavilyApiKey
+  const trimmed = rawValue.trim()
+  if (!trimmed) return 'missing'
+
+  const references = Array.from(trimmed.matchAll(/\$\{([A-Z_a-z][A-Z_a-z0-9]*)\}/g)).map((match) => match[1])
+  if (references.length === 0) return 'configured'
+
+  const unresolved = references.some((variable) => !env[variable]?.trim())
+  return unresolved ? 'env-missing' : 'env-resolved'
+}
+
+function recoveryHintForUnavailableProvider(credentialStatus: AgentWebSearchCredentialStatus): string {
+  if (credentialStatus === 'missing') return 'Add an API key or a ${ENV_NAME} reference, then test the provider again.'
+  if (credentialStatus === 'env-missing') return 'Check that the referenced environment variable is available to the Electron main process.'
+  return 'Check provider settings and try again.'
 }
 
 function clampMaxResults(value: number | undefined): number {

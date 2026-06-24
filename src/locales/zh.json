@@ -363,11 +363,16 @@
     "agentSettingsMcpStatusWaiting": "等待下次 Agent 会话连接",
     "agentSettingsMcpStatusConnected": "已连接",
     "agentSettingsMcpStatusConnectedTools": "已连接 · {{count}} 个工具可用",
+    "agentSettingsMcpStatusRuntimeConnected": "当前会话已连接",
+    "agentSettingsMcpStatusRuntimeConnectedTools": "当前会话已连接 · {{count}} 个工具可用",
+    "agentSettingsMcpStatusProjectAvailableTools": "项目可用 · {{count}} 个工具",
     "agentSettingsMcpStatusFailed": "连接失败",
     "agentSettingsMcpStatusFailedDetail": "连接失败：{{message}}",
     "agentSettingsMcpStatusNeedsAuth": "需要认证",
     "agentSettingsMcpStatusNeedsAuthDetail": "需要认证：{{message}}",
     "agentSettingsMcpStatusRuntime": "状态：{{status}}",
+    "agentSettingsMcpTestingEnabled": "正在测试 {{count}} 个已启用 MCP 服务...",
+    "agentSettingsMcpTestEnabledDone": "已测试 {{tested}} 个 MCP 服务，{{connected}} 个可用。",
     "agentSettingsSkillDefaultModel": "不固定模型（使用项目默认/当前模型）",
     "agentSettingsSkillModelFor": "选择 {{name}} 的运行模型",
     "agentSettingsUnsavedChanges": "有未保存更改",
@@ -661,8 +666,10 @@
       "saving": "正在保存 MCP 设置…",
       "saved": "MCP 设置已保存",
       "testing": "正在测试 {{name}}…",
+      "testingEnabled": "正在测试 {{count}} 个已启用 MCP 服务…",
       "testingShort": "测试中",
       "testConnected": "{{name}} 已连接，发现 {{count}} 个工具",
+      "testEnabledDone": "已测试 {{tested}} 个 MCP 服务，{{connected}} 个可用。",
       "notTested": "尚未测试连接",
       "backToList": "返回列表",
       "saveAndTest": "保存并测试",
@@ -692,8 +699,8 @@
       "providerAria": "搜索 Provider",
       "provider": {
         "duckduckgo-instant": {
-          "title": "DuckDuckGo Instant Answer",
-          "description": "无需 API Key，适合兜底；结果较轻量，不等同完整搜索结果页。"
+          "title": "DuckDuckGo Search",
+          "description": "无需 API Key；优先 Instant Answer，普通查询会回退到 DuckDuckGo HTML 搜索结果（实验性）。"
         },
         "brave": {
           "title": "Brave Search",
@@ -713,7 +720,31 @@
       "saved": "搜索设置已保存",
       "reverted": "已恢复到上次保存的搜索设置",
       "revert": "还原",
-      "save": "保存搜索设置"
+      "save": "保存搜索设置",
+      "test": "测试 Provider",
+      "testing": "正在测试搜索 Provider…",
+      "testingShort": "测试中",
+      "testConnected": "{{provider}} 可用，返回 {{count}} 条结果",
+      "testFailed": "{{provider}} 测试失败：{{message}}",
+      "testBridgeUnavailable": "搜索 Provider 测试接口不可用。",
+      "nativeTestUnavailable": "原生 Web Search 由 Claude Code 执行，不需要在 AgentOS 中测试 Provider。",
+      "credential": {
+        "notRequired": "DuckDuckGo Search 不需要 API Key。",
+        "missing": "请填写 API Key 或 ${ENV_NAME} 引用后再测试。",
+        "configured": "将使用这里保存的 Key；不会在日志或状态中展示明文。",
+        "envPending": "保存的是环境变量引用；测试时会在主进程解析。",
+        "envResolved": "环境变量已在主进程解析。",
+        "envMissing": "环境变量未在主进程解析，请检查变量名或启动环境。"
+      },
+      "recovery": {
+        "missing-credential": "补充 API Key 或环境变量引用后重试。",
+        "auth": "检查 API Key 是否有效，或环境变量是否指向正确凭据。",
+        "quota": "检查 Provider 套餐或额度，或临时切换到其它 Provider。",
+        "bot-challenge": "DuckDuckGo 返回 bot challenge；建议切换 Brave 或 Tavily。",
+        "network": "检查网络连接后重试。",
+        "service": "Provider 服务暂不可用，可稍后重试或切换 Provider。",
+        "unknown": "检查 Provider 设置后重试。"
+      }
     },
     "models": {
       "pageTitle": "模型",

@@ -10,6 +10,7 @@ import type {
   AgentMcpServerConfig,
   AgentMcpServerOverrides,
   AgentMcpServerProbeCache,
+  AgentMcpServerProbeSnapshot,
   AgentMcpToolPolicies,
   AgentMcpToolPolicy,
   AgentProjectDocumentName,
@@ -281,6 +282,7 @@ export function ProjectHomeSurface({
   const [mcpServerProbeCache, setMcpServerProbeCache] = useState<AgentMcpServerProbeCache>({})
   const [mcpSettingsStatus, setMcpSettingsStatus] = useState('')
   const [mcpSettingsSaving, setMcpSettingsSaving] = useState(false)
+  const autoTestedProjectMcpSignatureRef = useRef('')
   const [cardOrderSaving, setCardOrderSaving] = useState(false)
   const [cardOrderStatus, setCardOrderStatus] = useState('')
   const [modelRows, setModelRows] = useState<ModelPickMenuRow[]>([])
@@ -792,6 +794,54 @@ export function ProjectHomeSurface({
     }
   }
 
+  const refreshProjectMcpProbeStatus = useCallback(async (servers: AgentMcpServerConfig[]) => {
+    const enabledServers = servers.filter((server) => server.enabled)
+    if (enabledServers.length === 0) return
+    const testGlobalMcpServer = window.desktop?.testGlobalMcpServer
+    if (!testGlobalMcpServer) {
+      setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setMcpSettingsSaving(true)
+    setMcpSettingsStatus(t('workspace.agentSettingsMcpTestingEnabled', { count: enabledServers.length }))
+    let tested = 0
+    let connected = 0
+    try {
+      for (const server of enabledServers) {
+        setMcpSettingsStatus(t('settings.mcp.testing', { name: server.name }))
+        const result = await testGlobalMcpServer(server)
+        const snapshot = result.snapshot
+        if (snapshot) {
+          setMcpServerProbeCache((current) => ({
+            ...current,
+            [snapshot.serverName]: snapshot,
+          }))
+        }
+        tested += 1
+        if (result.ok && snapshot?.status === 'connected') connected += 1
+      }
+      setMcpSettingsStatus(t('workspace.agentSettingsMcpTestEnabledDone', { tested, connected }))
+    } catch (error) {
+      setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setMcpSettingsSaving(false)
+    }
+  }, [t])
+
+  const refreshMcpStatus = useCallback(() => {
+    void refreshProjectMcpProbeStatus(mcpServers)
+    onRefreshAgentStatus(true)
+  }, [mcpServers, onRefreshAgentStatus, refreshProjectMcpProbeStatus])
+
+  useEffect(() => {
+    if (!agentSettingsOpen || agentSettingsPanel !== 'mcp') return
+    const enabledServers = mcpServers.filter((server) => server.enabled)
+    const signature = enabledServers.map((server) => `${server.name}:${buildMcpServerConfigSignature(server)}`).join('|')
+    if (!signature || autoTestedProjectMcpSignatureRef.current === signature) return
+    autoTestedProjectMcpSignatureRef.current = signature
+    void refreshProjectMcpProbeStatus(enabledServers)
+  }, [agentSettingsOpen, agentSettingsPanel, mcpServers, refreshProjectMcpProbeStatus])
+
   const saveSortOrder = async () => {
     setCardOrderSaving(true)
     setCardOrderStatus(t('settings.agentMode.saving'))
@@ -1058,7 +1108,7 @@ export function ProjectHomeSurface({
           onDraftMcpServersChange={setDraftMcpServers}
           onDraftMcpServerOverridesChange={setDraftMcpServerOverrides}
           onDraftMcpToolPoliciesChange={setDraftMcpToolPolicies}
-          onRefreshMcpStatus={() => onRefreshAgentStatus(true)}
+          onRefreshMcpStatus={refreshMcpStatus}
           onSaveMcpSettings={() => void saveMcpSettings()}
           deletingSlug={deletingSlug}
           cardOrderStatus={cardOrderStatus}
@@ -2714,7 +2764,7 @@ function McpSettingsPanel({
   const discoveredTools = useMemo(() => {
     return draftServers.flatMap((server) => {
       if (!server.enabled) return []
-      const snapshot = probeCache[server.name]
+      const snapshot = getMatchingMcpProbeSnapshot(server, probeCache)
       if (snapshot?.status !== 'connected') return []
       return snapshot.tools.map((tool) => ({
         serverName: server.name,
@@ -2794,7 +2844,8 @@ function McpSettingsPanel({
               const displayName = server.name.trim() || t('workspace.agentSettingsMcpUnnamed')
               const savedName = savedServers[index]?.name?.trim() ?? ''
               const runtimeStatus = statusByName.get(server.name.trim()) ?? (savedName ? statusByName.get(savedName) : undefined)
-              const statusMeta = formatMcpSettingsServerStatus(server, runtimeStatus, t)
+              const probeSnapshot = getMatchingMcpProbeSnapshot(server, probeCache)
+              const statusMeta = formatMcpSettingsServerStatus(server, runtimeStatus, probeSnapshot, t)
               return (
                 <div
                   key={`${server.name}-${index}`}
@@ -3199,27 +3250,22 @@ type McpSettingsStatusTone = 'ready' | 'pending' | 'error' | 'disabled'
 function formatMcpSettingsServerStatus(
   server: AgentMcpServerConfig,
   runtimeStatus: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>[number] | undefined,
+  probeSnapshot: AgentMcpServerProbeSnapshot | undefined,
   t: (path: string, params?: Record<string, string | number>) => string,
 ): { tone: McpSettingsStatusTone; text: string; title?: string } {
   if (!server.enabled) {
     return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
   }
-  if (!runtimeStatus) {
-    return { tone: 'pending', text: t('workspace.agentSettingsMcpStatusWaiting') }
-  }
-  if (runtimeStatus.status === 'connected') {
+  if (runtimeStatus?.status === 'connected') {
     if (typeof runtimeStatus.toolCount === 'number') {
       return {
         tone: 'ready',
-        text: t('workspace.agentSettingsMcpStatusConnectedTools', { count: runtimeStatus.toolCount }),
+        text: t('workspace.agentSettingsMcpStatusRuntimeConnectedTools', { count: runtimeStatus.toolCount }),
       }
     }
-    return { tone: 'ready', text: t('workspace.agentSettingsMcpStatusConnected') }
+    return { tone: 'ready', text: t('workspace.agentSettingsMcpStatusRuntimeConnected') }
   }
-  if (runtimeStatus.status === 'disabled') {
-    return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
-  }
-  if (runtimeStatus.status === 'failed') {
+  if (runtimeStatus?.status === 'failed') {
     const message = runtimeStatus.error?.trim()
     return {
       tone: 'error',
@@ -3229,7 +3275,7 @@ function formatMcpSettingsServerStatus(
       title: message,
     }
   }
-  if (runtimeStatus.status === 'needs-auth') {
+  if (runtimeStatus?.status === 'needs-auth') {
     const message = runtimeStatus.error?.trim()
     return {
       tone: 'error',
@@ -3239,17 +3285,49 @@ function formatMcpSettingsServerStatus(
       title: message,
     }
   }
-  if (runtimeStatus.error?.trim()) {
+  if (runtimeStatus?.error?.trim()) {
     return {
       tone: 'error',
       text: t('workspace.agentSettingsMcpStatusFailedDetail', { message: runtimeStatus.error.trim() }),
       title: runtimeStatus.error.trim(),
     }
   }
-  return {
-    tone: 'pending',
-    text: t('workspace.agentSettingsMcpStatusRuntime', { status: runtimeStatus.status || 'pending' }),
+  if (probeSnapshot?.status === 'connected') {
+    return {
+      tone: 'ready',
+      text: t('workspace.agentSettingsMcpStatusProjectAvailableTools', { count: probeSnapshot.tools.length }),
+    }
   }
+  if (probeSnapshot?.status === 'needs-auth') {
+    const message = probeSnapshot.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusNeedsAuthDetail', { message })
+        : t('workspace.agentSettingsMcpStatusNeedsAuth'),
+      title: message,
+    }
+  }
+  if (probeSnapshot?.status === 'failed') {
+    const message = probeSnapshot.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusFailedDetail', { message })
+        : t('workspace.agentSettingsMcpStatusFailed'),
+      title: message,
+    }
+  }
+  if (probeSnapshot?.status === 'disabled') {
+    return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
+  }
+  if (runtimeStatus?.status) {
+    return {
+      tone: 'pending',
+      text: t('workspace.agentSettingsMcpStatusRuntime', { status: runtimeStatus.status }),
+    }
+  }
+  return { tone: 'pending', text: t('settings.mcp.notTested') }
 }
 
 function validateMcpSettings(
@@ -3282,6 +3360,28 @@ function sameMcpSettings(
 ): boolean {
   return JSON.stringify(normalizeMcpServersForSave(savedServers)) === JSON.stringify(normalizeMcpServersForSave(draftServers)) &&
     JSON.stringify(normalizeMcpPoliciesForSave(savedPolicies)) === JSON.stringify(normalizeMcpPoliciesForSave(draftPolicies))
+}
+
+function getMatchingMcpProbeSnapshot(
+  server: AgentMcpServerConfig,
+  probeCache: AgentMcpServerProbeCache,
+): AgentMcpServerProbeSnapshot | undefined {
+  const snapshot = probeCache[server.name]
+  if (!snapshot) return undefined
+  if (snapshot.configSignature !== buildMcpServerConfigSignature(server)) return undefined
+  return snapshot
+}
+
+function buildMcpServerConfigSignature(server: AgentMcpServerConfig): string {
+  return JSON.stringify({
+    transport: server.transport === 'http' || server.transport === 'sse' ? server.transport : 'stdio',
+    command: server.command.trim(),
+    args: server.args.map((arg) => arg.trim()).filter(Boolean),
+    env: cleanStringRecord(server.env),
+    cwd: server.cwd.trim(),
+    url: server.url.trim(),
+    headers: cleanStringRecord(server.headers),
+  })
 }
 
 function cleanStringRecord(record: Record<string, string>): Record<string, string> {

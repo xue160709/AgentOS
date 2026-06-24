@@ -532,7 +532,7 @@ function normalizeMcpToolDescriptors(value: unknown): AgentMcpToolDescriptor[] {
   return output
 }
 
-function normalizeWebSearchSettings(value: unknown): AgentWebSearchSettings {
+export function normalizeWebSearchSettings(value: unknown): AgentWebSearchSettings {
   const defaults = getDefaultWebSearchSettings()
   if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults
   const record = value as Record<string, unknown>

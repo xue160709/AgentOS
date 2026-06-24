@@ -224,6 +224,43 @@ export type AgentWebSearchSettingsResult =
       message: string
     }
 
+export type AgentWebSearchCredentialStatus =
+  | 'not-required'
+  | 'missing'
+  | 'configured'
+  | 'env-resolved'
+  | 'env-missing'
+
+export type AgentWebSearchProviderErrorKind =
+  | 'missing-credential'
+  | 'auth'
+  | 'quota'
+  | 'bot-challenge'
+  | 'network'
+  | 'service'
+  | 'unknown'
+
+export type AgentWebSearchProviderTestResult =
+  | {
+      ok: true
+      providerId: AgentWebSearchProviderId
+      providerName: string
+      credentialStatus: AgentWebSearchCredentialStatus
+      resultCount: number
+      checkedAt: string
+      message: string
+    }
+  | {
+      ok: false
+      providerId: AgentWebSearchProviderId
+      providerName: string
+      credentialStatus: AgentWebSearchCredentialStatus
+      errorKind: AgentWebSearchProviderErrorKind
+      checkedAt: string
+      message: string
+      recoveryHint?: string
+    }
+
 /** Agent Mode 状态查询结果 / Agent Mode status query result */
 export type AgentModeStatusResult =
   | {
