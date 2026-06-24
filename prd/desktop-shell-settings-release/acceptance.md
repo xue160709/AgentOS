@@ -98,14 +98,14 @@
 - WHEN 用户点击“去 MCP 设置”入口
 - THEN 系统打开该项目的 Agent 设置模态，并激活 MCP 面板
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="agent-status-open-mcp-settings"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run build + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：无活动项目时进入 MCP 设置
 - GIVEN 当前没有活动项目或项目路径不可用
 - WHEN 用户从全局设置页或状态面板尝试进入 MCP 设置
 - THEN 系统不打开空白配置页，而是提示先打开项目或选择项目
 
-> 实现状态：⬜ 未实现｜selector: [data-testid="mcp-settings-no-project-empty"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run build + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 ### 需求：全局设置提供搜索路由配置
 系统 SHALL 在全局设置中提供独立的搜索设置页，让用户选择 Claude Agent 的 WebSearch 使用原生能力或 AgentOS 搜索 Provider。

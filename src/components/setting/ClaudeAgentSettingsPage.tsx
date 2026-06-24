@@ -49,7 +49,7 @@ type ProviderTestState = {
 }
 
 const MCP_TRANSPORTS: AgentMcpServerTransport[] = ['stdio', 'http', 'sse']
-const WEB_SEARCH_PROVIDERS: AgentWebSearchProviderId[] = ['duckduckgo-instant', 'brave', 'tavily']
+const WEB_SEARCH_PROVIDERS: AgentWebSearchProviderId[] = ['duckduckgo', 'brave', 'tavily']
 
 type GlobalMcpSettingsPageProps = {
   activeProject: WorkspaceProject
@@ -58,7 +58,7 @@ type GlobalMcpSettingsPageProps = {
 
 const DEFAULT_WEB_SEARCH_SETTINGS: AgentWebSearchSettings = {
   mode: 'native',
-  provider: 'duckduckgo-instant',
+  provider: 'duckduckgo',
   maxResults: 5,
   braveApiKey: '',
   tavilyApiKey: '',
@@ -67,7 +67,7 @@ const DEFAULT_WEB_SEARCH_SETTINGS: AgentWebSearchSettings = {
 function normalizeWebSearchSettingsDraft(settings: AgentWebSearchSettings): AgentWebSearchSettings {
   return {
     mode: settings.mode === 'agentos' ? 'agentos' : 'native',
-    provider: WEB_SEARCH_PROVIDERS.includes(settings.provider) ? settings.provider : 'duckduckgo-instant',
+    provider: WEB_SEARCH_PROVIDERS.includes(settings.provider) ? settings.provider : 'duckduckgo',
     maxResults: clampUiNumber(settings.maxResults, 1, 10, DEFAULT_WEB_SEARCH_SETTINGS.maxResults),
     braveApiKey: settings.braveApiKey.trim(),
     tavilyApiKey: settings.tavilyApiKey.trim(),
@@ -97,7 +97,7 @@ function getWebSearchCredentialHint(
 ): string {
   if (settings.mode !== 'agentos') return ''
   if (result?.providerId === settings.provider) return t(`settings.search.credential.${result.credentialStatus}`)
-  if (settings.provider === 'duckduckgo-instant') return t('settings.search.credential.notRequired')
+  if (settings.provider === 'duckduckgo') return t('settings.search.credential.notRequired')
 
   const key = settings.provider === 'brave' ? settings.braveApiKey.trim() : settings.tavilyApiKey.trim()
   if (!key) return t('settings.search.credential.missing')
@@ -1136,6 +1136,22 @@ export function GlobalMcpSettingsPage({
     setEditingGlobalMcpServer((current) => (current?.index === index ? null : current))
   }, [])
 
+  const confirmRemoveGlobalMcpServer = useCallback((index: number) => {
+    const name = draftGlobalMcpServers[index]?.name.trim() || t('workspace.agentSettingsMcpUnnamed')
+    if (!window.confirm(t('settings.mcp.deleteConfirm', { name }))) return
+    removeGlobalMcpServer(index)
+  }, [draftGlobalMcpServers, removeGlobalMcpServer, t])
+
+  const duplicateGlobalMcpServer = useCallback((index: number) => {
+    setDraftGlobalMcpServers((current) => {
+      const source = current[index]
+      if (!source) return current
+      return [...current, cloneGlobalMcpServer(source, current)]
+    })
+    setEditingGlobalMcpServer(null)
+    setGlobalMcpStatus(t('settings.mcp.duplicated'))
+  }, [t])
+
   const resetGlobalMcpServers = useCallback(() => {
     setDraftGlobalMcpServers(globalMcpServers)
     setEditingGlobalMcpServer(null)
@@ -1169,6 +1185,7 @@ export function GlobalMcpSettingsPage({
 
       <GlobalMcpSettingsSection
         activeProjectName={activeProject.name}
+        projectPathMissing={Boolean(activeProject.pathMissing)}
         servers={draftGlobalMcpServers}
         probeCache={globalMcpProbeCache}
         editingServer={editingGlobalMcpServer}
@@ -1181,7 +1198,8 @@ export function GlobalMcpSettingsPage({
         onEditorCancel={() => setEditingGlobalMcpServer(null)}
         onEditorSave={(server) => void saveAndTestGlobalMcpEditor(server, false)}
         onEditorSaveAndTest={(server) => void saveAndTestGlobalMcpEditor(server, true)}
-        onRemoveServer={removeGlobalMcpServer}
+        onDuplicateServer={duplicateGlobalMcpServer}
+        onRemoveServer={confirmRemoveGlobalMcpServer}
         onReset={resetGlobalMcpServers}
         onSave={() => void saveGlobalMcpSettings()}
       />
@@ -1411,7 +1429,7 @@ export function GlobalWebSearchSettingsPage() {
             ) : null}
           </div>
 
-          {usingAgentOs && draftSettings.provider === 'duckduckgo-instant' ? (
+          {usingAgentOs && draftSettings.provider === 'duckduckgo' ? (
             <p className="settings-provider-test-status" data-testid="web-search-key-status">{credentialHint}</p>
           ) : null}
 
@@ -1454,6 +1472,7 @@ export function GlobalWebSearchSettingsPage() {
 
 function GlobalMcpSettingsSection({
   activeProjectName,
+  projectPathMissing,
   servers,
   probeCache,
   editingServer,
@@ -1466,11 +1485,13 @@ function GlobalMcpSettingsSection({
   onEditorCancel,
   onEditorSave,
   onEditorSaveAndTest,
+  onDuplicateServer,
   onRemoveServer,
   onReset,
   onSave,
 }: {
   activeProjectName: string
+  projectPathMissing: boolean
   servers: AgentMcpServerConfig[]
   probeCache: AgentMcpServerProbeCache
   editingServer: { index: number | null; server: AgentMcpServerConfig } | null
@@ -1483,6 +1504,7 @@ function GlobalMcpSettingsSection({
   onEditorCancel: () => void
   onEditorSave: (server: AgentMcpServerConfig) => void
   onEditorSaveAndTest: (server: AgentMcpServerConfig) => void
+  onDuplicateServer: (index: number) => void
   onRemoveServer: (index: number) => void
   onReset: () => void
   onSave: () => void
@@ -1500,6 +1522,13 @@ function GlobalMcpSettingsSection({
           <span>{t('settings.mcp.boundaryProject', { name: activeProjectName })}</span>
         </div>
       </div>
+
+      {projectPathMissing ? (
+        <div className="settings-mcp-empty" data-testid="mcp-settings-no-project-empty" role="status">
+          <strong>{t('settings.mcp.noProjectTitle')}</strong>
+          <span>{t('settings.mcp.noProjectBody')}</span>
+        </div>
+      ) : null}
 
       {editingServer ? (
         <GlobalMcpServerEditor
@@ -1543,21 +1572,33 @@ function GlobalMcpSettingsSection({
                       <span>{statusView.text}</span>
                     </span>
                   </button>
-                  <label className="agent-mcp-installed-row__switch">
-                    <span className="sr-only">{t('workspace.agentSettingsMcpToggleServer', { name: displayName })}</span>
-                    <span className="settings-switch-control">
-                      <input
-                        type="checkbox"
-                        className="settings-switch-input"
-                        checked={server.enabled}
-                        disabled={saving}
-                        onChange={(event) => onServerChange(index, { enabled: event.target.checked })}
-                      />
-                      <span className="settings-switch-track" aria-hidden="true">
-                        <span className="settings-switch-thumb" />
+                  <span className="global-mcp-installed-row__actions">
+                    <button
+                      type="button"
+                      className="project-home-icon-button"
+                      disabled={saving}
+                      title={t('settings.mcp.duplicateServer')}
+                      aria-label={t('settings.mcp.duplicateServerNamed', { name: displayName })}
+                      onClick={() => onDuplicateServer(index)}
+                    >
+                      <IconInline name="copy" />
+                    </button>
+                    <label className="agent-mcp-installed-row__switch">
+                      <span className="sr-only">{t('workspace.agentSettingsMcpToggleServer', { name: displayName })}</span>
+                      <span className="settings-switch-control">
+                        <input
+                          type="checkbox"
+                          className="settings-switch-input"
+                          checked={server.enabled}
+                          disabled={saving}
+                          onChange={(event) => onServerChange(index, { enabled: event.target.checked })}
+                        />
+                        <span className="settings-switch-track" aria-hidden="true">
+                          <span className="settings-switch-thumb" />
+                        </span>
                       </span>
-                    </span>
-                  </label>
+                    </label>
+                  </span>
                 </div>
               )
             })}
@@ -1617,6 +1658,9 @@ function GlobalMcpServerEditor({
   const { t } = useI18n()
   const serverId = isNew ? 'global-mcp-server-new' : `global-mcp-server-${server.name || 'edit'}`
   const statusView = formatGlobalMcpProbeStatus(server, snapshot, t)
+  const envHints = getGlobalMcpFieldEnvHints(server, snapshot, t)
+  const serverInfo = formatMcpServerInfo(snapshot, t)
+  const recoveryHint = getGlobalMcpRecoveryHint(server, snapshot, t)
 
   return (
     <div className="global-mcp-editor" data-testid="global-mcp-server-editor">
@@ -1634,8 +1678,15 @@ function GlobalMcpServerEditor({
 
       <div className="global-mcp-editor__status">
         <span className={`agent-mcp-installed-row__dot agent-mcp-installed-row__dot--${statusView.tone}`} aria-hidden="true" />
-        <span>{statusView.text}</span>
+        <span className="global-mcp-editor__status-stack">
+          <span>{statusView.text}</span>
+          {serverInfo ? <span className="global-mcp-editor__server-info" data-testid="mcp-server-info-detail">{serverInfo}</span> : null}
+        </span>
       </div>
+
+      {recoveryHint ? (
+        <p className="agent-mcp-warning agent-mcp-warning--compact" data-testid="mcp-recovery-hint">{recoveryHint}</p>
+      ) : null}
 
       <div className="agent-mcp-row agent-mcp-row--editor">
         <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-name`}>
@@ -1681,6 +1732,7 @@ function GlobalMcpServerEditor({
                   placeholder="npx"
                   onChange={(event) => onChange({ command: event.target.value })}
                 />
+                <GlobalMcpEnvHint hint={envHints.command} />
               </label>
               <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-args`}>
                 <span>{t('workspace.agentSettingsMcpArgs')}</span>
@@ -1693,6 +1745,7 @@ function GlobalMcpServerEditor({
                   placeholder="-y\nchrome-devtools-mcp@latest"
                   onChange={(event) => onChange({ args: linesToList(event.target.value) })}
                 />
+                <GlobalMcpEnvHint hint={envHints.args} />
               </label>
               <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-cwd`}>
                 <span>{t('workspace.agentSettingsMcpCwd')}</span>
@@ -1705,6 +1758,7 @@ function GlobalMcpServerEditor({
                   placeholder="~/code"
                   onChange={(event) => onChange({ cwd: event.target.value })}
                 />
+                <GlobalMcpEnvHint hint={envHints.cwd} />
               </label>
             </>
           ) : (
@@ -1720,6 +1774,7 @@ function GlobalMcpServerEditor({
                   placeholder="https://mcp.example.com/mcp"
                   onChange={(event) => onChange({ url: event.target.value })}
                 />
+                <GlobalMcpEnvHint hint={envHints.url} />
               </label>
               <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-headers`}>
                 <span>{t('workspace.agentSettingsMcpHeaders')}</span>
@@ -1732,6 +1787,7 @@ function GlobalMcpServerEditor({
                   placeholder="Authorization=Bearer ${MCP_TOKEN}"
                   onChange={(event) => onChange({ headers: keyValueLinesToRecord(event.target.value) })}
                 />
+                <GlobalMcpEnvHint hint={envHints.headers} />
               </label>
             </>
           )}
@@ -1747,6 +1803,7 @@ function GlobalMcpServerEditor({
               placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_TOKEN}"
               onChange={(event) => onChange({ env: keyValueLinesToRecord(event.target.value) })}
             />
+            <GlobalMcpEnvHint hint={envHints.env} />
           </label>
 
           <label className="agent-mcp-checkbox">
@@ -1780,6 +1837,94 @@ function GlobalMcpServerEditor({
       </div>
     </div>
   )
+}
+
+type GlobalMcpEnvHintTone = 'success' | 'pending' | 'error'
+
+type GlobalMcpEnvHintModel = {
+  tone: GlobalMcpEnvHintTone
+  text: string
+}
+
+function GlobalMcpEnvHint({ hint }: { hint?: GlobalMcpEnvHintModel }) {
+  if (!hint) return null
+  return (
+    <small
+      className={`settings-field-row__hint global-mcp-env-hint global-mcp-env-hint--${hint.tone}`}
+      data-testid={hint.tone === 'success' ? 'mcp-env-resolution-status' : 'mcp-env-resolution-error'}
+    >
+      {hint.text}
+    </small>
+  )
+}
+
+type GlobalMcpFieldEnvHints = Partial<Record<'command' | 'args' | 'cwd' | 'url' | 'headers' | 'env', GlobalMcpEnvHintModel>>
+
+function getGlobalMcpFieldEnvHints(
+  server: AgentMcpServerConfig,
+  snapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: TranslateFn,
+): GlobalMcpFieldEnvHints {
+  return {
+    command: formatGlobalMcpFieldEnvHint([server.command], snapshot, t),
+    args: formatGlobalMcpFieldEnvHint(server.args, snapshot, t),
+    cwd: formatGlobalMcpFieldEnvHint([server.cwd], snapshot, t),
+    url: formatGlobalMcpFieldEnvHint([server.url], snapshot, t),
+    headers: formatGlobalMcpFieldEnvHint(Object.values(server.headers), snapshot, t),
+    env: formatGlobalMcpFieldEnvHint(Object.values(server.env), snapshot, t),
+  }
+}
+
+function formatGlobalMcpFieldEnvHint(
+  values: string[],
+  snapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: TranslateFn,
+): GlobalMcpEnvHintModel | undefined {
+  const refs = collectGlobalMcpEnvReferenceNames(values)
+  if (refs.length === 0) return undefined
+  const names = refs.join(', ')
+  if (snapshot?.status === 'connected') {
+    return { tone: 'success', text: t('settings.mcp.fieldEnvResolved', { names }) }
+  }
+  if (snapshot?.status === 'failed' || snapshot?.status === 'needs-auth') {
+    return { tone: 'error', text: t('settings.mcp.fieldEnvUnresolved', { names }) }
+  }
+  return { tone: 'pending', text: t('settings.mcp.fieldEnvPending', { names }) }
+}
+
+function collectGlobalMcpEnvReferenceNames(values: string[]): string[] {
+  const refs = new Set<string>()
+  for (const value of values) {
+    for (const match of value.matchAll(/\$\{([A-Z_a-z][A-Z_a-z0-9]*)\}/g)) {
+      refs.add(match[1])
+    }
+  }
+  return [...refs]
+}
+
+function formatMcpServerInfo(snapshot: AgentMcpServerProbeSnapshot | undefined, t: TranslateFn): string {
+  const serverInfo = snapshot?.serverInfo
+  if (!serverInfo?.name) return ''
+  if (serverInfo.version) return t('settings.mcp.serverInfoVersion', { name: serverInfo.name, version: serverInfo.version })
+  return t('settings.mcp.serverInfo', { name: serverInfo.name })
+}
+
+function getGlobalMcpRecoveryHint(
+  server: AgentMcpServerConfig,
+  snapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: TranslateFn,
+): string {
+  if (!server.enabled) return ''
+  if (!snapshot) return t('settings.mcp.recoveryTest')
+  if (snapshot.status === 'connected' || snapshot.status === 'disabled') return ''
+  const error = snapshot.error?.toLowerCase() ?? ''
+  if (error.includes('env') || error.includes('environment') || error.includes('variable') || error.includes('${')) {
+    return t('settings.mcp.recoveryEnv')
+  }
+  if (snapshot.status === 'needs-auth' || error.includes('auth') || error.includes('token') || error.includes('key')) {
+    return t('settings.mcp.recoveryAuth')
+  }
+  return server.transport === 'stdio' ? t('settings.mcp.recoveryCommand') : t('settings.mcp.recoveryUrl')
 }
 
 function getMatchingGlobalMcpProbeSnapshot(
@@ -1855,6 +2000,15 @@ function createDraftGlobalMcpServer(existing: AgentMcpServerConfig[]): AgentMcpS
     url: '',
     headers: {},
     alwaysLoad: false,
+  }
+}
+
+function cloneGlobalMcpServer(source: AgentMcpServerConfig, existing: AgentMcpServerConfig[]): AgentMcpServerConfig {
+  const baseName = `${source.name.trim() || 'mcp-server'}-copy`
+  return {
+    ...source,
+    name: uniqueGlobalMcpServerName(existing, baseName),
+    enabled: false,
   }
 }
 

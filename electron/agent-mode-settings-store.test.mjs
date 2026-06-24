@@ -133,6 +133,16 @@ test('agent mode settings persist global web search settings', async () => {
 
     const raw = JSON.parse(readFileSync(join(dir, 'agent-mode-settings.json'), 'utf8'))
     assert.deepEqual(raw.globalWebSearchSettings, result.settings)
+
+    const legacyDuckDuckGo = await store.saveGlobalWebSearchSettings({
+      mode: 'agentos',
+      provider: 'duckduckgo-instant',
+      maxResults: 5,
+      braveApiKey: '',
+      tavilyApiKey: '',
+    })
+    assert.equal(legacyDuckDuckGo.ok, true)
+    assert.equal(legacyDuckDuckGo.settings.provider, 'duckduckgo')
   })
 })
 

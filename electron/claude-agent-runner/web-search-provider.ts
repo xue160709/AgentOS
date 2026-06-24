@@ -5,6 +5,7 @@
  * backends do not leak SDK or MCP details into the runner.
  */
 
+import { createHash } from 'node:crypto'
 import { summarizeErrorForLog } from './config'
 import { safeConsoleError, safeConsoleInfo, safeConsoleWarn } from '../safe-console'
 
@@ -92,6 +93,16 @@ type WebSearchProvider = {
   search: (request: WebSearchRequest, env: WebSearchEnv) => Promise<WebSearchResultItem[]>
 }
 
+type WebSearchLogContext = {
+  provider: string
+  queryHash: string
+  queryLength: number
+  maxResults: number
+  allowedDomainCount: number
+  blockedDomainCount: number
+  freshness?: string
+}
+
 type BraveSearchResponse = {
   web?: {
     results?: Array<{
@@ -113,21 +124,6 @@ type TavilySearchResponse = {
   }>
 }
 
-type DuckDuckGoTopic = {
-  Text?: string
-  FirstURL?: string
-  Result?: string
-  Topics?: DuckDuckGoTopic[]
-}
-
-type DuckDuckGoInstantAnswer = {
-  AbstractText?: string
-  AbstractURL?: string
-  Heading?: string
-  RelatedTopics?: DuckDuckGoTopic[]
-  Results?: DuckDuckGoTopic[]
-}
-
 type DuckDuckGoHtmlResult = {
   title: string
   url: string
@@ -136,7 +132,7 @@ type DuckDuckGoHtmlResult = {
 
 const DEFAULT_MAX_RESULTS = 5
 const MAX_RESULTS_LIMIT = 10
-const WEB_SEARCH_TIMEOUT_MS = 10_000
+const WEB_SEARCH_TIMEOUT_MS = 20_000
 const PROVIDER_ENV_NAMES = ['AGENTOS_WEB_SEARCH_PROVIDER', 'WEB_SEARCH_PROVIDER'] as const
 const DUCKDUCKGO_HTML_ENDPOINT = 'https://html.duckduckgo.com/html'
 const DUCKDUCKGO_HTML_USER_AGENT =
@@ -227,28 +223,25 @@ const tavilyProvider: WebSearchProvider = {
   },
 }
 
-const duckDuckGoInstantProvider: WebSearchProvider = {
-  id: 'duckduckgo-instant',
+const duckDuckGoProvider: WebSearchProvider = {
+  id: 'duckduckgo',
   name: 'DuckDuckGo Search',
   requiresCredential: false,
   isAvailable: () => typeof fetch === 'function',
   unavailableReason: () => 'global fetch is not available in this runtime.',
   async search(request) {
+    const logContext = buildWebSearchLogContext('duckduckgo', request)
     try {
-      const instantResults = await searchDuckDuckGoInstantAnswers(request)
-      if (instantResults.length > 0) return instantResults
-    } catch (error) {
-      safeConsoleWarn('[AgentOS/WebSearch] DuckDuckGo Instant Answer fallback', {
-        queryLength: request.query.length,
-        error: summarizeErrorForLog(error),
+      safeConsoleInfo('[AgentOS/WebSearch] duckduckgo html enter', logContext)
+      const htmlResults = await searchDuckDuckGoHtml(request)
+      safeConsoleInfo('[AgentOS/WebSearch] duckduckgo html success', {
+        ...logContext,
+        resultCount: htmlResults.length,
       })
-    }
-
-    try {
-      return await searchDuckDuckGoHtml(request)
+      return htmlResults
     } catch (error) {
-      safeConsoleWarn('[AgentOS/WebSearch] DuckDuckGo HTML fallback failed', {
-        queryLength: request.query.length,
+      safeConsoleWarn('[AgentOS/WebSearch] DuckDuckGo HTML search failed', {
+        ...logContext,
         error: summarizeErrorForLog(error),
       })
       return []
@@ -256,7 +249,7 @@ const duckDuckGoInstantProvider: WebSearchProvider = {
   },
 }
 
-const WEB_SEARCH_PROVIDERS = [braveProvider, tavilyProvider, duckDuckGoInstantProvider] as const
+const WEB_SEARCH_PROVIDERS = [braveProvider, tavilyProvider, duckDuckGoProvider] as const
 
 export function normalizeWebSearchRequest(args: WebSearchToolArgs, defaultMaxResults = DEFAULT_MAX_RESULTS): WebSearchRequest {
   const query = typeof args.query === 'string' ? args.query.trim() : ''
@@ -342,20 +335,16 @@ export async function searchWeb(request: WebSearchRequest, env: WebSearchEnv = p
   if (!provider.isAvailable(env)) throw new Error(provider.unavailableReason(env))
 
   const startedAt = Date.now()
-  safeConsoleInfo('[AgentOS/WebSearch] search enter', {
-    provider: provider.id,
-    queryLength: request.query.length,
-    maxResults: request.maxResults,
-    allowedDomainCount: request.allowedDomains.length,
-    blockedDomainCount: request.blockedDomains.length,
-  })
+  const logContext = buildWebSearchLogContext(provider.id, request)
+  safeConsoleInfo('[AgentOS/WebSearch] search enter', logContext)
 
   try {
     const rawResults = await provider.search(request, env)
     const results = filterWebSearchResults(rawResults, request).slice(0, request.maxResults)
     safeConsoleInfo('[AgentOS/WebSearch] search success', {
-      provider: provider.id,
+      ...logContext,
       resultCount: results.length,
+      rawResultCount: rawResults.length,
       ms: Date.now() - startedAt,
     })
     return {
@@ -366,8 +355,7 @@ export async function searchWeb(request: WebSearchRequest, env: WebSearchEnv = p
     }
   } catch (error) {
     safeConsoleError('[AgentOS/WebSearch] search failed', {
-      provider: provider.id,
-      queryLength: request.query.length,
+      ...logContext,
       error: summarizeErrorForLog(error),
     })
     throw error
@@ -405,6 +393,26 @@ export function formatWebSearchToolOutput(response: WebSearchResponse): string {
   )
 }
 
+function buildWebSearchLogContext(provider: string, request: WebSearchRequest): WebSearchLogContext {
+  return {
+    provider,
+    queryHash: fingerprintWebSearchQuery(request.query),
+    queryLength: request.query.length,
+    maxResults: request.maxResults,
+    allowedDomainCount: request.allowedDomains.length,
+    blockedDomainCount: request.blockedDomains.length,
+    freshness: request.freshness,
+  }
+}
+
+function fingerprintWebSearchQuery(query: string): string {
+  try {
+    return createHash('sha256').update(query).digest('hex').slice(0, 12)
+  } catch {
+    return `len-${query.length}`
+  }
+}
+
 function selectWebSearchProvider(env: WebSearchEnv): WebSearchProvider | undefined {
   const requested = requestedProviderId(env)
   if (requested) return WEB_SEARCH_PROVIDERS.find((provider) => provider.id === requested)
@@ -414,9 +422,14 @@ function selectWebSearchProvider(env: WebSearchEnv): WebSearchProvider | undefin
 function requestedProviderId(env: WebSearchEnv): string {
   for (const name of PROVIDER_ENV_NAMES) {
     const value = env[name]?.trim().toLowerCase()
-    if (value) return value
+    if (value) return normalizeRequestedProviderId(value)
   }
   return ''
+}
+
+function normalizeRequestedProviderId(value: string): string {
+  if (value === 'duckduckgo-instant') return 'duckduckgo'
+  return value
 }
 
 function resolveBraveApiKey(env: WebSearchEnv): string {
@@ -430,10 +443,31 @@ function resolveTavilyApiKey(env: WebSearchEnv): string {
 async function fetchJson<T>(url: URL, init: RequestInit): Promise<T> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), WEB_SEARCH_TIMEOUT_MS)
+  const startedAt = Date.now()
   try {
+    safeConsoleInfo('[AgentOS/WebSearch] fetch json enter', {
+      host: url.hostname,
+      path: url.pathname || '/',
+      method: init.method ?? 'GET',
+    })
     const response = await fetch(url, { ...init, signal: controller.signal })
+    safeConsoleInfo('[AgentOS/WebSearch] fetch json response', {
+      host: url.hostname,
+      path: url.pathname || '/',
+      status: response.status,
+      ok: response.ok,
+      ms: Date.now() - startedAt,
+    })
     if (!response.ok) throw await createProviderHttpError(response, url)
     return (await response.json()) as T
+  } catch (error) {
+    safeConsoleWarn('[AgentOS/WebSearch] fetch json failed', {
+      host: url.hostname,
+      path: url.pathname || '/',
+      ms: Date.now() - startedAt,
+      error: summarizeErrorForLog(error),
+    })
+    throw error
   } finally {
     clearTimeout(timeout)
   }
@@ -442,10 +476,31 @@ async function fetchJson<T>(url: URL, init: RequestInit): Promise<T> {
 async function fetchText(url: URL, init: RequestInit): Promise<string> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), WEB_SEARCH_TIMEOUT_MS)
+  const startedAt = Date.now()
   try {
+    safeConsoleInfo('[AgentOS/WebSearch] fetch text enter', {
+      host: url.hostname,
+      path: url.pathname || '/',
+      method: init.method ?? 'GET',
+    })
     const response = await fetch(url, { ...init, signal: controller.signal })
+    safeConsoleInfo('[AgentOS/WebSearch] fetch text response', {
+      host: url.hostname,
+      path: url.pathname || '/',
+      status: response.status,
+      ok: response.ok,
+      ms: Date.now() - startedAt,
+    })
     if (!response.ok) throw await createProviderHttpError(response, url)
     return await response.text()
+  } catch (error) {
+    safeConsoleWarn('[AgentOS/WebSearch] fetch text failed', {
+      host: url.hostname,
+      path: url.pathname || '/',
+      ms: Date.now() - startedAt,
+      error: summarizeErrorForLog(error),
+    })
+    throw error
   } finally {
     clearTimeout(timeout)
   }
@@ -551,41 +606,6 @@ function providerNameFromHostname(hostname: string): string {
   return hostname
 }
 
-async function searchDuckDuckGoInstantAnswers(request: WebSearchRequest): Promise<WebSearchResultItem[]> {
-  const url = new URL('https://api.duckduckgo.com/')
-  url.searchParams.set('q', request.query)
-  url.searchParams.set('format', 'json')
-  url.searchParams.set('no_html', '1')
-  url.searchParams.set('skip_disambig', '1')
-
-  const body = await fetchJson<DuckDuckGoInstantAnswer>(url, {
-    headers: { Accept: 'application/json' },
-  })
-  const results: WebSearchResultItem[] = []
-
-  if (body.AbstractURL) {
-    results.push({
-      title: cleanText(body.Heading) || request.query,
-      url: body.AbstractURL,
-      snippet: cleanText(body.AbstractText),
-      source: domainFromUrl(body.AbstractURL),
-    })
-  }
-
-  for (const topic of flattenDuckDuckGoTopics([...(body.Results ?? []), ...(body.RelatedTopics ?? [])])) {
-    const url = topic.FirstURL?.trim() ?? ''
-    if (!url) continue
-    results.push({
-      title: titleFromDuckDuckGoText(topic.Text) || domainFromUrl(url) || 'Untitled result',
-      url,
-      snippet: cleanText(topic.Text),
-      source: domainFromUrl(url),
-    })
-  }
-
-  return dedupeResults(results).slice(0, request.maxResults)
-}
-
 async function searchDuckDuckGoHtml(request: WebSearchRequest): Promise<WebSearchResultItem[]> {
   const cacheKey = JSON.stringify({
     query: request.query,
@@ -652,23 +672,6 @@ function normalizeTavilyTimeRange(value: string | undefined): string {
   if (normalized === 'pm' || normalized === 'm' || normalized === 'month') return 'month'
   if (normalized === 'py' || normalized === 'y' || normalized === 'year') return 'year'
   return ''
-}
-
-function flattenDuckDuckGoTopics(topics: DuckDuckGoTopic[], output: DuckDuckGoTopic[] = []): DuckDuckGoTopic[] {
-  for (const topic of topics) {
-    if (topic.Topics) {
-      flattenDuckDuckGoTopics(topic.Topics, output)
-      continue
-    }
-    output.push(topic)
-  }
-  return output
-}
-
-function titleFromDuckDuckGoText(value: string | undefined): string {
-  const text = cleanText(value)
-  if (!text) return ''
-  return text.split(' - ')[0]?.trim() || text.slice(0, 80)
 }
 
 function parseDuckDuckGoHtml(html: string): DuckDuckGoHtmlResult[] {

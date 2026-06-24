@@ -300,7 +300,7 @@ export function buildAgentMcpServerConfigSignature(server: AgentMcpServerConfig)
 export function getDefaultWebSearchSettings(): AgentWebSearchSettings {
   return {
     mode: 'native',
-    provider: 'duckduckgo-instant',
+    provider: 'duckduckgo',
     maxResults: 5,
     braveApiKey: '',
     tavilyApiKey: '',
@@ -546,8 +546,9 @@ export function normalizeWebSearchSettings(value: unknown): AgentWebSearchSettin
 }
 
 function normalizeWebSearchProvider(value: unknown): AgentWebSearchProviderId {
-  if (value === 'brave' || value === 'tavily') return value
-  return 'duckduckgo-instant'
+  if (value === 'brave' || value === 'tavily' || value === 'duckduckgo') return value
+  if (value === 'duckduckgo-instant') return 'duckduckgo'
+  return 'duckduckgo'
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {

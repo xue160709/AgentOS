@@ -127,60 +127,53 @@ test('web search provider status prefers Brave when configured and otherwise fal
     available: true,
     reason: undefined,
   })
-  assert.equal(resolveWebSearchProviderStatus({ AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo-instant' }).id, 'duckduckgo-instant')
+  assert.equal(resolveWebSearchProviderStatus({ AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo' }).id, 'duckduckgo')
+  assert.equal(resolveWebSearchProviderStatus({ AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo-instant' }).id, 'duckduckgo')
   assert.equal(resolveWebSearchProviderStatus({ AGENTOS_WEB_SEARCH_PROVIDER: 'missing' }).available, false)
 })
 
 test('web search provider executes through fetch and returns normalized results', async () => {
   const { normalizeWebSearchRequest, searchWeb } = loadWebSearchProviderModule()
   const originalFetch = globalThis.fetch
-  globalThis.fetch = async (url) => {
-    assert.equal(new URL(url).hostname, 'api.duckduckgo.com')
+  const calls = []
+  globalThis.fetch = async (url, init) => {
+    const parsedUrl = new URL(url)
+    calls.push(`${parsedUrl.hostname}${parsedUrl.pathname}`)
+    assert.equal(parsedUrl.hostname, 'html.duckduckgo.com')
+    assert.equal(parsedUrl.searchParams.get('q'), 'example')
+    assert.match(init.headers['User-Agent'], /Mozilla\/5\.0/)
     return {
       ok: true,
-      json: async () => ({
-        AbstractURL: 'https://example.com/overview',
-        Heading: 'Example',
-        AbstractText: 'Overview snippet',
-        RelatedTopics: [
-          {
-            FirstURL: 'https://docs.example.com/page',
-            Text: 'Docs page - extra detail',
-          },
-        ],
-      }),
+      text: async () => `
+        <a class="result__a" href="https://example.com/overview">Example &amp; Overview</a>
+        <a class="result__snippet">Overview&nbsp;snippet</a>
+        <a class="result__a" href="https://docs.example.com/page">Docs page</a>
+        <a class="result__snippet">extra detail</a>
+      `,
     }
   }
 
   try {
     const response = await searchWeb(
       normalizeWebSearchRequest({ query: 'example', max_results: 2 }),
-      { AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo-instant' },
+      { AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo' },
     )
 
-    assert.equal(response.provider.id, 'duckduckgo-instant')
+    assert.equal(response.provider.id, 'duckduckgo')
+    assert.deepEqual(calls, ['html.duckduckgo.com/html'])
     assert.deepEqual(response.results.map((item) => item.url), ['https://example.com/overview', 'https://docs.example.com/page'])
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('DuckDuckGo provider falls back to HTML search when instant answers are empty', async () => {
+test('DuckDuckGo provider decodes HTML search results directly', async () => {
   const { normalizeWebSearchRequest, searchWeb } = loadWebSearchProviderModule()
   const originalFetch = globalThis.fetch
   const calls = []
   globalThis.fetch = async (url, init) => {
     const parsedUrl = new URL(url)
     calls.push(`${parsedUrl.hostname}${parsedUrl.pathname}`)
-    if (parsedUrl.hostname === 'api.duckduckgo.com') {
-      return {
-        ok: true,
-        json: async () => ({
-          Results: [],
-          RelatedTopics: [],
-        }),
-      }
-    }
     assert.equal(parsedUrl.hostname, 'html.duckduckgo.com')
     assert.match(init.headers['User-Agent'], /Mozilla\/5\.0/)
     return {
@@ -199,11 +192,11 @@ test('DuckDuckGo provider falls back to HTML search when instant answers are emp
   try {
     const response = await searchWeb(
       normalizeWebSearchRequest({ query: 'Sam Altman news', max_results: 2, freshness: 'week' }),
-      { AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo-instant' },
+      { AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo' },
     )
 
     assert.equal(response.provider.name, 'DuckDuckGo Search')
-    assert.deepEqual(calls, ['api.duckduckgo.com/', 'html.duckduckgo.com/html'])
+    assert.deepEqual(calls, ['html.duckduckgo.com/html'])
     assert.deepEqual(response.results, [
       {
         title: 'Sam & OpenAI News',
@@ -223,7 +216,7 @@ test('DuckDuckGo provider falls back to HTML search when instant answers are emp
   }
 })
 
-test('DuckDuckGo provider returns an empty result instead of a tool error when both endpoints fail', async () => {
+test('DuckDuckGo provider returns an empty result instead of a tool error when HTML search fails', async () => {
   const { normalizeWebSearchRequest, searchWeb } = loadWebSearchProviderModule()
   const originalFetch = globalThis.fetch
   const calls = []
@@ -236,11 +229,11 @@ test('DuckDuckGo provider returns an empty result instead of a tool error when b
   try {
     const response = await searchWeb(
       normalizeWebSearchRequest({ query: 'Sam Altman news today 2026-06-24', freshness: 'day' }),
-      { AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo-instant' },
+      { AGENTOS_WEB_SEARCH_PROVIDER: 'duckduckgo' },
     )
 
     assert.equal(response.provider.name, 'DuckDuckGo Search')
-    assert.deepEqual(calls, ['api.duckduckgo.com/', 'html.duckduckgo.com/html'])
+    assert.deepEqual(calls, ['html.duckduckgo.com/html'])
     assert.deepEqual(response.results, [])
   } finally {
     globalThis.fetch = originalFetch

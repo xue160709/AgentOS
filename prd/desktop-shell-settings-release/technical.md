@@ -28,7 +28,7 @@
 - `SpeechRecognitionSnapshot` / `SpeechRecognitionEvent`：语音状态、partial/final/error。
 - `DESKTOP_SEAM_CAPABILITIES`：所有命名桌面能力。
 - MCP 设置入口：全局设置页管理 MCP server 定义、全局开关和连接测试缓存；项目 Agent 设置模态只保存当前项目开关覆盖和 tool policy；Chat 状态面板可跳转到当前项目 MCP 面板。
-- `AgentWebSearchSettings`：`mode` 为 `native` 或 `agentos`，`provider` 为 `duckduckgo-instant` / `brave` / `tavily`，并保存默认结果数、Brave/Tavily Key 或环境变量引用。
+- `AgentWebSearchSettings`：`mode` 为 `native` 或 `agentos`，`provider` 为 `duckduckgo` / `brave` / `tavily`，并保存默认结果数、Brave/Tavily Key 或环境变量引用；旧值 `duckduckgo-instant` 会归一化为 `duckduckgo`。
 - `AgentWebSearchProviderTestResult`：搜索 Provider 连接测试的成功/失败、凭据状态、错误分类和恢复建议。
 
 ## 调用链路
@@ -78,16 +78,17 @@ search settings
 - MCP 设置跳转依赖当前项目；没有活动项目或项目路径失效时，入口应禁用或展示恢复路径。
 - MCP 连接测试可能启动子进程或访问网络，设置页应有加载、取消/超时、禁用和错误状态。
 - 搜索设置 bridge 不存在时页面展示可读错误；保存时会归一化 Provider、结果数和 Key 字段。
-- DuckDuckGo 不需要 Key，普通 query 会走 HTML 搜索回退；若遇到 bot challenge 或网络不可达，运行时返回空结果而不是工具错误。Brave/Tavily 需要 Key 或 `${ENV_NAME}` 引用，设置页 Provider Test 会展示 `configured / env-resolved / env-missing` 凭据状态和 auth/quota/bot-challenge/network/service 恢复提示。
+- DuckDuckGo 不需要 Key，普通 query 会直接读取 HTML 搜索结果；若遇到 bot challenge 或网络不可达，运行时返回空结果而不是工具错误。Brave/Tavily 需要 Key 或 `${ENV_NAME}` 引用，设置页 Provider Test 会展示 `configured / env-resolved / env-missing` 凭据状态和 auth/quota/bot-challenge/network/service 恢复提示。
 
 ## TODO 对应项
 
 - `TODO.md §14`：补 release、自动更新、语音 helper 和打包验证证据。
-- `TODO.md §15`：补 MCP 复制、删除确认、字段级修复提示、无项目空态和设置导航正式验收；搜索 Provider 连接测试与恢复文案已补齐。
+- `TODO.md §15`：MCP 复制、删除确认、字段级修复提示、无项目空态、设置导航和搜索 Provider 连接测试/恢复文案均已补齐并完成正式验收。
 
 ## 最近同步
 
 - commit：`a45dc7d89a7985e2f80903c9338f827ed58dd345`
 - 日期：`2026-06-24`
 - 变化摘要：同步未提交代码观察：全局设置新增 Search 分类和页面，preload/IPC/store 增加全局 WebSearch 设置读写与 Provider Test，运行时通过 resolver 读取该设置并影响 Agent 搜索路由；设置页可测试 DuckDuckGo/Brave/Tavily 并显示字段级凭据状态和恢复文案。
-- 待确认：搜索相关 `project-verify` 已执行；release/packaged 更新、语音 helper、MCP 复制/删除确认和无项目空态仍待补证据。
+- 已确认：搜索与 MCP 相关 `project-verify` 已执行。
+- 待确认：release/packaged 更新、语音 helper 仍待补证据。

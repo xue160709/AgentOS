@@ -81,28 +81,28 @@
 - WHEN 用户提交聊天并启动 Claude Agent SDK query
 - THEN 主进程将项目级 `mcpServers` 传入 query options，并按 tool policy 构造 `allowedTools` 或拦截禁用工具
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜验证方式: node --test electron/claude-agent-runner-mcp.test.mjs
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron｜证据: TESTING_CHECKLIST.md
 
 #### 场景：MCP server 连接失败
 - GIVEN 当前项目配置的 MCP server 启动失败、认证缺失或 HTTP 401
 - WHEN Chat 状态面板刷新运行时状态
 - THEN UI 展示对应 server 的 failed 或 needs-auth 状态、脱敏错误摘要和进入 MCP 设置的修复入口
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="agent-status-mcp-list"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：MCP 工具请求权限
 - GIVEN Claude Agent SDK 请求调用 `mcp__server__tool` 且该工具策略为每次询问
 - WHEN 权限事件到达 UI
 - THEN 权限弹窗展示 server 名称、tool 名称、输入摘要和允许/拒绝操作，且不泄漏密钥或完整 header
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: role=dialog[name="MCP 权限请求"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：Transcript 展示 MCP 工具调用
 - GIVEN assistant 调用了名称为 `mcp__github__create_issue` 的工具
 - WHEN transcript 渲染该工具事件
 - THEN UI 以可读形式展示 `github · create_issue`，并在详情中保留完整工具名用于排查
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="transcript-mcp-tool-call"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 ### 需求：聊天运行时按全局搜索设置路由 WebSearch
 系统 SHALL 在启动 Claude Agent SDK query 时读取全局搜索设置，并据此决定是否使用 Claude Code 原生 WebSearch 或 AgentOS `web_search` Provider。
@@ -128,10 +128,10 @@
 
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: provider smoke + npm run test:electron｜证据: TESTING_CHECKLIST.md
 
-#### 场景：DuckDuckGo 普通网页搜索回退
+#### 场景：DuckDuckGo HTML 网页搜索
 - GIVEN 全局搜索设置选择 AgentOS 搜索 Provider 且 Provider 为 DuckDuckGo Search
-- WHEN `web_search` 查询一个 DuckDuckGo Instant Answer 未覆盖的普通网页搜索词
-- THEN 工具回退到 DuckDuckGo HTML 搜索结果，返回合法 JSON 输出，包含 Provider 信息和归一化后的 title、url、snippet、source；若 HTML 搜索无结果、触发拦截或网络不可达则返回空 `results` 数组，不把整个工具调用标记为错误，也不伪造搜索结果
+- WHEN `web_search` 查询一个普通网页搜索词
+- THEN 工具读取 DuckDuckGo HTML 搜索结果，返回合法 JSON 输出，包含 Provider 信息和归一化后的 title、url、snippet、source；若 HTML 搜索无结果、触发拦截或网络不可达则返回空 `results` 数组，不把整个工具调用标记为错误，也不伪造搜索结果
 
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: provider smoke + npm run test:electron｜证据: TESTING_CHECKLIST.md
 

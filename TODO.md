@@ -152,16 +152,16 @@
 
 - [x] MCP 配置模型：增加全局 MCP server 定义与项目级 `mcpServerOverrides` / `mcpToolPolicies`，支持 stdio、HTTP、SSE，归一化 server 名称、command/args/env/url/headers/alwaysLoad，并兼容旧项目 MCP 设置文件。
   - 证据：`src/desktop-types.ts`、`electron/agent-mode-settings-store.ts`、`electron/agent-mode-settings-store.test.mjs`。
-- [ ] MCP 设置入口与导航：全局设置新增独立 MCP Tab，提供 MCP 新增/编辑/删除与全局开关；项目首页 Agent 设置 MCP Tab 只提供当前项目开关覆盖；Chat 状态面板提供“去当前项目 MCP 设置”的跳转，无项目时展示空态。
-  - 进展：全局设置侧栏已新增独立 MCP Tab，并提供 MCP server 定义管理和全局开关；模型页不再展示 MCP 表单；项目首页 Agent 设置已新增 MCP Tab 且只保存项目开关覆盖；Chat 顶栏 Agent 状态面板已提供“打开 MCP 设置”入口。无项目空态仍待补。
-- [ ] MCP 设置面板：全局 MCP 面板提供 server 列表、启用/禁用、新增/编辑/复制/删除、未保存状态、删除确认和空态引导；项目 MCP Tab 展示全局已启用 server 的项目开关、状态和 tool policy。
-  - 进展：已支持 Cursor 风格全局 server 列表、启用/禁用、新增/编辑/删除、未保存状态和空态；新增/编辑进入 Codex 对齐的单 server 配置页；项目页已支持 Installed MCP Servers 状态列表与项目开关覆盖；复制与删除确认仍待补。
-- [ ] 密钥与环境变量体验：支持 `${ENV_NAME}` 引用，展示“已解析 / 未解析”状态；禁止在日志、状态面板和错误摘要中输出 token、API key 或完整 header 明文。
-  - 进展：运行时与全局 Save & Test 都会解析 `${ENV_NAME}`，缺失时返回 env 名称；UI 会提示引用数量；已避免在日志中输出 MCP header/env 明文。字段级“已解析/未解析”修复提示仍待补齐。
-- [ ] 连接测试与状态展示：实现保存前/保存后的 Test，展示 `connected / failed / needs-auth / pending / disabled`、serverInfo、工具数量和字段级修复提示。
-  - 进展：全局 MCP 编辑页已支持“保存并测试”，stdio 会启动 MCP handshake，HTTP/SSE 会发 JSON-RPC probe；测试结果缓存 `connected / failed / needs-auth / disabled`、serverInfo、工具数量和错误信息，并在全局列表显示工具数量/失败原因。2026-06-24 补充进入全局 MCP 设置和项目 MCP 设置时自动重测已启用 MCP；项目页在当前会话状态缺失时回退显示全局测试缓存，避免把可用服务误显示为等待会话。字段级修复提示和 serverInfo 详细展开仍待补。
-- [ ] Tool policy 配置：连接成功后按 server 分组列出工具，支持 `每次询问 / 自动允许 / 禁用`；默认不全量自动允许，读写/破坏性工具需保持显式授权。
-  - 进展：MCP Tab 已支持手动添加完整 tool 名称策略，并映射到 `allowedTools` / `disallowedTools`；全局连接测试成功后，项目 MCP Tab 会读取缓存工具列表并可直接设置 `每次询问 / 自动允许 / 禁用`。按 server 折叠分组与工具风险 annotation 提示仍待补。
+- [x] MCP 设置入口与导航：全局设置新增独立 MCP Tab，提供 MCP 新增/编辑/删除与全局开关；项目首页 Agent 设置 MCP Tab 只提供当前项目开关覆盖；Chat 状态面板提供“去当前项目 MCP 设置”的跳转，无项目时展示空态。
+  - 证据：`src/components/setting/ClaudeAgentSettingsPage.tsx`、`src/components/chat/ProjectHomeSurface.tsx`、`src/components/AppAgentStatusPopover.tsx`、`src/components/AppShell.tsx`、`TESTING_CHECKLIST.md`。
+- [x] MCP 设置面板：全局 MCP 面板提供 server 列表、启用/禁用、新增/编辑/复制/删除、未保存状态、删除确认和空态引导；项目 MCP Tab 展示全局已启用 server 的项目开关、状态和 tool policy。
+  - 证据：全局 MCP server 复制、删除确认、路径不可用/无活动项目空态、项目 Installed MCP Servers 与策略列表已接入；`npm run build` ✅。
+- [x] 密钥与环境变量体验：支持 `${ENV_NAME}` 引用，展示“已解析 / 未解析”状态；禁止在日志、状态面板和错误摘要中输出 token、API key 或完整 header 明文。
+  - 证据：全局 MCP 编辑字段展示 `mcp-env-resolution-error/status`；运行时与连接测试继续做主进程解析和脱敏摘要；`npm run test:electron` ✅。
+- [x] 连接测试与状态展示：实现保存前/保存后的 Test，展示 `connected / failed / needs-auth / pending / disabled`、serverInfo、工具数量和字段级修复提示。
+  - 证据：全局 Save & Test 缓存 serverInfo/tools/status，编辑页展开 serverInfo 与恢复提示；项目页回退全局测试缓存并区分“项目可用/当前会话已连接”；`TESTING_CHECKLIST.md`。
+- [x] Tool policy 配置：连接成功后按 server 分组列出工具，支持 `每次询问 / 自动允许 / 禁用`；默认不全量自动允许，读写/破坏性工具需保持显式授权。
+  - 证据：项目 MCP 已发现工具按 server 分组，展示风险 annotation 和 policy 来源；策略仍按完整 `mcp__server__tool` 保存；`npm run test:electron` ✅。
 - [x] SDK 运行时接入：在主聊天 query 与 status probe 中传入项目级 `mcpServers`，复用 `mcpServerStatus()`，把允许的 MCP tool 转成 `allowedTools`，把禁用策略转成 `disallowedTools` 或 `canUseTool` 拦截。
   - 证据：`electron/claude-agent-runner.ts`、`electron/claude-agent-runner/mcp.ts`、`electron/claude-agent-runner-mcp.test.mjs`。
 - [x] Chat 可见状态：在 Composer 或 Agent 状态入口展示 MCP 可用数量；状态面板显示 server 状态、失败原因、工具数和“去设置修复”入口。
@@ -169,15 +169,15 @@
 - [x] Tool 调用展示：把 `mcp__server__tool` 在 transcript、权限弹窗和日志摘要里展示为可读的 `server · tool`，同时保留完整名称用于排查。
   - 证据：`electron/claude-agent-runner/mcp.ts`、`electron/claude-agent-runner.ts`、`src/components/chat/Transcript.tsx`。
 - [x] WebSearch 内置工具替换：用 SDK in-process MCP 暴露 AgentOS `web_search`，通过 `toolAliases.WebSearch` 把 Claude Code 内置 WebSearch 名称路由到内部搜索工具，并预留多 provider 扩展。
-  - 进展：2026-06-24，本轮完成 provider registry、Brave / DuckDuckGo Instant Answer 首批 provider、内部 `agentos-web` MCP server、`WebSearch -> mcp__agentos-web__web_search` alias、内置 WebSearch 禁用和 runner 接入；本轮继续按全局搜索设置接入原生/AgentOS 路由选择，并补 Tavily Provider。验收契约 → `prd/chat-agent-runtime/acceptance.md`、`prd/desktop-shell-settings-release/acceptance.md`。
+  - 进展：2026-06-24，本轮完成 provider registry、Brave / DuckDuckGo Search 首批 provider、内部 `agentos-web` MCP server、`WebSearch -> mcp__agentos-web__web_search` alias、内置 WebSearch 禁用和 runner 接入；本轮继续按全局搜索设置接入原生/AgentOS 路由选择，并补 Tavily Provider。验收契约 → `prd/chat-agent-runtime/acceptance.md`、`prd/desktop-shell-settings-release/acceptance.md`。
 - [x] WebSearch Provider 体验补强：为 DuckDuckGo bot challenge/网络不可达、Tavily/Brave 认证或配额错误、Provider 保存前连接测试和字段级恢复提示补 UI/运行时文案。
-  - 进展：2026-06-24，已实测 DuckDuckGo Instant Answer 可访问但普通 query 可能返回 0 条；本轮借鉴 OpenClaw 的 HTML 搜索页解析，为 DuckDuckGo 补 Instant Answer 空结果后的 HTML 回退，并在 DuckDuckGo endpoint 网络不可达时降级为空结果而不是工具错误；Tavily key 可识别但外部 smoke 返回 HTTP 432 usage limit。本轮继续补 `testGlobalWebSearchProvider` IPC、设置页 Test Provider、`configured / env-resolved / env-missing` 字段状态、auth/quota/bot-challenge/network/service 恢复文案和回归测试。
-- [ ] 权限与恢复交互：MCP 权限弹窗展示 server、tool、输入摘要和 policy 来源；server 失败、认证缺失、命令不存在、HTTP 401/403 时提供明确恢复路径。
-  - 进展：权限弹窗已使用 `server · tool` 友好名并保留输入摘要；policy 来源与失败恢复路径仍待补。
-- [ ] Session 生效策略：定义 MCP 配置变化后是下一轮生效、新会话生效还是立即重建 session，并在 UI 中给出明确提示。
-  - 进展：运行时已把 MCP 配置纳入 session signature，配置变化会使下一轮重建 SDK session；2026-06-24 项目 MCP 状态改为区分“项目可用（全局测试通过）”与“当前会话已连接”，符合“全局开且项目未关即项目可用”的用户模型。更细的 session 重建提示仍待补。
-- [ ] 测试与验收补齐：增加 MCP 配置 normalize/store 单测、runner options 单测、tool name 展示单测、设置面板交互测试，以及 Chat 状态/权限/失败恢复的稳定选择器。
-  - 进展：已覆盖 store 全局 MCP normalize/override、probe cache 失效过滤、runner options、tool name 展示、WebSearch provider/runtime、全局搜索设置 store，以及搜索设置 provider test seam/UI 状态守卫；MCP 设置面板交互测试、Chat 权限/失败恢复选择器仍待补。
+  - 进展：2026-06-24，已按 OpenClaw 的 DuckDuckGo HTML 搜索页解析路线调整，DuckDuckGo 不再调用 Instant Answer API；HTML endpoint 网络不可达时降级为空结果而不是工具错误，默认请求超时为 20 秒；Tavily key 可识别但外部 smoke 返回 HTTP 432 usage limit。本轮继续补 `testGlobalWebSearchProvider` IPC、设置页 Test Provider、`configured / env-resolved / env-missing` 字段状态、auth/quota/bot-challenge/network/service 恢复文案和回归测试。
+- [x] 权限与恢复交互：MCP 权限弹窗展示 server、tool、输入摘要和 policy 来源；server 失败、认证缺失、命令不存在、HTTP 401/403 时提供明确恢复路径。
+  - 证据：权限/Transcript 继续使用 `server · tool` 友好名；项目策略 UI 展示默认/项目/手动来源；状态与全局编辑页展示 auth/env/command/url 恢复提示。
+- [x] Session 生效策略：定义 MCP 配置变化后是下一轮生效、新会话生效还是立即重建 session，并在 UI 中给出明确提示。
+  - 证据：运行时 MCP signature 保持 session 重建策略；项目 MCP 面板新增 `mcp-session-effect-hint`，明确保存后下一轮 Agent 会话读取最新设置。
+- [x] 测试与验收补齐：增加 MCP 配置 normalize/store 单测、runner options 单测、tool name 展示单测、设置面板交互测试，以及 Chat 状态/权限/失败恢复的稳定选择器。
+  - 证据：`npm run typecheck` ✅、`npm run test:electron` ✅（69/69）、`npm run build` ✅、MCP selector audit ✅；15 个 MCP 验收场景已在 `prd/*/acceptance.md` 盖戳。
 
 ## 验证记录
 
@@ -248,7 +248,7 @@
   - `npm run test:electron` ✅
   - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `git diff --check` ✅
-- 本轮：实现 WebSearch 试验版替换链路：新增 AgentOS web search provider registry、Brave / DuckDuckGo Instant Answer provider、SDK in-process MCP `agentos-web` server，并通过 `toolAliases.WebSearch` 将内置 WebSearch 名称路由到 `mcp__agentos-web__web_search`。
+- 本轮：实现 WebSearch 试验版替换链路：新增 AgentOS web search provider registry、Brave / DuckDuckGo Search provider、SDK in-process MCP `agentos-web` server，并通过 `toolAliases.WebSearch` 将内置 WebSearch 名称路由到 `mcp__agentos-web__web_search`。
 - 验证类别：Codex 自检（Agent runtime + provider 纯逻辑 + TODO 同步）。
 - 验证命令：
   - `npm run typecheck` ✅
@@ -256,7 +256,7 @@
   - `npm run test:electron` ✅
   - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `git diff --check` ✅
-- 本轮：新增全局“搜索”设置页与 IPC/preload 存储链路，支持原生 Web Search 与 AgentOS Provider 模式切换；AgentOS 模式支持 DuckDuckGo Instant Answer、Brave Search、Tavily，并让 runner 按设置决定是否注册 `agentos-web`、alias `WebSearch` 与禁用内置 WebSearch。
+- 本轮：新增全局“搜索”设置页与 IPC/preload 存储链路，支持原生 Web Search 与 AgentOS Provider 模式切换；AgentOS 模式支持 DuckDuckGo Search、Brave Search、Tavily，并让 runner 按设置决定是否注册 `agentos-web`、alias `WebSearch` 与禁用内置 WebSearch。
 - 验证类别：Codex 自检（设置页 + Agent runtime + provider 纯逻辑 + PRD/TODO 同步）。
 - 验证命令：
   - `npm run typecheck` ✅
@@ -278,7 +278,7 @@
 
 ### 2026-06-24
 
-- 本轮：排查 DuckDuckGo Provider 普通新闻类 query 返回异常；对照 OpenClaw 后补 DuckDuckGo HTML 搜索回退、bot challenge/网络失败降级、设置页/PRD 文案和回归测试。
+- 本轮：排查 DuckDuckGo Provider 普通新闻类 query 返回异常；对照 OpenClaw 后改为直接使用 DuckDuckGo HTML 搜索、bot challenge/网络失败降级、设置页/PRD 文案和回归测试。
 - 验证类别：debug 自检（未执行正式 `project-verify` 盖戳）。
 - 验证命令：
   - `npm run typecheck` ✅
@@ -286,7 +286,8 @@
   - `npm run test:electron` ✅（59 tests passed）
   - `bash .codex/scripts/check-acceptance.sh --all` ✅（结构检查通过；自动生成的正式验收临时文件已清理）
   - `git diff --check` ✅
-- 备注：外部 DuckDuckGo live `curl` 在当前 shell 环境返回 TLS code 35；本轮已覆盖该路径，DuckDuckGo 两个 endpoint 都失败时返回空结果，不再让 `web_search` 工具调用标红。
+- 备注：外部 DuckDuckGo live `curl` 在当前 shell 环境返回 TLS code 35；本轮已覆盖该路径，DuckDuckGo HTML endpoint 失败时返回空结果，不再让 `web_search` 工具调用标红。
+- 追踪：为 WebSearch 后端 provider 增加脱敏阶段日志，记录 provider、queryHash、queryLength、endpoint host/path、HTTP 状态、耗时、结果数和失败摘要，便于定位 HTML 搜索或网络层问题。
 - 本轮：按用户指定范围执行搜索相关正式 `project-verify`，完成 `chat-agent-runtime` WebSearch runtime 6 个场景与 `desktop-shell-settings-release` 搜索设置 6 个场景验收盖戳。
 - 验证类别：正式验收（project-verify，搜索范围）。
 - 验收结果：12 个搜索相关场景 ✅ 通过；场景级无失败、无跳过、无阻塞。
@@ -320,3 +321,12 @@
   - `npm run typecheck` ✅
   - `node --test electron/chat-workspace-store.test.mjs electron/workspace-session.test.mjs` ✅
   - `npm run test:electron` ✅（69 tests passed）
+- 本轮：完成 MCP 相关剩余实现与正式验收打勾：全局 MCP 复制/删除确认、字段级 ENV 状态、serverInfo 展开、恢复提示、项目工具按 server 分组、风险 annotation、policy 来源、session 生效提示，以及无活动项目/路径不可用空态。
+- 验证类别：正式验收（project-verify，MCP 范围）。
+- 验收结果：15 个 MCP 相关场景 ✅ 通过；场景级无失败、无跳过、无阻塞。
+- 证据：`TESTING_CHECKLIST.md`。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅（69/69）
+  - `npm run build` ✅
+  - MCP selector audit ✅

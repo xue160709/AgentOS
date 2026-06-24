@@ -2761,7 +2761,7 @@ function McpSettingsPanel({
   onSave: () => void
 }) {
   const { t } = useI18n()
-  const discoveredTools = useMemo(() => {
+  const discoveredTools = useMemo<DiscoveredMcpToolOption[]>(() => {
     return draftServers.flatMap((server) => {
       if (!server.enabled) return []
       const snapshot = getMatchingMcpProbeSnapshot(server, probeCache)
@@ -2775,6 +2775,7 @@ function McpSettingsPanel({
     })
   }, [draftServers, probeCache])
   const discoveredToolNames = useMemo(() => new Set(discoveredTools.map((tool) => tool.fullName)), [discoveredTools])
+  const discoveredToolGroups = useMemo(() => groupMcpDiscoveredTools(discoveredTools), [discoveredTools])
   const policyEntries = Object.entries(draftPolicies).filter(([toolName]) => !discoveredToolNames.has(toolName))
   const isDirty =
     JSON.stringify(savedOverrides) !== JSON.stringify(draftOverrides) ||
@@ -2846,6 +2847,7 @@ function McpSettingsPanel({
               const runtimeStatus = statusByName.get(server.name.trim()) ?? (savedName ? statusByName.get(savedName) : undefined)
               const probeSnapshot = getMatchingMcpProbeSnapshot(server, probeCache)
               const statusMeta = formatMcpSettingsServerStatus(server, runtimeStatus, probeSnapshot, t)
+              const recoveryHint = formatMcpProjectRecoveryHint(server, runtimeStatus, probeSnapshot, t)
               return (
                 <div
                   key={`${server.name}-${index}`}
@@ -2859,6 +2861,7 @@ function McpSettingsPanel({
                   <span className="agent-mcp-installed-row__copy">
                     <strong>{displayName}</strong>
                     <span title={statusMeta.title}>{statusMeta.text}</span>
+                    {recoveryHint ? <small data-testid="mcp-recovery-hint">{recoveryHint}</small> : null}
                   </span>
                   <label className="agent-mcp-installed-row__switch">
                     <span className="sr-only">{t('workspace.agentSettingsMcpToggleServer', { name: displayName })}</span>
@@ -2879,6 +2882,9 @@ function McpSettingsPanel({
               )
             })}
           </div>
+          <p className="agent-mcp-session-hint" data-testid="mcp-session-effect-hint">
+            {t('workspace.agentSettingsMcpSessionEffectHint')}
+          </p>
         </section>
 
         {envRefs.length > 0 ? (
@@ -2898,31 +2904,51 @@ function McpSettingsPanel({
               <span>{t('workspace.agentSettingsMcpAddPolicy')}</span>
             </button>
           </div>
-          {discoveredTools.length > 0 ? (
+          {discoveredToolGroups.length > 0 ? (
             <div className="agent-mcp-discovered-tools" role="list" data-testid="mcp-discovered-tool-policy-list">
               <div className="agent-mcp-discovered-tools__head">
                 <strong>{t('workspace.agentSettingsMcpDiscoveredTools')}</strong>
                 <span>{t('workspace.agentSettingsMcpDiscoveredToolsHint')}</span>
               </div>
-              {discoveredTools.map((tool) => (
-                <div className="agent-mcp-discovered-tool-row" role="listitem" key={tool.fullName}>
-                  <span className="agent-mcp-discovered-tool-row__copy">
-                    <strong>{tool.serverName} · {tool.toolName}</strong>
-                    <small>{tool.description || tool.fullName}</small>
-                  </span>
-                  <label className="agent-mcp-field">
-                    <span>{t('workspace.agentSettingsMcpPolicy')}</span>
-                    <select
-                      className="settings-input settings-select"
-                      value={draftPolicies[tool.fullName] ?? 'ask'}
-                      disabled={saving}
-                      onChange={(event) => updatePolicy(tool.fullName, event.target.value as AgentMcpToolPolicy)}
-                    >
-                      <option value="ask">{t('workspace.agentSettingsMcpPolicyAsk')}</option>
-                      <option value="allow">{t('workspace.agentSettingsMcpPolicyAllow')}</option>
-                      <option value="deny">{t('workspace.agentSettingsMcpPolicyDeny')}</option>
-                    </select>
-                  </label>
+              {discoveredToolGroups.map((group) => (
+                <div className="agent-mcp-discovered-tools__group" key={group.serverName}>
+                  <div className="agent-mcp-discovered-tools__group-head">
+                    <strong>{group.serverName}</strong>
+                    <span>{t('workspace.agentSettingsMcpDiscoveredServerTools', { count: group.tools.length })}</span>
+                  </div>
+                  {group.tools.map((tool) => {
+                    const risk = formatMcpToolRisk(tool.toolName, tool.description, t)
+                    const hasExplicitPolicy = Object.prototype.hasOwnProperty.call(draftPolicies, tool.fullName)
+                    return (
+                      <div className="agent-mcp-discovered-tool-row" role="listitem" key={tool.fullName}>
+                        <span className="agent-mcp-discovered-tool-row__copy">
+                          <strong>{tool.toolName}</strong>
+                          <small>{tool.description || tool.fullName}</small>
+                          <span className="agent-mcp-discovered-tool-row__meta">
+                            <span className={`agent-mcp-risk agent-mcp-risk--${risk.tone}`} data-testid="mcp-tool-risk-annotation">
+                              {risk.label}
+                            </span>
+                            <small data-testid="mcp-policy-source-hint">
+                              {hasExplicitPolicy ? t('workspace.agentSettingsMcpPolicySourceProject') : t('workspace.agentSettingsMcpPolicySourceDefault')}
+                            </small>
+                          </span>
+                        </span>
+                        <label className="agent-mcp-field">
+                          <span>{t('workspace.agentSettingsMcpPolicy')}</span>
+                          <select
+                            className="settings-input settings-select"
+                            value={draftPolicies[tool.fullName] ?? 'ask'}
+                            disabled={saving}
+                            onChange={(event) => updatePolicy(tool.fullName, event.target.value as AgentMcpToolPolicy)}
+                          >
+                            <option value="ask">{t('workspace.agentSettingsMcpPolicyAsk')}</option>
+                            <option value="allow">{t('workspace.agentSettingsMcpPolicyAllow')}</option>
+                            <option value="deny">{t('workspace.agentSettingsMcpPolicyDeny')}</option>
+                          </select>
+                        </label>
+                      </div>
+                    )
+                  })}
                 </div>
               ))}
             </div>
@@ -2956,6 +2982,9 @@ function McpSettingsPanel({
                     <option value="allow">{t('workspace.agentSettingsMcpPolicyAllow')}</option>
                     <option value="deny">{t('workspace.agentSettingsMcpPolicyDeny')}</option>
                   </select>
+                  <small className="settings-field-row__hint" data-testid="mcp-policy-source-hint">
+                    {t('workspace.agentSettingsMcpPolicySourceManual')}
+                  </small>
                 </label>
                 <button
                   type="button"
@@ -3245,7 +3274,58 @@ function overridesFromMcpServers(servers: AgentMcpServerConfig[]): AgentMcpServe
   return Object.fromEntries(servers.map((server) => [server.name, { enabled: server.enabled }]))
 }
 
+type DiscoveredMcpToolOption = {
+  serverName: string
+  toolName: string
+  fullName: string
+  description?: string
+}
+
 type McpSettingsStatusTone = 'ready' | 'pending' | 'error' | 'disabled'
+
+function groupMcpDiscoveredTools(tools: DiscoveredMcpToolOption[]): { serverName: string; tools: DiscoveredMcpToolOption[] }[] {
+  const groups = new Map<string, DiscoveredMcpToolOption[]>()
+  for (const tool of tools) {
+    const groupTools = groups.get(tool.serverName) ?? []
+    groupTools.push(tool)
+    groups.set(tool.serverName, groupTools)
+  }
+  return [...groups.entries()].map(([serverName, groupTools]) => ({ serverName, tools: groupTools }))
+}
+
+function formatMcpToolRisk(
+  toolName: string,
+  description: string | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): { tone: 'low' | 'medium' | 'high'; label: string } {
+  const text = `${toolName} ${description ?? ''}`.toLowerCase()
+  if (/(delete|remove|destroy|drop|reset|execute|exec|shell|bash|terminal|run|deploy|publish)/.test(text)) {
+    return { tone: 'high', label: t('workspace.agentSettingsMcpRiskHigh') }
+  }
+  if (/(write|create|update|edit|upload|send|post|commit|merge|move|rename|apply|patch)/.test(text)) {
+    return { tone: 'medium', label: t('workspace.agentSettingsMcpRiskMedium') }
+  }
+  return { tone: 'low', label: t('workspace.agentSettingsMcpRiskLow') }
+}
+
+function formatMcpProjectRecoveryHint(
+  server: AgentMcpServerConfig,
+  runtimeStatus: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>[number] | undefined,
+  probeSnapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): string {
+  if (!server.enabled) return ''
+  const status = runtimeStatus?.status ?? probeSnapshot?.status
+  if (status !== 'failed' && status !== 'needs-auth') return ''
+  const error = `${runtimeStatus?.error ?? ''} ${probeSnapshot?.error ?? ''}`.toLowerCase()
+  if (error.includes('env') || error.includes('environment') || error.includes('variable') || error.includes('${')) {
+    return t('workspace.agentSettingsMcpRecoveryEnv')
+  }
+  if (status === 'needs-auth' || error.includes('auth') || error.includes('token') || error.includes('key')) {
+    return t('workspace.agentSettingsMcpRecoveryAuth')
+  }
+  return server.transport === 'stdio' ? t('workspace.agentSettingsMcpRecoveryCommand') : t('workspace.agentSettingsMcpRecoveryUrl')
+}
 
 function formatMcpSettingsServerStatus(
   server: AgentMcpServerConfig,

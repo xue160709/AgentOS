@@ -64,28 +64,28 @@
 - WHEN 用户编辑 Provider 配置
 - THEN Provider 表单只展示 Provider 凭据、Base URL、模型档位和图片能力，不展示 MCP command、args、headers 或 tool policy 编辑字段
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: role=region[name="模型与 Provider 设置"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run build + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：全局设置侧栏进入 MCP Tab
 - GIVEN 用户打开全局设置
 - WHEN 用户点击侧栏中的 MCP
 - THEN 系统进入独立的全局 MCP 设置页，而不是在模型页内展示 MCP 表单
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: [data-settings-category="mcp"] + [data-testid="global-mcp-settings-page"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run build + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：添加全局 MCP server
 - GIVEN 用户打开全局 MCP 设置页
 - WHEN 用户在全局 MCP 服务列表点击 New MCP Server，填写 server 名称、command、args、工作目录、环境变量或 URL/header 后保存
 - THEN 系统把该 MCP server 作为全局定义保存，并允许用户在列表中设置全局启用或停用开关
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="global-mcp-add-server"] + [data-testid="global-mcp-server-editor"] + [data-testid="global-mcp-server-list"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run build + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：保存并测试全局 MCP server
 - GIVEN 用户正在编辑一个全局 MCP server
 - WHEN 用户点击“保存并测试”
 - THEN 系统先保存全局定义，再执行 MCP initialize/tools/list 连接测试，并在全局列表显示 connected、failed、needs-auth、disabled 或未测试状态；连接成功时显示工具数量
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify）｜selector: [data-testid="global-mcp-server-editor"] + [data-testid="global-mcp-server-list"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 ## 平台专项验证（Electron + React）
 

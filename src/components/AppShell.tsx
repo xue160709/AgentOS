@@ -1665,6 +1665,36 @@ export function AppShell() {
   }
 
   if (!activeProject) {
+    if (activeViewId === 'settings' && settingsCategory === 'mcp') {
+      return (
+        <div className={`app-shell${isWindows ? ' is-platform-win32' : ''} is-shell-settings`} id="app-shell">
+          <div className="app-body">
+            <div className="app-workspace">
+              <div className="app-workspace-top-drag draggable" aria-hidden />
+              <div className="app-workspace-content">
+                <main className="app-main" role="main">
+                  <section
+                    className="app-main-inner settings-page settings-page--mcp"
+                    id="panel-settings-mcp"
+                    data-testid="global-mcp-settings-page"
+                    aria-hidden={false}
+                  >
+                    <header className="settings-page-header">
+                      <h1 className="app-main-heading">{t('settings.mcp.pageTitle')}</h1>
+                      <p className="settings-lede">{t('settings.mcp.pageLede')}</p>
+                    </header>
+                    <div className="settings-mcp-empty" data-testid="mcp-settings-no-project-empty" role="status">
+                      <strong>{t('settings.mcp.noActiveProjectTitle')}</strong>
+                      <span>{t('settings.mcp.noActiveProjectBody')}</span>
+                    </div>
+                  </section>
+                </main>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
     return null
   }
 

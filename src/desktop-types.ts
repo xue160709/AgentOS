@@ -204,7 +204,7 @@ export type AgentMcpGlobalSettingsResult =
 
 export type AgentWebSearchMode = 'native' | 'agentos'
 
-export type AgentWebSearchProviderId = 'duckduckgo-instant' | 'brave' | 'tavily'
+export type AgentWebSearchProviderId = 'duckduckgo' | 'brave' | 'tavily'
 
 export type AgentWebSearchSettings = {
   mode: AgentWebSearchMode

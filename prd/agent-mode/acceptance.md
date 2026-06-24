@@ -64,35 +64,35 @@
 - WHEN 用户在项目 Agent 设置的 MCP 面板切换该 server 并保存
 - THEN 系统只保存当前项目的 `mcpServerOverrides`，不修改全局 MCP server 定义或全局开关
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: [data-testid="agent-settings-mcp-tab"] + [data-testid="mcp-installed-server-list"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：展示已配置服务状态与启用开关
 - GIVEN 用户已在全局设置中启用一个或多个 MCP server
 - WHEN 用户打开项目 Agent 设置的 MCP 面板
 - THEN 面板展示 Installed MCP Servers 列表，每个 server 显示启用开关、当前连接状态、失败原因或工具数量；应用不会在保存配置时自动预安装 MCP server
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: [data-testid="mcp-installed-server-list"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：全局关闭后项目隐藏 MCP server
 - GIVEN 某个 MCP server 在全局设置中被关闭
 - WHEN 用户打开任一项目的 MCP 面板
 - THEN 该 server 不出现在项目 MCP 列表中，也不会传入 Claude Agent SDK runtime options
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-23，待 project-verify）｜selector: [data-testid="mcp-installed-server-list"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：环境变量未解析
 - GIVEN 用户配置的 MCP server 使用 `${ENV_NAME}` 引用密钥或连接串
 - WHEN 系统测试连接时发现该环境变量不存在
 - THEN MCP 面板在对应字段附近显示未解析状态，不启动有效工具调用，并提供可修复的错误提示
 
-> 实现状态：⚠️ 部分实现（运行时解析、全局连接测试失败摘要与脱敏已接入，字段级状态待补）｜selector: [data-testid="mcp-env-resolution-error"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run build + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 #### 场景：配置工具权限策略
 - GIVEN 某个 MCP server 已连接并返回工具列表
 - WHEN 用户把某个工具设置为“自动允许”或“禁用”并保存
 - THEN 系统按完整 `mcp__server__tool` 名称保存该项目的 tool policy，且不会影响其它项目
 
-> 实现状态：⚠️ 已实现（自检通过 2026-06-24，待 project-verify；全局连接测试缓存工具后项目页可直接选择策略）｜selector: [data-testid="mcp-discovered-tool-policy-list"] + [data-testid="mcp-tool-policy-list"]
+> 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: npm run test:electron + MCP selector audit｜证据: TESTING_CHECKLIST.md
 
 ## 平台专项验证（Electron + React）
 

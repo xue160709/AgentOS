@@ -186,9 +186,9 @@ function normalizeRuntimeWebSearchSettings(settings: AgentWebSearchSettings | un
   return {
     mode: settings?.mode === 'agentos' ? 'agentos' : 'native',
     provider:
-      settings?.provider === 'brave' || settings?.provider === 'tavily'
+      settings?.provider === 'brave' || settings?.provider === 'tavily' || settings?.provider === 'duckduckgo'
         ? settings.provider
-        : 'duckduckgo-instant',
+        : 'duckduckgo',
     maxResults: clampMaxResults(settings?.maxResults),
     braveApiKey: settings?.braveApiKey?.trim() ?? '',
     tavilyApiKey: settings?.tavilyApiKey?.trim() ?? '',
@@ -220,7 +220,7 @@ function resolveSecretSetting(value: string, env: WebSearchEnv): string {
 }
 
 function resolveWebSearchCredentialStatus(settings: AgentWebSearchSettings, env: WebSearchEnv): AgentWebSearchCredentialStatus {
-  if (settings.provider === 'duckduckgo-instant') return 'not-required'
+  if (settings.provider === 'duckduckgo') return 'not-required'
   const rawValue = settings.provider === 'brave' ? settings.braveApiKey : settings.tavilyApiKey
   const trimmed = rawValue.trim()
   if (!trimmed) return 'missing'
