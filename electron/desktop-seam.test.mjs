@@ -85,3 +85,22 @@ test('Web search settings expose provider test seam and UI status hooks', () => 
   assert.match(settingsPage, /data-testid="web-search-provider-test-status"/)
   assert.match(settingsPage, /data-testid="web-search-key-status"/)
 })
+
+test('Global MCP settings distinguish auto-test busy state from saving copy', () => {
+  const settingsPage = readFileSync(resolve(root, 'src/components/setting/ClaudeAgentSettingsPage.tsx'), 'utf8')
+  const zhLocale = readFileSync(resolve(root, 'src/locales/zh.json'), 'utf8')
+  const enLocale = readFileSync(resolve(root, 'src/locales/en.json'), 'utf8')
+
+  assert.match(settingsPage, /type GlobalMcpOperation = 'idle' \| 'saving' \| 'testing'/)
+  assert.match(settingsPage, /setGlobalMcpOperation\('testing'\)[\s\S]{0,120}setGlobalMcpStatus\(t\('settings\.mcp\.testing/)
+  assert.match(
+    settingsPage,
+    /operation === 'saving' \? t\('settings\.mcp\.saving'\) : t\('settings\.mcp\.save'\)/,
+  )
+  assert.doesNotMatch(
+    settingsPage,
+    /saving \? t\('settings\.mcp\.saving'\) : t\('settings\.mcp\.save'\)/,
+  )
+  assert.match(zhLocale, /"savingShort": "保存中"/)
+  assert.match(enLocale, /"savingShort": "Saving"/)
+})

@@ -346,3 +346,10 @@
   - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `python3 .codex/scripts/agentic_drift_check.py` ✅
   - `git diff --check` ✅
+- 本轮：修复全局 MCP 设置页进入后自动连接测试误显示“正在保存 MCP 设置”的交互问题；保存与测试事务状态已拆分，自动测试只展示测试中，保存按钮仅在真实保存时显示保存中。
+- 验证类别：Codex 自检（MCP 设置 UI 状态 + 回归测试）。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `node --test electron/desktop-seam.test.mjs` ✅
+  - `npm run test:electron` ✅（70/70）
+  - `git diff --check` ✅

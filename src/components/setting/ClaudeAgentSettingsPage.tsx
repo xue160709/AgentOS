@@ -75,6 +75,7 @@ function normalizeWebSearchSettingsDraft(settings: AgentWebSearchSettings): Agen
 }
 
 type TranslateFn = (path: string, vars?: Record<string, string | number>) => string
+type GlobalMcpOperation = 'idle' | 'saving' | 'testing'
 
 function formatWebSearchProviderTestStatus(result: AgentWebSearchProviderTestResult, t: TranslateFn): string {
   if (result.ok) {
@@ -960,9 +961,10 @@ export function GlobalMcpSettingsPage({
     server: AgentMcpServerConfig
   } | null>(null)
   const [globalMcpStatus, setGlobalMcpStatus] = useState('')
-  const [globalMcpSaving, setGlobalMcpSaving] = useState(false)
+  const [globalMcpOperation, setGlobalMcpOperation] = useState<GlobalMcpOperation>('idle')
   const autoTestedGlobalMcpSignatureRef = useRef('')
   const globalMcpDirty = JSON.stringify(globalMcpServers) !== JSON.stringify(draftGlobalMcpServers)
+  const globalMcpBusy = globalMcpOperation !== 'idle'
 
   const loadGlobalMcpSettings = useCallback(async () => {
     const getGlobalMcpSettings = window.desktop?.getGlobalMcpSettings
@@ -998,7 +1000,7 @@ export function GlobalMcpSettingsPage({
       setGlobalMcpStatus(validationError)
       return undefined
     }
-    setGlobalMcpSaving(true)
+    setGlobalMcpOperation('saving')
     setGlobalMcpStatus(t('settings.mcp.saving'))
     try {
       const result = await saveGlobalMcpSettings({ mcpServers: nextServers })
@@ -1016,7 +1018,7 @@ export function GlobalMcpSettingsPage({
       setGlobalMcpStatus(error instanceof Error ? error.message : String(error))
       return undefined
     } finally {
-      setGlobalMcpSaving(false)
+      setGlobalMcpOperation('idle')
     }
   }, [t])
 
@@ -1030,7 +1032,7 @@ export function GlobalMcpSettingsPage({
       setGlobalMcpStatus(t('settings.mcp.bridgeUnavailable'))
       return undefined
     }
-    setGlobalMcpSaving(true)
+    setGlobalMcpOperation('testing')
     setGlobalMcpStatus(t('settings.mcp.testing', { name: server.name }))
     try {
       const result = await testServer(server)
@@ -1051,7 +1053,7 @@ export function GlobalMcpSettingsPage({
       setGlobalMcpStatus(error instanceof Error ? error.message : String(error))
       return undefined
     } finally {
-      setGlobalMcpSaving(false)
+      setGlobalMcpOperation('idle')
     }
   }, [t])
 
@@ -1063,7 +1065,7 @@ export function GlobalMcpSettingsPage({
       setGlobalMcpStatus(t('settings.mcp.bridgeUnavailable'))
       return
     }
-    setGlobalMcpSaving(true)
+    setGlobalMcpOperation('testing')
     setGlobalMcpStatus(t('settings.mcp.testingEnabled', { count: enabledServers.length }))
     let tested = 0
     let connected = 0
@@ -1085,7 +1087,7 @@ export function GlobalMcpSettingsPage({
     } catch (error) {
       setGlobalMcpStatus(error instanceof Error ? error.message : String(error))
     } finally {
-      setGlobalMcpSaving(false)
+      setGlobalMcpOperation('idle')
     }
   }, [t])
 
@@ -1190,7 +1192,8 @@ export function GlobalMcpSettingsPage({
         probeCache={globalMcpProbeCache}
         editingServer={editingGlobalMcpServer}
         dirty={globalMcpDirty}
-        saving={globalMcpSaving}
+        busy={globalMcpBusy}
+        operation={globalMcpOperation}
         status={globalMcpStatus}
         onServerChange={updateGlobalMcpServer}
         onOpenEditor={openGlobalMcpEditor}
@@ -1477,7 +1480,8 @@ function GlobalMcpSettingsSection({
   probeCache,
   editingServer,
   dirty,
-  saving,
+  busy,
+  operation,
   status,
   onServerChange,
   onOpenEditor,
@@ -1496,7 +1500,8 @@ function GlobalMcpSettingsSection({
   probeCache: AgentMcpServerProbeCache
   editingServer: { index: number | null; server: AgentMcpServerConfig } | null
   dirty: boolean
-  saving: boolean
+  busy: boolean
+  operation: GlobalMcpOperation
   status: string
   onServerChange: (index: number, patch: Partial<AgentMcpServerConfig>) => void
   onOpenEditor: (index: number | null) => void
@@ -1534,7 +1539,8 @@ function GlobalMcpSettingsSection({
         <GlobalMcpServerEditor
           server={editingServer.server}
           snapshot={editingSnapshot}
-          saving={saving}
+          busy={busy}
+          operation={operation}
           status={status}
           isNew={editingServer.index === null}
           onChange={onEditorChange}
@@ -1562,7 +1568,7 @@ function GlobalMcpSettingsSection({
               const statusView = formatGlobalMcpProbeStatus(server, snapshot, t)
               return (
                 <div key={`${server.name}-${index}`} className={`agent-mcp-installed-row agent-mcp-installed-row--${statusView.tone}`} role="listitem">
-                  <button type="button" className="global-mcp-installed-row__main" disabled={saving} onClick={() => onOpenEditor(index)}>
+                  <button type="button" className="global-mcp-installed-row__main" disabled={busy} onClick={() => onOpenEditor(index)}>
                     <span className="agent-mcp-installed-row__avatar" aria-hidden="true">
                       <span>{displayName.slice(0, 1).toUpperCase()}</span>
                       <span className={`agent-mcp-installed-row__dot agent-mcp-installed-row__dot--${statusView.tone}`} />
@@ -1576,7 +1582,7 @@ function GlobalMcpSettingsSection({
                     <button
                       type="button"
                       className="project-home-icon-button"
-                      disabled={saving}
+                      disabled={busy}
                       title={t('settings.mcp.duplicateServer')}
                       aria-label={t('settings.mcp.duplicateServerNamed', { name: displayName })}
                       onClick={() => onDuplicateServer(index)}
@@ -1590,7 +1596,7 @@ function GlobalMcpSettingsSection({
                           type="checkbox"
                           className="settings-switch-input"
                           checked={server.enabled}
-                          disabled={saving}
+                          disabled={busy}
                           onChange={(event) => onServerChange(index, { enabled: event.target.checked })}
                         />
                         <span className="settings-switch-track" aria-hidden="true">
@@ -1602,7 +1608,7 @@ function GlobalMcpSettingsSection({
                 </div>
               )
             })}
-            <button type="button" className="agent-mcp-installed-row agent-mcp-installed-row--add" data-testid="global-mcp-add-server" disabled={saving} onClick={() => onOpenEditor(null)}>
+            <button type="button" className="agent-mcp-installed-row agent-mcp-installed-row--add" data-testid="global-mcp-add-server" disabled={busy} onClick={() => onOpenEditor(null)}>
               <span className="agent-mcp-installed-row__avatar" aria-hidden="true">
                 <IconInline name="plus" />
               </span>
@@ -1614,16 +1620,16 @@ function GlobalMcpSettingsSection({
           </div>
 
           <div className="agent-settings-panel-actions">
-            <p className={`agent-settings-save-feedback${dirty && !saving ? ' is-dirty' : ''}`} role="status" aria-live="polite">
-              <IconInline name={saving ? 'refresh' : dirty ? 'save' : 'check'} />
+            <p className={`agent-settings-save-feedback${dirty && !busy ? ' is-dirty' : ''}`} role="status" aria-live="polite">
+              <IconInline name={busy ? 'refresh' : dirty ? 'save' : 'check'} />
               <span>{status || (dirty ? t('workspace.agentSettingsUnsavedChanges') : t('workspace.agentSettingsNoChanges'))}</span>
             </p>
-            <button type="button" className="agent-card-secondary-button" disabled={saving || !dirty} onClick={onReset}>
+            <button type="button" className="agent-card-secondary-button" disabled={busy || !dirty} onClick={onReset}>
               {t('settings.mcp.cancel')}
             </button>
-            <button type="button" className="agent-card-primary-button" disabled={saving || !dirty} onClick={onSave}>
-              <IconInline name={saving ? 'refresh' : 'save'} />
-              <span>{saving ? t('settings.mcp.saving') : t('settings.mcp.save')}</span>
+            <button type="button" className="agent-card-primary-button" disabled={busy || !dirty} onClick={onSave}>
+              <IconInline name={operation === 'saving' ? 'refresh' : 'save'} />
+              <span>{operation === 'saving' ? t('settings.mcp.saving') : t('settings.mcp.save')}</span>
             </button>
           </div>
         </>
@@ -1635,7 +1641,8 @@ function GlobalMcpSettingsSection({
 function GlobalMcpServerEditor({
   server,
   snapshot,
-  saving,
+  busy,
+  operation,
   status,
   isNew,
   onChange,
@@ -1646,7 +1653,8 @@ function GlobalMcpServerEditor({
 }: {
   server: AgentMcpServerConfig
   snapshot?: AgentMcpServerProbeSnapshot
-  saving: boolean
+  busy: boolean
+  operation: GlobalMcpOperation
   status: string
   isNew: boolean
   onChange: (patch: Partial<AgentMcpServerConfig>) => void
@@ -1665,12 +1673,12 @@ function GlobalMcpServerEditor({
   return (
     <div className="global-mcp-editor" data-testid="global-mcp-server-editor">
       <div className="global-mcp-editor__topbar">
-        <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={onCancel}>
+        <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onCancel}>
           <IconInline name="back" />
           <span>{t('settings.mcp.backToList')}</span>
         </button>
         {onDelete ? (
-          <button type="button" className="project-home-icon-button project-home-icon-button--danger" disabled={saving} title={t('workspace.agentSettingsMcpRemoveServer')} onClick={onDelete}>
+          <button type="button" className="project-home-icon-button project-home-icon-button--danger" disabled={busy} title={t('workspace.agentSettingsMcpRemoveServer')} onClick={onDelete}>
             <IconInline name="trash" />
           </button>
         ) : null}
@@ -1695,7 +1703,7 @@ function GlobalMcpServerEditor({
             id={`${serverId}-name`}
             className="settings-input"
             value={server.name}
-            disabled={saving}
+            disabled={busy}
             spellCheck={false}
             placeholder="chrome-devtools"
             onChange={(event) => onChange({ name: event.target.value })}
@@ -1710,7 +1718,7 @@ function GlobalMcpServerEditor({
               role="tab"
               aria-selected={server.transport === transport}
               className={`global-mcp-segmented__item${server.transport === transport ? ' is-active' : ''}`}
-              disabled={saving}
+              disabled={busy}
               onClick={() => onChange({ transport })}
             >
               {t(`workspace.agentSettingsMcpTransport.${transport}`)}
@@ -1727,7 +1735,7 @@ function GlobalMcpServerEditor({
                   id={`${serverId}-command`}
                   className="settings-input"
                   value={server.command}
-                  disabled={saving}
+                  disabled={busy}
                   spellCheck={false}
                   placeholder="npx"
                   onChange={(event) => onChange({ command: event.target.value })}
@@ -1740,7 +1748,7 @@ function GlobalMcpServerEditor({
                   id={`${serverId}-args`}
                   className="settings-input agent-mcp-textarea"
                   value={server.args.join('\n')}
-                  disabled={saving}
+                  disabled={busy}
                   spellCheck={false}
                   placeholder="-y\nchrome-devtools-mcp@latest"
                   onChange={(event) => onChange({ args: linesToList(event.target.value) })}
@@ -1753,7 +1761,7 @@ function GlobalMcpServerEditor({
                   id={`${serverId}-cwd`}
                   className="settings-input"
                   value={server.cwd}
-                  disabled={saving}
+                  disabled={busy}
                   spellCheck={false}
                   placeholder="~/code"
                   onChange={(event) => onChange({ cwd: event.target.value })}
@@ -1769,7 +1777,7 @@ function GlobalMcpServerEditor({
                   id={`${serverId}-url`}
                   className="settings-input"
                   value={server.url}
-                  disabled={saving}
+                  disabled={busy}
                   spellCheck={false}
                   placeholder="https://mcp.example.com/mcp"
                   onChange={(event) => onChange({ url: event.target.value })}
@@ -1782,7 +1790,7 @@ function GlobalMcpServerEditor({
                   id={`${serverId}-headers`}
                   className="settings-input agent-mcp-textarea"
                   value={recordToKeyValueLines(server.headers)}
-                  disabled={saving}
+                  disabled={busy}
                   spellCheck={false}
                   placeholder="Authorization=Bearer ${MCP_TOKEN}"
                   onChange={(event) => onChange({ headers: keyValueLinesToRecord(event.target.value) })}
@@ -1798,7 +1806,7 @@ function GlobalMcpServerEditor({
               id={`${serverId}-env`}
               className="settings-input agent-mcp-textarea"
               value={recordToKeyValueLines(server.env)}
-              disabled={saving}
+              disabled={busy}
               spellCheck={false}
               placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_TOKEN}"
               onChange={(event) => onChange({ env: keyValueLinesToRecord(event.target.value) })}
@@ -1810,7 +1818,7 @@ function GlobalMcpServerEditor({
             <input
               type="checkbox"
               checked={server.alwaysLoad}
-              disabled={saving}
+              disabled={busy}
               onChange={(event) => onChange({ alwaysLoad: event.target.checked })}
             />
             <span>
@@ -1823,16 +1831,22 @@ function GlobalMcpServerEditor({
 
       <div className="agent-settings-panel-actions">
         <p className="agent-settings-save-feedback" role="status" aria-live="polite">
-          <IconInline name={saving ? 'refresh' : statusView.tone === 'ready' ? 'check' : 'server'} />
+          <IconInline name={busy ? 'refresh' : statusView.tone === 'ready' ? 'check' : 'server'} />
           <span>{status || statusView.text}</span>
         </p>
-        <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={onSave}>
+        <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onSave}>
           <IconInline name="save" />
           <span>{t('settings.mcp.save')}</span>
         </button>
-        <button type="button" className="agent-card-primary-button" disabled={saving} onClick={onSaveAndTest}>
-          <IconInline name={saving ? 'refresh' : 'server'} />
-          <span>{saving ? t('settings.mcp.testingShort') : t('settings.mcp.saveAndTest')}</span>
+        <button type="button" className="agent-card-primary-button" disabled={busy} onClick={onSaveAndTest}>
+          <IconInline name={busy ? 'refresh' : 'server'} />
+          <span>
+            {operation === 'saving'
+              ? t('settings.mcp.savingShort')
+              : operation === 'testing'
+                ? t('settings.mcp.testingShort')
+                : t('settings.mcp.saveAndTest')}
+          </span>
         </button>
       </div>
     </div>

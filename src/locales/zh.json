@@ -676,6 +676,7 @@
       "bridgeUnavailable": "全局 MCP 设置接口不可用。",
       "loaded": "MCP 设置已读取",
       "saving": "正在保存 MCP 设置…",
+      "savingShort": "保存中",
       "saved": "MCP 设置已保存",
       "testing": "正在测试 {{name}}…",
       "testingEnabled": "正在测试 {{count}} 个已启用 MCP 服务…",

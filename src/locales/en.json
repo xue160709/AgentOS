@@ -676,6 +676,7 @@
       "bridgeUnavailable": "Global MCP settings bridge is unavailable.",
       "loaded": "MCP settings loaded",
       "saving": "Saving MCP settings…",
+      "savingShort": "Saving",
       "saved": "MCP settings saved",
       "testing": "Testing {{name}}…",
       "testingEnabled": "Testing {{count}} enabled MCP servers…",
