@@ -54,17 +54,20 @@ export type SpeechRecognitionCommandResult =
   | {
       ok: true
       status: SpeechRecognitionStatus
+      generation?: number
     }
   | {
       ok: false
       status: SpeechRecognitionStatus
       message: string
+      generation?: number
     }
 
 /** Current native speech recognizer snapshot / 原生语音识别当前快照 */
 export type SpeechRecognitionSnapshot = {
   supported: boolean
   status: SpeechRecognitionStatus
+  generation?: number
 }
 
 /** Streaming events from the Apple Speech helper / Apple 语音 helper 事件流 */
@@ -75,19 +78,23 @@ export type SpeechRecognitionEvent =
       locale?: string
       supportsOnDevice?: boolean
       requiresOnDevice?: boolean
+      generation?: number
     }
   | {
       type: 'partial'
       text: string
+      generation?: number
     }
   | {
       type: 'final'
       text: string
+      generation?: number
     }
   | {
       type: 'error'
       code: string
       message: string
+      generation?: number
     }
 
 /** Agent Mode 文件写入状态 / Agent Mode scaffold file status */
@@ -100,6 +107,69 @@ export type AgentModeFileChange = {
   status: AgentModeFileStatus
 }
 
+/** Agent Mode 项目级 MCP 连接传输类型 / Project-level MCP server transport type */
+export type AgentMcpServerTransport = 'stdio' | 'http' | 'sse'
+
+/** Agent Mode 项目级 MCP 服务配置（脱敏、可持久化）/ Persisted project-level MCP server config */
+export type AgentMcpServerConfig = {
+  name: string
+  enabled: boolean
+  transport: AgentMcpServerTransport
+  command: string
+  args: string[]
+  env: Record<string, string>
+  cwd: string
+  url: string
+  headers: Record<string, string>
+  alwaysLoad: boolean
+}
+
+export type AgentMcpServerProbeStatus = 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'
+
+export type AgentMcpToolDescriptor = {
+  name: string
+  description?: string
+  annotations?: {
+    readOnly?: boolean
+    destructive?: boolean
+    openWorld?: boolean
+  }
+}
+
+export type AgentMcpServerProbeSnapshot = {
+  serverName: string
+  status: AgentMcpServerProbeStatus
+  checkedAt: string
+  configSignature: string
+  serverInfo?: {
+    name: string
+    version?: string
+  }
+  tools: AgentMcpToolDescriptor[]
+  error?: string
+}
+
+export type AgentMcpServerProbeCache = Record<string, AgentMcpServerProbeSnapshot>
+
+export type AgentMcpServerProbeResult =
+  | {
+      ok: true
+      snapshot: AgentMcpServerProbeSnapshot
+    }
+  | {
+      ok: false
+      snapshot?: AgentMcpServerProbeSnapshot
+      message: string
+    }
+
+/** MCP tool permission policy stored at project scope / 项目级 MCP tool 权限策略 */
+export type AgentMcpToolPolicy = 'ask' | 'allow' | 'deny'
+
+export type AgentMcpToolPolicies = Record<string, AgentMcpToolPolicy>
+
+/** Per-project enablement override for globally defined MCP servers. */
+export type AgentMcpServerOverrides = Record<string, { enabled: boolean }>
+
 /** Agent Mode 项目级开关与身份文案 / Project-level Agent Mode toggles and identity copy */
 export type AgentModeProjectSettings = {
   enabled: boolean
@@ -108,7 +178,92 @@ export type AgentModeProjectSettings = {
   identity: string
   projectModelPick?: ChatModelPick
   skillModelOverrides: Record<string, ChatModelPick>
+  /** Effective globally-defined MCP servers visible to this project. */
+  mcpServers: AgentMcpServerConfig[]
+  /** Project-local enabled overrides by MCP server name. */
+  mcpServerOverrides: AgentMcpServerOverrides
+  mcpToolPolicies: AgentMcpToolPolicies
+  /** Cached global MCP connection tests, keyed by global server name. */
+  mcpServerProbeCache: AgentMcpServerProbeCache
 }
+
+export type AgentMcpGlobalSettings = {
+  mcpServers: AgentMcpServerConfig[]
+  mcpServerProbeCache: AgentMcpServerProbeCache
+}
+
+export type AgentMcpGlobalSettingsResult =
+  | {
+      ok: true
+      settings: AgentMcpGlobalSettings
+    }
+  | {
+      ok: false
+      message: string
+    }
+
+export type AgentWebSearchMode = 'native' | 'agentos'
+
+export type AgentWebSearchProviderId = 'duckduckgo' | 'brave' | 'tavily'
+
+export type AgentWebSearchSettings = {
+  mode: AgentWebSearchMode
+  provider: AgentWebSearchProviderId
+  /** Legacy single-key fields kept for older settings payloads. New code should read the pools below. */
+  braveApiKey: string
+  tavilyApiKey: string
+  braveApiKeys: string[]
+  tavilyApiKeys: string[]
+}
+
+export type AgentWebSearchSettingsResult =
+  | {
+      ok: true
+      settings: AgentWebSearchSettings
+    }
+  | {
+      ok: false
+      message: string
+    }
+
+export type AgentWebSearchCredentialStatus =
+  | 'not-required'
+  | 'missing'
+  | 'configured'
+  | 'env-resolved'
+  | 'env-missing'
+
+export type AgentWebSearchProviderErrorKind =
+  | 'missing-credential'
+  | 'auth'
+  | 'quota'
+  | 'bot-challenge'
+  | 'network'
+  | 'service'
+  | 'unknown'
+
+export type AgentWebSearchProviderTestResult =
+  | {
+      ok: true
+      providerId: AgentWebSearchProviderId
+      providerName: string
+      credentialStatus: AgentWebSearchCredentialStatus
+      resultCount: number
+      credentialAttemptCount?: number
+      credentialFallbackCount?: number
+      checkedAt: string
+      message: string
+    }
+  | {
+      ok: false
+      providerId: AgentWebSearchProviderId
+      providerName: string
+      credentialStatus: AgentWebSearchCredentialStatus
+      errorKind: AgentWebSearchProviderErrorKind
+      checkedAt: string
+      message: string
+      recoveryHint?: string
+    }
 
 /** Agent Mode 状态查询结果 / Agent Mode status query result */
 export type AgentModeStatusResult =

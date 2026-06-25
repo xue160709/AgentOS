@@ -369,7 +369,7 @@ export async function readProjectFilePreview(rootPath: unknown, filePath: unknow
 
     if (!imageMimeType) return fail('仅支持预览纯文本文件或 PNG、JPG、GIF、WEBP 图片')
     if (stat.size > PROJECT_FILE_PREVIEW_IMAGE_MAX_BYTES) {
-      return fail('图片超过 10MB，暂不在应用内预览')
+      return fail('图片超过 5MB，暂不在应用内预览')
     }
     const data = await fs.readFile(requestedPath)
     return {

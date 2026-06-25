@@ -9,6 +9,7 @@ import { useI18n } from '../../i18n/i18n'
 import type {
   ActivityStatus,
   ChatActivityItem,
+  ChatContextCompactionItem,
   ChatFileDiffItem,
   ChatMessageAttachment,
   ChatMessageItem,
@@ -63,7 +64,7 @@ export const Transcript = memo(function Transcript({
   onForkMessage?: (messageId: string) => void
   onEditUserMessage?: (messageId: string, text: string) => void
   onUserMessageEditDismissed?: () => void
-  onReviewFileChanges?: (changeSetId: string) => void
+  onReviewFileChanges?: (item: ChatFileDiffItem) => void
   onRewindFileChanges?: (item: ChatFileDiffItem) => void
 }) {
   const now = useLiveNow(Boolean(activeRunState?.startedAt))
@@ -72,6 +73,7 @@ export const Transcript = memo(function Transcript({
     if (item.type === 'tool') return <ToolRow key={item.id} item={item} />
     if (item.type === 'thinking') return <ThinkingRow key={item.id} item={item} />
     if (item.type === 'activity') return <ActivityRow key={item.id} item={item} />
+    if (item.type === 'context_compaction') return <ContextCompactionRow key={item.id} item={item} />
     if (item.type === 'file_diff') {
       return (
         <FileDiffRow
@@ -592,6 +594,7 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
   const hasDetails = Boolean(item.inputPreview?.trim())
   const inlineDetail = summarizeInlineToolInput(item) ?? item.detail
   const [isOpen, setIsOpen] = useState(item.status === 'running')
+  const isMcpTool = item.name.startsWith('mcp__')
 
   useEffect(() => {
     setIsOpen(item.status === 'running')
@@ -601,7 +604,7 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
     <>
       <span className={`status-row__chevron${hasDetails ? '' : ' status-row__chevron--hidden'}`} aria-hidden="true" />
       <span className="tool-row__dot" />
-      <span className="tool-row__name">{item.name}</span>
+      <span className="tool-row__name">{formatToolDisplayName(item.name)}</span>
       <span className="tool-row__status">{statusLabel[item.status]}</span>
       {inlineDetail ? <span className="tool-row__detail">{inlineDetail}</span> : null}
     </>
@@ -610,16 +613,17 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
   if (!hasDetails) {
     return (
       <div className={`tool-row tool-row--${item.status} tool-row--static`} data-transcript-item-id={item.id}>
-        <div className="status-row__summary status-row__summary--static">{summary}</div>
+        <div className="status-row__summary status-row__summary--static" data-testid={isMcpTool ? 'transcript-mcp-tool-call' : undefined}>{summary}</div>
       </div>
     )
   }
 
   return (
     <details
-      className={`tool-row tool-row--${item.status}`}
-      data-transcript-item-id={item.id}
-      open={isOpen}
+    className={`tool-row tool-row--${item.status}`}
+    data-transcript-item-id={item.id}
+    data-testid={isMcpTool ? 'transcript-mcp-tool-call' : undefined}
+    open={isOpen}
       onToggle={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen(event.currentTarget.open))}
     >
       <summary className="status-row__summary">{summary}</summary>
@@ -629,6 +633,12 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
 })
 
 const INLINE_TOOL_INPUT_NAMES = new Set(['Bash', 'Read', 'Glob', 'Grep', 'LS'])
+
+function formatToolDisplayName(toolName: string): string {
+  const match = /^mcp__(.+?)__(.+)$/.exec(toolName)
+  if (!match) return toolName
+  return `${match[1]} · ${match[2]}`
+}
 
 function summarizeInlineToolInput(item: ChatToolItem): string | undefined {
   if (!INLINE_TOOL_INPUT_NAMES.has(item.name)) return undefined
@@ -766,13 +776,93 @@ const ActivityRow = memo(function ActivityRow({ item }: { item: ChatActivityItem
   )
 })
 
+const ContextCompactionRow = memo(function ContextCompactionRow({ item }: { item: ChatContextCompactionItem }) {
+  const { locale, t } = useI18n()
+  const hasDetails = Boolean(item.summary?.trim() || item.error?.trim())
+  const [isOpen, setIsOpen] = useState(false)
+  const title =
+    item.status === 'running'
+      ? t('chat.contextCompactionRunning')
+      : item.status === 'error'
+        ? t('chat.contextCompactionFailed')
+        : t('chat.contextCompactionDone')
+  const triggerLabel = contextCompactionTriggerLabel(item.trigger, t)
+  const meta = [
+    triggerLabel,
+    formatContextCompactionTokens(item, locale, t),
+    item.durationMs ? formatDuration(item.durationMs) : '',
+    item.preservedMessageCount ? t('chat.contextCompactionPreserved', { count: item.preservedMessageCount }) : '',
+  ].filter(Boolean)
+  const summary = (
+    <>
+      <span className="context-compaction-row__line" aria-hidden="true" />
+      <span className="context-compaction-row__pill">
+        <IconInline name={item.status === 'error' ? 'x' : item.status === 'running' ? 'refresh' : 'check'} />
+        <span className="context-compaction-row__title">{title}</span>
+        {meta.length > 0 ? <span className="context-compaction-row__meta">{meta.join(' · ')}</span> : null}
+        <span className={`status-row__chevron${hasDetails ? '' : ' status-row__chevron--hidden'}`} aria-hidden="true" />
+      </span>
+      <span className="context-compaction-row__line" aria-hidden="true" />
+    </>
+  )
+
+  if (!hasDetails) {
+    return (
+      <div className={`context-compaction-row context-compaction-row--${item.status}`} data-transcript-item-id={item.id}>
+        <div className="context-compaction-row__summary context-compaction-row__summary--static">{summary}</div>
+      </div>
+    )
+  }
+
+  return (
+    <details
+      className={`context-compaction-row context-compaction-row--${item.status}`}
+      data-transcript-item-id={item.id}
+      open={isOpen}
+      onToggle={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen(event.currentTarget.open))}
+    >
+      <summary className="context-compaction-row__summary">{summary}</summary>
+      <div className="context-compaction-row__body">
+        {item.error ? <p>{item.error}</p> : null}
+        {item.summary ? (
+          <>
+            <span>{t('chat.contextCompactionSummaryTitle')}</span>
+            <pre>{item.summary}</pre>
+          </>
+        ) : null}
+      </div>
+    </details>
+  )
+})
+
+function contextCompactionTriggerLabel(
+  trigger: ChatContextCompactionItem['trigger'],
+  t: (path: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (trigger === 'manual') return t('chat.contextCompactionManual')
+  if (trigger === 'auto') return t('chat.contextCompactionAuto')
+  return ''
+}
+
+function formatContextCompactionTokens(
+  item: ChatContextCompactionItem,
+  locale: string,
+  t: (path: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (typeof item.preTokens !== 'number') return ''
+  const formatter = new Intl.NumberFormat(locale)
+  const pre = formatter.format(item.preTokens)
+  if (typeof item.postTokens !== 'number') return t('chat.contextCompactionPreTokens', { pre })
+  return t('chat.contextCompactionTokens', { pre, post: formatter.format(item.postTokens) })
+}
+
 const FileDiffRow = memo(function FileDiffRow({
   item,
   onReviewFileChanges,
   onRewindFileChanges,
 }: {
   item: ChatFileDiffItem
-  onReviewFileChanges?: (changeSetId: string) => void
+  onReviewFileChanges?: (item: ChatFileDiffItem) => void
   onRewindFileChanges?: (item: ChatFileDiffItem) => void
 }) {
   const { t } = useI18n()
@@ -822,7 +912,7 @@ const FileDiffRow = memo(function FileDiffRow({
             type="button"
             className="btn btn-primary btn-compact"
             disabled={!canReview}
-            onClick={() => onReviewFileChanges?.(item.changeSetId)}
+            onClick={() => onReviewFileChanges?.(item)}
           >
             <IconInline name="check" />
             <span>{item.status === 'reviewed' ? t('chat.fileDiffReviewed') : t('chat.fileDiffReview')}</span>

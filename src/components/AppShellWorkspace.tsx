@@ -31,13 +31,59 @@ import { DocsPage } from './DocsPage'
 import { ProjectFilePreviewOverlay, type ProjectFilePreviewOverlayState } from './ProjectFilePreviewOverlay'
 import { SettingsPage } from './setting/SettingsPage'
 import { useWorkspaceAgentMode } from './useWorkspaceAgentMode'
-import type { HomePluginRunItem } from '../desktop-types'
+import type { AgentModeSettingsResult, HomePluginRunItem } from '../desktop-types'
 import { projectContent } from '../project-content'
 
 /** 右侧辅助抽屉开关与当前标签 / Auxiliary side panel open flag and active tab */
 type SidePanelState = {
   open: boolean
   tab: WorkspaceSidePanelTab
+}
+
+function withProjectMcpProbeStatus(
+  snapshot: ClaudeAgentStatusSnapshot,
+  agentModeResult: AgentModeSettingsResult | undefined,
+): ClaudeAgentStatusSnapshot {
+  if (!agentModeResult?.ok) return snapshot
+  const enabledServers = agentModeResult.settings.mcpServers.filter((server) => server.enabled)
+  if (enabledServers.length === 0) return snapshot
+
+  const runtimeByName = new Map((snapshot.mcpServers ?? []).map((server) => [server.name, server]))
+  const mcpServers = enabledServers.map((server) => {
+    const probe = agentModeResult.settings.mcpServerProbeCache[server.name]
+    if (probe) {
+      return {
+        name: server.name,
+        status: probe.status,
+        error: probe.error,
+        toolCount: probe.tools.length,
+      }
+    }
+    const runtimeStatus = runtimeByName.get(server.name)
+    if (runtimeStatus?.status === 'connected') return runtimeStatus
+    return {
+      name: server.name,
+      status: 'untested',
+      error: runtimeStatus?.error,
+      toolCount: runtimeStatus?.toolCount,
+    }
+  })
+
+  return {
+    ...snapshot,
+    health: statusHealthWithMcpServers(snapshot, mcpServers),
+    mcpServers,
+  }
+}
+
+function statusHealthWithMcpServers(
+  snapshot: ClaudeAgentStatusSnapshot,
+  mcpServers: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>,
+): ClaudeAgentStatusSnapshot['health'] {
+  if (snapshot.health === 'unconfigured' || snapshot.health === 'running' || snapshot.health === 'error') return snapshot.health
+  const hasMcpIssue = mcpServers.some((server) => server.status !== 'connected' && server.status !== 'disabled')
+  if (hasMcpIssue) return 'partial'
+  return snapshot.sessionId ? 'ready' : 'idle'
 }
 
 /** `AppShellWorkspace` 的 props：标题、活动视图、聊天委托与侧栏联动 / Props wiring title, active view, chat callbacks, and drawer prefs */
@@ -128,6 +174,8 @@ export function AppShellWorkspace({
   const [agentStatusSnapshot, setAgentStatusSnapshot] = useState<ClaudeAgentStatusSnapshot | null>(null)
   const filePaneRef = useRef<AppFileTreePaneHandle>(null)
   const filePreviewRequestRef = useRef(0)
+  const agentStatusRequestSeqRef = useRef(0)
+  const autoContextRefreshKeysRef = useRef<Set<string>>(new Set())
   const agentMode = useWorkspaceAgentMode(activeProject)
   const activeThreadRunning = Boolean(activeThread && threadRunStates[activeThread.id])
   const agentStatusRequest = useMemo(
@@ -150,6 +198,7 @@ export function AppShellWorkspace({
     activeThread?.purpose === 'task-run' ||
     activeThread?.purpose === 'skill-run'
   const showAgentModeToolbar = activeViewId === 'home' && !showConversationFlow
+  const showAgentStatusToolbar = activeViewId !== 'home' || showConversationFlow
 
   // --- Close auxiliary drawer when navigating into settings / 进入设置路由时收起辅助抽屉 ---
 
@@ -159,6 +208,10 @@ export function AppShellWorkspace({
       setAgentStatusOpen(false)
     }
   }, [activeViewId])
+
+  useEffect(() => {
+    if (!showAgentStatusToolbar && agentStatusOpen) setAgentStatusOpen(false)
+  }, [agentStatusOpen, showAgentStatusToolbar])
 
   useEffect(() => {
     filePreviewRequestRef.current += 1
@@ -188,10 +241,16 @@ export function AppShellWorkspace({
     setSearchOpen(true)
   }, [])
 
-  const openAgentSettings = useCallback((panel: AgentSettingsPanelId) => {
+  const openAgentSettings = useCallback((panel: AgentSettingsPanelId, options?: { showProjectHome?: boolean }) => {
+    if (activeViewId !== 'home') {
+      window.location.hash = ''
+    }
+    if (options?.showProjectHome) {
+      onSelectProject(activeProject.id)
+    }
     setAgentSettingsPanel(panel)
     setAgentSettingsOpen(true)
-  }, [])
+  }, [activeProject.id, activeViewId, onSelectProject])
 
   const refreshAgentStatus = useCallback(async (refresh = false) => {
     const getStatus = window.claudeChat?.getStatus
@@ -199,19 +258,55 @@ export function AppShellWorkspace({
       setAgentStatusSnapshot(null)
       return
     }
+    const requestSeq = agentStatusRequestSeqRef.current + 1
+    agentStatusRequestSeqRef.current = requestSeq
     setAgentStatusLoading(true)
     try {
-      setAgentStatusSnapshot(await getStatus({ ...agentStatusRequest, refresh }))
+      const [snapshot, agentModeResult] = await Promise.all([
+        getStatus({ ...agentStatusRequest, refresh }),
+        window.desktop?.getAgentModeSettings?.(activeProject.path).catch(() => undefined),
+      ])
+      if (agentStatusRequestSeqRef.current === requestSeq) {
+        setAgentStatusSnapshot(withProjectMcpProbeStatus(snapshot, agentModeResult))
+      }
     } catch {
-      setAgentStatusSnapshot(null)
+      if (agentStatusRequestSeqRef.current === requestSeq) setAgentStatusSnapshot(null)
     } finally {
-      setAgentStatusLoading(false)
+      if (agentStatusRequestSeqRef.current === requestSeq) setAgentStatusLoading(false)
     }
-  }, [agentStatusRequest])
+  }, [activeProject.path, agentStatusRequest])
 
   useEffect(() => {
     void refreshAgentStatus(false)
   }, [activeThreadRunning, refreshAgentStatus])
+
+  useEffect(() => {
+    const threadId = activeThread?.id
+    const sessionId = activeThread?.chatState.sessionId?.trim()
+    if (activeViewId !== 'home' || !threadId || !sessionId || activeThreadRunning) return
+    if (
+      agentStatusSnapshot?.threadId === threadId &&
+      agentStatusSnapshot.sessionId === sessionId &&
+      agentStatusSnapshot.contextUsage
+    ) {
+      return
+    }
+
+    const refreshKey = `${activeProject.path}:${threadId}:${sessionId}`
+    if (autoContextRefreshKeysRef.current.has(refreshKey)) return
+    autoContextRefreshKeysRef.current.add(refreshKey)
+    void refreshAgentStatus(true)
+  }, [
+    activeProject.path,
+    activeThread?.chatState.sessionId,
+    activeThread?.id,
+    activeThreadRunning,
+    activeViewId,
+    agentStatusSnapshot?.contextUsage,
+    agentStatusSnapshot?.sessionId,
+    agentStatusSnapshot?.threadId,
+    refreshAgentStatus,
+  ])
 
   useEffect(() => {
     const openStatus = (event: Event) => {
@@ -392,14 +487,20 @@ export function AppShellWorkspace({
           <div className="app-workspace-drag-gap draggable" aria-hidden="true" />
           <div className="app-workspace-actions no-drag">
             {showAgentModeToolbar ? <AgentModeMenu agent={agentMode} onOpenSettings={() => openAgentSettings('project')} /> : null}
-            <AppAgentStatusPopover
-              open={agentStatusOpen}
-              loading={agentStatusLoading}
-              running={activeThreadRunning}
-              snapshot={agentStatusSnapshot}
-              onOpenChange={setAgentStatusOpen}
-              onRefresh={() => void refreshAgentStatus(true)}
-            />
+            {showAgentStatusToolbar ? (
+              <AppAgentStatusPopover
+                open={agentStatusOpen}
+                loading={agentStatusLoading}
+                running={activeThreadRunning}
+                snapshot={agentStatusSnapshot}
+                onOpenChange={setAgentStatusOpen}
+                onRefresh={() => void refreshAgentStatus(true)}
+                onOpenMcpSettings={() => {
+                  setAgentStatusOpen(false)
+                  openAgentSettings('mcp', { showProjectHome: true })
+                }}
+              />
+            ) : null}
             <button
               type="button"
               className={`btn btn-toolbar${folderToolbarActive ? ' is-active' : ''}`}
@@ -425,6 +526,7 @@ export function AppShellWorkspace({
             activeThread={activeThread}
             projectDefaultModelPick={projectDefaultModelPick}
             projectHomeModelPick={projectHomeModelPick}
+            agentStatusSnapshot={agentStatusSnapshot}
             threads={threads}
             projects={projects}
             projectOrderIds={projectOrderIds}
@@ -439,6 +541,7 @@ export function AppShellWorkspace({
             onThreadRunStateChange={onThreadRunStateChange}
             onThreadCompletionStateChange={onThreadCompletionStateChange}
             onProjectHomeModelPickChange={onProjectHomeModelPickChange}
+            onRefreshAgentStatus={refreshAgentStatus}
             agentMode={agentMode}
             agentModeEnabled={agentMode.enabled}
             todoEnabled={agentMode.todoEnabled}
@@ -463,6 +566,7 @@ export function AppShellWorkspace({
             activeProject={activeProject}
             showProjectSkillsInSidebar={showProjectSkillsInSidebar}
             onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
+            onOpenAgentSettings={openAgentSettings}
           />
           {filePreview ? (
             <ProjectFilePreviewOverlay preview={filePreview} onClose={() => setFilePreview(null)} />

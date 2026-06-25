@@ -4,7 +4,7 @@
  */
 
 import { createPortal } from 'react-dom'
-import { useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type {
   Dispatch,
   DragEvent,
@@ -17,11 +17,13 @@ import type {
 } from 'react'
 import type {
   ClaudeChatAttachment,
+  ClaudeAgentStatusContextUsage,
   ClaudePermissionMode,
 } from '../../claude-chat-types'
 import type { SpeechRecognitionStatus } from '../../desktop-types'
 import { IconInline } from '../../icon-inline'
 import { useI18n } from '../../i18n/i18n'
+import { ContextUsageView } from '../AppAgentStatusPopover'
 import { AttachmentThumb } from './AttachmentThumb'
 import { formatBytes } from './format'
 import type { ChatModelMenuRow, ComposerSuggestion, ComposerTrigger, PermissionModeRow } from './local-types'
@@ -48,6 +50,7 @@ type ComposerProps = {
   modelMenuSelectionKey: string
   modelPopoverBox: PopoverBox | null
   displayModelName: string
+  contextUsage?: ClaudeAgentStatusContextUsage
   composerAutocompleteOpen: boolean
   composerAutocompleteBox: PopoverBox | null
   activeComposerTrigger: ComposerTrigger | null
@@ -78,6 +81,9 @@ type ComposerProps = {
   onSendClick: (event: MouseEvent<HTMLButtonElement>) => void
   onToggleSpeechRecognition: () => void
   onAddComposerAttachments: () => void
+  onCompactContext?: () => void
+  onCompactContextUnavailable?: () => void
+  onRefreshContextUsage?: () => void
   onRemoveComposerAttachment: (attachmentId: string) => void
   onInsertComposerSuggestion: (suggestion: ComposerSuggestion) => void
   onPickChatMenuRow: (row: ChatModelMenuRow) => void
@@ -99,6 +105,7 @@ export function Composer({
   modelMenuSelectionKey,
   modelPopoverBox,
   displayModelName,
+  contextUsage,
   composerAutocompleteOpen,
   composerAutocompleteBox,
   activeComposerTrigger,
@@ -129,6 +136,9 @@ export function Composer({
   onSendClick,
   onToggleSpeechRecognition,
   onAddComposerAttachments,
+  onCompactContext,
+  onCompactContextUnavailable,
+  onRefreshContextUsage,
   onRemoveComposerAttachment,
   onInsertComposerSuggestion,
   onPickChatMenuRow,
@@ -150,6 +160,12 @@ export function Composer({
       : speechRecognitionActive
         ? t('chat.voiceCancelTitle')
         : t('chat.voiceStartTitle')
+  const speechRecognitionButtonAriaLabel =
+    speechRecognitionStatus === 'listening'
+      ? t('chat.voiceStopAria')
+      : speechRecognitionActive
+        ? t('chat.voiceCancelAria')
+        : t('chat.voiceStartAria')
   const speechRecognitionButtonClassName = [
     'composer-icon-button',
     'composer-voice-button',
@@ -342,6 +358,17 @@ export function Composer({
             </div>
           </div>
           <div className="composer-actions composer-actions--end">
+            <span className={`composer-context-meter-shell${contextUsage ? ' has-meter' : ''}`} aria-hidden={contextUsage ? undefined : true}>
+              {contextUsage ? (
+                <ContextUsageMeter
+                  context={contextUsage}
+                  compactDisabledReason={isRunning ? 'running' : onCompactContext ? undefined : 'unsupported'}
+                  onCompact={onCompactContext}
+                  onDisabledClick={onCompactContextUnavailable}
+                  onRefresh={onRefreshContextUsage}
+                />
+              ) : null}
+            </span>
             <div className="composer-model-picker" ref={modelPickerRef}>
               <button
                 ref={modelPopoverAnchorRef}
@@ -414,9 +441,10 @@ export function Composer({
                 type="button"
                 className={speechRecognitionButtonClassName}
                 title={speechRecognitionButtonTitle}
-                aria-label={speechRecognitionActive ? t('chat.voiceStopAria') : t('chat.voiceStartAria')}
+                aria-label={speechRecognitionButtonAriaLabel}
                 aria-pressed={speechRecognitionActive}
                 disabled={isRunning}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={onToggleSpeechRecognition}
               >
                 <IconInline name="mic" />
@@ -438,6 +466,198 @@ export function Composer({
       </form>
     </div>
   )
+}
+
+function ContextUsageMeter({
+  context,
+  compactDisabledReason,
+  onCompact,
+  onDisabledClick,
+  onRefresh,
+}: {
+  context: ClaudeAgentStatusContextUsage
+  compactDisabledReason?: 'running' | 'unsupported'
+  onCompact?: () => void
+  onDisabledClick?: () => void
+  onRefresh?: () => void
+}) {
+  const { t } = useI18n()
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const closeTimerRef = useRef<number | null>(null)
+  const lastRefreshAtRef = useRef(0)
+  const [open, setOpen] = useState(false)
+  const [popoverBox, setPopoverBox] = useState<PopoverBox | null>(null)
+  const percentage = clampContextPercentage(context.percentage)
+  const categories = useMemo(
+    () => context.categories.filter((category) => category.tokens > 0).sort((a, b) => b.tokens - a.tokens),
+    [context.categories],
+  )
+  const isCompactDisabled = Boolean(compactDisabledReason)
+  const compactTitle =
+    compactDisabledReason === 'running'
+      ? t('chat.contextCompactDisabledTitle')
+      : compactDisabledReason === 'unsupported'
+        ? t('chat.contextCompactUnavailableTitle')
+        : t('chat.contextCompactTitle')
+  const compactAriaLabel =
+    compactDisabledReason === 'running'
+      ? t('chat.contextCompactDisabledAria', { percent: Math.round(percentage) })
+      : compactDisabledReason === 'unsupported'
+        ? t('chat.contextCompactUnavailableAria', { percent: Math.round(percentage) })
+        : t('chat.contextCompactAria', { percent: Math.round(percentage) })
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current === null) return
+    window.clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = null
+  }
+
+  const requestRefresh = () => {
+    const now = Date.now()
+    if (!onRefresh || now - lastRefreshAtRef.current < 5000) return
+    lastRefreshAtRef.current = now
+    onRefresh()
+  }
+
+  const openPopover = () => {
+    clearCloseTimer()
+    setOpen(true)
+    requestRefresh()
+  }
+
+  const scheduleClose = () => {
+    clearCloseTimer()
+    closeTimerRef.current = window.setTimeout(() => setOpen(false), 120)
+  }
+
+  const runCompactAction = () => {
+    if (isCompactDisabled || !onCompact) {
+      if (compactDisabledReason === 'unsupported') onDisabledClick?.()
+      return
+    }
+    setOpen(false)
+    onCompact()
+  }
+
+  useEffect(() => () => clearCloseTimer(), [])
+
+  useLayoutEffect(() => {
+    if (!open || !anchorRef.current) {
+      setPopoverBox(null)
+      return
+    }
+    const gap = 8
+    const pad = 8
+    const maxListPx = 360
+
+    const sync = () => {
+      const anchor = anchorRef.current
+      if (!anchor) return
+      const r = anchor.getBoundingClientRect()
+      const width = Math.min(360, Math.max(280, window.innerWidth - pad * 2))
+      let left = r.left + r.width / 2 - width / 2
+      if (left + width > window.innerWidth - pad) left = window.innerWidth - pad - width
+      if (left < pad) left = pad
+      const bottom = window.innerHeight - r.top + gap
+      const maxHeight = Math.min(maxListPx, Math.max(160, r.top - pad - gap))
+      setPopoverBox({ left, bottom, width, maxHeight })
+    }
+
+    sync()
+    window.addEventListener('resize', sync)
+    document.addEventListener('scroll', sync, true)
+    return () => {
+      window.removeEventListener('resize', sync)
+      document.removeEventListener('scroll', sync, true)
+    }
+  }, [open])
+
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        className={`composer-context-meter${open ? ' is-open' : ''}`}
+        title={t('chat.contextUsageTitle')}
+        aria-label={t('chat.contextUsageAria', { percent: Math.round(percentage) })}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onMouseEnter={openPopover}
+        onMouseLeave={scheduleClose}
+        onFocus={openPopover}
+        onBlur={scheduleClose}
+        onClick={() => {
+          openPopover()
+        }}
+      >
+        <span
+          className="composer-context-meter__ring"
+          style={{
+            '--context-meter-angle': `${percentage * 3.6}deg`,
+            '--context-meter-color': contextMeterColor(percentage),
+          } as CSSProperties}
+          aria-hidden="true"
+        />
+      </button>
+      {open && popoverBox
+        ? createPortal(
+            <div
+              className="composer-context-popover"
+              role="dialog"
+              aria-label={t('statusPanel.contextSection')}
+              style={{
+                position: 'fixed',
+                left: popoverBox.left,
+                bottom: popoverBox.bottom,
+                width: popoverBox.width,
+                maxHeight: popoverBox.maxHeight,
+              }}
+              onMouseEnter={() => {
+                clearCloseTimer()
+                setOpen(true)
+              }}
+              onMouseLeave={scheduleClose}
+              onFocus={() => {
+                clearCloseTimer()
+                setOpen(true)
+              }}
+              onBlur={scheduleClose}
+            >
+              <ContextUsageView context={context} categories={categories} />
+              <div className="composer-context-popover__actions">
+                <button
+                  type="button"
+                  className={`composer-context-popover__compact${isCompactDisabled ? ' is-disabled' : ''}`}
+                  title={compactTitle}
+                  aria-label={compactAriaLabel}
+                  aria-disabled={isCompactDisabled || undefined}
+                  onClick={runCompactAction}
+                >
+                  {t('chat.contextCompactTitle')}
+                </button>
+                {compactDisabledReason === 'unsupported' ? (
+                  <span>{t('chat.contextCompactUnavailableHelp')}</span>
+                ) : compactDisabledReason === 'running' ? (
+                  <span>{t('chat.contextCompactDisabledHelp')}</span>
+                ) : null}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  )
+}
+
+function clampContextPercentage(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.min(100, Math.max(0, value))
+}
+
+function contextMeterColor(percentage: number): string {
+  if (percentage >= 90) return 'var(--red-500)'
+  if (percentage >= 70) return 'var(--orange-400)'
+  return 'var(--color-token-text-secondary)'
 }
 
 function ComposerAttachmentPreview({

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
@@ -10,17 +10,32 @@ const ts = require('typescript')
 const testDir = dirname(fileURLToPath(import.meta.url))
 
 function loadWorkspaceSession() {
-  const modulePath = resolve(testDir, '../src/components/workspace-session.ts')
-  const source = readFileSync(modulePath, 'utf8')
+  return loadTsModule(resolve(testDir, '../src/components/workspace-session.ts'))
+}
+
+function loadTsModule(modulePath, cache = new Map()) {
+  const resolvedPath = resolve(modulePath)
+  const cached = cache.get(resolvedPath)
+  if (cached) return cached.exports
+
+  const source = readFileSync(resolvedPath, 'utf8')
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
       target: ts.ScriptTarget.ES2020,
     },
-    fileName: modulePath,
+    fileName: resolvedPath,
   })
   const module = { exports: {} }
-  Function('exports', 'module', 'require', outputText)(module.exports, module, require)
+  cache.set(resolvedPath, module)
+  const localRequire = (specifier) => {
+    if (specifier.startsWith('.')) {
+      const candidate = resolve(dirname(resolvedPath), `${specifier}.ts`)
+      if (existsSync(candidate)) return loadTsModule(candidate, cache)
+    }
+    return require(specifier)
+  }
+  Function('exports', 'module', 'require', outputText)(module.exports, module, localRequire)
   return module.exports
 }
 
@@ -56,10 +71,14 @@ function createHarness() {
   const scheduled = []
   const cancelled = []
   const saved = []
+  const savedImmediately = []
   const session = new WorkspaceSession({
     load: async () => createState(),
     save: async (state) => {
       saved.push(state)
+    },
+    saveImmediately: (state) => {
+      savedImmediately.push(state)
     },
     now: () => now,
     schedule: (callback, delayMs) => {
@@ -74,6 +93,7 @@ function createHarness() {
   return {
     session,
     saved,
+    savedImmediately,
     scheduled,
     cancelled,
     setNow(value) {
@@ -238,12 +258,32 @@ test('Workspace Session interface serializes debounced saves and retains the new
   assert.equal(harness.scheduled.length, 2)
   assert.equal(harness.cancelled.length, 1)
   assert.equal(harness.scheduled[1].delayMs, 750)
+  assert.deepEqual(harness.savedImmediately.map((state) => state.activeProjectId), ['project-1', 'project-2'])
+  assert.deepEqual(harness.savedImmediately.map((state) => state.workspaceRevision), [1, 2])
 
   harness.scheduled[1].callback()
   await Promise.resolve()
   await Promise.resolve()
   assert.equal(harness.saved.length, 1)
   assert.equal(harness.saved[0].activeProjectId, 'project-2')
+  assert.equal(harness.saved[0].workspaceRevision, 2)
+})
+
+test('Workspace Session immediate durable save ignores runtime-only pathMissing changes', async () => {
+  const harness = createHarness()
+  const first = createState()
+  const runtimeOnly = {
+    ...first,
+    projects: first.projects.map((project, index) =>
+      index === 0 ? { ...project, pathMissing: true } : project,
+    ),
+  }
+
+  harness.session.stage(first)
+  harness.session.stage(runtimeOnly)
+  assert.equal(harness.savedImmediately.length, 1)
+  assert.equal(harness.scheduled.length, 1)
+  assert.equal(harness.savedImmediately[0].workspaceRevision, 1)
 })
 
 test('Workspace Session close drains a newer snapshot queued during an in-flight save', async () => {

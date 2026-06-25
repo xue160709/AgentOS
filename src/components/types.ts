@@ -7,6 +7,8 @@ import type {
   AgentContextSlashItem,
   ChatModelPick,
   ClaudeChatAttachmentKind,
+  ClaudeContextCompactionStatus,
+  ClaudeContextCompactionTrigger,
   ClaudeFileChangeSetStatus,
   ClaudeFileDiffFile,
   ProjectFileSearchItem,
@@ -16,10 +18,10 @@ import type {
 export type AppViewId = 'home' | 'docs' | 'settings'
 
 /** 设置页侧栏路由 `#settings/<id>` / Settings sidebar route fragment `#settings/<id>` */
-export type SettingsCategoryId = 'general' | 'skills' | 'updates' | 'agent' | 'developer'
+export type SettingsCategoryId = 'general' | 'search' | 'mcp' | 'skills' | 'updates' | 'agent' | 'developer'
 
 /** Agent Mode 首页模态设置页签 / Agent Mode home modal settings panel id */
-export type AgentSettingsPanelId = 'project' | 'context' | 'general' | 'card-order' | 'skills'
+export type AgentSettingsPanelId = 'project' | 'context' | 'mcp' | 'general' | 'card-order' | 'skills'
 
 /** 消息气泡渲染状态 / Chat bubble render status */
 export type MessageStatus = 'done' | 'streaming' | 'error' | 'cancelled'
@@ -96,11 +98,29 @@ export type ChatActivityItem = {
   preview?: string
 }
 
+/** 会话压缩边界条目 / Context compaction boundary embedded in the transcript */
+export type ChatContextCompactionItem = {
+  type: 'context_compaction'
+  id: string
+  requestId?: string
+  status: ClaudeContextCompactionStatus
+  trigger: ClaudeContextCompactionTrigger
+  preTokens?: number
+  postTokens?: number
+  durationMs?: number
+  preservedMessageCount?: number
+  summary?: string
+  error?: string
+  createdAt?: number
+  updatedAt?: number
+}
+
 /** 会话中的文件 diff 卡片 / File diff card embedded in the transcript */
 export type ChatFileDiffItem = {
   type: 'file_diff'
   id: string
   requestId: string
+  threadId?: string
   changeSetId: string
   checkpointId?: string
   files: ClaudeFileDiffFile[]
@@ -135,7 +155,13 @@ export type ChatTaskState = {
 }
 
 /** 对话时间轴联合类型 / Union of rows shown in the transcript timeline */
-export type TranscriptItem = ChatMessageItem | ChatToolItem | ChatThinkingItem | ChatActivityItem | ChatFileDiffItem
+export type TranscriptItem =
+  | ChatMessageItem
+  | ChatToolItem
+  | ChatThinkingItem
+  | ChatActivityItem
+  | ChatContextCompactionItem
+  | ChatFileDiffItem
 
 /** 单线程内的聊天 UI 状态快照 / Per-thread chat UI state snapshot */
 export type ChatState = {
@@ -255,6 +281,8 @@ export type ProjectFilePreviewResult =
 
 /** 完整聊天工作区状态（活动项目/线程与列表）/ Full chat workspace snapshot */
 export type ChatWorkspaceState = {
+  /** 工作区逻辑修订号，用于跨 adapter 判断快照新旧 / Logical workspace revision for adapter freshness */
+  workspaceRevision: number
   activeProjectId: string
   activeThreadId: string
   projects: WorkspaceProject[]

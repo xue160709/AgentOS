@@ -67,6 +67,19 @@ function applyEvent(harness, state, event, context = {}) {
   }
 }
 
+function applyEventWithoutThread(harness, state, event, context = {}) {
+  const transition = harness.run.handleEvent(event, {
+    activeThreadId: 'thread-1',
+    fallbackModel: 'Claude Agent',
+    stoppedBody: 'Stopped',
+    ...context,
+  })
+  return {
+    transition,
+    state: transition.updateState ? transition.updateState(state) : state,
+  }
+}
+
 function applyTransition(state, transition) {
   return transition.updateState ? transition.updateState(state) : state
 }
@@ -229,6 +242,57 @@ test('Chat Run interface marks cancellation without discarding partial text', ()
   })
 })
 
+test('Chat Run interface ignores unsafe orphan events without thread ownership', () => {
+  const harness = createHarness()
+  const state = emptyState({
+    items: [
+      {
+        type: 'file_diff',
+        id: 'change-1',
+        requestId: 'request-owned',
+        threadId: 'thread-1',
+        changeSetId: 'change-1',
+        checkpointId: 'checkpoint-1',
+        files: [],
+        status: 'captured',
+      },
+    ],
+  })
+
+  const error = applyEventWithoutThread(
+    harness,
+    state,
+    {
+      type: 'error',
+      requestId: 'request-orphan',
+      code: 'sdk_error',
+      message: 'Late failure',
+    },
+    { activeThreadId: 'thread-2' },
+  )
+
+  assert.equal(error.transition.threadId, '')
+  assert.equal(error.transition.updateState, undefined)
+  assert.equal(error.state, state)
+
+  const rewind = applyEventWithoutThread(
+    harness,
+    state,
+    {
+      type: 'file_rewind_result',
+      requestId: 'request-orphan',
+      changeSetId: 'change-1',
+      status: 'reverted',
+      detail: 'Late revert',
+    },
+    { activeThreadId: 'thread-2' },
+  )
+
+  assert.equal(rewind.transition.threadId, '')
+  assert.equal(rewind.transition.updateState, undefined)
+  assert.equal(rewind.state.items[0].status, 'captured')
+})
+
 test('Chat Run interface owns thinking, tool, activity, task, and prompt lifecycle', () => {
   const harness = createHarness(100)
   beginAcceptedRun(harness, 'request-2')
@@ -308,10 +372,80 @@ test('Chat Run interface owns thinking, tool, activity, task, and prompt lifecyc
   assert.equal(prompt.runState.status, 'asking')
   const resumed = harness.run.resumeAfterPrompt('request-2', 'thread-1')
   assert.equal(resumed.runState.status, 'running')
+
+  harness.setNow(130)
+  const permission = applyEvent(harness, state, {
+    type: 'permission_request',
+    requestId: 'request-2',
+    permissionRequestId: 'permission-2',
+    toolUseId: 'permission-tool',
+    toolName: 'Write',
+    title: 'Write needs approval',
+    displayName: 'Write',
+    description: '',
+    inputPreview: 'file.txt',
+  }).transition
+
+  assert.equal(permission.prompt.permissionRequestId, 'permission-2')
+  assert.equal(permission.runState.status, 'waiting')
+  const resumedPermission = harness.run.resumeAfterPrompt('request-2', 'thread-1')
+  assert.equal(resumedPermission.runState.status, 'running')
   assert.equal(state.tasks.items[0].status, 'completed')
   assert.equal(state.items[0].type, 'thinking')
   assert.equal(state.items[1].type, 'tool')
   assert.equal(state.items[2].type, 'activity')
+})
+
+test('Chat Run interface persists context compaction boundary items', () => {
+  const harness = createHarness(200)
+  beginAcceptedRun(harness, 'request-compact')
+  let state = emptyState()
+
+  harness.setNow(210)
+  let result = applyEvent(harness, state, {
+    type: 'context_compaction',
+    requestId: 'request-compact',
+    compactionId: 'context-compact-request-compact',
+    status: 'running',
+    trigger: 'unknown',
+  })
+  state = result.state
+
+  assert.equal(harness.run.runStateForThread('thread-1').status, 'running')
+  assert.equal(state.items[0].type, 'context_compaction')
+  assert.equal(state.items[0].status, 'running')
+
+  harness.setNow(220)
+  result = applyEvent(harness, state, {
+    type: 'context_compaction',
+    requestId: 'request-compact',
+    compactionId: 'context-compact-request-compact',
+    status: 'done',
+    trigger: 'manual',
+    preTokens: 128000,
+    postTokens: 21000,
+    durationMs: 1400,
+    preservedMessageCount: 2,
+    summary: 'Kept the active task and recent decisions.',
+  })
+  state = result.state
+
+  assert.equal(state.items.length, 1)
+  assert.deepEqual(state.items[0], {
+    type: 'context_compaction',
+    id: 'context-compact-request-compact',
+    requestId: 'request-compact',
+    status: 'done',
+    trigger: 'manual',
+    preTokens: 128000,
+    postTokens: 21000,
+    durationMs: 1400,
+    preservedMessageCount: 2,
+    summary: 'Kept the active task and recent decisions.',
+    error: undefined,
+    createdAt: 210,
+    updatedAt: 220,
+  })
 })
 
 test('Chat Run interface merges file diffs and records rewind status', () => {

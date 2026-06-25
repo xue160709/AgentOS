@@ -5,6 +5,7 @@
 import type { ClaudeChatEvent } from '../../claude-chat-types'
 import type {
   ChatActivityItem,
+  ChatContextCompactionItem,
   ChatFileDiffItem,
   ChatMessageItem,
   ChatState,
@@ -217,7 +218,7 @@ export class ChatRun {
     const threadId = this.threadIdForRequest(requestId, fallbackThreadId)
     const current = this.runStates[threadId]
     const transition: ChatRunTransition = { threadId }
-    if (current?.requestId === requestId && current.status === 'asking') {
+    if (current?.requestId === requestId && (current.status === 'asking' || current.status === 'waiting')) {
       transition.runState = this.setRunState(threadId, {
         ...current,
         status: 'running',
@@ -229,10 +230,11 @@ export class ChatRun {
 
   handleEvent(event: ClaudeChatEvent, context: ChatRunEventContext): ChatRunTransition {
     const knownRequest = this.requestThreadIds.has(event.requestId)
-    const threadId =
-      event.threadId ??
-      this.requestThreadIds.get(event.requestId) ??
-      context.activeThreadId
+    const resolvedThreadId = event.threadId ?? this.requestThreadIds.get(event.requestId)
+    if (!resolvedThreadId && isUnsafeOrphanEvent(event)) {
+      return { threadId: '' }
+    }
+    const threadId = resolvedThreadId ?? context.activeThreadId
     this.requestThreadIds.set(event.requestId, threadId)
 
     const transition: ChatRunTransition = { threadId }
@@ -292,6 +294,14 @@ export class ChatRun {
     }
 
     if (event.type === 'agent_activity') {
+      if (event.status === 'running') {
+        this.attachRunningState(transition, threadId, event.requestId, 'running', now)
+      }
+      transition.updateState = (prev) => foldChatRunEvent(prev, event, { now })
+      return transition
+    }
+
+    if (event.type === 'context_compaction') {
       if (event.status === 'running') {
         this.attachRunningState(transition, threadId, event.requestId, 'running', now)
       }
@@ -758,7 +768,7 @@ function foldChatRunEvent(
           title: event.title,
           status: event.status,
           detail: event.detail,
-          preview: event.preview,
+          preview: event.preview ?? item.preview,
         }),
       }
     }
@@ -774,6 +784,47 @@ function foldChatRunEvent(
     return { ...prev, items: [...prev.items, row] }
   }
 
+  if (event.type === 'context_compaction') {
+    const index = prev.items.findIndex(
+      (item) => item.type === 'context_compaction' && item.id === event.compactionId,
+    )
+    if (index >= 0) {
+      const item = prev.items[index] as ChatContextCompactionItem
+      return {
+        ...prev,
+        items: replaceAt(prev.items, index, {
+          ...item,
+          requestId: item.requestId ?? event.requestId,
+          status: event.status,
+          trigger: event.trigger ?? item.trigger,
+          preTokens: event.preTokens ?? item.preTokens,
+          postTokens: event.postTokens ?? item.postTokens,
+          durationMs: event.durationMs ?? item.durationMs,
+          preservedMessageCount: event.preservedMessageCount ?? item.preservedMessageCount,
+          summary: event.summary ?? item.summary,
+          error: event.error ?? item.error,
+          updatedAt: now,
+        }),
+      }
+    }
+    const row: ChatContextCompactionItem = {
+      type: 'context_compaction',
+      id: event.compactionId,
+      requestId: event.requestId,
+      status: event.status,
+      trigger: event.trigger ?? 'unknown',
+      preTokens: event.preTokens,
+      postTokens: event.postTokens,
+      durationMs: event.durationMs,
+      preservedMessageCount: event.preservedMessageCount,
+      summary: event.summary,
+      error: event.error,
+      createdAt: now,
+      updatedAt: now,
+    }
+    return { ...prev, items: [...prev.items, row] }
+  }
+
   if (event.type === 'file_diff') {
     const index = prev.items.findIndex(
       (item) => item.type === 'file_diff' && item.changeSetId === event.changeSetId,
@@ -784,6 +835,7 @@ function foldChatRunEvent(
         ...prev,
         items: replaceAt(prev.items, index, {
           ...item,
+          threadId: item.threadId ?? event.threadId,
           checkpointId: event.checkpointId ?? item.checkpointId,
           files: mergeDiffFiles(item.files, event.files),
           status: item.status === 'reverted' ? item.status : 'captured',
@@ -795,6 +847,7 @@ function foldChatRunEvent(
       type: 'file_diff',
       id: event.changeSetId,
       requestId: event.requestId,
+      threadId: event.threadId,
       changeSetId: event.changeSetId,
       checkpointId: event.checkpointId,
       files: event.files,
@@ -1062,6 +1115,15 @@ function mergeDiffFiles(
 
 function isPendingRequestId(requestId: string): boolean {
   return requestId.startsWith('pending-')
+}
+
+function isUnsafeOrphanEvent(event: ClaudeChatEvent): boolean {
+  return (
+    event.type === 'result' ||
+    event.type === 'error' ||
+    event.type === 'cancelled' ||
+    event.type === 'file_rewind_result'
+  )
 }
 
 function isMissingSessionMessage(message: string): boolean {

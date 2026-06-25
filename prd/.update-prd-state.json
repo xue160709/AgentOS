@@ -1,0 +1,18 @@
+{
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
+  "lastPrdSyncAt": "2026-06-24",
+  "workflow": "full-resync",
+  "modulesUpdated": [
+    "agentos",
+    "workspace-session",
+    "chat-agent-runtime",
+    "file-context",
+    "model-settings",
+    "persistence",
+    "agent-mode",
+    "home-plugin",
+    "task-home-plugin",
+    "desktop-shell-settings-release"
+  ],
+  "notes": "全量同步：对齐 2026-06-24 全量 project-verify 与 WebSearch API Key 池增量验收结果，当前 98 个场景中 95 个通过、0 个失败、3 个保留为桌面托盘和 macOS 语音权限人工确认；同步 interaction-flow-review 结论与 TODO 剩余验收细节。"
+}

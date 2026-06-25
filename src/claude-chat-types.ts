@@ -403,6 +403,8 @@ export type ClaudeAgentStatusHealth = 'unconfigured' | 'idle' | 'running' | 'rea
 export type ClaudeAgentStatusMcpServer = {
   name: string
   status: string
+  error?: string
+  toolCount?: number
 }
 
 /** 单模型用量摘要 / Per-model usage summary */
@@ -489,6 +491,12 @@ export type ClaudeAgentStatusSnapshot = {
 
 /** Agent 活动条的状态 / Status for inline agent activity rows */
 export type ClaudeChatActivityStatus = 'running' | 'done' | 'error' | 'info'
+
+/** 上下文压缩来源 / Context compaction trigger source */
+export type ClaudeContextCompactionTrigger = 'manual' | 'auto' | 'unknown'
+
+/** 上下文压缩状态 / Context compaction lifecycle status */
+export type ClaudeContextCompactionStatus = 'running' | 'done' | 'error'
 
 /** Claude Task 工具状态 / Status values from Claude Task tools */
 export type ClaudeTaskStatus = 'pending' | 'in_progress' | 'completed' | 'deleted'
@@ -689,6 +697,19 @@ export type ClaudeChatEventBase =
       status: ClaudeChatActivityStatus
       detail?: string
       preview?: string
+    }
+  | {
+      type: 'context_compaction'
+      requestId: string
+      compactionId: string
+      status: ClaudeContextCompactionStatus
+      trigger?: ClaudeContextCompactionTrigger
+      preTokens?: number
+      postTokens?: number
+      durationMs?: number
+      preservedMessageCount?: number
+      summary?: string
+      error?: string
     }
   | {
       type: 'file_diff'

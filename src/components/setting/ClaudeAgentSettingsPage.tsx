@@ -21,10 +21,24 @@ import {
   type ProviderPreset,
   type ProviderPresetCatalog,
 } from '../../model-provider-presets'
+import type {
+  AgentMcpServerProbeCache,
+  AgentMcpServerProbeResult,
+  AgentMcpServerProbeSnapshot,
+  AgentMcpServerConfig,
+  AgentMcpServerTransport,
+  AgentWebSearchMode,
+  AgentWebSearchProviderId,
+  AgentWebSearchProviderTestResult,
+  AgentWebSearchSettings,
+} from '../../desktop-types'
+import type { AgentSettingsPanelId, WorkspaceProject } from '../types'
 
 const IS_DEV_BUILD = import.meta.env.DEV
 const REMOTE_PROVIDER_PRESETS_URL =
-  'https://raw.githubusercontent.com/xuezhirong/AgentOS/main/src/model-provider-presets.json'
+  typeof import.meta.env.VITE_MODEL_PROVIDER_PRESETS_URL === 'string'
+    ? import.meta.env.VITE_MODEL_PROVIDER_PRESETS_URL.trim()
+    : ''
 
 type ProviderPresetSource = 'remote' | 'local'
 
@@ -32,6 +46,102 @@ type ProviderTestState = {
   busy: boolean
   message: string
   ok?: boolean
+}
+
+const MCP_TRANSPORTS: AgentMcpServerTransport[] = ['stdio', 'http', 'sse']
+const WEB_SEARCH_PROVIDERS: AgentWebSearchProviderId[] = ['duckduckgo', 'brave', 'tavily']
+
+type GlobalMcpSettingsPageProps = {
+  activeProject: WorkspaceProject
+  onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
+}
+
+const DEFAULT_WEB_SEARCH_SETTINGS: AgentWebSearchSettings = {
+  mode: 'native',
+  provider: 'duckduckgo',
+  braveApiKey: '',
+  tavilyApiKey: '',
+  braveApiKeys: [],
+  tavilyApiKeys: [],
+}
+
+function normalizeWebSearchSettingsDraft(settings: AgentWebSearchSettings): AgentWebSearchSettings {
+  const braveApiKeys = normalizeApiKeyPoolDraft(settings.braveApiKeys, settings.braveApiKey)
+  const tavilyApiKeys = normalizeApiKeyPoolDraft(settings.tavilyApiKeys, settings.tavilyApiKey)
+  return {
+    mode: settings.mode === 'agentos' ? 'agentos' : 'native',
+    provider: WEB_SEARCH_PROVIDERS.includes(settings.provider) ? settings.provider : 'duckduckgo',
+    braveApiKey: braveApiKeys[0] ?? '',
+    tavilyApiKey: tavilyApiKeys[0] ?? '',
+    braveApiKeys,
+    tavilyApiKeys,
+  }
+}
+
+function normalizeApiKeyPoolDraft(keys: string[] | undefined, legacyKey: string): string[] {
+  const source = Array.isArray(keys) ? keys : [legacyKey]
+  return source.map((key) => key.trim()).filter(Boolean)
+}
+
+type TranslateFn = (path: string, vars?: Record<string, string | number>) => string
+type GlobalMcpOperation = 'idle' | 'saving' | 'testing'
+
+function formatWebSearchProviderTestStatus(result: AgentWebSearchProviderTestResult, t: TranslateFn): string {
+  if (result.ok) {
+    const fallbackCount = result.credentialFallbackCount ?? 0
+    if (fallbackCount > 0) {
+      return t('settings.search.testConnectedWithFallback', {
+        provider: result.providerName,
+        count: result.resultCount,
+        attempts: result.credentialAttemptCount ?? fallbackCount + 1,
+        fallbackCount,
+      })
+    }
+    return t('settings.search.testConnected', {
+      provider: result.providerName,
+      count: result.resultCount,
+    })
+  }
+  const recovery = t(`settings.search.recovery.${result.errorKind}`)
+  return `${t('settings.search.testFailed', {
+    provider: result.providerName,
+    message: result.message,
+  })} ${recovery}`
+}
+
+function getWebSearchCredentialHint(
+  settings: AgentWebSearchSettings,
+  result: AgentWebSearchProviderTestResult | null,
+  t: TranslateFn,
+): string {
+  if (settings.mode !== 'agentos') return ''
+  if (result?.providerId === settings.provider) return t(`settings.search.credential.${result.credentialStatus}`)
+  if (settings.provider === 'duckduckgo') return t('settings.search.credential.notRequired')
+
+  const keys = normalizeApiKeyPoolDraft(getWebSearchApiKeyPool(settings, settings.provider), '')
+  if (keys.length === 0) return t('settings.search.credential.missing')
+  if (keys.some((key) => /\$\{[A-Z_a-z][A-Z_a-z0-9]*\}/.test(key))) return t('settings.search.credential.envPending')
+  return t('settings.search.credential.configured')
+}
+
+function getWebSearchApiKeyPool(settings: AgentWebSearchSettings, provider: AgentWebSearchProviderId): string[] {
+  if (provider === 'brave') return settings.braveApiKeys.length > 0 ? settings.braveApiKeys : settings.braveApiKey ? [settings.braveApiKey] : []
+  if (provider === 'tavily') return settings.tavilyApiKeys.length > 0 ? settings.tavilyApiKeys : settings.tavilyApiKey ? [settings.tavilyApiKey] : []
+  return []
+}
+
+function withWebSearchApiKeyPool(
+  settings: AgentWebSearchSettings,
+  provider: AgentWebSearchProviderId,
+  keys: string[],
+): AgentWebSearchSettings {
+  if (provider === 'brave') {
+    return { ...settings, braveApiKeys: keys, braveApiKey: keys.find((key) => key.trim())?.trim() ?? '' }
+  }
+  if (provider === 'tavily') {
+    return { ...settings, tavilyApiKeys: keys, tavilyApiKey: keys.find((key) => key.trim())?.trim() ?? '' }
+  }
+  return settings
 }
 
 // --- Snapshot helpers / 快照辅助 ---
@@ -79,7 +189,6 @@ export function ClaudeAgentSettingsPage() {
   const [providerPresetVersion, setProviderPresetVersion] = useState(() => LOCAL_PROVIDER_PRESET_CATALOG.version)
   const [providerPresetSource, setProviderPresetSource] = useState<ProviderPresetSource>('local')
   const [providerTestStates, setProviderTestStates] = useState<Record<string, ProviderTestState>>({})
-
   const latestRef = useRef({
     providers,
     configSource,
@@ -99,7 +208,6 @@ export function ClaudeAgentSettingsPage() {
   const addProviderDialogRef = useRef<HTMLDialogElement>(null)
   const deleteConfirmDialogRef = useRef<HTMLDialogElement>(null)
   const effectiveConfigSource = IS_DEV_BUILD ? configSource : 'settings'
-
   useEffect(() => {
     latestRef.current = { providers, configSource, chatActiveProviderId, chatActiveAnthropicModel }
   }, [providers, configSource, chatActiveProviderId, chatActiveAnthropicModel])
@@ -130,6 +238,10 @@ export function ClaudeAgentSettingsPage() {
     }
 
     async function loadProviderPresets() {
+      if (!REMOTE_PROVIDER_PRESETS_URL) {
+        applyCatalog(normalizePresetCatalog(LOCAL_PROVIDER_PRESET_CATALOG, locale), 'local')
+        return
+      }
       try {
         const response = await fetch(REMOTE_PROVIDER_PRESETS_URL, { cache: 'no-store' })
         if (!response.ok) throw new Error(`Preset request failed: ${response.status}`)
@@ -866,6 +978,1226 @@ export function ClaudeAgentSettingsPage() {
       ) : null}
     </section>
   )
+}
+
+/** `#settings/mcp` global MCP server management route */
+export function GlobalMcpSettingsPage({
+  activeProject,
+}: GlobalMcpSettingsPageProps) {
+  const { t } = useI18n()
+  const [globalMcpServers, setGlobalMcpServers] = useState<AgentMcpServerConfig[]>([])
+  const [draftGlobalMcpServers, setDraftGlobalMcpServers] = useState<AgentMcpServerConfig[]>([])
+  const [globalMcpProbeCache, setGlobalMcpProbeCache] = useState<AgentMcpServerProbeCache>({})
+  const [editingGlobalMcpServer, setEditingGlobalMcpServer] = useState<{
+    index: number | null
+    server: AgentMcpServerConfig
+  } | null>(null)
+  const [globalMcpStatus, setGlobalMcpStatus] = useState('')
+  const [globalMcpOperation, setGlobalMcpOperation] = useState<GlobalMcpOperation>('idle')
+  const autoTestedGlobalMcpSignatureRef = useRef('')
+  const globalMcpDirty = JSON.stringify(globalMcpServers) !== JSON.stringify(draftGlobalMcpServers)
+  const globalMcpBusy = globalMcpOperation !== 'idle'
+
+  const loadGlobalMcpSettings = useCallback(async () => {
+    const getGlobalMcpSettings = window.desktop?.getGlobalMcpSettings
+    if (!getGlobalMcpSettings) {
+      setGlobalMcpStatus(t('settings.mcp.bridgeUnavailable'))
+      return
+    }
+    try {
+      const result = await getGlobalMcpSettings()
+      if (!result.ok) {
+        setGlobalMcpStatus(result.message)
+        return
+      }
+      const servers = result.settings.mcpServers ?? []
+      setGlobalMcpServers(servers)
+      setDraftGlobalMcpServers(servers)
+      setGlobalMcpProbeCache(result.settings.mcpServerProbeCache ?? {})
+      setGlobalMcpStatus(t('settings.mcp.loaded'))
+    } catch (error) {
+      setGlobalMcpStatus(error instanceof Error ? error.message : String(error))
+    }
+  }, [t])
+
+  const persistGlobalMcpSettings = useCallback(async (servers: AgentMcpServerConfig[]) => {
+    const saveGlobalMcpSettings = window.desktop?.saveGlobalMcpSettings
+    if (!saveGlobalMcpSettings) {
+      setGlobalMcpStatus(t('settings.mcp.bridgeUnavailable'))
+      return undefined
+    }
+    const nextServers = normalizeGlobalMcpServers(servers)
+    const validationError = validateGlobalMcpServers(nextServers, t)
+    if (validationError) {
+      setGlobalMcpStatus(validationError)
+      return undefined
+    }
+    setGlobalMcpOperation('saving')
+    setGlobalMcpStatus(t('settings.mcp.saving'))
+    try {
+      const result = await saveGlobalMcpSettings({ mcpServers: nextServers })
+      if (!result.ok) {
+        setGlobalMcpStatus(result.message)
+        return undefined
+      }
+      const savedServers = result.settings.mcpServers ?? []
+      setGlobalMcpServers(savedServers)
+      setDraftGlobalMcpServers(savedServers)
+      setGlobalMcpProbeCache(result.settings.mcpServerProbeCache ?? {})
+      setGlobalMcpStatus(t('settings.mcp.saved'))
+      return savedServers
+    } catch (error) {
+      setGlobalMcpStatus(error instanceof Error ? error.message : String(error))
+      return undefined
+    } finally {
+      setGlobalMcpOperation('idle')
+    }
+  }, [t])
+
+  const saveGlobalMcpSettings = useCallback(async () => {
+    await persistGlobalMcpSettings(draftGlobalMcpServers)
+  }, [draftGlobalMcpServers, persistGlobalMcpSettings])
+
+  const testGlobalMcpServer = useCallback(async (server: AgentMcpServerConfig): Promise<AgentMcpServerProbeResult | undefined> => {
+    const testServer = window.desktop?.testGlobalMcpServer
+    if (!testServer) {
+      setGlobalMcpStatus(t('settings.mcp.bridgeUnavailable'))
+      return undefined
+    }
+    setGlobalMcpOperation('testing')
+    setGlobalMcpStatus(t('settings.mcp.testing', { name: server.name }))
+    try {
+      const result = await testServer(server)
+      const snapshot = result.snapshot
+      if (snapshot) {
+        setGlobalMcpProbeCache((current) => ({
+          ...current,
+          [snapshot.serverName]: snapshot,
+        }))
+      }
+      if (result.ok && snapshot) {
+        setGlobalMcpStatus(t('settings.mcp.testConnected', { name: server.name, count: snapshot.tools.length }))
+      } else {
+        setGlobalMcpStatus(result.ok ? t('settings.mcp.saved') : result.message)
+      }
+      return result
+    } catch (error) {
+      setGlobalMcpStatus(error instanceof Error ? error.message : String(error))
+      return undefined
+    } finally {
+      setGlobalMcpOperation('idle')
+    }
+  }, [t])
+
+  const testEnabledGlobalMcpServers = useCallback(async (servers: AgentMcpServerConfig[]) => {
+    const enabledServers = servers.filter((server) => server.enabled)
+    if (enabledServers.length === 0) return
+    const testServer = window.desktop?.testGlobalMcpServer
+    if (!testServer) {
+      setGlobalMcpStatus(t('settings.mcp.bridgeUnavailable'))
+      return
+    }
+    setGlobalMcpOperation('testing')
+    setGlobalMcpStatus(t('settings.mcp.testingEnabled', { count: enabledServers.length }))
+    let tested = 0
+    let connected = 0
+    try {
+      for (const server of enabledServers) {
+        setGlobalMcpStatus(t('settings.mcp.testing', { name: server.name }))
+        const result = await testServer(server)
+        const snapshot = result.snapshot
+        if (snapshot) {
+          setGlobalMcpProbeCache((current) => ({
+            ...current,
+            [snapshot.serverName]: snapshot,
+          }))
+        }
+        tested += 1
+        if (result.ok && snapshot?.status === 'connected') connected += 1
+      }
+      setGlobalMcpStatus(t('settings.mcp.testEnabledDone', { tested, connected }))
+    } catch (error) {
+      setGlobalMcpStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setGlobalMcpOperation('idle')
+    }
+  }, [t])
+
+  const saveAndTestGlobalMcpEditor = useCallback(async (server: AgentMcpServerConfig, shouldTest: boolean) => {
+    const nextServers =
+      editingGlobalMcpServer?.index === null
+        ? [...draftGlobalMcpServers, server]
+        : draftGlobalMcpServers.map((item, index) => (index === editingGlobalMcpServer?.index ? server : item))
+    const savedServers = await persistGlobalMcpSettings(nextServers)
+    if (!savedServers) return
+    const savedIndex = editingGlobalMcpServer?.index === null ? savedServers.length - 1 : editingGlobalMcpServer?.index ?? 0
+    const savedServer = savedServers[savedIndex]
+    if (!savedServer) {
+      setEditingGlobalMcpServer(null)
+      return
+    }
+    if (!shouldTest) {
+      setEditingGlobalMcpServer(null)
+      return
+    }
+    const result = await testGlobalMcpServer(savedServer)
+    if (result?.ok) {
+      setEditingGlobalMcpServer(null)
+      return
+    }
+    setEditingGlobalMcpServer({ index: savedIndex, server: savedServer })
+  }, [draftGlobalMcpServers, editingGlobalMcpServer?.index, persistGlobalMcpSettings, testGlobalMcpServer])
+
+  const updateGlobalMcpServer = useCallback((index: number, patch: Partial<AgentMcpServerConfig>) => {
+    setDraftGlobalMcpServers((current) =>
+      current.map((server, serverIndex) => (serverIndex === index ? { ...server, ...patch } : server)),
+    )
+  }, [])
+
+  const openGlobalMcpEditor = useCallback((index: number | null) => {
+    setEditingGlobalMcpServer({
+      index,
+      server: index === null ? createDraftGlobalMcpServer(draftGlobalMcpServers) : draftGlobalMcpServers[index],
+    })
+  }, [draftGlobalMcpServers])
+
+  const updateGlobalMcpEditor = useCallback((patch: Partial<AgentMcpServerConfig>) => {
+    setEditingGlobalMcpServer((current) => (current ? { ...current, server: { ...current.server, ...patch } } : current))
+  }, [])
+
+  const removeGlobalMcpServer = useCallback((index: number) => {
+    setDraftGlobalMcpServers((current) => current.filter((_, serverIndex) => serverIndex !== index))
+    setEditingGlobalMcpServer((current) => (current?.index === index ? null : current))
+  }, [])
+
+  const confirmRemoveGlobalMcpServer = useCallback((index: number) => {
+    const name = draftGlobalMcpServers[index]?.name.trim() || t('workspace.agentSettingsMcpUnnamed')
+    if (!window.confirm(t('settings.mcp.deleteConfirm', { name }))) return
+    removeGlobalMcpServer(index)
+  }, [draftGlobalMcpServers, removeGlobalMcpServer, t])
+
+  const duplicateGlobalMcpServer = useCallback((index: number) => {
+    setDraftGlobalMcpServers((current) => {
+      const source = current[index]
+      if (!source) return current
+      return [...current, cloneGlobalMcpServer(source, current)]
+    })
+    setEditingGlobalMcpServer(null)
+    setGlobalMcpStatus(t('settings.mcp.duplicated'))
+  }, [t])
+
+  const resetGlobalMcpServers = useCallback(() => {
+    setDraftGlobalMcpServers(globalMcpServers)
+    setEditingGlobalMcpServer(null)
+    setGlobalMcpStatus(t('settings.mcp.reverted'))
+  }, [globalMcpServers, t])
+
+  useEffect(() => {
+    void loadGlobalMcpSettings()
+  }, [loadGlobalMcpSettings])
+
+  useEffect(() => {
+    if (editingGlobalMcpServer || globalMcpDirty) return
+    const enabledServers = globalMcpServers.filter((server) => server.enabled)
+    const signature = enabledServers.map((server) => `${server.name}:${buildGlobalMcpServerConfigSignature(server)}`).join('|')
+    if (!signature || autoTestedGlobalMcpSignatureRef.current === signature) return
+    autoTestedGlobalMcpSignatureRef.current = signature
+    void testEnabledGlobalMcpServers(enabledServers)
+  }, [editingGlobalMcpServer, globalMcpDirty, globalMcpServers, testEnabledGlobalMcpServers])
+
+  return (
+    <section
+      className="app-main-inner settings-page settings-page--mcp"
+      id="panel-settings-mcp"
+      data-testid="global-mcp-settings-page"
+      aria-hidden={false}
+    >
+      <header className="settings-page-header">
+        <h1 className="app-main-heading">{t('settings.mcp.pageTitle')}</h1>
+        <p className="settings-lede">{t('settings.mcp.pageLede')}</p>
+      </header>
+
+      <GlobalMcpSettingsSection
+        activeProjectName={activeProject.name}
+        projectPathMissing={Boolean(activeProject.pathMissing)}
+        servers={draftGlobalMcpServers}
+        probeCache={globalMcpProbeCache}
+        editingServer={editingGlobalMcpServer}
+        dirty={globalMcpDirty}
+        busy={globalMcpBusy}
+        operation={globalMcpOperation}
+        status={globalMcpStatus}
+        onServerChange={updateGlobalMcpServer}
+        onOpenEditor={openGlobalMcpEditor}
+        onEditorChange={updateGlobalMcpEditor}
+        onEditorCancel={() => setEditingGlobalMcpServer(null)}
+        onEditorSave={(server) => void saveAndTestGlobalMcpEditor(server, false)}
+        onEditorSaveAndTest={(server) => void saveAndTestGlobalMcpEditor(server, true)}
+        onDuplicateServer={duplicateGlobalMcpServer}
+        onRemoveServer={confirmRemoveGlobalMcpServer}
+        onReset={resetGlobalMcpServers}
+        onSave={() => void saveGlobalMcpSettings()}
+      />
+    </section>
+  )
+}
+
+/** `#settings/search` global WebSearch routing settings route */
+export function GlobalWebSearchSettingsPage() {
+  const { t } = useI18n()
+  const [savedSettings, setSavedSettings] = useState<AgentWebSearchSettings>(DEFAULT_WEB_SEARCH_SETTINGS)
+  const [draftSettings, setDraftSettings] = useState<AgentWebSearchSettings>(DEFAULT_WEB_SEARCH_SETTINGS)
+  const [status, setStatus] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [testingProvider, setTestingProvider] = useState(false)
+  const [providerTestResult, setProviderTestResult] = useState<AgentWebSearchProviderTestResult | null>(null)
+  const dirty = JSON.stringify(savedSettings) !== JSON.stringify(draftSettings)
+  const usingAgentOs = draftSettings.mode === 'agentos'
+  const activeKeyProvider = draftSettings.provider === 'brave' || draftSettings.provider === 'tavily' ? draftSettings.provider : null
+  const activeApiKeys = activeKeyProvider ? getWebSearchApiKeyPool(draftSettings, activeKeyProvider) : []
+  const visibleApiKeys = activeApiKeys.length > 0 ? activeApiKeys : ['']
+  const credentialHint = getWebSearchCredentialHint(draftSettings, providerTestResult, t)
+
+  const updateDraftSettings = useCallback((updater: (current: AgentWebSearchSettings) => AgentWebSearchSettings) => {
+    setProviderTestResult(null)
+    setDraftSettings(updater)
+  }, [])
+
+  const updateWebSearchApiKeyPool = useCallback(
+    (provider: AgentWebSearchProviderId, updater: (keys: string[]) => string[]) => {
+      updateDraftSettings((current) => withWebSearchApiKeyPool(current, provider, updater(getWebSearchApiKeyPool(current, provider))))
+    },
+    [updateDraftSettings],
+  )
+
+  const loadWebSearchSettings = useCallback(async () => {
+    const getGlobalWebSearchSettings = window.desktop?.getGlobalWebSearchSettings
+    if (!getGlobalWebSearchSettings) {
+      setStatus(t('settings.search.bridgeUnavailable'))
+      return
+    }
+    try {
+      const result = await getGlobalWebSearchSettings()
+      if (!result.ok) {
+        setStatus(result.message)
+        return
+      }
+      setSavedSettings(result.settings)
+      setDraftSettings(result.settings)
+      setProviderTestResult(null)
+      setStatus(t('settings.search.loaded'))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error))
+    }
+  }, [t])
+
+  const saveWebSearchSettings = useCallback(async () => {
+    const saveGlobalWebSearchSettings = window.desktop?.saveGlobalWebSearchSettings
+    if (!saveGlobalWebSearchSettings) {
+      setStatus(t('settings.search.bridgeUnavailable'))
+      return
+    }
+    setSaving(true)
+    setStatus(t('settings.search.saving'))
+    try {
+      const result = await saveGlobalWebSearchSettings(normalizeWebSearchSettingsDraft(draftSettings))
+      if (!result.ok) {
+        setStatus(result.message)
+        return
+      }
+      setSavedSettings(result.settings)
+      setDraftSettings(result.settings)
+      setStatus(t('settings.search.saved'))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaving(false)
+    }
+  }, [draftSettings, t])
+
+  const testWebSearchProvider = useCallback(async () => {
+    const testGlobalWebSearchProvider = window.desktop?.testGlobalWebSearchProvider
+    if (!testGlobalWebSearchProvider) {
+      setStatus(t('settings.search.testBridgeUnavailable'))
+      return
+    }
+    if (!usingAgentOs) {
+      setProviderTestResult(null)
+      setStatus(t('settings.search.nativeTestUnavailable'))
+      return
+    }
+    setTestingProvider(true)
+    setStatus(t('settings.search.testing'))
+    try {
+      const result = await testGlobalWebSearchProvider(normalizeWebSearchSettingsDraft(draftSettings))
+      setProviderTestResult(result)
+      setStatus(formatWebSearchProviderTestStatus(result, t))
+    } catch (error) {
+      setProviderTestResult(null)
+      setStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setTestingProvider(false)
+    }
+  }, [draftSettings, t, usingAgentOs])
+
+  useEffect(() => {
+    void loadWebSearchSettings()
+  }, [loadWebSearchSettings])
+
+  return (
+    <section
+      className="app-main-inner settings-page settings-page--search"
+      id="panel-settings-search"
+      data-testid="global-web-search-settings-page"
+      aria-hidden={false}
+    >
+      <header className="settings-page-header">
+        <h1 className="app-main-heading">{t('settings.search.pageTitle')}</h1>
+        <p className="settings-lede">{t('settings.search.pageLede')}</p>
+      </header>
+
+      <section className="settings-mcp-boundary settings-mcp-boundary--global" aria-labelledby="settings-search-mode-heading">
+        <div className="settings-mcp-boundary__header">
+          <div className="settings-mcp-boundary__copy">
+            <span className="settings-mcp-boundary__eyebrow">{t('settings.search.boundaryEyebrow')}</span>
+            <h2 id="settings-search-mode-heading">{t('settings.search.boundaryHeading')}</h2>
+            <p>{t('settings.search.boundaryCaption')}</p>
+          </div>
+        </div>
+
+        <div className="agent-mcp-list" role="radiogroup" aria-label={t('settings.search.modeAria')} data-testid="web-search-mode-options">
+          {(['native', 'agentos'] as AgentWebSearchMode[]).map((mode) => (
+            <label className="agent-mcp-checkbox" key={mode}>
+              <input
+                type="radio"
+                name="web-search-mode"
+                value={mode}
+                checked={draftSettings.mode === mode}
+                disabled={saving || testingProvider}
+                onChange={() => updateDraftSettings((current) => ({ ...current, mode }))}
+              />
+              <span>
+                <strong>{t(`settings.search.mode.${mode}.title`)}</strong>
+                <small>{t(`settings.search.mode.${mode}.description`)}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+
+        <div className="agent-mcp-policy" data-testid="web-search-provider-options">
+          <div className="agent-mcp-policy__head">
+            <div>
+              <h4>{t('settings.search.providerHeading')}</h4>
+              <p>{t('settings.search.providerCaption')}</p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-compact"
+              data-testid="web-search-provider-test"
+              disabled={saving || testingProvider || !usingAgentOs}
+              onClick={() => void testWebSearchProvider()}
+            >
+              <IconInline name={providerTestResult?.ok ? 'check' : 'refresh'} />
+              <span>{testingProvider ? t('settings.search.testingShort') : t('settings.search.test')}</span>
+            </button>
+          </div>
+
+          <div className="agent-mcp-list" role="radiogroup" aria-label={t('settings.search.providerAria')}>
+            {WEB_SEARCH_PROVIDERS.map((provider) => (
+              <label className="agent-mcp-checkbox" key={provider}>
+                <input
+                  type="radio"
+                  name="web-search-provider"
+                  value={provider}
+                  checked={draftSettings.provider === provider}
+                  disabled={saving || testingProvider || !usingAgentOs}
+                  onChange={() => updateDraftSettings((current) => ({ ...current, provider }))}
+                />
+                <span>
+                  <strong>{t(`settings.search.provider.${provider}.title`)}</strong>
+                  <small>{t(`settings.search.provider.${provider}.description`)}</small>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {activeKeyProvider ? (
+            <div className="agent-mcp-row__grid">
+              <div className="agent-mcp-field agent-mcp-field--wide" data-testid="web-search-key-pool">
+                <span>{t(`settings.search.${activeKeyProvider}ApiKeyPool`)}</span>
+                <div
+                  className="web-search-key-pool"
+                  role="list"
+                  aria-label={t('settings.search.apiKeyPoolAria', { provider: t(`settings.search.provider.${activeKeyProvider}.title`) })}
+                >
+                  {visibleApiKeys.map((apiKey, index) => {
+                    const rowId = `web-search-${activeKeyProvider}-key-${index}`
+                    const moveDisabled = saving || testingProvider || !usingAgentOs
+                    return (
+                      <div className="web-search-key-pool__row" role="listitem" key={`${activeKeyProvider}-${index}`}>
+                        <label className="sr-only" htmlFor={rowId}>
+                          {t('settings.search.apiKeyPoolItemLabel', { index: index + 1 })}
+                        </label>
+                        <input
+                          id={rowId}
+                          className="settings-input web-search-key-pool__input"
+                          data-testid={`web-search-key-pool-input-${index}`}
+                          value={apiKey}
+                          disabled={saving || testingProvider || !usingAgentOs}
+                          spellCheck={false}
+                          placeholder={activeKeyProvider === 'brave' ? '${BRAVE_SEARCH_API_KEY}' : '${TAVILY_API_KEY}'}
+                          onChange={(event) =>
+                            updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
+                              const next = keys.length > 0 ? [...keys] : ['']
+                              next[index] = event.target.value
+                              return next
+                            })
+                          }
+                        />
+                        <div className="web-search-key-pool__actions">
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-compact web-search-key-pool__button"
+                            aria-label={t('settings.search.apiKeyMoveUp', { index: index + 1 })}
+                            disabled={moveDisabled || index === 0}
+                            onClick={() =>
+                              updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
+                                const next = [...keys]
+                                const previous = next[index - 1]
+                                next[index - 1] = next[index]
+                                next[index] = previous
+                                return next
+                              })
+                            }
+                          >
+                            <IconInline name="arrowUp" />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-compact web-search-key-pool__button"
+                            aria-label={t('settings.search.apiKeyMoveDown', { index: index + 1 })}
+                            disabled={moveDisabled || index >= visibleApiKeys.length - 1}
+                            onClick={() =>
+                              updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
+                                const next = [...keys]
+                                const currentValue = next[index]
+                                next[index] = next[index + 1]
+                                next[index + 1] = currentValue
+                                return next
+                              })
+                            }
+                          >
+                            <IconInline name="arrowDown" />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-compact web-search-key-pool__button web-search-key-pool__button--danger"
+                            aria-label={t('settings.search.apiKeyRemove', { index: index + 1 })}
+                            disabled={saving || testingProvider || !usingAgentOs}
+                            onClick={() =>
+                              updateWebSearchApiKeyPool(activeKeyProvider, (keys) => keys.filter((_key, keyIndex) => keyIndex !== index))
+                            }
+                          >
+                            <IconInline name="trash" />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="web-search-key-pool__footer">
+                  <small className="settings-field-row__hint" data-testid="web-search-key-status">{credentialHint}</small>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-compact"
+                    disabled={saving || testingProvider || !usingAgentOs}
+                    onClick={() => updateWebSearchApiKeyPool(activeKeyProvider, (keys) => [...keys, ''])}
+                  >
+                    <IconInline name="plus" />
+                    <span>{t('settings.search.apiKeyAdd')}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {usingAgentOs && draftSettings.provider === 'duckduckgo' ? (
+            <p className="settings-provider-test-status" data-testid="web-search-key-status">{credentialHint}</p>
+          ) : null}
+
+          {providerTestResult ? (
+            <p
+              className={`settings-provider-test-status ${providerTestResult.ok ? 'is-success' : 'is-error'}`}
+              data-testid="web-search-provider-test-status"
+            >
+              {formatWebSearchProviderTestStatus(providerTestResult, t)}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="settings-footer settings-footer--inline">
+          <span>{status}</span>
+          <div className="settings-footer__actions">
+            <button type="button" className="btn btn-ghost" disabled={saving || testingProvider || !dirty} onClick={() => {
+              setDraftSettings(savedSettings)
+              setProviderTestResult(null)
+              setStatus(t('settings.search.reverted'))
+            }}>
+              {t('settings.search.revert')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              data-testid="web-search-settings-save"
+              disabled={saving || testingProvider || !dirty}
+              onClick={() => void saveWebSearchSettings()}
+            >
+              <IconInline name="save" />
+              <span>{t('settings.search.save')}</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+function GlobalMcpSettingsSection({
+  activeProjectName,
+  projectPathMissing,
+  servers,
+  probeCache,
+  editingServer,
+  dirty,
+  busy,
+  operation,
+  status,
+  onServerChange,
+  onOpenEditor,
+  onEditorChange,
+  onEditorCancel,
+  onEditorSave,
+  onEditorSaveAndTest,
+  onDuplicateServer,
+  onRemoveServer,
+  onReset,
+  onSave,
+}: {
+  activeProjectName: string
+  projectPathMissing: boolean
+  servers: AgentMcpServerConfig[]
+  probeCache: AgentMcpServerProbeCache
+  editingServer: { index: number | null; server: AgentMcpServerConfig } | null
+  dirty: boolean
+  busy: boolean
+  operation: GlobalMcpOperation
+  status: string
+  onServerChange: (index: number, patch: Partial<AgentMcpServerConfig>) => void
+  onOpenEditor: (index: number | null) => void
+  onEditorChange: (patch: Partial<AgentMcpServerConfig>) => void
+  onEditorCancel: () => void
+  onEditorSave: (server: AgentMcpServerConfig) => void
+  onEditorSaveAndTest: (server: AgentMcpServerConfig) => void
+  onDuplicateServer: (index: number) => void
+  onRemoveServer: (index: number) => void
+  onReset: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const editingSnapshot = editingServer ? getMatchingGlobalMcpProbeSnapshot(editingServer.server, probeCache) : undefined
+  const editingIndex = editingServer?.index ?? null
+  return (
+    <section className="settings-mcp-boundary settings-mcp-boundary--global" data-testid="mcp-settings-boundary-note" aria-labelledby="settings-mcp-boundary-heading">
+      <div className="settings-mcp-boundary__header">
+        <div className="settings-mcp-boundary__copy">
+          <span className="settings-mcp-boundary__eyebrow">{t('settings.mcp.boundaryEyebrow')}</span>
+          <h2 id="settings-mcp-boundary-heading">{t('settings.mcp.boundaryHeading')}</h2>
+          <p>{t('settings.mcp.boundaryCaption')}</p>
+          <span>{t('settings.mcp.boundaryProject', { name: activeProjectName })}</span>
+        </div>
+      </div>
+
+      {projectPathMissing ? (
+        <div className="settings-mcp-empty" data-testid="mcp-settings-no-project-empty" role="status">
+          <strong>{t('settings.mcp.noProjectTitle')}</strong>
+          <span>{t('settings.mcp.noProjectBody')}</span>
+        </div>
+      ) : null}
+
+      {editingServer ? (
+        <GlobalMcpServerEditor
+          server={editingServer.server}
+          snapshot={editingSnapshot}
+          busy={busy}
+          operation={operation}
+          status={status}
+          isNew={editingServer.index === null}
+          onChange={onEditorChange}
+          onCancel={onEditorCancel}
+          onDelete={editingIndex === null ? undefined : () => onRemoveServer(editingIndex)}
+          onSave={() => onEditorSave(editingServer.server)}
+          onSaveAndTest={() => onEditorSaveAndTest(editingServer.server)}
+        />
+      ) : (
+        <>
+          <div className="agent-mcp-installed__head">
+            <div>
+              <h4>{t('settings.mcp.globalHeading')}</h4>
+              <p>{t('settings.mcp.globalCaption')}</p>
+            </div>
+          </div>
+
+          <div className="agent-mcp-installed-list" role="list" data-testid="global-mcp-server-list">
+            {servers.length === 0 ? (
+              <p className="agent-context-empty">{t('settings.mcp.globalEmpty')}</p>
+            ) : null}
+            {servers.map((server, index) => {
+              const displayName = server.name.trim() || t('workspace.agentSettingsMcpUnnamed')
+              const snapshot = getMatchingGlobalMcpProbeSnapshot(server, probeCache)
+              const statusView = formatGlobalMcpProbeStatus(server, snapshot, t)
+              return (
+                <div key={`${server.name}-${index}`} className={`agent-mcp-installed-row agent-mcp-installed-row--${statusView.tone}`} role="listitem">
+                  <button type="button" className="global-mcp-installed-row__main" disabled={busy} onClick={() => onOpenEditor(index)}>
+                    <span className="agent-mcp-installed-row__avatar" aria-hidden="true">
+                      <span>{displayName.slice(0, 1).toUpperCase()}</span>
+                      <span className={`agent-mcp-installed-row__dot agent-mcp-installed-row__dot--${statusView.tone}`} />
+                    </span>
+                    <span className="agent-mcp-installed-row__copy">
+                      <strong>{displayName}</strong>
+                      <span>{statusView.text}</span>
+                    </span>
+                  </button>
+                  <span className="global-mcp-installed-row__actions">
+                    <button
+                      type="button"
+                      className="project-home-icon-button"
+                      disabled={busy}
+                      title={t('settings.mcp.duplicateServer')}
+                      aria-label={t('settings.mcp.duplicateServerNamed', { name: displayName })}
+                      onClick={() => onDuplicateServer(index)}
+                    >
+                      <IconInline name="copy" />
+                    </button>
+                    <label className="agent-mcp-installed-row__switch">
+                      <span className="sr-only">{t('workspace.agentSettingsMcpToggleServer', { name: displayName })}</span>
+                      <span className="settings-switch-control">
+                        <input
+                          type="checkbox"
+                          className="settings-switch-input"
+                          checked={server.enabled}
+                          disabled={busy}
+                          onChange={(event) => onServerChange(index, { enabled: event.target.checked })}
+                        />
+                        <span className="settings-switch-track" aria-hidden="true">
+                          <span className="settings-switch-thumb" />
+                        </span>
+                      </span>
+                    </label>
+                  </span>
+                </div>
+              )
+            })}
+            <button type="button" className="agent-mcp-installed-row agent-mcp-installed-row--add" data-testid="global-mcp-add-server" disabled={busy} onClick={() => onOpenEditor(null)}>
+              <span className="agent-mcp-installed-row__avatar" aria-hidden="true">
+                <IconInline name="plus" />
+              </span>
+              <span className="agent-mcp-installed-row__copy">
+                <strong>{t('workspace.agentSettingsMcpNewServer')}</strong>
+                <span>{t('workspace.agentSettingsMcpAddCustomServer')}</span>
+              </span>
+            </button>
+          </div>
+
+          <div className="agent-settings-panel-actions">
+            <p className={`agent-settings-save-feedback${dirty && !busy ? ' is-dirty' : ''}`} role="status" aria-live="polite">
+              <IconInline name={busy ? 'refresh' : dirty ? 'save' : 'check'} />
+              <span>{status || (dirty ? t('workspace.agentSettingsUnsavedChanges') : t('workspace.agentSettingsNoChanges'))}</span>
+            </p>
+            <button type="button" className="agent-card-secondary-button" disabled={busy || !dirty} onClick={onReset}>
+              {t('settings.mcp.cancel')}
+            </button>
+            <button type="button" className="agent-card-primary-button" disabled={busy || !dirty} onClick={onSave}>
+              <IconInline name={operation === 'saving' ? 'refresh' : 'save'} />
+              <span>{operation === 'saving' ? t('settings.mcp.saving') : t('settings.mcp.save')}</span>
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+function GlobalMcpServerEditor({
+  server,
+  snapshot,
+  busy,
+  operation,
+  status,
+  isNew,
+  onChange,
+  onCancel,
+  onDelete,
+  onSave,
+  onSaveAndTest,
+}: {
+  server: AgentMcpServerConfig
+  snapshot?: AgentMcpServerProbeSnapshot
+  busy: boolean
+  operation: GlobalMcpOperation
+  status: string
+  isNew: boolean
+  onChange: (patch: Partial<AgentMcpServerConfig>) => void
+  onCancel: () => void
+  onDelete?: () => void
+  onSave: () => void
+  onSaveAndTest: () => void
+}) {
+  const { t } = useI18n()
+  const serverId = isNew ? 'global-mcp-server-new' : `global-mcp-server-${server.name || 'edit'}`
+  const statusView = formatGlobalMcpProbeStatus(server, snapshot, t)
+  const envHints = getGlobalMcpFieldEnvHints(server, snapshot, t)
+  const serverInfo = formatMcpServerInfo(snapshot, t)
+  const recoveryHint = getGlobalMcpRecoveryHint(server, snapshot, t)
+
+  return (
+    <div className="global-mcp-editor" data-testid="global-mcp-server-editor">
+      <div className="global-mcp-editor__topbar">
+        <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onCancel}>
+          <IconInline name="back" />
+          <span>{t('settings.mcp.backToList')}</span>
+        </button>
+        {onDelete ? (
+          <button type="button" className="project-home-icon-button project-home-icon-button--danger" disabled={busy} title={t('workspace.agentSettingsMcpRemoveServer')} onClick={onDelete}>
+            <IconInline name="trash" />
+          </button>
+        ) : null}
+      </div>
+
+      <div className="global-mcp-editor__status">
+        <span className={`agent-mcp-installed-row__dot agent-mcp-installed-row__dot--${statusView.tone}`} aria-hidden="true" />
+        <span className="global-mcp-editor__status-stack">
+          <span>{statusView.text}</span>
+          {serverInfo ? <span className="global-mcp-editor__server-info" data-testid="mcp-server-info-detail">{serverInfo}</span> : null}
+        </span>
+      </div>
+
+      {recoveryHint ? (
+        <p className="agent-mcp-warning agent-mcp-warning--compact" data-testid="mcp-recovery-hint">{recoveryHint}</p>
+      ) : null}
+
+      <div className="agent-mcp-row agent-mcp-row--editor">
+        <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-name`}>
+          <span>{t('workspace.agentSettingsMcpServerName')}</span>
+          <input
+            id={`${serverId}-name`}
+            className="settings-input"
+            value={server.name}
+            disabled={busy}
+            spellCheck={false}
+            placeholder="chrome-devtools"
+            onChange={(event) => onChange({ name: event.target.value })}
+          />
+        </label>
+
+        <div className="global-mcp-segmented" role="tablist" aria-label={t('workspace.agentSettingsMcpTransportLabel')}>
+          {MCP_TRANSPORTS.map((transport) => (
+            <button
+              key={transport}
+              type="button"
+              role="tab"
+              aria-selected={server.transport === transport}
+              className={`global-mcp-segmented__item${server.transport === transport ? ' is-active' : ''}`}
+              disabled={busy}
+              onClick={() => onChange({ transport })}
+            >
+              {t(`workspace.agentSettingsMcpTransport.${transport}`)}
+            </button>
+          ))}
+        </div>
+
+        <div className="agent-mcp-row__grid">
+          {server.transport === 'stdio' ? (
+            <>
+              <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-command`}>
+                <span>{t('workspace.agentSettingsMcpCommand')}</span>
+                <input
+                  id={`${serverId}-command`}
+                  className="settings-input"
+                  value={server.command}
+                  disabled={busy}
+                  spellCheck={false}
+                  placeholder="npx"
+                  onChange={(event) => onChange({ command: event.target.value })}
+                />
+                <GlobalMcpEnvHint hint={envHints.command} />
+              </label>
+              <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-args`}>
+                <span>{t('workspace.agentSettingsMcpArgs')}</span>
+                <textarea
+                  id={`${serverId}-args`}
+                  className="settings-input agent-mcp-textarea"
+                  value={server.args.join('\n')}
+                  disabled={busy}
+                  spellCheck={false}
+                  placeholder="-y\nchrome-devtools-mcp@latest"
+                  onChange={(event) => onChange({ args: linesToList(event.target.value) })}
+                />
+                <GlobalMcpEnvHint hint={envHints.args} />
+              </label>
+              <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-cwd`}>
+                <span>{t('workspace.agentSettingsMcpCwd')}</span>
+                <input
+                  id={`${serverId}-cwd`}
+                  className="settings-input"
+                  value={server.cwd}
+                  disabled={busy}
+                  spellCheck={false}
+                  placeholder="~/code"
+                  onChange={(event) => onChange({ cwd: event.target.value })}
+                />
+                <GlobalMcpEnvHint hint={envHints.cwd} />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-url`}>
+                <span>{t('workspace.agentSettingsMcpUrl')}</span>
+                <input
+                  id={`${serverId}-url`}
+                  className="settings-input"
+                  value={server.url}
+                  disabled={busy}
+                  spellCheck={false}
+                  placeholder="https://mcp.example.com/mcp"
+                  onChange={(event) => onChange({ url: event.target.value })}
+                />
+                <GlobalMcpEnvHint hint={envHints.url} />
+              </label>
+              <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-headers`}>
+                <span>{t('workspace.agentSettingsMcpHeaders')}</span>
+                <textarea
+                  id={`${serverId}-headers`}
+                  className="settings-input agent-mcp-textarea"
+                  value={recordToKeyValueLines(server.headers)}
+                  disabled={busy}
+                  spellCheck={false}
+                  placeholder="Authorization=Bearer ${MCP_TOKEN}"
+                  onChange={(event) => onChange({ headers: keyValueLinesToRecord(event.target.value) })}
+                />
+                <GlobalMcpEnvHint hint={envHints.headers} />
+              </label>
+            </>
+          )}
+
+          <label className="agent-mcp-field agent-mcp-field--wide" htmlFor={`${serverId}-env`}>
+            <span>{t('workspace.agentSettingsMcpEnv')}</span>
+            <textarea
+              id={`${serverId}-env`}
+              className="settings-input agent-mcp-textarea"
+              value={recordToKeyValueLines(server.env)}
+              disabled={busy}
+              spellCheck={false}
+              placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_TOKEN}"
+              onChange={(event) => onChange({ env: keyValueLinesToRecord(event.target.value) })}
+            />
+            <GlobalMcpEnvHint hint={envHints.env} />
+          </label>
+
+          <label className="agent-mcp-checkbox">
+            <input
+              type="checkbox"
+              checked={server.alwaysLoad}
+              disabled={busy}
+              onChange={(event) => onChange({ alwaysLoad: event.target.checked })}
+            />
+            <span>
+              <strong>{t('workspace.agentSettingsMcpAlwaysLoad')}</strong>
+              <small>{t('workspace.agentSettingsMcpAlwaysLoadHint')}</small>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div className="agent-settings-panel-actions">
+        <p className="agent-settings-save-feedback" role="status" aria-live="polite">
+          <IconInline name={busy ? 'refresh' : statusView.tone === 'ready' ? 'check' : 'server'} />
+          <span>{status || statusView.text}</span>
+        </p>
+        <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onSave}>
+          <IconInline name="save" />
+          <span>{t('settings.mcp.save')}</span>
+        </button>
+        <button type="button" className="agent-card-primary-button" disabled={busy} onClick={onSaveAndTest}>
+          <IconInline name={busy ? 'refresh' : 'server'} />
+          <span>
+            {operation === 'saving'
+              ? t('settings.mcp.savingShort')
+              : operation === 'testing'
+                ? t('settings.mcp.testingShort')
+                : t('settings.mcp.saveAndTest')}
+          </span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+type GlobalMcpEnvHintTone = 'success' | 'pending' | 'error'
+
+type GlobalMcpEnvHintModel = {
+  tone: GlobalMcpEnvHintTone
+  text: string
+}
+
+function GlobalMcpEnvHint({ hint }: { hint?: GlobalMcpEnvHintModel }) {
+  if (!hint) return null
+  return (
+    <small
+      className={`settings-field-row__hint global-mcp-env-hint global-mcp-env-hint--${hint.tone}`}
+      data-testid={hint.tone === 'success' ? 'mcp-env-resolution-status' : 'mcp-env-resolution-error'}
+    >
+      {hint.text}
+    </small>
+  )
+}
+
+type GlobalMcpFieldEnvHints = Partial<Record<'command' | 'args' | 'cwd' | 'url' | 'headers' | 'env', GlobalMcpEnvHintModel>>
+
+function getGlobalMcpFieldEnvHints(
+  server: AgentMcpServerConfig,
+  snapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: TranslateFn,
+): GlobalMcpFieldEnvHints {
+  return {
+    command: formatGlobalMcpFieldEnvHint([server.command], snapshot, t),
+    args: formatGlobalMcpFieldEnvHint(server.args, snapshot, t),
+    cwd: formatGlobalMcpFieldEnvHint([server.cwd], snapshot, t),
+    url: formatGlobalMcpFieldEnvHint([server.url], snapshot, t),
+    headers: formatGlobalMcpFieldEnvHint(Object.values(server.headers), snapshot, t),
+    env: formatGlobalMcpFieldEnvHint(Object.values(server.env), snapshot, t),
+  }
+}
+
+function formatGlobalMcpFieldEnvHint(
+  values: string[],
+  snapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: TranslateFn,
+): GlobalMcpEnvHintModel | undefined {
+  const refs = collectGlobalMcpEnvReferenceNames(values)
+  if (refs.length === 0) return undefined
+  const names = refs.join(', ')
+  if (snapshot?.status === 'connected') {
+    return { tone: 'success', text: t('settings.mcp.fieldEnvResolved', { names }) }
+  }
+  if (snapshot?.status === 'failed' || snapshot?.status === 'needs-auth') {
+    return { tone: 'error', text: t('settings.mcp.fieldEnvUnresolved', { names }) }
+  }
+  return { tone: 'pending', text: t('settings.mcp.fieldEnvPending', { names }) }
+}
+
+function collectGlobalMcpEnvReferenceNames(values: string[]): string[] {
+  const refs = new Set<string>()
+  for (const value of values) {
+    for (const match of value.matchAll(/\$\{([A-Z_a-z][A-Z_a-z0-9]*)\}/g)) {
+      refs.add(match[1])
+    }
+  }
+  return [...refs]
+}
+
+function formatMcpServerInfo(snapshot: AgentMcpServerProbeSnapshot | undefined, t: TranslateFn): string {
+  const serverInfo = snapshot?.serverInfo
+  if (!serverInfo?.name) return ''
+  if (serverInfo.version) return t('settings.mcp.serverInfoVersion', { name: serverInfo.name, version: serverInfo.version })
+  return t('settings.mcp.serverInfo', { name: serverInfo.name })
+}
+
+function getGlobalMcpRecoveryHint(
+  server: AgentMcpServerConfig,
+  snapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: TranslateFn,
+): string {
+  if (!server.enabled) return ''
+  if (!snapshot) return t('settings.mcp.recoveryTest')
+  if (snapshot.status === 'connected' || snapshot.status === 'disabled') return ''
+  const error = snapshot.error?.toLowerCase() ?? ''
+  if (error.includes('env') || error.includes('environment') || error.includes('variable') || error.includes('${')) {
+    return t('settings.mcp.recoveryEnv')
+  }
+  if (snapshot.status === 'needs-auth' || error.includes('auth') || error.includes('token') || error.includes('key')) {
+    return t('settings.mcp.recoveryAuth')
+  }
+  return server.transport === 'stdio' ? t('settings.mcp.recoveryCommand') : t('settings.mcp.recoveryUrl')
+}
+
+function getMatchingGlobalMcpProbeSnapshot(
+  server: AgentMcpServerConfig,
+  probeCache: AgentMcpServerProbeCache,
+): AgentMcpServerProbeSnapshot | undefined {
+  const snapshot = probeCache[server.name]
+  if (!snapshot) return undefined
+  if (snapshot.configSignature !== buildGlobalMcpServerConfigSignature(server)) return undefined
+  return snapshot
+}
+
+function formatGlobalMcpProbeStatus(
+  server: AgentMcpServerConfig,
+  snapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): { tone: 'ready' | 'pending' | 'error' | 'disabled'; text: string } {
+  if (!server.enabled) {
+    return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
+  }
+  if (!snapshot) {
+    return { tone: 'pending', text: t('settings.mcp.notTested') }
+  }
+  if (snapshot.status === 'connected') {
+    return {
+      tone: 'ready',
+      text: t('workspace.agentSettingsMcpStatusConnectedTools', { count: snapshot.tools.length }),
+    }
+  }
+  if (snapshot.status === 'needs-auth') {
+    return {
+      tone: 'error',
+      text: snapshot.error
+        ? t('workspace.agentSettingsMcpStatusNeedsAuthDetail', { message: snapshot.error })
+        : t('workspace.agentSettingsMcpStatusNeedsAuth'),
+    }
+  }
+  if (snapshot.status === 'failed') {
+    return {
+      tone: 'error',
+      text: snapshot.error
+        ? t('workspace.agentSettingsMcpStatusFailedDetail', { message: snapshot.error })
+        : t('workspace.agentSettingsMcpStatusFailed'),
+    }
+  }
+  if (snapshot.status === 'disabled') {
+    return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
+  }
+  return { tone: 'pending', text: t('workspace.agentSettingsMcpStatusWaiting') }
+}
+
+function buildGlobalMcpServerConfigSignature(server: AgentMcpServerConfig): string {
+  return JSON.stringify({
+    transport: server.transport === 'http' || server.transport === 'sse' ? server.transport : 'stdio',
+    command: server.command.trim(),
+    args: server.args.map((arg) => arg.trim()).filter(Boolean),
+    env: cleanStringRecord(server.env),
+    cwd: server.cwd.trim(),
+    url: server.url.trim(),
+    headers: cleanStringRecord(server.headers),
+  })
+}
+
+function createDraftGlobalMcpServer(existing: AgentMcpServerConfig[]): AgentMcpServerConfig {
+  return {
+    name: uniqueGlobalMcpServerName(existing, 'local-tools'),
+    enabled: true,
+    transport: 'stdio',
+    command: '',
+    args: [],
+    env: {},
+    cwd: '',
+    url: '',
+    headers: {},
+    alwaysLoad: false,
+  }
+}
+
+function cloneGlobalMcpServer(source: AgentMcpServerConfig, existing: AgentMcpServerConfig[]): AgentMcpServerConfig {
+  const baseName = `${source.name.trim() || 'mcp-server'}-copy`
+  return {
+    ...source,
+    name: uniqueGlobalMcpServerName(existing, baseName),
+    enabled: false,
+  }
+}
+
+function normalizeGlobalMcpServers(servers: AgentMcpServerConfig[]): AgentMcpServerConfig[] {
+  const usedNames = new Set<string>()
+  return servers.map((server) => {
+    const rawName = server.name.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) || 'mcp-server'
+    let name = rawName
+    let suffix = 2
+    while (usedNames.has(name)) {
+      name = `${rawName}-${suffix}`
+      suffix += 1
+    }
+    usedNames.add(name)
+    return {
+      name,
+      enabled: server.enabled,
+      transport: server.transport === 'http' || server.transport === 'sse' ? server.transport : 'stdio',
+      command: server.command.trim(),
+      args: server.args.map((arg) => arg.trim()).filter(Boolean),
+      env: cleanStringRecord(server.env),
+      cwd: server.cwd.trim(),
+      url: server.url.trim(),
+      headers: cleanStringRecord(server.headers),
+      alwaysLoad: server.alwaysLoad,
+    }
+  })
+}
+
+function uniqueGlobalMcpServerName(existing: AgentMcpServerConfig[], preferred: string): string {
+  const used = new Set(existing.map((server) => server.name.trim()).filter(Boolean))
+  let name = preferred
+  let suffix = 2
+  while (used.has(name)) {
+    name = `${preferred}-${suffix}`
+    suffix += 1
+  }
+  return name
+}
+
+function validateGlobalMcpServers(
+  servers: AgentMcpServerConfig[],
+  t: (path: string, params?: Record<string, string | number>) => string,
+): string {
+  for (const server of servers) {
+    if (!server.enabled) continue
+    if (server.transport === 'stdio' && !server.command.trim()) {
+      return t('workspace.agentSettingsMcpMissingCommand', { name: server.name })
+    }
+    if (server.transport !== 'stdio' && !server.url.trim()) {
+      return t('workspace.agentSettingsMcpMissingUrl', { name: server.name })
+    }
+  }
+  return ''
+}
+
+function linesToList(value: string): string[] {
+  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+}
+
+function recordToKeyValueLines(record: Record<string, string>): string {
+  return Object.entries(record).map(([key, value]) => `${key}=${value}`).join('\n')
+}
+
+function keyValueLinesToRecord(value: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const separator = trimmed.indexOf('=')
+    if (separator <= 0) continue
+    const key = trimmed.slice(0, separator).trim()
+    const nextValue = trimmed.slice(separator + 1).trim()
+    if (key) out[key] = nextValue
+  }
+  return out
+}
+
+function cleanStringRecord(record: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const key = rawKey.trim()
+    const value = rawValue.trim()
+    if (key && value) out[key] = value
+  }
+  return out
 }
 
 function pruneStoredAnthropicOverlay(

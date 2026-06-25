@@ -5,8 +5,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import { A2uiSurface, basicCatalog, MarkdownContext, type ReactComponentImplementation } from '@a2ui/react/v0_9'
 import { MessageProcessor, type A2uiClientAction, type A2uiMessage, type SurfaceModel } from '@a2ui/web_core/v0_9'
-import type { AgentContextSlashItem, ChatModelPick, ClaudeAgentSettingsSnapshot } from '../../claude-chat-types'
+import type { AgentContextSlashItem, ChatModelPick, ClaudeAgentSettingsSnapshot, ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
 import type {
+  AgentMcpServerConfig,
+  AgentMcpServerOverrides,
+  AgentMcpServerProbeCache,
+  AgentMcpServerProbeSnapshot,
+  AgentMcpToolPolicies,
+  AgentMcpToolPolicy,
   AgentProjectDocumentName,
   HomePluginCardSize,
   HomePluginRunItem,
@@ -40,6 +46,7 @@ type ProjectHomeSurfaceProps = {
   agent: WorkspaceAgentModeState
   todoEnabled: boolean
   loading: boolean
+  agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
   agentSettingsOpen: boolean
   agentSettingsPanel: AgentSettingsPanelId
   onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
@@ -55,6 +62,7 @@ type ProjectHomeSurfaceProps = {
   onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
+  onRefreshAgentStatus: (refresh?: boolean) => void
 }
 
 const pluginCache = new Map<string, { hashes: Record<string, string>; plugins: HomePluginRunItem[] }>()
@@ -70,6 +78,7 @@ type HomeCardItem =
 type HomeGridItem =
   | { kind: 'card'; card: HomeCardItem }
   | { kind: 'filler'; id: string; span: 1 | 2; tone: 'grid' | 'signal' | 'trace' }
+type ProjectMcpOperation = 'idle' | 'saving' | 'testing'
 type HomeGridFillerItem = Extract<HomeGridItem, { kind: 'filler' }>
 
 type HomeCardLayout = {
@@ -218,6 +227,7 @@ export function ProjectHomeSurface({
   agent,
   todoEnabled,
   loading,
+  agentStatusSnapshot,
   agentSettingsOpen,
   agentSettingsPanel,
   onOpenAgentSettings,
@@ -233,6 +243,7 @@ export function ProjectHomeSurface({
   onOpenProjectFile,
   onRunProjectSkill,
   onStopProjectSkillRun,
+  onRefreshAgentStatus,
 }: ProjectHomeSurfaceProps) {
   const { t } = useI18n()
   const cacheKey = project.path
@@ -263,12 +274,49 @@ export function ProjectHomeSurface({
   const [draftSkillModelOverrides, setDraftSkillModelOverrides] = useState<Record<string, ChatModelPick>>({})
   const [skillSettingsStatus, setSkillSettingsStatus] = useState('')
   const [skillSettingsSaving, setSkillSettingsSaving] = useState(false)
+  const [mcpServers, setMcpServers] = useState<AgentMcpServerConfig[]>([])
+  const [draftMcpServers, setDraftMcpServers] = useState<AgentMcpServerConfig[]>([])
+  const [mcpServerOverrides, setMcpServerOverrides] = useState<AgentMcpServerOverrides>({})
+  const [draftMcpServerOverrides, setDraftMcpServerOverrides] = useState<AgentMcpServerOverrides>({})
+  const [mcpToolPolicies, setMcpToolPolicies] = useState<AgentMcpToolPolicies>({})
+  const [draftMcpToolPolicies, setDraftMcpToolPolicies] = useState<AgentMcpToolPolicies>({})
+  const [mcpServerProbeCache, setMcpServerProbeCache] = useState<AgentMcpServerProbeCache>({})
+  const [mcpSettingsStatus, setMcpSettingsStatus] = useState('')
+  const [mcpSettingsOperation, setMcpSettingsOperation] = useState<ProjectMcpOperation>('idle')
+  const autoTestedProjectMcpSignatureRef = useRef('')
+  const agentSettingsLoadSeqRef = useRef(0)
+  const projectMcpProbeSeqRef = useRef(0)
+  const projectPathRef = useRef(project.path)
+  const agentSettingsOpenRef = useRef(agentSettingsOpen)
+  const agentSettingsPanelRef = useRef(agentSettingsPanel)
   const [cardOrderSaving, setCardOrderSaving] = useState(false)
   const [cardOrderStatus, setCardOrderStatus] = useState('')
   const [modelRows, setModelRows] = useState<ModelPickMenuRow[]>([])
   const [modelSettingsSnapshot, setModelSettingsSnapshot] = useState<ClaudeAgentSettingsSnapshot | null>(null)
   const [deletingSlug, setDeletingSlug] = useState('')
   const addMenuRef = useRef<HTMLDivElement>(null)
+  projectPathRef.current = project.path
+  agentSettingsOpenRef.current = agentSettingsOpen
+  agentSettingsPanelRef.current = agentSettingsPanel
+  const mcpStatusServers = useMemo(() => {
+    if (!agentStatusSnapshot) return undefined
+    if (agentStatusSnapshot.cwd && !sameProjectPath(agentStatusSnapshot.cwd, project.path)) return undefined
+    return agentStatusSnapshot.mcpServers
+  }, [agentStatusSnapshot, project.path])
+
+  useEffect(() => {
+    autoTestedProjectMcpSignatureRef.current = ''
+    agentSettingsLoadSeqRef.current += 1
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation('idle')
+    setMcpSettingsStatus('')
+  }, [project.path])
+
+  useEffect(() => {
+    if (agentSettingsOpen && agentSettingsPanel === 'mcp') return
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation((operation) => (operation === 'testing' ? 'idle' : operation))
+  }, [agentSettingsOpen, agentSettingsPanel])
 
   const loadHomePlugins = useCallback(async () => {
     const runHomePlugin = window.desktop?.runHomePlugin
@@ -354,21 +402,36 @@ export function ProjectHomeSurface({
   }, [applyModelSettings])
 
   const loadAgentSkillModelSettings = useCallback(async () => {
+    const requestProjectPath = project.path
+    const requestSeq = agentSettingsLoadSeqRef.current + 1
+    agentSettingsLoadSeqRef.current = requestSeq
+    const isCurrentRequest = () => agentSettingsLoadSeqRef.current === requestSeq && projectPathRef.current === requestProjectPath
     const getAgentModeSettings = window.desktop?.getAgentModeSettings
     if (!getAgentModeSettings) {
+      if (!isCurrentRequest()) return
       setProjectModelPick(undefined)
       setDraftProjectModelPick(undefined)
       setSkillModelOverrides({})
       setDraftSkillModelOverrides({})
+      setMcpServers([])
+      setDraftMcpServers([])
+      setMcpServerOverrides({})
+      setDraftMcpServerOverrides({})
+      setMcpToolPolicies({})
+      setDraftMcpToolPolicies({})
+      setMcpServerProbeCache({})
+      setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
       setSkillSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
       setProjectSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
       return
     }
     try {
-      const result = await getAgentModeSettings(project.path)
+      const result = await getAgentModeSettings(requestProjectPath)
+      if (!isCurrentRequest()) return
       if (!result.ok) {
         setSkillSettingsStatus(result.message)
         setProjectSettingsStatus(result.message)
+        setMcpSettingsStatus(result.message)
         return
       }
       const projectPick = result.settings.projectModelPick
@@ -377,11 +440,24 @@ export function ProjectHomeSurface({
       const overrides = result.settings.skillModelOverrides ?? {}
       setSkillModelOverrides(overrides)
       setDraftSkillModelOverrides(overrides)
+      const servers = result.settings.mcpServers ?? []
+      setMcpServers(servers)
+      setDraftMcpServers(servers)
+      const serverOverrides = result.settings.mcpServerOverrides ?? {}
+      setMcpServerOverrides(serverOverrides)
+      setDraftMcpServerOverrides(serverOverrides)
+      const policies = result.settings.mcpToolPolicies ?? {}
+      setMcpToolPolicies(policies)
+      setDraftMcpToolPolicies(policies)
+      setMcpServerProbeCache(result.settings.mcpServerProbeCache ?? {})
+      setMcpSettingsStatus(t('settings.agentMode.loaded'))
       setSkillSettingsStatus(t('settings.agentMode.loaded'))
       setProjectSettingsStatus(t('settings.agentMode.loaded'))
     } catch (error) {
+      if (!isCurrentRequest()) return
       setSkillSettingsStatus(error instanceof Error ? error.message : String(error))
       setProjectSettingsStatus(error instanceof Error ? error.message : String(error))
+      setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
     }
   }, [project.path, t])
 
@@ -705,6 +781,115 @@ export function ProjectHomeSurface({
     }
   }
 
+  const saveMcpSettings = async () => {
+    const saveAgentModeSettings = window.desktop?.saveAgentModeSettings
+    if (!saveAgentModeSettings) {
+      setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    const requestProjectPath = project.path
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation((operation) => (operation === 'testing' ? 'idle' : operation))
+    const nextOverrides = overridesFromMcpServers(draftMcpServers)
+    const nextPolicies = normalizeMcpPoliciesForSave(draftMcpToolPolicies)
+    const validationError = validateMcpSettings(draftMcpServers, nextPolicies, t)
+    if (validationError) {
+      setMcpSettingsStatus(validationError)
+      return
+    }
+    setMcpSettingsOperation('saving')
+    setMcpSettingsStatus(t('settings.agentMode.saving'))
+    try {
+      const result = await saveAgentModeSettings(requestProjectPath, {
+        mcpServerOverrides: nextOverrides,
+        mcpToolPolicies: nextPolicies,
+      })
+      if (projectPathRef.current !== requestProjectPath) return
+      if (!result.ok) {
+        setMcpSettingsStatus(result.message)
+        return
+      }
+      const servers = result.settings.mcpServers ?? []
+      const serverOverrides = result.settings.mcpServerOverrides ?? {}
+      const policies = result.settings.mcpToolPolicies ?? {}
+      setMcpServers(servers)
+      setDraftMcpServers(servers)
+      setMcpServerOverrides(serverOverrides)
+      setDraftMcpServerOverrides(serverOverrides)
+      setMcpToolPolicies(policies)
+      setDraftMcpToolPolicies(policies)
+      setMcpServerProbeCache(result.settings.mcpServerProbeCache ?? {})
+      setMcpSettingsStatus(t('settings.agentMode.saved'))
+      window.dispatchEvent(new CustomEvent('agentos:project-agent-settings-changed', { detail: { projectPath: requestProjectPath } }))
+    } catch (error) {
+      if (projectPathRef.current !== requestProjectPath) return
+      setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (projectPathRef.current === requestProjectPath) setMcpSettingsOperation('idle')
+    }
+  }
+
+  const refreshProjectMcpProbeStatus = useCallback(async (servers: AgentMcpServerConfig[]) => {
+    const enabledServers = servers.filter((server) => server.enabled)
+    if (enabledServers.length === 0) return
+    const requestProjectPath = project.path
+    const requestSeq = projectMcpProbeSeqRef.current + 1
+    projectMcpProbeSeqRef.current = requestSeq
+    const isCurrentProbe = () =>
+      projectMcpProbeSeqRef.current === requestSeq &&
+      projectPathRef.current === requestProjectPath &&
+      agentSettingsOpenRef.current &&
+      agentSettingsPanelRef.current === 'mcp'
+    const testGlobalMcpServer = window.desktop?.testGlobalMcpServer
+    if (!testGlobalMcpServer) {
+      if (!isCurrentProbe()) return
+      setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setMcpSettingsOperation('testing')
+    setMcpSettingsStatus(t('workspace.agentSettingsMcpTestingEnabled', { count: enabledServers.length }))
+    let tested = 0
+    let connected = 0
+    try {
+      for (const server of enabledServers) {
+        if (!isCurrentProbe()) return
+        setMcpSettingsStatus(t('settings.mcp.testing', { name: server.name }))
+        const result = await testGlobalMcpServer(server)
+        if (!isCurrentProbe()) return
+        const snapshot = result.snapshot
+        if (snapshot) {
+          setMcpServerProbeCache((current) => ({
+            ...current,
+            [snapshot.serverName]: snapshot,
+          }))
+        }
+        tested += 1
+        if (result.ok && snapshot?.status === 'connected') connected += 1
+      }
+      setMcpSettingsStatus(t('workspace.agentSettingsMcpTestEnabledDone', { tested, connected }))
+    } catch (error) {
+      if (!isCurrentProbe()) return
+      setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (isCurrentProbe()) setMcpSettingsOperation('idle')
+    }
+  }, [project.path, t])
+
+  const refreshMcpStatus = useCallback(() => {
+    void refreshProjectMcpProbeStatus(mcpServers)
+    onRefreshAgentStatus(true)
+  }, [mcpServers, onRefreshAgentStatus, refreshProjectMcpProbeStatus])
+
+  useEffect(() => {
+    if (!agentSettingsOpen || agentSettingsPanel !== 'mcp') return
+    const enabledServers = mcpServers.filter((server) => server.enabled)
+    const signature = enabledServers.map((server) => `${server.name}:${buildMcpServerConfigSignature(server)}`).join('|')
+    const signatureKey = `${project.path}:${signature}`
+    if (!signature || autoTestedProjectMcpSignatureRef.current === signatureKey) return
+    autoTestedProjectMcpSignatureRef.current = signatureKey
+    void refreshProjectMcpProbeStatus(enabledServers)
+  }, [agentSettingsOpen, agentSettingsPanel, mcpServers, project.path, refreshProjectMcpProbeStatus])
+
   const saveSortOrder = async () => {
     setCardOrderSaving(true)
     setCardOrderStatus(t('settings.agentMode.saving'))
@@ -958,6 +1143,21 @@ export function ProjectHomeSurface({
           skillSettingsSaving={skillSettingsSaving}
           onDraftSkillModelOverridesChange={setDraftSkillModelOverrides}
           onSaveSkillModelOverrides={() => void saveSkillModelSettings()}
+          mcpServers={mcpServers}
+          draftMcpServers={draftMcpServers}
+          mcpServerOverrides={mcpServerOverrides}
+          draftMcpServerOverrides={draftMcpServerOverrides}
+          mcpToolPolicies={mcpToolPolicies}
+          draftMcpToolPolicies={draftMcpToolPolicies}
+          mcpServerProbeCache={mcpServerProbeCache}
+          mcpSettingsStatus={mcpSettingsStatus}
+          mcpSettingsOperation={mcpSettingsOperation}
+          mcpStatusServers={mcpStatusServers}
+          onDraftMcpServersChange={setDraftMcpServers}
+          onDraftMcpServerOverridesChange={setDraftMcpServerOverrides}
+          onDraftMcpToolPoliciesChange={setDraftMcpToolPolicies}
+          onRefreshMcpStatus={refreshMcpStatus}
+          onSaveMcpSettings={() => void saveMcpSettings()}
           deletingSlug={deletingSlug}
           cardOrderStatus={cardOrderStatus}
           cardOrderSaving={cardOrderSaving}
@@ -1897,6 +2097,21 @@ function AgentSettingsModal({
   skillSettingsSaving,
   onDraftSkillModelOverridesChange,
   onSaveSkillModelOverrides,
+  mcpServers,
+  draftMcpServers,
+  mcpServerOverrides,
+  draftMcpServerOverrides,
+  mcpToolPolicies,
+  draftMcpToolPolicies,
+  mcpServerProbeCache,
+  mcpSettingsStatus,
+  mcpSettingsOperation,
+  mcpStatusServers,
+  onDraftMcpServersChange,
+  onDraftMcpServerOverridesChange,
+  onDraftMcpToolPoliciesChange,
+  onRefreshMcpStatus,
+  onSaveMcpSettings,
   deletingSlug,
   cardOrderStatus,
   cardOrderSaving,
@@ -1942,6 +2157,21 @@ function AgentSettingsModal({
   skillSettingsSaving: boolean
   onDraftSkillModelOverridesChange: (overrides: Record<string, ChatModelPick>) => void
   onSaveSkillModelOverrides: () => void
+  mcpServers: AgentMcpServerConfig[]
+  draftMcpServers: AgentMcpServerConfig[]
+  mcpServerOverrides: AgentMcpServerOverrides
+  draftMcpServerOverrides: AgentMcpServerOverrides
+  mcpToolPolicies: AgentMcpToolPolicies
+  draftMcpToolPolicies: AgentMcpToolPolicies
+  mcpServerProbeCache: AgentMcpServerProbeCache
+  mcpSettingsStatus: string
+  mcpSettingsOperation: ProjectMcpOperation
+  mcpStatusServers?: ClaudeAgentStatusSnapshot['mcpServers']
+  onDraftMcpServersChange: (servers: AgentMcpServerConfig[]) => void
+  onDraftMcpServerOverridesChange: (overrides: AgentMcpServerOverrides) => void
+  onDraftMcpToolPoliciesChange: (policies: AgentMcpToolPolicies) => void
+  onRefreshMcpStatus: () => void
+  onSaveMcpSettings: () => void
   deletingSlug: string
   cardOrderStatus: string
   cardOrderSaving: boolean
@@ -1963,9 +2193,10 @@ function AgentSettingsModal({
     onClose()
   }
 
-  const navItems: { id: AgentSettingsPanelId; label: string; icon: 'settings' | 'sort' | 'chip' | 'folder' | 'files' }[] = [
+  const navItems: { id: AgentSettingsPanelId; label: string; icon: 'settings' | 'sort' | 'chip' | 'folder' | 'files' | 'server' }[] = [
     { id: 'project', label: t('workspace.agentSettingsProject'), icon: 'folder' },
     { id: 'context', label: t('workspace.agentSettingsContext'), icon: 'files' },
+    { id: 'mcp', label: t('workspace.agentSettingsMcp'), icon: 'server' },
     { id: 'card-order', label: t('workspace.agentSettingsCardOrder'), icon: 'sort' },
     { id: 'skills', label: t('workspace.agentSettingsSkills'), icon: 'chip' },
     { id: 'general', label: t('workspace.agentSettingsGeneral'), icon: 'settings' },
@@ -1979,7 +2210,9 @@ function AgentSettingsModal({
       ? t('workspace.agentSettingsCardOrder')
       : activePanel === 'skills'
         ? t('workspace.agentSettingsSkills')
-        : t('workspace.agentModeReady')
+        : activePanel === 'mcp'
+          ? t('workspace.agentSettingsMcp')
+          : t('workspace.agentModeReady')
 
   return (
     <div className="project-home-modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -2000,6 +2233,7 @@ function AgentSettingsModal({
                 key={item.id}
                 type="button"
                 className={`agent-settings-nav__item${activePanel === item.id ? ' is-active' : ''}`}
+                data-testid={item.id === 'mcp' ? 'agent-settings-mcp-tab' : undefined}
                 aria-current={activePanel === item.id ? 'page' : undefined}
                 onClick={() => onActivePanelChange(item.id)}
               >
@@ -2057,6 +2291,25 @@ function AgentSettingsModal({
                 onDraftOverridesChange={onDraftSkillModelOverridesChange}
                 onClose={onClose}
                 onSave={onSaveSkillModelOverrides}
+              />
+            ) : activePanel === 'mcp' ? (
+              <McpSettingsPanel
+                savedServers={mcpServers}
+                draftServers={draftMcpServers}
+                savedOverrides={mcpServerOverrides}
+                draftOverrides={draftMcpServerOverrides}
+                savedPolicies={mcpToolPolicies}
+                draftPolicies={draftMcpToolPolicies}
+                probeCache={mcpServerProbeCache}
+                status={mcpSettingsStatus}
+                operation={mcpSettingsOperation}
+                statusServers={mcpStatusServers}
+                onDraftServersChange={onDraftMcpServersChange}
+                onDraftOverridesChange={onDraftMcpServerOverridesChange}
+                onDraftPoliciesChange={onDraftMcpToolPoliciesChange}
+                onRefreshStatus={onRefreshMcpStatus}
+                onClose={onClose}
+                onSave={onSaveMcpSettings}
               />
             ) : (
               <CardOrderSettingsPanel
@@ -2138,13 +2391,13 @@ function AgentSettingsGeneralPanel({
   )
 }
 
-function SaveFeedback({ status, dirty, saving }: { status: string; dirty: boolean; saving: boolean }) {
+function SaveFeedback({ status, dirty, saving, busy = saving }: { status: string; dirty: boolean; saving: boolean; busy?: boolean }) {
   const { t } = useI18n()
   const passiveStatus = !status || status === t('settings.agentMode.loaded') || status === t('settings.agentMode.saved')
-  const message = dirty && !saving && passiveStatus
+  const message = dirty && !busy && passiveStatus
     ? t('workspace.agentSettingsUnsavedChanges')
     : status || t('workspace.agentSettingsNoChanges')
-  const tone = saving
+  const tone = busy
     ? ' is-saving'
     : dirty && passiveStatus
       ? ' is-dirty'
@@ -2154,7 +2407,7 @@ function SaveFeedback({ status, dirty, saving }: { status: string; dirty: boolea
 
   return (
     <p className={`agent-settings-save-feedback${tone}`} role="status" aria-live="polite">
-      <IconInline name={saving ? 'refresh' : dirty && passiveStatus ? 'save' : status === t('settings.agentMode.saved') ? 'check' : 'check'} />
+      <IconInline name={busy ? 'refresh' : dirty && passiveStatus ? 'save' : status === t('settings.agentMode.saved') ? 'check' : 'check'} />
       <span>{message}</span>
     </p>
   )
@@ -2520,6 +2773,302 @@ function SkillsModelSettingsPanel({
   )
 }
 
+function McpSettingsPanel({
+  savedServers,
+  draftServers,
+  savedOverrides,
+  draftOverrides,
+  savedPolicies,
+  draftPolicies,
+  probeCache,
+  status,
+  operation,
+  statusServers,
+  onDraftServersChange,
+  onDraftOverridesChange,
+  onDraftPoliciesChange,
+  onRefreshStatus,
+  onClose,
+  onSave,
+}: {
+  savedServers: AgentMcpServerConfig[]
+  draftServers: AgentMcpServerConfig[]
+  savedOverrides: AgentMcpServerOverrides
+  draftOverrides: AgentMcpServerOverrides
+  savedPolicies: AgentMcpToolPolicies
+  draftPolicies: AgentMcpToolPolicies
+  probeCache: AgentMcpServerProbeCache
+  status: string
+  operation: ProjectMcpOperation
+  statusServers?: ClaudeAgentStatusSnapshot['mcpServers']
+  onDraftServersChange: (servers: AgentMcpServerConfig[]) => void
+  onDraftOverridesChange: (overrides: AgentMcpServerOverrides) => void
+  onDraftPoliciesChange: (policies: AgentMcpToolPolicies) => void
+  onRefreshStatus: () => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const saving = operation === 'saving'
+  const testing = operation === 'testing'
+  const discoveredTools = useMemo<DiscoveredMcpToolOption[]>(() => {
+    return draftServers.flatMap((server) => {
+      if (!server.enabled) return []
+      const snapshot = getMatchingMcpProbeSnapshot(server, probeCache)
+      if (snapshot?.status !== 'connected') return []
+      return snapshot.tools.map((tool) => ({
+        serverName: server.name,
+        toolName: tool.name,
+        fullName: `mcp__${server.name}__${tool.name}`,
+        description: tool.description,
+      }))
+    })
+  }, [draftServers, probeCache])
+  const discoveredToolNames = useMemo(() => new Set(discoveredTools.map((tool) => tool.fullName)), [discoveredTools])
+  const discoveredToolGroups = useMemo(() => groupMcpDiscoveredTools(discoveredTools), [discoveredTools])
+  const policyEntries = Object.entries(draftPolicies).filter(([toolName]) => !discoveredToolNames.has(toolName))
+  const isDirty =
+    JSON.stringify(savedOverrides) !== JSON.stringify(draftOverrides) ||
+    !sameMcpSettings(savedServers, draftServers, savedPolicies, draftPolicies)
+  const envRefs = collectMcpEnvReferences(draftServers)
+  const statusByName = useMemo(() => {
+    return new Map((statusServers ?? []).map((server) => [server.name.trim(), server]))
+  }, [statusServers])
+  const updateServer = (index: number, patch: Partial<AgentMcpServerConfig>) => {
+    const nextServers = draftServers.map((server, serverIndex) => (serverIndex === index ? { ...server, ...patch } : server))
+    onDraftServersChange(nextServers)
+    const target = nextServers[index]
+    if (target && Object.prototype.hasOwnProperty.call(patch, 'enabled')) {
+      onDraftOverridesChange({ ...draftOverrides, [target.name]: { enabled: target.enabled } })
+    }
+  }
+  const reset = () => {
+    onDraftServersChange(savedServers)
+    onDraftOverridesChange(savedOverrides)
+    onDraftPoliciesChange(savedPolicies)
+  }
+  const addPolicy = () => {
+    const nextName = uniquePolicyName(draftPolicies, draftServers)
+    onDraftPoliciesChange({ ...draftPolicies, [nextName]: 'ask' })
+  }
+  const updatePolicyName = (oldName: string, nextName: string) => {
+    const trimmed = nextName.trim()
+    const next = { ...draftPolicies }
+    const policy = next[oldName] ?? 'ask'
+    delete next[oldName]
+    if (trimmed) next[trimmed] = policy
+    onDraftPoliciesChange(next)
+  }
+  const updatePolicy = (toolName: string, policy: AgentMcpToolPolicy) => {
+    onDraftPoliciesChange({ ...draftPolicies, [toolName]: policy })
+  }
+  const removePolicy = (toolName: string) => {
+    const next = { ...draftPolicies }
+    delete next[toolName]
+    onDraftPoliciesChange(next)
+  }
+
+  return (
+    <section className="settings-stack agent-settings-panel" data-testid="agent-settings-mcp-panel" aria-labelledby="agent-settings-mcp-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-mcp-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsMcp')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsMcpHint')}</p>
+
+        <section className="agent-mcp-installed" aria-labelledby="agent-settings-mcp-installed-heading">
+          <div className="agent-mcp-installed__head">
+            <div>
+              <h4 id="agent-settings-mcp-installed-heading">{t('workspace.agentSettingsMcpInstalledHeading')}</h4>
+              <p>{t('workspace.agentSettingsMcpInstallHint')}</p>
+            </div>
+            <button type="button" className="agent-card-secondary-button" disabled={saving || testing} onClick={onRefreshStatus}>
+              <IconInline name="refresh" />
+              <span>{t('workspace.agentSettingsMcpRefreshStatus')}</span>
+            </button>
+          </div>
+          <div className="agent-mcp-installed-list" role="list" data-testid="mcp-installed-server-list">
+            {draftServers.length === 0 ? (
+              <p className="agent-context-empty">{t('workspace.agentSettingsMcpGlobalEmpty')}</p>
+            ) : null}
+            {draftServers.map((server, index) => {
+              const displayName = server.name.trim() || t('workspace.agentSettingsMcpUnnamed')
+              const savedName = savedServers[index]?.name?.trim() ?? ''
+              const runtimeStatus = statusByName.get(server.name.trim()) ?? (savedName ? statusByName.get(savedName) : undefined)
+              const probeSnapshot = getMatchingMcpProbeSnapshot(server, probeCache)
+              const statusMeta = formatMcpSettingsServerStatus(server, runtimeStatus, probeSnapshot, t)
+              const recoveryHint = formatMcpProjectRecoveryHint(server, runtimeStatus, probeSnapshot, t)
+              return (
+                <div
+                  key={`${server.name}-${index}`}
+                  className={`agent-mcp-installed-row agent-mcp-installed-row--${statusMeta.tone}`}
+                  role="listitem"
+                >
+                  <span className="agent-mcp-installed-row__avatar" aria-hidden="true">
+                    <span>{displayName.slice(0, 1).toUpperCase()}</span>
+                    <span className={`agent-mcp-installed-row__dot agent-mcp-installed-row__dot--${statusMeta.tone}`} />
+                  </span>
+                  <span className="agent-mcp-installed-row__copy">
+                    <strong>{displayName}</strong>
+                    <span title={statusMeta.title}>{statusMeta.text}</span>
+                    {recoveryHint ? <small data-testid="mcp-recovery-hint">{recoveryHint}</small> : null}
+                  </span>
+                  <label className="agent-mcp-installed-row__switch">
+                    <span className="sr-only">{t('workspace.agentSettingsMcpToggleServer', { name: displayName })}</span>
+                    <span className="settings-switch-control">
+                      <input
+                        type="checkbox"
+                        className="settings-switch-input"
+                        checked={server.enabled}
+                        disabled={saving}
+                        onChange={(event) => updateServer(index, { enabled: event.target.checked })}
+                      />
+                      <span className="settings-switch-track" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              )
+            })}
+          </div>
+          <p className="agent-mcp-session-hint" data-testid="mcp-session-effect-hint">
+            {t('workspace.agentSettingsMcpSessionEffectHint')}
+          </p>
+        </section>
+
+        {envRefs.length > 0 ? (
+          <p className="agent-mcp-warning" data-testid="mcp-env-resolution-error">
+            {t('workspace.agentSettingsMcpEnvRefNotice', { count: envRefs.length })}
+          </p>
+        ) : null}
+
+        <section className="agent-mcp-policy" aria-labelledby="agent-settings-mcp-policy-heading">
+          <div className="agent-mcp-policy__head">
+            <div>
+              <h4 id="agent-settings-mcp-policy-heading">{t('workspace.agentSettingsMcpPolicies')}</h4>
+              <p>{t('workspace.agentSettingsMcpPoliciesHint')}</p>
+            </div>
+            <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={addPolicy}>
+              <IconInline name="plus" />
+              <span>{t('workspace.agentSettingsMcpAddPolicy')}</span>
+            </button>
+          </div>
+          {discoveredToolGroups.length > 0 ? (
+            <div className="agent-mcp-discovered-tools" role="list" data-testid="mcp-discovered-tool-policy-list">
+              <div className="agent-mcp-discovered-tools__head">
+                <strong>{t('workspace.agentSettingsMcpDiscoveredTools')}</strong>
+                <span>{t('workspace.agentSettingsMcpDiscoveredToolsHint')}</span>
+              </div>
+              {discoveredToolGroups.map((group) => (
+                <div className="agent-mcp-discovered-tools__group" key={group.serverName}>
+                  <div className="agent-mcp-discovered-tools__group-head">
+                    <strong>{group.serverName}</strong>
+                    <span>{t('workspace.agentSettingsMcpDiscoveredServerTools', { count: group.tools.length })}</span>
+                  </div>
+                  {group.tools.map((tool) => {
+                    const risk = formatMcpToolRisk(tool.toolName, tool.description, t)
+                    const hasExplicitPolicy = Object.prototype.hasOwnProperty.call(draftPolicies, tool.fullName)
+                    return (
+                      <div className="agent-mcp-discovered-tool-row" role="listitem" key={tool.fullName}>
+                        <span className="agent-mcp-discovered-tool-row__copy">
+                          <strong>{tool.toolName}</strong>
+                          <small>{tool.description || tool.fullName}</small>
+                          <span className="agent-mcp-discovered-tool-row__meta">
+                            <span className={`agent-mcp-risk agent-mcp-risk--${risk.tone}`} data-testid="mcp-tool-risk-annotation">
+                              {risk.label}
+                            </span>
+                            <small data-testid="mcp-policy-source-hint">
+                              {hasExplicitPolicy ? t('workspace.agentSettingsMcpPolicySourceProject') : t('workspace.agentSettingsMcpPolicySourceDefault')}
+                            </small>
+                          </span>
+                        </span>
+                        <label className="agent-mcp-field">
+                          <span>{t('workspace.agentSettingsMcpPolicy')}</span>
+                          <select
+                            className="settings-input settings-select"
+                            value={draftPolicies[tool.fullName] ?? 'ask'}
+                            disabled={saving}
+                            onChange={(event) => updatePolicy(tool.fullName, event.target.value as AgentMcpToolPolicy)}
+                          >
+                            <option value="ask">{t('workspace.agentSettingsMcpPolicyAsk')}</option>
+                            <option value="allow">{t('workspace.agentSettingsMcpPolicyAllow')}</option>
+                            <option value="deny">{t('workspace.agentSettingsMcpPolicyDeny')}</option>
+                          </select>
+                        </label>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="agent-mcp-policy__list" role="list" data-testid="mcp-tool-policy-list">
+            {policyEntries.length === 0 ? (
+              <p className="agent-context-empty">{t('workspace.agentSettingsMcpPolicyEmpty')}</p>
+            ) : null}
+            {policyEntries.map(([toolName, policy]) => (
+              <div className="agent-mcp-policy-row" role="listitem" key={toolName}>
+                <label className="agent-mcp-field">
+                  <span>{t('workspace.agentSettingsMcpToolName')}</span>
+                  <input
+                    className="settings-input"
+                    value={toolName}
+                    disabled={saving}
+                    spellCheck={false}
+                    placeholder="mcp__github__create_issue"
+                    onChange={(event) => updatePolicyName(toolName, event.target.value)}
+                  />
+                </label>
+                <label className="agent-mcp-field">
+                  <span>{t('workspace.agentSettingsMcpPolicy')}</span>
+                  <select
+                    className="settings-input settings-select"
+                    value={policy}
+                    disabled={saving}
+                    onChange={(event) => updatePolicy(toolName, event.target.value as AgentMcpToolPolicy)}
+                  >
+                    <option value="ask">{t('workspace.agentSettingsMcpPolicyAsk')}</option>
+                    <option value="allow">{t('workspace.agentSettingsMcpPolicyAllow')}</option>
+                    <option value="deny">{t('workspace.agentSettingsMcpPolicyDeny')}</option>
+                  </select>
+                  <small className="settings-field-row__hint" data-testid="mcp-policy-source-hint">
+                    {t('workspace.agentSettingsMcpPolicySourceManual')}
+                  </small>
+                </label>
+                <button
+                  type="button"
+                  className="project-home-icon-button project-home-icon-button--danger"
+                  disabled={saving}
+                  title={t('workspace.agentSettingsMcpRemovePolicy')}
+                  aria-label={t('workspace.agentSettingsMcpRemovePolicyNamed', { name: toolName })}
+                  onClick={() => removePolicy(toolName)}
+                >
+                  <IconInline name="trash" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} busy={saving || testing} />
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+            reset()
+            onClose()
+          }}>
+            {t('settings.agentMode.cancel')}
+          </button>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+            <IconInline name={saving ? 'refresh' : 'save'} />
+            <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
 function CardOrderSettingsPanel({
   cards,
   draftOrder,
@@ -2721,6 +3270,273 @@ function sameCardLayout(
   if (currentOrder.length !== draftOrder.length) return false
   if (currentOrder.some((cardId, index) => cardId !== draftOrder[index])) return false
   return cards.every((card) => (draftSizes[card.cardId] ?? card.size) === card.size)
+}
+
+function uniquePolicyName(policies: AgentMcpToolPolicies, servers: AgentMcpServerConfig[]): string {
+  const serverName = servers.find((server) => server.name.trim())?.name.trim() || 'server'
+  const base = `mcp__${serverName}__tool`
+  let name = base
+  let suffix = 2
+  while (Object.prototype.hasOwnProperty.call(policies, name)) {
+    name = `${base}_${suffix}`
+    suffix += 1
+  }
+  return name
+}
+
+function normalizeMcpServersForSave(servers: AgentMcpServerConfig[]): AgentMcpServerConfig[] {
+  const usedNames = new Set<string>()
+  return servers.map((server) => {
+    const rawName = server.name.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) || 'mcp-server'
+    let name = rawName
+    let suffix = 2
+    while (usedNames.has(name)) {
+      name = `${rawName}-${suffix}`
+      suffix += 1
+    }
+    usedNames.add(name)
+    return {
+      name,
+      enabled: server.enabled,
+      transport: server.transport === 'http' || server.transport === 'sse' ? server.transport : 'stdio',
+      command: server.command.trim(),
+      args: server.args.map((arg) => arg.trim()).filter(Boolean),
+      env: cleanStringRecord(server.env),
+      cwd: server.cwd.trim(),
+      url: server.url.trim(),
+      headers: cleanStringRecord(server.headers),
+      alwaysLoad: server.alwaysLoad,
+    }
+  })
+}
+
+function normalizeMcpPoliciesForSave(policies: AgentMcpToolPolicies): AgentMcpToolPolicies {
+  const next: AgentMcpToolPolicies = {}
+  for (const [rawName, policy] of Object.entries(policies)) {
+    const name = rawName.trim()
+    if (!name) continue
+    next[name] = policy === 'allow' || policy === 'deny' ? policy : 'ask'
+  }
+  return next
+}
+
+function overridesFromMcpServers(servers: AgentMcpServerConfig[]): AgentMcpServerOverrides {
+  return Object.fromEntries(servers.map((server) => [server.name, { enabled: server.enabled }]))
+}
+
+type DiscoveredMcpToolOption = {
+  serverName: string
+  toolName: string
+  fullName: string
+  description?: string
+}
+
+type McpSettingsStatusTone = 'ready' | 'pending' | 'error' | 'disabled'
+
+function groupMcpDiscoveredTools(tools: DiscoveredMcpToolOption[]): { serverName: string; tools: DiscoveredMcpToolOption[] }[] {
+  const groups = new Map<string, DiscoveredMcpToolOption[]>()
+  for (const tool of tools) {
+    const groupTools = groups.get(tool.serverName) ?? []
+    groupTools.push(tool)
+    groups.set(tool.serverName, groupTools)
+  }
+  return [...groups.entries()].map(([serverName, groupTools]) => ({ serverName, tools: groupTools }))
+}
+
+function formatMcpToolRisk(
+  toolName: string,
+  description: string | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): { tone: 'low' | 'medium' | 'high'; label: string } {
+  const text = `${toolName} ${description ?? ''}`.toLowerCase()
+  if (/(delete|remove|destroy|drop|reset|execute|exec|shell|bash|terminal|run|deploy|publish)/.test(text)) {
+    return { tone: 'high', label: t('workspace.agentSettingsMcpRiskHigh') }
+  }
+  if (/(write|create|update|edit|upload|send|post|commit|merge|move|rename|apply|patch)/.test(text)) {
+    return { tone: 'medium', label: t('workspace.agentSettingsMcpRiskMedium') }
+  }
+  return { tone: 'low', label: t('workspace.agentSettingsMcpRiskLow') }
+}
+
+function formatMcpProjectRecoveryHint(
+  server: AgentMcpServerConfig,
+  runtimeStatus: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>[number] | undefined,
+  probeSnapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): string {
+  if (!server.enabled) return ''
+  const status = runtimeStatus?.status ?? probeSnapshot?.status
+  if (status !== 'failed' && status !== 'needs-auth') return ''
+  const error = `${runtimeStatus?.error ?? ''} ${probeSnapshot?.error ?? ''}`.toLowerCase()
+  if (error.includes('env') || error.includes('environment') || error.includes('variable') || error.includes('${')) {
+    return t('workspace.agentSettingsMcpRecoveryEnv')
+  }
+  if (status === 'needs-auth' || error.includes('auth') || error.includes('token') || error.includes('key')) {
+    return t('workspace.agentSettingsMcpRecoveryAuth')
+  }
+  return server.transport === 'stdio' ? t('workspace.agentSettingsMcpRecoveryCommand') : t('workspace.agentSettingsMcpRecoveryUrl')
+}
+
+function formatMcpSettingsServerStatus(
+  server: AgentMcpServerConfig,
+  runtimeStatus: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>[number] | undefined,
+  probeSnapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): { tone: McpSettingsStatusTone; text: string; title?: string } {
+  if (!server.enabled) {
+    return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
+  }
+  if (runtimeStatus?.status === 'connected') {
+    if (typeof runtimeStatus.toolCount === 'number') {
+      return {
+        tone: 'ready',
+        text: t('workspace.agentSettingsMcpStatusRuntimeConnectedTools', { count: runtimeStatus.toolCount }),
+      }
+    }
+    return { tone: 'ready', text: t('workspace.agentSettingsMcpStatusRuntimeConnected') }
+  }
+  if (runtimeStatus?.status === 'failed') {
+    const message = runtimeStatus.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusFailedDetail', { message })
+        : t('workspace.agentSettingsMcpStatusFailed'),
+      title: message,
+    }
+  }
+  if (runtimeStatus?.status === 'needs-auth') {
+    const message = runtimeStatus.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusNeedsAuthDetail', { message })
+        : t('workspace.agentSettingsMcpStatusNeedsAuth'),
+      title: message,
+    }
+  }
+  if (runtimeStatus?.error?.trim()) {
+    return {
+      tone: 'error',
+      text: t('workspace.agentSettingsMcpStatusFailedDetail', { message: runtimeStatus.error.trim() }),
+      title: runtimeStatus.error.trim(),
+    }
+  }
+  if (probeSnapshot?.status === 'connected') {
+    return {
+      tone: 'ready',
+      text: t('workspace.agentSettingsMcpStatusProjectAvailableTools', { count: probeSnapshot.tools.length }),
+    }
+  }
+  if (probeSnapshot?.status === 'needs-auth') {
+    const message = probeSnapshot.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusNeedsAuthDetail', { message })
+        : t('workspace.agentSettingsMcpStatusNeedsAuth'),
+      title: message,
+    }
+  }
+  if (probeSnapshot?.status === 'failed') {
+    const message = probeSnapshot.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusFailedDetail', { message })
+        : t('workspace.agentSettingsMcpStatusFailed'),
+      title: message,
+    }
+  }
+  if (probeSnapshot?.status === 'disabled') {
+    return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
+  }
+  if (runtimeStatus?.status) {
+    return {
+      tone: 'pending',
+      text: t('workspace.agentSettingsMcpStatusRuntime', { status: runtimeStatus.status }),
+    }
+  }
+  return { tone: 'pending', text: t('settings.mcp.notTested') }
+}
+
+function validateMcpSettings(
+  servers: AgentMcpServerConfig[],
+  policies: AgentMcpToolPolicies,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): string {
+  for (const server of servers) {
+    if (!server.enabled) continue
+    if (server.transport === 'stdio' && !server.command.trim()) {
+      return t('workspace.agentSettingsMcpMissingCommand', { name: server.name })
+    }
+    if (server.transport !== 'stdio' && !server.url.trim()) {
+      return t('workspace.agentSettingsMcpMissingUrl', { name: server.name })
+    }
+  }
+  for (const toolName of Object.keys(policies)) {
+    if (!toolName.startsWith('mcp__') || !/^mcp__(.+?)__(.+)$/.test(toolName)) {
+      return t('workspace.agentSettingsMcpInvalidToolName', { name: toolName })
+    }
+  }
+  return ''
+}
+
+function sameMcpSettings(
+  savedServers: AgentMcpServerConfig[],
+  draftServers: AgentMcpServerConfig[],
+  savedPolicies: AgentMcpToolPolicies,
+  draftPolicies: AgentMcpToolPolicies,
+): boolean {
+  return JSON.stringify(normalizeMcpServersForSave(savedServers)) === JSON.stringify(normalizeMcpServersForSave(draftServers)) &&
+    JSON.stringify(normalizeMcpPoliciesForSave(savedPolicies)) === JSON.stringify(normalizeMcpPoliciesForSave(draftPolicies))
+}
+
+function getMatchingMcpProbeSnapshot(
+  server: AgentMcpServerConfig,
+  probeCache: AgentMcpServerProbeCache,
+): AgentMcpServerProbeSnapshot | undefined {
+  const snapshot = probeCache[server.name]
+  if (!snapshot) return undefined
+  if (snapshot.configSignature !== buildMcpServerConfigSignature(server)) return undefined
+  return snapshot
+}
+
+function buildMcpServerConfigSignature(server: AgentMcpServerConfig): string {
+  return JSON.stringify({
+    transport: server.transport === 'http' || server.transport === 'sse' ? server.transport : 'stdio',
+    command: server.command.trim(),
+    args: server.args.map((arg) => arg.trim()).filter(Boolean),
+    env: cleanStringRecord(server.env),
+    cwd: server.cwd.trim(),
+    url: server.url.trim(),
+    headers: cleanStringRecord(server.headers),
+  })
+}
+
+function cleanStringRecord(record: Record<string, string>): Record<string, string> {
+  const output: Record<string, string> = {}
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const key = rawKey.trim()
+    const value = rawValue.trim()
+    if (key && value) output[key] = value
+  }
+  return output
+}
+
+function collectMcpEnvReferences(servers: AgentMcpServerConfig[]): string[] {
+  const refs = new Set<string>()
+  const collect = (value: string) => {
+    for (const match of value.matchAll(/\$\{([A-Z_a-z][A-Z_a-z0-9]*)\}/g)) refs.add(match[1])
+  }
+  for (const server of servers) {
+    collect(server.command)
+    server.args.forEach(collect)
+    collect(server.url)
+    Object.values(server.env).forEach(collect)
+    Object.values(server.headers).forEach(collect)
+  }
+  return [...refs]
 }
 
 function useMasonrySpan(ref: RefObject<HTMLElement | null>, deps: unknown[]) {

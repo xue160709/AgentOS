@@ -1,0 +1,12 @@
+{
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
+  "lastPrdSyncAt": "2026-06-24",
+  "module": "file-context",
+  "lastChangedFiles": [
+    "src/components/AppSearchModal.tsx",
+    "electron/main.ts",
+    "electron/chat-workspace-store.ts",
+    "electron/chat-workspace-store.test.mjs"
+  ],
+  "notes": "全量同步：file-context acceptance 已通过；项目文件搜索、预览、附件与图片能力限制完成验收状态同步，后续可补全页面点击式附件 UI 回归。"
+}

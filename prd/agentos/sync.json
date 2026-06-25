@@ -1,0 +1,19 @@
+{
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
+  "lastPrdSyncAt": "2026-06-23",
+  "module": "agentos",
+  "lastChangedFiles": [
+    "package.json",
+    "README.md",
+    "src/main.tsx",
+    "src/components/AppShell.tsx",
+    "src/components/AppShellWorkspace.tsx",
+    "src/desktop-seam.ts",
+    "src/desktop-api.ts",
+    "electron/main.ts",
+    "electron/preload.ts",
+    "src/i18n/i18n.tsx",
+    "src/app-metadata.ts"
+  ],
+  "notes": "全量同步：产品总览 acceptance 已通过；剩余未验收项集中在桌面托盘和 macOS 语音权限人工确认，产品 TODO 仍需重整为 AgentOS backlog。"
+}

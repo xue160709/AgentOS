@@ -13,6 +13,7 @@ import type {
   ClaudeFileDiffLineKind,
 } from './claude-chat-types'
 import type {
+  ChatContextCompactionItem,
   ChatMessageAttachment,
   ChatState,
   ChatTaskItem,
@@ -27,6 +28,16 @@ import {
   stripRuntimeProjectFields,
 } from './project-path'
 import { restoreWorkspaceSessionState } from './components/workspace-session'
+import {
+  CHAT_WORKSPACE_SAVED_AT_FIELD,
+  CHAT_WORKSPACE_REVISION_FIELD,
+  readWorkspaceRevision,
+  readWorkspaceSavedAt,
+  resolveChatWorkspaceSnapshot,
+  withNextWorkspaceRevision,
+  workspaceRevisionOf,
+  type ChatWorkspaceSnapshot,
+} from './workspace-snapshot-resolution'
 
 // --- Factories & selectors / 默认值与查询 ---
 
@@ -58,10 +69,18 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
     try {
       const raw = await window.desktop.getChatWorkspace()
       if (raw != null) {
-        return finalizeChatWorkspaceState(normalizeChatWorkspaceState(raw))
+        const selected = resolveChatWorkspaceSnapshot([
+          createChatWorkspaceSnapshot(raw, 'desktop-mirror'),
+          fromLocal,
+        ])
+        const finalized = await finalizeChatWorkspaceState(selected?.state ?? normalizeChatWorkspaceState(raw))
+        if (selected === fromLocal && window.desktop.saveChatWorkspace) {
+          await window.desktop.saveChatWorkspace(finalized)
+        }
+        return finalized
       }
       if (fromLocal) {
-        const finalized = await finalizeChatWorkspaceState(fromLocal)
+        const finalized = await finalizeChatWorkspaceState(fromLocal.state)
         if (window.desktop.saveChatWorkspace) {
           await window.desktop.saveChatWorkspace(finalized)
         }
@@ -72,7 +91,7 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
     }
   }
 
-  return finalizeChatWorkspaceState(fromLocal ?? createDefaultChatWorkspaceState())
+  return finalizeChatWorkspaceState(fromLocal?.state ?? createDefaultChatWorkspaceState())
 }
 
 /** 迁移旧种子项目、校验路径并修正活动项目 / Migrate legacy seeds, validate paths, fix active project */
@@ -85,6 +104,7 @@ export async function finalizeChatWorkspaceState(state: ChatWorkspaceState): Pro
     JSON.stringify(stripRuntimeProjectFields(next)) !== JSON.stringify(stripRuntimeProjectFields(state))
   if (changed && typeof window !== 'undefined' && window.desktop?.saveChatWorkspace) {
     try {
+      next = withNextWorkspaceRevision(next, workspaceRevisionOf(state))
       await window.desktop.saveChatWorkspace(next)
     } catch {
       /* ignore */
@@ -123,12 +143,6 @@ async function annotateProjectPathAvailability(state: ChatWorkspaceState): Promi
 /** 写入 localStorage 并尽力同步主进程 / Persist locally and best-effort mirror to main */
 export async function persistChatWorkspaceState(state: ChatWorkspaceState): Promise<void> {
   const toSave = stripRuntimeProjectFields(state)
-  try {
-    localStorage.setItem(CHAT_WORKSPACE_STORAGE_KEY, JSON.stringify(toSave))
-  } catch {
-    /* ignore */
-  }
-
   const save = typeof window !== 'undefined' ? window.desktop?.saveChatWorkspace : undefined
   if (save) {
     try {
@@ -139,10 +153,27 @@ export async function persistChatWorkspaceState(state: ChatWorkspaceState): Prom
   }
 }
 
-function loadChatWorkspaceFromLocalStorage(): ChatWorkspaceState | null {
+/** 同步写入 renderer 本地快照，用于覆盖退出前主进程 mirror 尚未完成的窗口。 */
+export function persistChatWorkspaceStateToLocalStorage(state: ChatWorkspaceState): void {
+  try {
+    const toSave = stripRuntimeProjectFields(state)
+    const payload = {
+      ...toSave,
+      [CHAT_WORKSPACE_SAVED_AT_FIELD]: Date.now(),
+      [CHAT_WORKSPACE_REVISION_FIELD]: workspaceRevisionOf(toSave),
+    }
+    localStorage.setItem(CHAT_WORKSPACE_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadChatWorkspaceFromLocalStorage(): ChatWorkspaceSnapshot | null {
   try {
     const raw = localStorage.getItem(CHAT_WORKSPACE_STORAGE_KEY)
-    if (raw) return normalizeChatWorkspaceState(JSON.parse(raw))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    return createChatWorkspaceSnapshot(parsed, 'renderer-local')
   } catch {
     /* ignore */
   }
@@ -154,9 +185,19 @@ export function createDefaultChatWorkspaceState(): ChatWorkspaceState {
   return {
     activeProjectId: '',
     activeThreadId: '',
+    workspaceRevision: 0,
     projects: [],
     threads: [],
     sidebarPrefs: createDefaultSidebarPrefs(),
+  }
+}
+
+function createChatWorkspaceSnapshot(value: unknown, source: string): ChatWorkspaceSnapshot {
+  return {
+    state: normalizeChatWorkspaceState(value),
+    savedAt: readWorkspaceSavedAt(value),
+    revision: readWorkspaceRevision(value),
+    source,
   }
 }
 
@@ -211,7 +252,10 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
   })
 
   if (projects.length === 0) {
-    return migrateLegacySeedProjects(createDefaultChatWorkspaceState())
+    return {
+      ...migrateLegacySeedProjects(createDefaultChatWorkspaceState()),
+      workspaceRevision: readWorkspaceRevision(value) ?? 0,
+    }
   }
   const projectIds = new Set(projects.map((project) => project.id))
   const threads = value.threads.flatMap((thread): WorkspaceThread[] => {
@@ -240,6 +284,7 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
   const sidebarPrefs = normalizeSidebarPrefs(value, projectIds)
 
   return {
+    workspaceRevision: readWorkspaceRevision(value) ?? 0,
     activeProjectId: typeof value.activeProjectId === 'string' ? value.activeProjectId : '',
     activeThreadId: typeof value.activeThreadId === 'string' ? value.activeThreadId : '',
     projects,
@@ -334,6 +379,7 @@ function normalizeTranscriptItem(value: unknown): ChatState['items'] {
       {
         type: 'tool',
         id: value.id,
+        requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
         toolUseId: value.toolUseId,
         name: value.name,
         inputPreview: typeof value.inputPreview === 'string' ? value.inputPreview : '',
@@ -349,6 +395,7 @@ function normalizeTranscriptItem(value: unknown): ChatState['items'] {
       {
         type: 'thinking',
         id: value.id,
+        requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
         thinkingId: value.thinkingId,
         title: typeof value.title === 'string' ? value.title : 'Think',
         content: typeof value.content === 'string' ? value.content : '',
@@ -357,11 +404,19 @@ function normalizeTranscriptItem(value: unknown): ChatState['items'] {
     ]
   }
 
+  if (value.type === 'context_compaction') {
+    return normalizeContextCompactionItem(value)
+  }
+
   if (value.type === 'activity' && typeof value.title === 'string') {
+    if (isLegacyContextCompactionActivity(value)) {
+      return normalizeLegacyContextCompactionActivity(value)
+    }
     return [
       {
         type: 'activity',
         id: value.id,
+        requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
         title: value.title,
         status:
           value.status === 'running' || value.status === 'done' || value.status === 'error' || value.status === 'info'
@@ -389,6 +444,49 @@ function normalizeTranscriptItem(value: unknown): ChatState['items'] {
   }
 
   return []
+}
+
+function normalizeContextCompactionItem(value: Record<string, unknown>): ChatContextCompactionItem[] {
+  return [
+    {
+      type: 'context_compaction',
+      id: typeof value.id === 'string' ? value.id : 'context-compact-unknown',
+      requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
+      status: normalizeContextCompactionStatus(value.status),
+      trigger: normalizeContextCompactionTrigger(value.trigger),
+      preTokens: toOptionalFiniteNumber(value.preTokens),
+      postTokens: toOptionalFiniteNumber(value.postTokens),
+      durationMs: toOptionalFiniteNumber(value.durationMs),
+      preservedMessageCount: toOptionalFiniteNumber(value.preservedMessageCount),
+      summary: typeof value.summary === 'string' ? value.summary : undefined,
+      error: typeof value.error === 'string' ? value.error : undefined,
+      createdAt: toOptionalFiniteNumber(value.createdAt),
+      updatedAt: toOptionalFiniteNumber(value.updatedAt),
+    },
+  ]
+}
+
+function normalizeLegacyContextCompactionActivity(value: Record<string, unknown>): ChatContextCompactionItem[] {
+  const detail = typeof value.detail === 'string' ? value.detail : ''
+  const tokenMatch = detail.match(/([0-9,]+)\s*tokens(?:\s*·\s*->\s*([0-9,]+))?/i)
+  return [
+    {
+      type: 'context_compaction',
+      id: value.id === 'sdk-compact' ? 'context-compact-legacy' : typeof value.id === 'string' ? value.id : 'context-compact-legacy',
+      requestId: typeof value.requestId === 'string' ? value.requestId : undefined,
+      status: normalizeContextCompactionStatus(value.status),
+      trigger: normalizeContextCompactionTrigger(detail.includes('自动') || /auto/i.test(detail) ? 'auto' : detail.includes('手动') || /manual/i.test(detail) ? 'manual' : undefined),
+      preTokens: tokenMatch ? numberFromCompactToken(tokenMatch[1]) : undefined,
+      postTokens: tokenMatch?.[2] ? numberFromCompactToken(tokenMatch[2]) : undefined,
+      summary: typeof value.preview === 'string' ? value.preview : undefined,
+    },
+  ]
+}
+
+function isLegacyContextCompactionActivity(value: Record<string, unknown>): boolean {
+  const title = typeof value.title === 'string' ? value.title.trim() : ''
+  const id = typeof value.id === 'string' ? value.id : ''
+  return id.includes('sdk-compact') || title === '压缩上下文' || title.toLowerCase() === 'compact context'
 }
 
 // --- Module helpers / 模块内工具 ---
@@ -466,6 +564,16 @@ function normalizeFileChangeSetStatus(value: unknown): ClaudeFileChangeSetStatus
   return 'captured'
 }
 
+function normalizeContextCompactionStatus(value: unknown): ChatContextCompactionItem['status'] {
+  if (value === 'running' || value === 'error') return value
+  return 'done'
+}
+
+function normalizeContextCompactionTrigger(value: unknown): ChatContextCompactionItem['trigger'] {
+  if (value === 'manual' || value === 'auto') return value
+  return 'unknown'
+}
+
 function normalizeFileDiffStatus(value: unknown): ClaudeFileDiffFileStatus {
   if (value === 'added' || value === 'modified' || value === 'deleted') return value
   return 'unknown'
@@ -482,6 +590,11 @@ function toFiniteNumber(value: unknown, fallback: number): number {
 
 function toOptionalFiniteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function numberFromCompactToken(value: string): number | undefined {
+  const number = Number(value.replace(/,/g, ''))
+  return Number.isFinite(number) ? number : undefined
 }
 
 function normalizeThreadPurpose(value: unknown): WorkspaceThread['purpose'] {

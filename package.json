@@ -1,7 +1,7 @@
 {
   "name": "agentos",
   "productName": "AgentOS",
-  "version": "0.1.14",
+  "version": "0.1.16",
   "description": "面向本地项目与长期任务的桌面 Agent 工作台",
   "author": "xuezhirong <xue160709@gmail.com> (https://github.com/xue160709)",
   "homepage": "https://github.com/xue160709/AgentOS",
@@ -51,5 +51,8 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "zod": "^4.4.3"
+  },
+  "overrides": {
+    "@electron/notarize": "2.5.0"
   }
 }
