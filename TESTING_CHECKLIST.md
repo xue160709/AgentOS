@@ -3,7 +3,7 @@
 最后更新：2026-06-24
 主框架：Electron + React + Vite
 验证类别：正式验收（project-verify）
-验证范围：`prd/*/acceptance.md` 全部 10 个模块、98 个场景；本轮增量覆盖 WebSearch API Key 池 5 个新增场景
+验证范围：`prd/*/acceptance.md` 全部 10 个模块、98 个场景；本轮复验剩余 3 个 manual-only 场景并同步当前静态/集成测试结果
 
 ## 结论
 
@@ -19,12 +19,14 @@
 | 命令 / smoke | 结果 | 摘要 |
 | --- | --- | --- |
 | `npm run typecheck` | ✅ | TypeScript 检查通过 |
-| `npm run test:electron` | ✅ | 78/78 通过；覆盖 workspace session、chat runtime、project content、desktop seam、window chrome、model pick、MCP、WebSearch API Key 池等 |
+| `npm run test:electron` | ✅ | 79/79 通过；覆盖 workspace session、chat runtime、project content、desktop seam、window chrome、model pick、MCP、WebSearch API Key 池和 release-safe stdio MCP PATH 等 |
 | `node --test electron/claude-agent-runner-web-search.test.mjs electron/agent-mode-settings-store.test.mjs` | ✅ | 19/19 通过；覆盖 Brave/Tavily Key 池 fallback、聚合失败脱敏、Provider Test fallback 元数据和旧单 Key 到单元素池迁移 |
 | WebSearch Key Pool selector/source audit | ✅ | 23 项源码核对通过；覆盖 `[data-testid="web-search-key-pool"]`、Key 池输入、保存按钮、Provider Test 状态、上移/下移/删除/添加控件和脱敏 fallback 代码路径 |
 | `npm run test:home-plugin` | ✅ | 命令执行成功；当前仓库无 `.agents/home-plugins/project-home`，脚本按预期跳过 |
 | `node test-results/full-acceptance-smoke.mjs` | ✅ | 覆盖 Agent Mode、runtime context、Generative UI、Home Plugin、模型设置、任务 Home Plugin |
 | `bash .codex/scripts/check-acceptance.sh --all` | ✅ | 10 个 acceptance 契约结构检查通过 |
+| `python3 .codex/scripts/agentic_drift_check.py` | ✅ | 10 个 acceptance 契约 inspected，无状态漂移失败 |
+| `git diff --check` | ✅ | 无 whitespace 错误 |
 | `./node_modules/.bin/vite build` | ✅ | renderer、Electron main/preload build 通过 |
 | `npm run build:local` | ✅ | 本地 Electron 打包通过，生成 macOS app/dmg/zip blockmap；本地模式按预期跳过 notarization |
 | `curl -I http://127.0.0.1:5181/` | ✅ | Preview server 返回 HTTP 200 |
@@ -79,3 +81,11 @@
 - 真实 Brave/Tavily 外网成功搜索不作为本轮通过条件；请求映射、缺凭据、HTTP 错误分类与脱敏通过本地测试和 Provider smoke 验证。
 - Electron 托盘和 macOS 语音/麦克风权限必须在用户本机 GUI 中人工确认，已在对应 acceptance 场景标记为 `⚠️`。
 - 全页面点击式 Playwright E2E 尚未沉淀为仓库脚本；本轮以 Electron 单元/集成测试、selector audit、浏览器 smoke 和专用 Node smoke 组合验收。
+
+## 剩余 manual-only 场景复验（2026-06-24）
+
+| 模块/场景 | 本轮动作 | 状态 | 证据类型 | 结论 |
+| --- | --- | --- | --- | --- |
+| `desktop-shell-settings-release` / 启用 close-to-tray | 复查 `electron/main.ts` close handler、托盘恢复入口；运行 `npm run typecheck`、`npm run test:electron`、`check-acceptance --all`、drift check | ⚠️ | skipped + static | 代码路径存在，但仍需真实 Electron 托盘与窗口关闭事件确认，不能无 GUI 证据盖 ✅ |
+| `desktop-shell-settings-release` / 用户开始语音输入 | 复查 `electron/speech-recognition.ts` status/partial/final 转发；运行当前集成测试 | ⚠️ | skipped + static | 事件桥接代码存在，但需真实 macOS Speech/Microphone 授权和 speech helper 事件，不能无系统权限证据盖 ✅ |
+| `desktop-shell-settings-release` / 用户拒绝语音权限 | 复查 speech helper error 转发与状态置错路径；运行当前集成测试 | ⚠️ | skipped + static | 错误事件路径存在，但需真实 macOS 权限拒绝状态，不能无系统权限证据盖 ✅ |

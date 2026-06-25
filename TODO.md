@@ -143,6 +143,7 @@
   - 说明：本轮只做 PRD as-built 与验收契约初始化，不修改业务代码，不把未正式验收场景标为 `✅`。
 - [ ] 正式验收收口：全量 `project-verify` 已完成，继续收口人工 GUI / 系统权限项。
   - 进展：2026-06-24 已完成全量 project-verify 与 WebSearch API Key 池增量验收；当前累计 98 个场景中 95 个 ✅、0 个 ❌、3 个 ⚠️。剩余 3 个均在 `desktop-shell-settings-release`，详见 `TESTING_CHECKLIST.md`、`test-results/verification-summary.md` 与 `prd/desktop-shell-settings-release/acceptance.md`。
+  - 复验：2026-06-24 本轮按 `project-verify` 复查剩余 3 个 manual-only 场景；`npm run typecheck`、`npm run test:electron`（79/79）、`npm run test:home-plugin`、`bash .codex/scripts/check-acceptance.sh --all`、`python3 .codex/scripts/agentic_drift_check.py`、`git diff --check` 均通过。因缺真实 Electron 托盘 / macOS Speech & Microphone 权限 GUI 证据，3 项继续保持 ⚠️，不得打勾。
   - [ ] 人工确认 close-to-tray：真实 Electron 托盘与窗口关闭事件下，关闭主窗口应隐藏到托盘且可恢复窗口。
   - [ ] 人工确认 macOS 语音授权成功：真实 macOS Speech/Microphone 授权后，Composer 语音输入应把 partial/final 写入当前选区 draft range。
   - [ ] 人工确认 macOS 语音权限拒绝：系统权限拒绝时，页面应展示权限恢复提示，主进程语音状态应落到 error。
@@ -426,3 +427,14 @@
   - `node --test electron/claude-agent-runner-mcp.test.mjs` ✅
   - `npm run test:electron` ✅（79/79）
   - `git diff --check -- electron/claude-agent-runner/mcp.ts electron/claude-agent-runner/mcp-probe.ts electron/claude-agent-runner-mcp.test.mjs` ✅
+- 本轮：按用户要求对项目内尚未验收项执行正式 `project-verify` 复验；确认 `prd/*/acceptance.md` 当前无 `⬜` / `❌`，剩余 3 个均为 `desktop-shell-settings-release` 的真实 Electron GUI / macOS 系统权限 manual-only 场景。
+- 验证类别：正式验收（project-verify，剩余未验收项复验）。
+- 验收结果：98 个场景中 95 个 ✅、0 个 ❌、3 个 ⚠️；本轮未新增通过戳，3 个 manual-only 场景因缺真实托盘/系统权限证据继续保持跳过。
+- 证据：`TESTING_CHECKLIST.md`、`test-results/verification-summary.md`、`prd/desktop-shell-settings-release/acceptance.md`。
+- 验证命令：
+  - `npm run typecheck` ✅
+  - `npm run test:electron` ✅（79/79）
+  - `npm run test:home-plugin` ✅（当前无 `.agents/home-plugins/project-home`，脚本按预期跳过）
+  - `bash .codex/scripts/check-acceptance.sh --all` ✅
+  - `python3 .codex/scripts/agentic_drift_check.py` ✅
+  - `git diff --check` ✅
