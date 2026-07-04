@@ -2,29 +2,56 @@
  * Agent Mode card home surface rendered from per-card Home Plugins.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import { A2uiSurface, basicCatalog, MarkdownContext, type ReactComponentImplementation } from '@a2ui/react/v0_9'
 import { MessageProcessor, type A2uiClientAction, type A2uiMessage, type SurfaceModel } from '@a2ui/web_core/v0_9'
-import type { AgentContextSlashItem } from '../../claude-chat-types'
+import type { AgentContextSlashItem, ChatModelPick, ClaudeAgentSettingsSnapshot, ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
 import type {
+  AgentMcpServerConfig,
+  AgentMcpServerOverrides,
+  AgentMcpServerProbeCache,
+  AgentMcpServerProbeSnapshot,
+  AgentMcpToolPolicies,
+  AgentMcpToolPolicy,
+  AgentProjectDocumentName,
   HomePluginCardSize,
   HomePluginRunItem,
   HomePluginTaskMode,
   HomePluginTaskSchedule,
   HomePluginTaskSkillStep,
+  ProjectContextAddMode,
+  ProjectContextEntry,
 } from '../../desktop-types'
 import { IconInline } from '../../icon-inline'
+import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT } from '../../app-events'
 import { useI18n } from '../../i18n/i18n'
-import type { ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
+import {
+  buildModelPickRows,
+  modelPickFromRow,
+  modelRowForPick,
+  sameModelPick,
+  validateModelPick,
+  type ModelPickMenuRow,
+} from '../../model-pick'
+import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
+import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { sortProjectsForSidebar } from '../project-order'
+import { formatBytes } from './format'
 import { renderMarkdown } from './markdown'
 
 type ProjectHomeSurfaceProps = {
   project: WorkspaceProject
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
+  agent: WorkspaceAgentModeState
   todoEnabled: boolean
   loading: boolean
+  agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
+  agentSettingsOpen: boolean
+  agentSettingsPanel: AgentSettingsPanelId
+  onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
+  onAgentSettingsPanelChange: (panel: AgentSettingsPanelId) => void
+  onCloseAgentSettings: () => void
   threads: WorkspaceThread[]
   threadRunStates: Record<string, ThreadRunState>
   hiddenSkillPaths: string[]
@@ -32,13 +59,17 @@ type ProjectHomeSurfaceProps = {
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onEditHomePluginCard: (item: HomePluginRunItem) => void
+  onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
+  onRefreshAgentStatus: (refresh?: boolean) => void
 }
 
 const pluginCache = new Map<string, { hashes: Record<string, string>; plugins: HomePluginRunItem[] }>()
 const HOME_GRID_COLUMNS = 3
 const HOME_CARD_LAYOUT_STORAGE_KEY = 'agentos:project-home-card-layout:v1'
+const AGENT_PROJECT_DOCUMENT_NAMES: AgentProjectDocumentName[] = ['AGENTS.md', 'SOUL.md', 'GOAL.md']
+const TODO_HOME_PLUGIN_ID = 'agentos.todo-card'
 
 type HomeCardItem =
   | { kind: 'plugin'; cardId: string; item: HomePluginRunItem; size: HomePluginCardSize }
@@ -47,11 +78,33 @@ type HomeCardItem =
 type HomeGridItem =
   | { kind: 'card'; card: HomeCardItem }
   | { kind: 'filler'; id: string; span: 1 | 2; tone: 'grid' | 'signal' | 'trace' }
+type ProjectMcpOperation = 'idle' | 'saving' | 'testing'
 type HomeGridFillerItem = Extract<HomeGridItem, { kind: 'filler' }>
 
 type HomeCardLayout = {
   order: string[]
   sizes: Record<string, HomePluginCardSize>
+}
+
+type TodoHomeCardData = {
+  phase: string
+  progress: string
+  currentTask: string
+  nextStep: string
+  blocker: string
+  updatedAt: string
+  completed: number
+  total: number
+  percent: number
+  tasks: TodoHomeCardTask[]
+}
+
+type TodoHomeCardTask = {
+  id: string
+  title: string
+  checked: boolean
+  status: string
+  priority: string
 }
 
 type ProjectHomeProjectSelectorProps = {
@@ -171,8 +224,15 @@ export function ProjectHomeSurface({
   project,
   projects,
   projectOrderIds,
+  agent,
   todoEnabled,
   loading,
+  agentStatusSnapshot,
+  agentSettingsOpen,
+  agentSettingsPanel,
+  onOpenAgentSettings,
+  onAgentSettingsPanelChange,
+  onCloseAgentSettings,
   threads,
   threadRunStates,
   hiddenSkillPaths,
@@ -180,8 +240,10 @@ export function ProjectHomeSurface({
   onCreateProject,
   onSelectProject,
   onEditHomePluginCard,
+  onOpenProjectFile,
   onRunProjectSkill,
   onStopProjectSkillRun,
+  onRefreshAgentStatus,
 }: ProjectHomeSurfaceProps) {
   const { t } = useI18n()
   const cacheKey = project.path
@@ -193,11 +255,68 @@ export function ProjectHomeSurface({
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [editingTaskSlug, setEditingTaskSlug] = useState<string | undefined>()
-  const [sortDialogOpen, setSortDialogOpen] = useState(false)
   const [draftOrder, setDraftOrder] = useState<string[]>([])
   const [draftSizes, setDraftSizes] = useState<Record<string, HomePluginCardSize>>({})
+  const [projectModelPick, setProjectModelPick] = useState<ChatModelPick | undefined>(undefined)
+  const [draftProjectModelPick, setDraftProjectModelPick] = useState<ChatModelPick | undefined>(undefined)
+  const [projectDocumentDrafts, setProjectDocumentDrafts] = useState<Record<AgentProjectDocumentName, string>>(() => emptyAgentProjectDocuments())
+  const [savedProjectDocumentDrafts, setSavedProjectDocumentDrafts] = useState<Record<AgentProjectDocumentName, string>>(() => emptyAgentProjectDocuments())
+  const [projectSettingsStatus, setProjectSettingsStatus] = useState('')
+  const [projectSettingsSaving, setProjectSettingsSaving] = useState(false)
+  const [projectContextEntries, setProjectContextEntries] = useState<ProjectContextEntry[]>([])
+  const [projectContextInstructions, setProjectContextInstructions] = useState('')
+  const [savedProjectContextInstructions, setSavedProjectContextInstructions] = useState('')
+  const [projectContextReadOnly, setProjectContextReadOnly] = useState(false)
+  const [projectContextTargetPath, setProjectContextTargetPath] = useState('')
+  const [projectContextStatus, setProjectContextStatus] = useState('')
+  const [projectContextBusy, setProjectContextBusy] = useState(false)
+  const [skillModelOverrides, setSkillModelOverrides] = useState<Record<string, ChatModelPick>>({})
+  const [draftSkillModelOverrides, setDraftSkillModelOverrides] = useState<Record<string, ChatModelPick>>({})
+  const [skillSettingsStatus, setSkillSettingsStatus] = useState('')
+  const [skillSettingsSaving, setSkillSettingsSaving] = useState(false)
+  const [mcpServers, setMcpServers] = useState<AgentMcpServerConfig[]>([])
+  const [draftMcpServers, setDraftMcpServers] = useState<AgentMcpServerConfig[]>([])
+  const [mcpServerOverrides, setMcpServerOverrides] = useState<AgentMcpServerOverrides>({})
+  const [draftMcpServerOverrides, setDraftMcpServerOverrides] = useState<AgentMcpServerOverrides>({})
+  const [mcpToolPolicies, setMcpToolPolicies] = useState<AgentMcpToolPolicies>({})
+  const [draftMcpToolPolicies, setDraftMcpToolPolicies] = useState<AgentMcpToolPolicies>({})
+  const [mcpServerProbeCache, setMcpServerProbeCache] = useState<AgentMcpServerProbeCache>({})
+  const [mcpSettingsStatus, setMcpSettingsStatus] = useState('')
+  const [mcpSettingsOperation, setMcpSettingsOperation] = useState<ProjectMcpOperation>('idle')
+  const autoTestedProjectMcpSignatureRef = useRef('')
+  const agentSettingsLoadSeqRef = useRef(0)
+  const projectMcpProbeSeqRef = useRef(0)
+  const projectPathRef = useRef(project.path)
+  const agentSettingsOpenRef = useRef(agentSettingsOpen)
+  const agentSettingsPanelRef = useRef(agentSettingsPanel)
+  const [cardOrderSaving, setCardOrderSaving] = useState(false)
+  const [cardOrderStatus, setCardOrderStatus] = useState('')
+  const [modelRows, setModelRows] = useState<ModelPickMenuRow[]>([])
+  const [modelSettingsSnapshot, setModelSettingsSnapshot] = useState<ClaudeAgentSettingsSnapshot | null>(null)
   const [deletingSlug, setDeletingSlug] = useState('')
   const addMenuRef = useRef<HTMLDivElement>(null)
+  projectPathRef.current = project.path
+  agentSettingsOpenRef.current = agentSettingsOpen
+  agentSettingsPanelRef.current = agentSettingsPanel
+  const mcpStatusServers = useMemo(() => {
+    if (!agentStatusSnapshot) return undefined
+    if (agentStatusSnapshot.cwd && !sameProjectPath(agentStatusSnapshot.cwd, project.path)) return undefined
+    return agentStatusSnapshot.mcpServers
+  }, [agentStatusSnapshot, project.path])
+
+  useEffect(() => {
+    autoTestedProjectMcpSignatureRef.current = ''
+    agentSettingsLoadSeqRef.current += 1
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation('idle')
+    setMcpSettingsStatus('')
+  }, [project.path])
+
+  useEffect(() => {
+    if (agentSettingsOpen && agentSettingsPanel === 'mcp') return
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation((operation) => (operation === 'testing' ? 'idle' : operation))
+  }, [agentSettingsOpen, agentSettingsPanel])
 
   const loadHomePlugins = useCallback(async () => {
     const runHomePlugin = window.desktop?.runHomePlugin
@@ -255,6 +374,254 @@ export function ProjectHomeSurface({
     void loadHomePlugins()
     void loadProjectSkills()
   }, [cacheKey, loadHomePlugins, loadProjectSkills])
+
+  const applyModelSettings = useCallback(
+    (snapshot: ClaudeAgentSettingsSnapshot) => {
+      const slots = {
+        primary: t('chat.modelSlotPrimary'),
+        haiku: t('chat.modelSlotHaiku'),
+        sonnet: t('chat.modelSlotSonnet'),
+        opus: t('chat.modelSlotOpus'),
+      }
+      setModelSettingsSnapshot(snapshot)
+      setModelRows(buildModelPickRows(snapshot.settings.providers, slots, t('chat.modelFallback')))
+    },
+    [t],
+  )
+
+  useEffect(() => {
+    window.claudeChat?.getSettings().then(applyModelSettings).catch(() => {
+      setModelSettingsSnapshot(null)
+      setModelRows([])
+    })
+    const onSettingsChanged = (event: Event) => {
+      applyModelSettings((event as CustomEvent<ClaudeAgentSettingsSnapshot>).detail)
+    }
+    window.addEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
+    return () => window.removeEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
+  }, [applyModelSettings])
+
+  const loadAgentSkillModelSettings = useCallback(async () => {
+    const requestProjectPath = project.path
+    const requestSeq = agentSettingsLoadSeqRef.current + 1
+    agentSettingsLoadSeqRef.current = requestSeq
+    const isCurrentRequest = () => agentSettingsLoadSeqRef.current === requestSeq && projectPathRef.current === requestProjectPath
+    const getAgentModeSettings = window.desktop?.getAgentModeSettings
+    if (!getAgentModeSettings) {
+      if (!isCurrentRequest()) return
+      setProjectModelPick(undefined)
+      setDraftProjectModelPick(undefined)
+      setSkillModelOverrides({})
+      setDraftSkillModelOverrides({})
+      setMcpServers([])
+      setDraftMcpServers([])
+      setMcpServerOverrides({})
+      setDraftMcpServerOverrides({})
+      setMcpToolPolicies({})
+      setDraftMcpToolPolicies({})
+      setMcpServerProbeCache({})
+      setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      setSkillSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      setProjectSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    try {
+      const result = await getAgentModeSettings(requestProjectPath)
+      if (!isCurrentRequest()) return
+      if (!result.ok) {
+        setSkillSettingsStatus(result.message)
+        setProjectSettingsStatus(result.message)
+        setMcpSettingsStatus(result.message)
+        return
+      }
+      const projectPick = result.settings.projectModelPick
+      setProjectModelPick(projectPick)
+      setDraftProjectModelPick(projectPick)
+      const overrides = result.settings.skillModelOverrides ?? {}
+      setSkillModelOverrides(overrides)
+      setDraftSkillModelOverrides(overrides)
+      const servers = result.settings.mcpServers ?? []
+      setMcpServers(servers)
+      setDraftMcpServers(servers)
+      const serverOverrides = result.settings.mcpServerOverrides ?? {}
+      setMcpServerOverrides(serverOverrides)
+      setDraftMcpServerOverrides(serverOverrides)
+      const policies = result.settings.mcpToolPolicies ?? {}
+      setMcpToolPolicies(policies)
+      setDraftMcpToolPolicies(policies)
+      setMcpServerProbeCache(result.settings.mcpServerProbeCache ?? {})
+      setMcpSettingsStatus(t('settings.agentMode.loaded'))
+      setSkillSettingsStatus(t('settings.agentMode.loaded'))
+      setProjectSettingsStatus(t('settings.agentMode.loaded'))
+    } catch (error) {
+      if (!isCurrentRequest()) return
+      setSkillSettingsStatus(error instanceof Error ? error.message : String(error))
+      setProjectSettingsStatus(error instanceof Error ? error.message : String(error))
+      setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
+    }
+  }, [project.path, t])
+
+  useEffect(() => {
+    if (!agentSettingsOpen) return
+    void loadAgentSkillModelSettings()
+  }, [agentSettingsOpen, loadAgentSkillModelSettings])
+
+  useEffect(() => {
+    void loadAgentSkillModelSettings()
+  }, [loadAgentSkillModelSettings])
+
+  const loadAgentProjectDocuments = useCallback(async () => {
+    const readAgentProjectDocuments = window.desktop?.readAgentProjectDocuments
+      if (!readAgentProjectDocuments) {
+        setProjectDocumentDrafts(emptyAgentProjectDocuments())
+        setSavedProjectDocumentDrafts(emptyAgentProjectDocuments())
+        setProjectSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+        return
+      }
+    try {
+      const result = await readAgentProjectDocuments(project.path)
+      if (!result.ok) {
+        setProjectSettingsStatus(result.message)
+        return
+      }
+      setProjectDocumentDrafts(result.files)
+      setSavedProjectDocumentDrafts(result.files)
+      setProjectSettingsStatus(t('settings.agentMode.loaded'))
+    } catch (error) {
+      setProjectSettingsStatus(error instanceof Error ? error.message : String(error))
+    }
+  }, [project.path, t])
+
+  useEffect(() => {
+    if (!agentSettingsOpen) return
+    void loadAgentProjectDocuments()
+  }, [agentSettingsOpen, loadAgentProjectDocuments])
+
+  const applyProjectContext = useCallback((context: { entries: ProjectContextEntry[]; instructions: string; readOnly: boolean; contextTargetPath?: string }) => {
+    setProjectContextEntries(context.entries)
+    setProjectContextInstructions(context.instructions)
+    setSavedProjectContextInstructions(context.instructions)
+    setProjectContextReadOnly(context.readOnly)
+    setProjectContextTargetPath(context.contextTargetPath ?? '')
+  }, [])
+
+  const loadProjectContext = useCallback(async () => {
+    const listProjectContext = window.desktop?.listProjectContext
+    if (!listProjectContext) {
+      setProjectContextEntries([])
+      setProjectContextInstructions('')
+      setSavedProjectContextInstructions('')
+      setProjectContextReadOnly(false)
+      setProjectContextTargetPath('')
+      setProjectContextStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setProjectContextBusy(true)
+    try {
+      const result = await listProjectContext(project.path)
+      if (!result.ok) {
+        setProjectContextStatus(result.message)
+        return
+      }
+      applyProjectContext(result)
+      setProjectContextStatus(result.readOnly ? t('workspace.agentSettingsContextLoadedReadOnly') : t('workspace.agentSettingsContextLoaded'))
+    } catch (error) {
+      setProjectContextStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectContextBusy(false)
+    }
+  }, [applyProjectContext, project.path, t])
+
+  useEffect(() => {
+    if (!agentSettingsOpen || agentSettingsPanel !== 'context') return
+    void loadProjectContext()
+  }, [agentSettingsOpen, agentSettingsPanel, loadProjectContext])
+
+  const addProjectContext = async (mode: ProjectContextAddMode) => {
+    const addProjectContextEntries = window.desktop?.addProjectContextEntries
+    if (!addProjectContextEntries) {
+      setProjectContextStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setProjectContextBusy(true)
+    setProjectContextStatus(mode === 'copy' ? t('workspace.agentSettingsContextCopying') : t('workspace.agentSettingsContextReferencing'))
+    try {
+      const result = await addProjectContextEntries(project.path, mode)
+      if (!result.ok) {
+        setProjectContextStatus(result.message)
+        return
+      }
+      applyProjectContext(result)
+      if (result.added.length === 0 && result.skipped.length === 0) {
+        setProjectContextStatus(t('workspace.agentSettingsContextNoSelection'))
+        return
+      }
+      const skipped = result.skipped.length > 0 ? t('workspace.agentSettingsContextSkipped', { count: result.skipped.length }) : ''
+      setProjectContextStatus(
+        [t('workspace.agentSettingsContextAdded', { count: result.added.length }), skipped].filter(Boolean).join(' '),
+      )
+      window.dispatchEvent(new CustomEvent('project-home:refresh'))
+    } catch (error) {
+      setProjectContextStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectContextBusy(false)
+    }
+  }
+
+  const saveProjectContextInstructions = async () => {
+    const saveProjectContextInstructions = window.desktop?.saveProjectContextInstructions
+    if (!saveProjectContextInstructions) {
+      setProjectContextStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setProjectContextBusy(true)
+    setProjectContextStatus(t('settings.agentMode.saving'))
+    try {
+      const result = await saveProjectContextInstructions(project.path, projectContextInstructions)
+      if (!result.ok) {
+        setProjectContextStatus(result.message)
+        return
+      }
+      applyProjectContext(result)
+      setProjectContextStatus(t('settings.agentMode.saved'))
+      window.dispatchEvent(new CustomEvent('agentos:project-agent-settings-changed', { detail: { projectPath: project.path } }))
+    } catch (error) {
+      setProjectContextStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectContextBusy(false)
+    }
+  }
+
+  const removeProjectContextEntry = async (entry: ProjectContextEntry) => {
+    const removeProjectContextEntry = window.desktop?.removeProjectContextEntry
+    if (!removeProjectContextEntry) {
+      setProjectContextStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    const confirmed = window.confirm(
+      entry.mode === 'reference'
+        ? t('workspace.agentSettingsContextRemoveReferenceConfirm', { name: entry.name })
+        : t('workspace.agentSettingsContextRemoveLocalConfirm', { name: entry.name }),
+    )
+    if (!confirmed) return
+
+    setProjectContextBusy(true)
+    setProjectContextStatus(t('workspace.agentSettingsContextRemoving'))
+    try {
+      const result = await removeProjectContextEntry(project.path, entry.relativePath)
+      if (!result.ok) {
+        setProjectContextStatus(result.message)
+        return
+      }
+      applyProjectContext(result)
+      setProjectContextStatus(t('workspace.agentSettingsContextRemoved'))
+      window.dispatchEvent(new CustomEvent('project-home:refresh'))
+    } catch (error) {
+      setProjectContextStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectContextBusy(false)
+    }
+  }
 
   useEffect(() => {
     const onRefresh = () => {
@@ -339,12 +706,193 @@ export function ProjectHomeSurface({
   const gridItems = useMemo(() => buildHomeGridItems(homeCards), [homeCards])
 
   useEffect(() => {
-    if (!sortDialogOpen) return
+    if (!agentSettingsOpen || agentSettingsPanel !== 'card-order') return
     setDraftOrder(homeCards.map((card) => card.cardId))
     setDraftSizes(Object.fromEntries(homeCards.map((card) => [card.cardId, card.size])))
-  }, [homeCards, sortDialogOpen])
+  }, [agentSettingsOpen, agentSettingsPanel, homeCards])
+
+  const saveProjectSettings = async () => {
+    const saveAgentModeSettings = window.desktop?.saveAgentModeSettings
+    const saveAgentProjectDocuments = window.desktop?.saveAgentProjectDocuments
+    if (!saveAgentModeSettings || !saveAgentProjectDocuments) {
+      setProjectSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    const nextProjectPick = modelSettingsSnapshot
+      ? validateModelPick(modelSettingsSnapshot.settings, draftProjectModelPick)
+      : draftProjectModelPick
+    setProjectSettingsSaving(true)
+    setProjectSettingsStatus(t('settings.agentMode.saving'))
+    try {
+      const settingsResult = await saveAgentModeSettings(project.path, { projectModelPick: nextProjectPick })
+      if (!settingsResult.ok) {
+        setProjectSettingsStatus(settingsResult.message)
+        return
+      }
+      const docsResult = await saveAgentProjectDocuments(project.path, projectDocumentDrafts)
+      if (!docsResult.ok) {
+        setProjectSettingsStatus(docsResult.message)
+        return
+      }
+      const savedPick = settingsResult.settings.projectModelPick
+      const projectModelPickChanged = !sameModelPick(projectModelPick, savedPick)
+      setProjectModelPick(savedPick)
+      setDraftProjectModelPick(savedPick)
+      setProjectDocumentDrafts(docsResult.files)
+      setSavedProjectDocumentDrafts(docsResult.files)
+      setProjectSettingsStatus(t('settings.agentMode.saved'))
+      window.dispatchEvent(new CustomEvent('agentos:project-agent-settings-changed', { detail: { projectPath: project.path, projectModelPickChanged } }))
+    } catch (error) {
+      setProjectSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setProjectSettingsSaving(false)
+    }
+  }
+
+  const saveSkillModelSettings = async () => {
+    const saveAgentModeSettings = window.desktop?.saveAgentModeSettings
+    if (!saveAgentModeSettings) {
+      setSkillSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    const skillPaths = new Set(skills.map((skill) => skill.path))
+    const next = Object.fromEntries(
+      Object.entries(draftSkillModelOverrides).filter(([skillPath, pick]) => {
+        if (!skillPaths.has(skillPath)) return false
+        return modelSettingsSnapshot ? Boolean(validateModelPick(modelSettingsSnapshot.settings, pick)) : true
+      }),
+    )
+    setSkillSettingsSaving(true)
+    setSkillSettingsStatus(t('settings.agentMode.saving'))
+    try {
+      const result = await saveAgentModeSettings(project.path, { skillModelOverrides: next })
+      if (!result.ok) {
+        setSkillSettingsStatus(result.message)
+        return
+      }
+      const overrides = result.settings.skillModelOverrides ?? {}
+      setSkillModelOverrides(overrides)
+      setDraftSkillModelOverrides(overrides)
+      setSkillSettingsStatus(t('settings.agentMode.saved'))
+    } catch (error) {
+      setSkillSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSkillSettingsSaving(false)
+    }
+  }
+
+  const saveMcpSettings = async () => {
+    const saveAgentModeSettings = window.desktop?.saveAgentModeSettings
+    if (!saveAgentModeSettings) {
+      setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    const requestProjectPath = project.path
+    projectMcpProbeSeqRef.current += 1
+    setMcpSettingsOperation((operation) => (operation === 'testing' ? 'idle' : operation))
+    const nextOverrides = overridesFromMcpServers(draftMcpServers)
+    const nextPolicies = normalizeMcpPoliciesForSave(draftMcpToolPolicies)
+    const validationError = validateMcpSettings(draftMcpServers, nextPolicies, t)
+    if (validationError) {
+      setMcpSettingsStatus(validationError)
+      return
+    }
+    setMcpSettingsOperation('saving')
+    setMcpSettingsStatus(t('settings.agentMode.saving'))
+    try {
+      const result = await saveAgentModeSettings(requestProjectPath, {
+        mcpServerOverrides: nextOverrides,
+        mcpToolPolicies: nextPolicies,
+      })
+      if (projectPathRef.current !== requestProjectPath) return
+      if (!result.ok) {
+        setMcpSettingsStatus(result.message)
+        return
+      }
+      const servers = result.settings.mcpServers ?? []
+      const serverOverrides = result.settings.mcpServerOverrides ?? {}
+      const policies = result.settings.mcpToolPolicies ?? {}
+      setMcpServers(servers)
+      setDraftMcpServers(servers)
+      setMcpServerOverrides(serverOverrides)
+      setDraftMcpServerOverrides(serverOverrides)
+      setMcpToolPolicies(policies)
+      setDraftMcpToolPolicies(policies)
+      setMcpServerProbeCache(result.settings.mcpServerProbeCache ?? {})
+      setMcpSettingsStatus(t('settings.agentMode.saved'))
+      window.dispatchEvent(new CustomEvent('agentos:project-agent-settings-changed', { detail: { projectPath: requestProjectPath } }))
+    } catch (error) {
+      if (projectPathRef.current !== requestProjectPath) return
+      setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (projectPathRef.current === requestProjectPath) setMcpSettingsOperation('idle')
+    }
+  }
+
+  const refreshProjectMcpProbeStatus = useCallback(async (servers: AgentMcpServerConfig[]) => {
+    const enabledServers = servers.filter((server) => server.enabled)
+    if (enabledServers.length === 0) return
+    const requestProjectPath = project.path
+    const requestSeq = projectMcpProbeSeqRef.current + 1
+    projectMcpProbeSeqRef.current = requestSeq
+    const isCurrentProbe = () =>
+      projectMcpProbeSeqRef.current === requestSeq &&
+      projectPathRef.current === requestProjectPath &&
+      agentSettingsOpenRef.current &&
+      agentSettingsPanelRef.current === 'mcp'
+    const testGlobalMcpServer = window.desktop?.testGlobalMcpServer
+    if (!testGlobalMcpServer) {
+      if (!isCurrentProbe()) return
+      setMcpSettingsStatus(t('settings.agentMode.bridgeUnavailable'))
+      return
+    }
+    setMcpSettingsOperation('testing')
+    setMcpSettingsStatus(t('workspace.agentSettingsMcpTestingEnabled', { count: enabledServers.length }))
+    let tested = 0
+    let connected = 0
+    try {
+      for (const server of enabledServers) {
+        if (!isCurrentProbe()) return
+        setMcpSettingsStatus(t('settings.mcp.testing', { name: server.name }))
+        const result = await testGlobalMcpServer(server)
+        if (!isCurrentProbe()) return
+        const snapshot = result.snapshot
+        if (snapshot) {
+          setMcpServerProbeCache((current) => ({
+            ...current,
+            [snapshot.serverName]: snapshot,
+          }))
+        }
+        tested += 1
+        if (result.ok && snapshot?.status === 'connected') connected += 1
+      }
+      setMcpSettingsStatus(t('workspace.agentSettingsMcpTestEnabledDone', { tested, connected }))
+    } catch (error) {
+      if (!isCurrentProbe()) return
+      setMcpSettingsStatus(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (isCurrentProbe()) setMcpSettingsOperation('idle')
+    }
+  }, [project.path, t])
+
+  const refreshMcpStatus = useCallback(() => {
+    void refreshProjectMcpProbeStatus(mcpServers)
+    onRefreshAgentStatus(true)
+  }, [mcpServers, onRefreshAgentStatus, refreshProjectMcpProbeStatus])
+
+  useEffect(() => {
+    if (!agentSettingsOpen || agentSettingsPanel !== 'mcp') return
+    const enabledServers = mcpServers.filter((server) => server.enabled)
+    const signature = enabledServers.map((server) => `${server.name}:${buildMcpServerConfigSignature(server)}`).join('|')
+    const signatureKey = `${project.path}:${signature}`
+    if (!signature || autoTestedProjectMcpSignatureRef.current === signatureKey) return
+    autoTestedProjectMcpSignatureRef.current = signatureKey
+    void refreshProjectMcpProbeStatus(enabledServers)
+  }, [agentSettingsOpen, agentSettingsPanel, mcpServers, project.path, refreshProjectMcpProbeStatus])
 
   const saveSortOrder = async () => {
+    setCardOrderSaving(true)
+    setCardOrderStatus(t('settings.agentMode.saving'))
     const cardsById = new Map(homeCards.map((card) => [card.cardId, card]))
     const pluginOrder = draftOrder
       .map((cardId) => cardsById.get(cardId))
@@ -364,15 +912,25 @@ export function ProjectHomeSurface({
           : null
       if (result && !result.ok) {
         setError(result.message)
+        setCardOrderStatus(result.message)
         return
       }
     }
     const nextLayout = normalizeHomeCardLayout({ order: draftOrder, sizes: draftSizes })
     writeHomeCardLayout(project.path, nextLayout)
     setCardLayout(nextLayout)
-    setSortDialogOpen(false)
+    setCardOrderStatus(t('settings.agentMode.saved'))
     outputHashesRef.current = {}
     window.dispatchEvent(new CustomEvent('project-home:refresh'))
+    setCardOrderSaving(false)
+  }
+
+  const saveSortOrderWithGuard = async () => {
+    try {
+      await saveSortOrder()
+    } finally {
+      setCardOrderSaving(false)
+    }
   }
 
   const deleteCard = async (item: HomePluginRunItem) => {
@@ -433,7 +991,7 @@ export function ProjectHomeSurface({
             title={t('workspace.sortAgentCards')}
             aria-label={t('workspace.sortAgentCards')}
             disabled={loading || homeCards.length === 0}
-            onClick={() => setSortDialogOpen(true)}
+            onClick={() => onOpenAgentSettings('card-order')}
           >
             <IconInline name="sort" />
           </button>
@@ -496,6 +1054,11 @@ export function ProjectHomeSurface({
                   projectId={project.id}
                   threads={threads}
                   threadRunStates={threadRunStates}
+                  fixedModelLabel={skillModelLabelForCard(
+                    skillModelOverrides[card.skill.path],
+                    modelRows,
+                    modelSettingsSnapshot,
+                  )}
                   onRun={onRunProjectSkill}
                   onStop={onStopProjectSkillRun}
                 />
@@ -507,6 +1070,7 @@ export function ProjectHomeSurface({
                 item={card.item}
                 size={card.size}
                 projectPath={project.path}
+                onOpenProjectFile={onOpenProjectFile}
                 onEdit={() => {
                   if (card.item.manifest.kind === 'task') {
                     setEditingTaskSlug(card.item.slug)
@@ -539,17 +1103,67 @@ export function ProjectHomeSurface({
           }}
         />
       ) : null}
-      {sortDialogOpen ? (
-        <SortCardsDialog
+      {agentSettingsOpen ? (
+        <AgentSettingsModal
+          agent={agent}
+          activePanel={agentSettingsPanel}
+          onActivePanelChange={onAgentSettingsPanelChange}
           cards={homeCards}
           draftOrder={draftOrder}
           draftSizes={draftSizes}
           onDraftOrderChange={setDraftOrder}
           onDraftSizeChange={(cardId, preferredSize) => setDraftSizes((prev) => ({ ...prev, [cardId]: preferredSize }))}
+          projectModelPick={projectModelPick}
+          draftProjectModelPick={draftProjectModelPick}
+          projectDocumentDrafts={projectDocumentDrafts}
+          savedProjectDocumentDrafts={savedProjectDocumentDrafts}
+          projectSettingsStatus={projectSettingsStatus}
+          projectSettingsSaving={projectSettingsSaving}
+          projectContextEntries={projectContextEntries}
+          projectContextInstructions={projectContextInstructions}
+          savedProjectContextInstructions={savedProjectContextInstructions}
+          projectContextReadOnly={projectContextReadOnly}
+          projectContextTargetPath={projectContextTargetPath}
+          projectContextStatus={projectContextStatus}
+          projectContextBusy={projectContextBusy}
+          onDraftProjectModelPickChange={setDraftProjectModelPick}
+          onProjectDocumentDraftsChange={setProjectDocumentDrafts}
+          onSaveProjectSettings={() => void saveProjectSettings()}
+          onProjectContextInstructionsChange={setProjectContextInstructions}
+          onAddProjectContext={(mode) => void addProjectContext(mode)}
+          onRemoveProjectContextEntry={(entry) => void removeProjectContextEntry(entry)}
+          onRefreshProjectContext={() => void loadProjectContext()}
+          onSaveProjectContextInstructions={() => void saveProjectContextInstructions()}
+          skills={skills}
+          modelRows={modelRows}
+          modelSettingsSnapshot={modelSettingsSnapshot}
+          skillModelOverrides={skillModelOverrides}
+          draftSkillModelOverrides={draftSkillModelOverrides}
+          skillSettingsStatus={skillSettingsStatus}
+          skillSettingsSaving={skillSettingsSaving}
+          onDraftSkillModelOverridesChange={setDraftSkillModelOverrides}
+          onSaveSkillModelOverrides={() => void saveSkillModelSettings()}
+          mcpServers={mcpServers}
+          draftMcpServers={draftMcpServers}
+          mcpServerOverrides={mcpServerOverrides}
+          draftMcpServerOverrides={draftMcpServerOverrides}
+          mcpToolPolicies={mcpToolPolicies}
+          draftMcpToolPolicies={draftMcpToolPolicies}
+          mcpServerProbeCache={mcpServerProbeCache}
+          mcpSettingsStatus={mcpSettingsStatus}
+          mcpSettingsOperation={mcpSettingsOperation}
+          mcpStatusServers={mcpStatusServers}
+          onDraftMcpServersChange={setDraftMcpServers}
+          onDraftMcpServerOverridesChange={setDraftMcpServerOverrides}
+          onDraftMcpToolPoliciesChange={setDraftMcpToolPolicies}
+          onRefreshMcpStatus={refreshMcpStatus}
+          onSaveMcpSettings={() => void saveMcpSettings()}
           deletingSlug={deletingSlug}
+          cardOrderStatus={cardOrderStatus}
+          cardOrderSaving={cardOrderSaving}
           onDelete={(item) => void deleteCard(item)}
-          onClose={() => setSortDialogOpen(false)}
-          onSave={() => void saveSortOrder()}
+          onClose={onCloseAgentSettings}
+          onSave={() => void saveSortOrderWithGuard()}
         />
       ) : null}
     </div>
@@ -579,20 +1193,24 @@ function HomePluginCard({
   item,
   size,
   projectPath,
+  onOpenProjectFile,
   onEdit,
 }: {
   item: HomePluginRunItem
   size: HomePluginCardSize
   projectPath: string
+  onOpenProjectFile: (node: FileTreeNode) => void
   onEdit: () => void
 }) {
   const { t } = useI18n()
   const messages = messagesForSize(item, size)
+  const todoCard = isTodoHomeCard(item) ? todoHomeCardDataFromMessages(messages) : null
   const taskCard = item.manifest.kind === 'task' ? taskCardViewModelFromMessages(item, messages) : null
   const [menuOpen, setMenuOpen] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
+  const editable = !todoCard
 
-  useMasonrySpan(cardRef, [messages, size])
+  useMasonrySpan(cardRef, [messages, size, todoCard])
 
   return (
     <div
@@ -600,7 +1218,7 @@ function HomePluginCard({
       className={`project-home-card project-home-card--${size} project-home-card--${item.manifest.kind}`}
       style={{ '--home-card-span': sizeToColumnSpan(size) } as CSSProperties}
     >
-      <div className="project-home-card__menu">
+      {editable ? <div className="project-home-card__menu">
         <button
           type="button"
           className="project-home-card__menu-button"
@@ -626,10 +1244,16 @@ function HomePluginCard({
             </button>
           </div>
         ) : null}
-      </div>
+      </div> : null}
       <div className="project-home-card__measure">
         <div className="project-home-card__surface">
-          {taskCard ? (
+          {todoCard ? (
+            <TodoHomeCardView
+              todo={todoCard}
+              size={size}
+              onOpen={() => onOpenProjectFile(createProjectFileNode(projectPath, 'TODO.md'))}
+            />
+          ) : taskCard ? (
             <TaskHomeCardView task={taskCard} projectPath={projectPath} />
           ) : (
             <MarkdownContext.Provider value={(text) => Promise.resolve(renderMarkdown(text))}>
@@ -655,6 +1279,80 @@ type TaskHomeCardViewModel = {
   meta: string[]
   threadTitle: string
   active: boolean
+}
+
+function TodoHomeCardView({ todo, size, onOpen }: { todo: TodoHomeCardData; size: HomePluginCardSize; onOpen: () => void }) {
+  const tone = todo.blocker && todo.blocker !== '无' ? 'error' : todo.percent >= 100 ? 'done' : 'active'
+  const visibleTasks = size === 'large'
+    ? todo.tasks.slice(0, 6)
+    : size === 'medium'
+      ? todo.tasks.slice(0, 3)
+      : []
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onOpen()
+  }
+
+  return (
+    <article
+      className={`todo-home-card todo-home-card--${tone}`}
+      role="button"
+      tabIndex={0}
+      aria-label="打开 TODO.md"
+      onClick={onOpen}
+      onKeyDown={handleKeyDown}
+    >
+      <header className="todo-home-card__header">
+        <span className="task-home-card__glyph todo-home-card__glyph" aria-hidden="true">
+          <IconInline name="checklist" />
+        </span>
+        <span className="task-home-card__heading">
+          <h3>TODO</h3>
+          <span>{todo.updatedAt || 'TODO.md'}</span>
+        </span>
+      </header>
+
+      <div className="todo-home-card__progress" aria-label={`TODO progress ${todo.percent}%`}>
+        <div className="todo-home-card__progress-head">
+          <span>{todo.progress || `${todo.completed}/${todo.total}`}</span>
+          <strong>{todo.percent}%</strong>
+        </div>
+        <span className="todo-home-card__bar" aria-hidden="true">
+          <span style={{ width: `${Math.min(100, Math.max(0, todo.percent))}%` }} />
+        </span>
+      </div>
+
+      <div className="todo-home-card__body">
+        <p className="task-home-card__summary">{todo.currentTask}</p>
+        {size !== 'small' ? <p className="task-home-card__detail">{todo.phase}</p> : null}
+      </div>
+
+      <div className="todo-home-card__facts">
+        <span>
+          <b>Next</b>
+          {todo.nextStep}
+        </span>
+        <span>
+          <b>Blocker</b>
+          {todo.blocker || '无'}
+        </span>
+      </div>
+
+      {visibleTasks.length > 0 ? (
+        <div className="todo-home-card__tasks" aria-label="TODO tasks">
+          {visibleTasks.map((task) => (
+            <span key={task.id} className={`todo-home-card__task todo-home-card__task--${task.status || 'todo'}`}>
+              <IconInline name={task.checked ? 'check' : 'branch'} />
+              <span>{task.id}</span>
+              <b>{task.title}</b>
+              {size === 'large' && task.priority ? <em>{task.priority}</em> : null}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  )
 }
 
 function TaskHomeCardView({ task, projectPath }: { task: TaskHomeCardViewModel; projectPath: string }) {
@@ -723,6 +1421,7 @@ function SkillHomeCard({
   projectId,
   threads,
   threadRunStates,
+  fixedModelLabel,
   onRun,
   onStop,
 }: {
@@ -731,6 +1430,7 @@ function SkillHomeCard({
   projectId: string
   threads: WorkspaceThread[]
   threadRunStates: Record<string, ThreadRunState>
+  fixedModelLabel: string
   onRun: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStop: (projectId: string, skillPath: string) => void
 }) {
@@ -828,7 +1528,12 @@ function SkillHomeCard({
               <span title={skill.relativePath}>{skill.relativePath}</span>
             </div>
 
-            <footer className="task-home-card__footer">
+            <footer className={`task-home-card__footer${fixedModelLabel ? ' skill-home-card__footer--with-model' : ''}`}>
+              {fixedModelLabel ? (
+                <span className="skill-home-card__fixed-model" title={t('workspace.skillCardFixedModelTitle', { model: fixedModelLabel })}>
+                  {fixedModelLabel}
+                </span>
+              ) : null}
               <button
                 type="button"
                 className={`task-home-card__action${active ? ' task-home-card__action--stop' : ''}`}
@@ -844,6 +1549,17 @@ function SkillHomeCard({
       </div>
     </div>
   )
+}
+
+function skillModelLabelForCard(
+  pick: ChatModelPick | undefined,
+  modelRows: ModelPickMenuRow[],
+  modelSettingsSnapshot: ClaudeAgentSettingsSnapshot | null,
+): string {
+  if (!pick || !modelSettingsSnapshot) return ''
+  const validPick = validateModelPick(modelSettingsSnapshot.settings, pick)
+  if (!validPick) return ''
+  return modelRowForPick(modelRows, validPick)?.headline ?? validPick.anthropicModel
 }
 
 function A2uiCardSurface({
@@ -1342,13 +2058,1026 @@ function TaskCardDialog({
   )
 }
 
-function SortCardsDialog({
+function AgentSettingsModal({
+  agent,
+  activePanel,
+  onActivePanelChange,
+  cards,
+  draftOrder,
+  draftSizes,
+  onDraftOrderChange,
+  onDraftSizeChange,
+  projectModelPick,
+  draftProjectModelPick,
+  projectDocumentDrafts,
+  savedProjectDocumentDrafts,
+  projectSettingsStatus,
+  projectSettingsSaving,
+  projectContextEntries,
+  projectContextInstructions,
+  savedProjectContextInstructions,
+  projectContextReadOnly,
+  projectContextTargetPath,
+  projectContextStatus,
+  projectContextBusy,
+  onDraftProjectModelPickChange,
+  onProjectDocumentDraftsChange,
+  onSaveProjectSettings,
+  onProjectContextInstructionsChange,
+  onAddProjectContext,
+  onRemoveProjectContextEntry,
+  onRefreshProjectContext,
+  onSaveProjectContextInstructions,
+  skills,
+  modelRows,
+  modelSettingsSnapshot,
+  skillModelOverrides,
+  draftSkillModelOverrides,
+  skillSettingsStatus,
+  skillSettingsSaving,
+  onDraftSkillModelOverridesChange,
+  onSaveSkillModelOverrides,
+  mcpServers,
+  draftMcpServers,
+  mcpServerOverrides,
+  draftMcpServerOverrides,
+  mcpToolPolicies,
+  draftMcpToolPolicies,
+  mcpServerProbeCache,
+  mcpSettingsStatus,
+  mcpSettingsOperation,
+  mcpStatusServers,
+  onDraftMcpServersChange,
+  onDraftMcpServerOverridesChange,
+  onDraftMcpToolPoliciesChange,
+  onRefreshMcpStatus,
+  onSaveMcpSettings,
+  deletingSlug,
+  cardOrderStatus,
+  cardOrderSaving,
+  onDelete,
+  onClose,
+  onSave,
+}: {
+  agent: WorkspaceAgentModeState
+  activePanel: AgentSettingsPanelId
+  onActivePanelChange: (panel: AgentSettingsPanelId) => void
+  cards: HomeCardItem[]
+  draftOrder: string[]
+  draftSizes: Record<string, HomePluginCardSize>
+  onDraftOrderChange: (order: string[]) => void
+  onDraftSizeChange: (cardId: string, preferredSize: HomePluginCardSize) => void
+  projectModelPick?: ChatModelPick
+  draftProjectModelPick?: ChatModelPick
+  projectDocumentDrafts: Record<AgentProjectDocumentName, string>
+  savedProjectDocumentDrafts: Record<AgentProjectDocumentName, string>
+  projectSettingsStatus: string
+  projectSettingsSaving: boolean
+  projectContextEntries: ProjectContextEntry[]
+  projectContextInstructions: string
+  savedProjectContextInstructions: string
+  projectContextReadOnly: boolean
+  projectContextTargetPath: string
+  projectContextStatus: string
+  projectContextBusy: boolean
+  onDraftProjectModelPickChange: (pick: ChatModelPick | undefined) => void
+  onProjectDocumentDraftsChange: (drafts: Record<AgentProjectDocumentName, string>) => void
+  onSaveProjectSettings: () => void
+  onProjectContextInstructionsChange: (instructions: string) => void
+  onAddProjectContext: (mode: ProjectContextAddMode) => void
+  onRemoveProjectContextEntry: (entry: ProjectContextEntry) => void
+  onRefreshProjectContext: () => void
+  onSaveProjectContextInstructions: () => void
+  skills: AgentContextSlashItem[]
+  modelRows: ModelPickMenuRow[]
+  modelSettingsSnapshot: ClaudeAgentSettingsSnapshot | null
+  skillModelOverrides: Record<string, ChatModelPick>
+  draftSkillModelOverrides: Record<string, ChatModelPick>
+  skillSettingsStatus: string
+  skillSettingsSaving: boolean
+  onDraftSkillModelOverridesChange: (overrides: Record<string, ChatModelPick>) => void
+  onSaveSkillModelOverrides: () => void
+  mcpServers: AgentMcpServerConfig[]
+  draftMcpServers: AgentMcpServerConfig[]
+  mcpServerOverrides: AgentMcpServerOverrides
+  draftMcpServerOverrides: AgentMcpServerOverrides
+  mcpToolPolicies: AgentMcpToolPolicies
+  draftMcpToolPolicies: AgentMcpToolPolicies
+  mcpServerProbeCache: AgentMcpServerProbeCache
+  mcpSettingsStatus: string
+  mcpSettingsOperation: ProjectMcpOperation
+  mcpStatusServers?: ClaudeAgentStatusSnapshot['mcpServers']
+  onDraftMcpServersChange: (servers: AgentMcpServerConfig[]) => void
+  onDraftMcpServerOverridesChange: (overrides: AgentMcpServerOverrides) => void
+  onDraftMcpToolPoliciesChange: (policies: AgentMcpToolPolicies) => void
+  onRefreshMcpStatus: () => void
+  onSaveMcpSettings: () => void
+  deletingSlug: string
+  cardOrderStatus: string
+  cardOrderSaving: boolean
+  onDelete: (item: HomePluginRunItem) => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const [confirmDisableOpen, setConfirmDisableOpen] = useState(false)
+  const [status, setStatus] = useState('')
+  const disableAgentMode = async () => {
+    setStatus('')
+    const ok = await agent.updateAgentModeState({ enabled: false })
+    if (!ok) {
+      setStatus(t('workspace.agentModeFailed'))
+      return
+    }
+    setConfirmDisableOpen(false)
+    onClose()
+  }
+
+  const navItems: { id: AgentSettingsPanelId; label: string; icon: 'settings' | 'sort' | 'chip' | 'folder' | 'files' | 'server' }[] = [
+    { id: 'project', label: t('workspace.agentSettingsProject'), icon: 'folder' },
+    { id: 'context', label: t('workspace.agentSettingsContext'), icon: 'files' },
+    { id: 'mcp', label: t('workspace.agentSettingsMcp'), icon: 'server' },
+    { id: 'card-order', label: t('workspace.agentSettingsCardOrder'), icon: 'sort' },
+    { id: 'skills', label: t('workspace.agentSettingsSkills'), icon: 'chip' },
+    { id: 'general', label: t('workspace.agentSettingsGeneral'), icon: 'settings' },
+  ]
+  const caption =
+    activePanel === 'project'
+      ? t('workspace.agentSettingsProject')
+      : activePanel === 'context'
+      ? t('workspace.agentSettingsContext')
+      : activePanel === 'card-order'
+      ? t('workspace.agentSettingsCardOrder')
+      : activePanel === 'skills'
+        ? t('workspace.agentSettingsSkills')
+        : activePanel === 'mcp'
+          ? t('workspace.agentSettingsMcp')
+          : t('workspace.agentModeReady')
+
+  return (
+    <div className="project-home-modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <div className="project-home-modal project-home-modal--agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="project-home-modal__header">
+          <div>
+            <h2 id="agent-settings-title">{t('workspace.agentSettings')}</h2>
+            <p className="project-home-modal__caption">{caption}</p>
+          </div>
+          <button type="button" className="project-home-icon-button" aria-label={t('filePanel.closeAria')} onClick={onClose}>
+            <IconInline name="x" />
+          </button>
+        </div>
+        <div className="agent-settings-layout">
+          <nav className="agent-settings-nav" aria-label={t('workspace.agentSettings')}>
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`agent-settings-nav__item${activePanel === item.id ? ' is-active' : ''}`}
+                data-testid={item.id === 'mcp' ? 'agent-settings-mcp-tab' : undefined}
+                aria-current={activePanel === item.id ? 'page' : undefined}
+                onClick={() => onActivePanelChange(item.id)}
+              >
+                <IconInline name={item.icon} />
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="agent-settings-content settings-page">
+            {activePanel === 'general' ? (
+              <AgentSettingsGeneralPanel
+                agent={agent}
+                status={status}
+                onDisable={() => setConfirmDisableOpen(true)}
+              />
+            ) : activePanel === 'project' ? (
+              <ProjectSettingsPanel
+                modelRows={modelRows}
+                modelSettingsSnapshot={modelSettingsSnapshot}
+                savedProjectModelPick={projectModelPick}
+                draftProjectModelPick={draftProjectModelPick}
+                documents={projectDocumentDrafts}
+                savedDocuments={savedProjectDocumentDrafts}
+                status={projectSettingsStatus}
+                saving={projectSettingsSaving}
+                onDraftProjectModelPickChange={onDraftProjectModelPickChange}
+                onDocumentsChange={onProjectDocumentDraftsChange}
+                onClose={onClose}
+                onSave={onSaveProjectSettings}
+              />
+            ) : activePanel === 'context' ? (
+              <ProjectContextSettingsPanel
+                entries={projectContextEntries}
+                instructions={projectContextInstructions}
+                savedInstructions={savedProjectContextInstructions}
+                readOnly={projectContextReadOnly}
+                contextTargetPath={projectContextTargetPath}
+                status={projectContextStatus}
+                busy={projectContextBusy}
+                onInstructionsChange={onProjectContextInstructionsChange}
+                onAdd={onAddProjectContext}
+                onRemove={onRemoveProjectContextEntry}
+                onRefresh={onRefreshProjectContext}
+                onSaveInstructions={onSaveProjectContextInstructions}
+              />
+            ) : activePanel === 'skills' ? (
+              <SkillsModelSettingsPanel
+                skills={skills}
+                modelRows={modelRows}
+                modelSettingsSnapshot={modelSettingsSnapshot}
+                savedOverrides={skillModelOverrides}
+                draftOverrides={draftSkillModelOverrides}
+                status={skillSettingsStatus}
+                saving={skillSettingsSaving}
+                onDraftOverridesChange={onDraftSkillModelOverridesChange}
+                onClose={onClose}
+                onSave={onSaveSkillModelOverrides}
+              />
+            ) : activePanel === 'mcp' ? (
+              <McpSettingsPanel
+                savedServers={mcpServers}
+                draftServers={draftMcpServers}
+                savedOverrides={mcpServerOverrides}
+                draftOverrides={draftMcpServerOverrides}
+                savedPolicies={mcpToolPolicies}
+                draftPolicies={draftMcpToolPolicies}
+                probeCache={mcpServerProbeCache}
+                status={mcpSettingsStatus}
+                operation={mcpSettingsOperation}
+                statusServers={mcpStatusServers}
+                onDraftServersChange={onDraftMcpServersChange}
+                onDraftOverridesChange={onDraftMcpServerOverridesChange}
+                onDraftPoliciesChange={onDraftMcpToolPoliciesChange}
+                onRefreshStatus={onRefreshMcpStatus}
+                onClose={onClose}
+                onSave={onSaveMcpSettings}
+              />
+            ) : (
+              <CardOrderSettingsPanel
+                cards={cards}
+                draftOrder={draftOrder}
+                draftSizes={draftSizes}
+                onDraftOrderChange={onDraftOrderChange}
+                onDraftSizeChange={onDraftSizeChange}
+                deletingSlug={deletingSlug}
+                status={cardOrderStatus}
+                saving={cardOrderSaving}
+                onDelete={onDelete}
+                onClose={onClose}
+                onSave={onSave}
+              />
+            )}
+          </div>
+        </div>
+        {confirmDisableOpen ? (
+          <div className="agent-settings-confirm" role="presentation" onMouseDown={() => setConfirmDisableOpen(false)}>
+            <section className="agent-settings-confirm__panel" role="alertdialog" aria-modal="true" aria-labelledby="agent-disable-confirm-title" onMouseDown={(event) => event.stopPropagation()}>
+              <h3 id="agent-disable-confirm-title">{t('workspace.disableAgentModeConfirmTitle')}</h3>
+              <p>{t('workspace.disableAgentModeConfirmBody')}</p>
+              <div className="agent-settings-confirm__actions">
+                <button type="button" className="btn btn-ghost" disabled={agent.loading} onClick={() => setConfirmDisableOpen(false)}>
+                  {t('settings.agentMode.cancel')}
+                </button>
+                <button type="button" className="btn btn-primary" disabled={agent.loading} onClick={() => void disableAgentMode()}>
+                  {t('workspace.disableAgentModeConfirmAction')}
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function AgentSettingsGeneralPanel({
+  agent,
+  status,
+  onDisable,
+}: {
+  agent: WorkspaceAgentModeState
+  status: string
+  onDisable: () => void
+}) {
+  const { t } = useI18n()
+
+  return (
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-general-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-general-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsGeneral')}
+        </h3>
+        <p className="settings-section-caption">{agent.message || t('workspace.agentModeReady')}</p>
+        <div className="settings-group">
+          <div className="settings-field-row settings-field-row--action">
+            <div className="settings-field-row__meta">
+              <div className="settings-field-row__label">
+                <IconInline name="agent" />
+                {t('workspace.agentModeEnabledLabel')}
+              </div>
+              <p className="settings-field-row__hint">{t('workspace.disableAgentModeHint')}</p>
+            </div>
+            <div className="settings-field-row__controls">
+              <button type="button" className="agent-card-secondary-button" disabled={agent.loading} onClick={onDisable}>
+                {t('workspace.disableAgentMode')}
+              </button>
+            </div>
+          </div>
+        </div>
+        <p className="settings-switch-status" role="status" aria-live="polite">
+          {status || agent.message}
+        </p>
+      </section>
+    </section>
+  )
+}
+
+function SaveFeedback({ status, dirty, saving, busy = saving }: { status: string; dirty: boolean; saving: boolean; busy?: boolean }) {
+  const { t } = useI18n()
+  const passiveStatus = !status || status === t('settings.agentMode.loaded') || status === t('settings.agentMode.saved')
+  const message = dirty && !busy && passiveStatus
+    ? t('workspace.agentSettingsUnsavedChanges')
+    : status || t('workspace.agentSettingsNoChanges')
+  const tone = busy
+    ? ' is-saving'
+    : dirty && passiveStatus
+      ? ' is-dirty'
+      : status === t('settings.agentMode.saved')
+      ? ' is-success'
+      : ''
+
+  return (
+    <p className={`agent-settings-save-feedback${tone}`} role="status" aria-live="polite">
+      <IconInline name={busy ? 'refresh' : dirty && passiveStatus ? 'save' : status === t('settings.agentMode.saved') ? 'check' : 'check'} />
+      <span>{message}</span>
+    </p>
+  )
+}
+
+function ProjectSettingsPanel({
+  modelRows,
+  modelSettingsSnapshot,
+  savedProjectModelPick,
+  draftProjectModelPick,
+  documents,
+  savedDocuments,
+  status,
+  saving,
+  onDraftProjectModelPickChange,
+  onDocumentsChange,
+  onClose,
+  onSave,
+}: {
+  modelRows: ModelPickMenuRow[]
+  modelSettingsSnapshot: ClaudeAgentSettingsSnapshot | null
+  savedProjectModelPick?: ChatModelPick
+  draftProjectModelPick?: ChatModelPick
+  documents: Record<AgentProjectDocumentName, string>
+  savedDocuments: Record<AgentProjectDocumentName, string>
+  status: string
+  saving: boolean
+  onDraftProjectModelPickChange: (pick: ChatModelPick | undefined) => void
+  onDocumentsChange: (drafts: Record<AgentProjectDocumentName, string>) => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const hasModels = modelRows.length > 0
+  const defaultLabel = t('workspace.agentSettingsProjectDefaultModel')
+  const validPick = modelSettingsSnapshot ? validateModelPick(modelSettingsSnapshot.settings, draftProjectModelPick) : draftProjectModelPick
+  const row = modelRowForPick(modelRows, validPick)
+  const currentValue = row?.pickKey ?? ''
+  const setProjectPick = (pickKey: string) => {
+    if (!pickKey) {
+      onDraftProjectModelPickChange(undefined)
+      return
+    }
+    const nextRow = modelRows.find((item) => item.pickKey === pickKey)
+    onDraftProjectModelPickChange(nextRow ? modelPickFromRow(nextRow) : undefined)
+  }
+  const setDocument = (name: AgentProjectDocumentName, value: string) => {
+    onDocumentsChange({ ...documents, [name]: value })
+  }
+  const reset = () => {
+    onDraftProjectModelPickChange(savedProjectModelPick)
+    onDocumentsChange(savedDocuments)
+  }
+  const isDirty = !sameModelPick(savedProjectModelPick, draftProjectModelPick) || !sameProjectDocuments(savedDocuments, documents)
+
+  return (
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-project-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-project-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsProject')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsProjectHint')}</p>
+        <div className="settings-group">
+          <div className="settings-field-row settings-field-row--action">
+            <div className="settings-field-row__meta">
+              <div className="settings-field-row__label">
+                <IconInline name="chip" />
+                {t('workspace.agentSettingsProjectModel')}
+              </div>
+              <p className="settings-field-row__hint">{t('workspace.agentSettingsProjectModelHint')}</p>
+            </div>
+            <div className="settings-field-row__controls">
+              <select
+                className="settings-input settings-select"
+                value={currentValue}
+                disabled={!hasModels}
+                onChange={(event) => setProjectPick(event.target.value)}
+              >
+                <option value="">{defaultLabel}</option>
+                {modelRows.map((item) => (
+                  <option key={item.pickKey} value={item.pickKey}>
+                    {item.headline}{item.metaLine ? ` · ${item.metaLine}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="agent-project-docs">
+          {AGENT_PROJECT_DOCUMENT_NAMES.map((name) => (
+            <label key={name} className="agent-project-doc-field">
+              <span className="agent-project-doc-field__title">{name}</span>
+              <p className="agent-project-doc-field__hint">{agentProjectDocumentHint(name, t)}</p>
+              <textarea
+                className="settings-input agent-project-doc-textarea"
+                value={documents[name]}
+                spellCheck={false}
+                placeholder={agentProjectDocumentPlaceholder(name, t)}
+                onChange={(event) => setDocument(name, event.target.value)}
+              />
+            </label>
+          ))}
+        </div>
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} />
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+            reset()
+            onClose()
+          }}>
+            {t('settings.agentMode.cancel')}
+          </button>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+            <IconInline name={saving ? 'refresh' : 'save'} />
+            <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+function ProjectContextSettingsPanel({
+  entries,
+  instructions,
+  savedInstructions,
+  readOnly,
+  contextTargetPath,
+  status,
+  busy,
+  onInstructionsChange,
+  onAdd,
+  onRemove,
+  onRefresh,
+  onSaveInstructions,
+}: {
+  entries: ProjectContextEntry[]
+  instructions: string
+  savedInstructions: string
+  readOnly: boolean
+  contextTargetPath: string
+  status: string
+  busy: boolean
+  onInstructionsChange: (instructions: string) => void
+  onAdd: (mode: ProjectContextAddMode) => void
+  onRemove: (entry: ProjectContextEntry) => void
+  onRefresh: () => void
+  onSaveInstructions: () => void
+}) {
+  const { t } = useI18n()
+  const instructionsDirty = instructions !== savedInstructions
+
+  return (
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-context-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-context-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsContext')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsContextHint')}</p>
+        {readOnly ? (
+          <p className="agent-context-readonly-note">
+            {t('workspace.agentSettingsContextReadOnlyNotice', {
+              path: contextTargetPath || 'Context',
+            })}
+          </p>
+        ) : null}
+
+        <div className="agent-project-docs agent-context-docs">
+          <label className="agent-project-doc-field" htmlFor="agent-settings-context-instructions">
+            <span className="agent-project-doc-field__title">CONTEXT.md</span>
+            <p className="agent-project-doc-field__hint">{t('workspace.agentSettingsContextInstructionsHint')}</p>
+            <textarea
+              id="agent-settings-context-instructions"
+              className="settings-input agent-project-doc-textarea"
+              value={instructions}
+              spellCheck={false}
+              placeholder={t('workspace.agentSettingsContextInstructionsPlaceholder')}
+              onChange={(event) => onInstructionsChange(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="agent-context-actions" aria-label={t('workspace.agentSettingsContextAdd')}>
+          <button type="button" className="agent-card-secondary-button" disabled={busy || readOnly} onClick={() => onAdd('reference')}>
+            <IconInline name="paperclip" />
+            <span>{t('workspace.agentSettingsContextAddReference')}</span>
+          </button>
+          <button type="button" className="agent-card-secondary-button" disabled={busy || readOnly} onClick={() => onAdd('copy')}>
+            <IconInline name="copy" />
+            <span>{t('workspace.agentSettingsContextAddCopy')}</span>
+          </button>
+          <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onRefresh}>
+            <IconInline name="refresh" />
+            <span>{t('workspace.agentSettingsContextRefresh')}</span>
+          </button>
+        </div>
+
+        <div className="agent-context-list" role="list" aria-label={t('workspace.agentSettingsContextList')}>
+          {entries.length === 0 ? (
+            <p className="agent-context-empty">{t('workspace.agentSettingsContextEmpty')}</p>
+          ) : (
+            entries.map((entry) => (
+              <div key={entry.relativePath} className="agent-context-row" role="listitem">
+                <div className="agent-context-row__icon" aria-hidden="true">
+                  <IconInline name={entry.kind === 'directory' ? 'folder' : 'file'} />
+                </div>
+                <div className="agent-context-row__body">
+                  <div className="agent-context-row__title">
+                    <span>{entry.name}</span>
+                    <span className={`agent-context-chip agent-context-chip--${readOnly && entry.mode === 'local' ? 'external' : entry.mode}`}>
+                      {t(
+                        entry.mode === 'reference'
+                          ? 'workspace.agentSettingsContextModeReference'
+                          : readOnly
+                            ? 'workspace.agentSettingsContextModeExternal'
+                            : 'workspace.agentSettingsContextModeLocal',
+                      )}
+                    </span>
+                    <span className="agent-context-chip">
+                      {t(
+                        entry.kind === 'directory'
+                          ? 'workspace.agentSettingsContextKindDirectory'
+                          : entry.kind === 'file'
+                            ? 'workspace.agentSettingsContextKindFile'
+                            : 'workspace.agentSettingsContextKindOther',
+                      )}
+                    </span>
+                    {entry.targetMissing ? (
+                      <span className="agent-context-chip agent-context-chip--warning">
+                        {t('workspace.agentSettingsContextTargetMissing')}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="agent-context-row__meta">
+                    {projectContextEntryMeta(entry, t)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="project-home-icon-button agent-context-row__remove"
+                  disabled={busy || readOnly}
+                  title={t('workspace.agentSettingsContextRemove')}
+                  aria-label={t('workspace.agentSettingsContextRemoveNamed', { name: entry.name })}
+                  onClick={() => onRemove(entry)}
+                >
+                  <IconInline name="trash" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={instructionsDirty} saving={busy} />
+          <button type="button" className="agent-card-primary-button" disabled={busy || readOnly || !instructionsDirty} onClick={onSaveInstructions}>
+            <IconInline name={busy ? 'refresh' : 'save'} />
+            <span>{busy ? t('settings.agentMode.saving') : t('workspace.agentSettingsContextSaveInstructions')}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+function SkillsModelSettingsPanel({
+  skills,
+  modelRows,
+  modelSettingsSnapshot,
+  savedOverrides,
+  draftOverrides,
+  status,
+  saving,
+  onDraftOverridesChange,
+  onClose,
+  onSave,
+}: {
+  skills: AgentContextSlashItem[]
+  modelRows: ModelPickMenuRow[]
+  modelSettingsSnapshot: ClaudeAgentSettingsSnapshot | null
+  savedOverrides: Record<string, ChatModelPick>
+  draftOverrides: Record<string, ChatModelPick>
+  status: string
+  saving: boolean
+  onDraftOverridesChange: (overrides: Record<string, ChatModelPick>) => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const hasModels = modelRows.length > 0
+  const defaultLabel = t('workspace.agentSettingsSkillDefaultModel')
+  const isDirty = JSON.stringify(savedOverrides) !== JSON.stringify(draftOverrides)
+  const setSkillPick = (skillPath: string, pickKey: string) => {
+    const next = { ...draftOverrides }
+    if (!pickKey) {
+      delete next[skillPath]
+    } else {
+      const row = modelRows.find((item) => item.pickKey === pickKey)
+      if (row) next[skillPath] = modelPickFromRow(row)
+    }
+    onDraftOverridesChange(next)
+  }
+  const reset = () => onDraftOverridesChange(savedOverrides)
+
+  return (
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-skills-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-skills-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsSkills')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsSkillsHint')}</p>
+        <div className="agent-skill-model-list" role="list">
+          {skills.length === 0 ? (
+            <div className="project-home-skill-empty">{t('workspace.taskNoSkills')}</div>
+          ) : null}
+          {skills.map((skill) => {
+            const rawPick = draftOverrides[skill.path]
+            const validPick = modelSettingsSnapshot ? validateModelPick(modelSettingsSnapshot.settings, rawPick) : rawPick
+            const row = modelRowForPick(modelRows, validPick)
+            const currentValue = row?.pickKey ?? ''
+            return (
+              <div key={skill.path} className="agent-skill-model-row" role="listitem">
+                <span className="agent-skill-model-row__icon" aria-hidden="true">
+                  <IconInline name="chip" />
+                </span>
+                <span className="agent-skill-model-row__copy">
+                  <span>{skill.title || skill.name}</span>
+                  <span>{skill.command ? `/${skill.command}` : skill.relativePath}</span>
+                </span>
+                <label className="agent-skill-model-row__selector">
+                  <span className="sr-only">{t('workspace.agentSettingsSkillModelFor', { name: skill.title || skill.name })}</span>
+                  <select
+                    className="settings-input settings-select"
+                    value={currentValue}
+                    disabled={!hasModels}
+                    onChange={(event) => setSkillPick(skill.path, event.target.value)}
+                  >
+                    <option value="">{defaultLabel}</option>
+                    {modelRows.map((item) => (
+                      <option key={item.pickKey} value={item.pickKey}>
+                        {item.headline}{item.metaLine ? ` · ${item.metaLine}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )
+          })}
+        </div>
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} />
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+            reset()
+            onClose()
+          }}>
+            {t('settings.agentMode.cancel')}
+          </button>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty || (!hasModels && skills.length > 0)} onClick={onSave}>
+            <IconInline name={saving ? 'refresh' : 'save'} />
+            <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+function McpSettingsPanel({
+  savedServers,
+  draftServers,
+  savedOverrides,
+  draftOverrides,
+  savedPolicies,
+  draftPolicies,
+  probeCache,
+  status,
+  operation,
+  statusServers,
+  onDraftServersChange,
+  onDraftOverridesChange,
+  onDraftPoliciesChange,
+  onRefreshStatus,
+  onClose,
+  onSave,
+}: {
+  savedServers: AgentMcpServerConfig[]
+  draftServers: AgentMcpServerConfig[]
+  savedOverrides: AgentMcpServerOverrides
+  draftOverrides: AgentMcpServerOverrides
+  savedPolicies: AgentMcpToolPolicies
+  draftPolicies: AgentMcpToolPolicies
+  probeCache: AgentMcpServerProbeCache
+  status: string
+  operation: ProjectMcpOperation
+  statusServers?: ClaudeAgentStatusSnapshot['mcpServers']
+  onDraftServersChange: (servers: AgentMcpServerConfig[]) => void
+  onDraftOverridesChange: (overrides: AgentMcpServerOverrides) => void
+  onDraftPoliciesChange: (policies: AgentMcpToolPolicies) => void
+  onRefreshStatus: () => void
+  onClose: () => void
+  onSave: () => void
+}) {
+  const { t } = useI18n()
+  const saving = operation === 'saving'
+  const testing = operation === 'testing'
+  const discoveredTools = useMemo<DiscoveredMcpToolOption[]>(() => {
+    return draftServers.flatMap((server) => {
+      if (!server.enabled) return []
+      const snapshot = getMatchingMcpProbeSnapshot(server, probeCache)
+      if (snapshot?.status !== 'connected') return []
+      return snapshot.tools.map((tool) => ({
+        serverName: server.name,
+        toolName: tool.name,
+        fullName: `mcp__${server.name}__${tool.name}`,
+        description: tool.description,
+      }))
+    })
+  }, [draftServers, probeCache])
+  const discoveredToolNames = useMemo(() => new Set(discoveredTools.map((tool) => tool.fullName)), [discoveredTools])
+  const discoveredToolGroups = useMemo(() => groupMcpDiscoveredTools(discoveredTools), [discoveredTools])
+  const policyEntries = Object.entries(draftPolicies).filter(([toolName]) => !discoveredToolNames.has(toolName))
+  const isDirty =
+    JSON.stringify(savedOverrides) !== JSON.stringify(draftOverrides) ||
+    !sameMcpSettings(savedServers, draftServers, savedPolicies, draftPolicies)
+  const envRefs = collectMcpEnvReferences(draftServers)
+  const statusByName = useMemo(() => {
+    return new Map((statusServers ?? []).map((server) => [server.name.trim(), server]))
+  }, [statusServers])
+  const updateServer = (index: number, patch: Partial<AgentMcpServerConfig>) => {
+    const nextServers = draftServers.map((server, serverIndex) => (serverIndex === index ? { ...server, ...patch } : server))
+    onDraftServersChange(nextServers)
+    const target = nextServers[index]
+    if (target && Object.prototype.hasOwnProperty.call(patch, 'enabled')) {
+      onDraftOverridesChange({ ...draftOverrides, [target.name]: { enabled: target.enabled } })
+    }
+  }
+  const reset = () => {
+    onDraftServersChange(savedServers)
+    onDraftOverridesChange(savedOverrides)
+    onDraftPoliciesChange(savedPolicies)
+  }
+  const addPolicy = () => {
+    const nextName = uniquePolicyName(draftPolicies, draftServers)
+    onDraftPoliciesChange({ ...draftPolicies, [nextName]: 'ask' })
+  }
+  const updatePolicyName = (oldName: string, nextName: string) => {
+    const trimmed = nextName.trim()
+    const next = { ...draftPolicies }
+    const policy = next[oldName] ?? 'ask'
+    delete next[oldName]
+    if (trimmed) next[trimmed] = policy
+    onDraftPoliciesChange(next)
+  }
+  const updatePolicy = (toolName: string, policy: AgentMcpToolPolicy) => {
+    onDraftPoliciesChange({ ...draftPolicies, [toolName]: policy })
+  }
+  const removePolicy = (toolName: string) => {
+    const next = { ...draftPolicies }
+    delete next[toolName]
+    onDraftPoliciesChange(next)
+  }
+
+  return (
+    <section className="settings-stack agent-settings-panel" data-testid="agent-settings-mcp-panel" aria-labelledby="agent-settings-mcp-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-mcp-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsMcp')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsMcpHint')}</p>
+
+        <section className="agent-mcp-installed" aria-labelledby="agent-settings-mcp-installed-heading">
+          <div className="agent-mcp-installed__head">
+            <div>
+              <h4 id="agent-settings-mcp-installed-heading">{t('workspace.agentSettingsMcpInstalledHeading')}</h4>
+              <p>{t('workspace.agentSettingsMcpInstallHint')}</p>
+            </div>
+            <button type="button" className="agent-card-secondary-button" disabled={saving || testing} onClick={onRefreshStatus}>
+              <IconInline name="refresh" />
+              <span>{t('workspace.agentSettingsMcpRefreshStatus')}</span>
+            </button>
+          </div>
+          <div className="agent-mcp-installed-list" role="list" data-testid="mcp-installed-server-list">
+            {draftServers.length === 0 ? (
+              <p className="agent-context-empty">{t('workspace.agentSettingsMcpGlobalEmpty')}</p>
+            ) : null}
+            {draftServers.map((server, index) => {
+              const displayName = server.name.trim() || t('workspace.agentSettingsMcpUnnamed')
+              const savedName = savedServers[index]?.name?.trim() ?? ''
+              const runtimeStatus = statusByName.get(server.name.trim()) ?? (savedName ? statusByName.get(savedName) : undefined)
+              const probeSnapshot = getMatchingMcpProbeSnapshot(server, probeCache)
+              const statusMeta = formatMcpSettingsServerStatus(server, runtimeStatus, probeSnapshot, t)
+              const recoveryHint = formatMcpProjectRecoveryHint(server, runtimeStatus, probeSnapshot, t)
+              return (
+                <div
+                  key={`${server.name}-${index}`}
+                  className={`agent-mcp-installed-row agent-mcp-installed-row--${statusMeta.tone}`}
+                  role="listitem"
+                >
+                  <span className="agent-mcp-installed-row__avatar" aria-hidden="true">
+                    <span>{displayName.slice(0, 1).toUpperCase()}</span>
+                    <span className={`agent-mcp-installed-row__dot agent-mcp-installed-row__dot--${statusMeta.tone}`} />
+                  </span>
+                  <span className="agent-mcp-installed-row__copy">
+                    <strong>{displayName}</strong>
+                    <span title={statusMeta.title}>{statusMeta.text}</span>
+                    {recoveryHint ? <small data-testid="mcp-recovery-hint">{recoveryHint}</small> : null}
+                  </span>
+                  <label className="agent-mcp-installed-row__switch">
+                    <span className="sr-only">{t('workspace.agentSettingsMcpToggleServer', { name: displayName })}</span>
+                    <span className="settings-switch-control">
+                      <input
+                        type="checkbox"
+                        className="settings-switch-input"
+                        checked={server.enabled}
+                        disabled={saving}
+                        onChange={(event) => updateServer(index, { enabled: event.target.checked })}
+                      />
+                      <span className="settings-switch-track" aria-hidden="true">
+                        <span className="settings-switch-thumb" />
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              )
+            })}
+          </div>
+          <p className="agent-mcp-session-hint" data-testid="mcp-session-effect-hint">
+            {t('workspace.agentSettingsMcpSessionEffectHint')}
+          </p>
+        </section>
+
+        {envRefs.length > 0 ? (
+          <p className="agent-mcp-warning" data-testid="mcp-env-resolution-error">
+            {t('workspace.agentSettingsMcpEnvRefNotice', { count: envRefs.length })}
+          </p>
+        ) : null}
+
+        <section className="agent-mcp-policy" aria-labelledby="agent-settings-mcp-policy-heading">
+          <div className="agent-mcp-policy__head">
+            <div>
+              <h4 id="agent-settings-mcp-policy-heading">{t('workspace.agentSettingsMcpPolicies')}</h4>
+              <p>{t('workspace.agentSettingsMcpPoliciesHint')}</p>
+            </div>
+            <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={addPolicy}>
+              <IconInline name="plus" />
+              <span>{t('workspace.agentSettingsMcpAddPolicy')}</span>
+            </button>
+          </div>
+          {discoveredToolGroups.length > 0 ? (
+            <div className="agent-mcp-discovered-tools" role="list" data-testid="mcp-discovered-tool-policy-list">
+              <div className="agent-mcp-discovered-tools__head">
+                <strong>{t('workspace.agentSettingsMcpDiscoveredTools')}</strong>
+                <span>{t('workspace.agentSettingsMcpDiscoveredToolsHint')}</span>
+              </div>
+              {discoveredToolGroups.map((group) => (
+                <div className="agent-mcp-discovered-tools__group" key={group.serverName}>
+                  <div className="agent-mcp-discovered-tools__group-head">
+                    <strong>{group.serverName}</strong>
+                    <span>{t('workspace.agentSettingsMcpDiscoveredServerTools', { count: group.tools.length })}</span>
+                  </div>
+                  {group.tools.map((tool) => {
+                    const risk = formatMcpToolRisk(tool.toolName, tool.description, t)
+                    const hasExplicitPolicy = Object.prototype.hasOwnProperty.call(draftPolicies, tool.fullName)
+                    return (
+                      <div className="agent-mcp-discovered-tool-row" role="listitem" key={tool.fullName}>
+                        <span className="agent-mcp-discovered-tool-row__copy">
+                          <strong>{tool.toolName}</strong>
+                          <small>{tool.description || tool.fullName}</small>
+                          <span className="agent-mcp-discovered-tool-row__meta">
+                            <span className={`agent-mcp-risk agent-mcp-risk--${risk.tone}`} data-testid="mcp-tool-risk-annotation">
+                              {risk.label}
+                            </span>
+                            <small data-testid="mcp-policy-source-hint">
+                              {hasExplicitPolicy ? t('workspace.agentSettingsMcpPolicySourceProject') : t('workspace.agentSettingsMcpPolicySourceDefault')}
+                            </small>
+                          </span>
+                        </span>
+                        <label className="agent-mcp-field">
+                          <span>{t('workspace.agentSettingsMcpPolicy')}</span>
+                          <select
+                            className="settings-input settings-select"
+                            value={draftPolicies[tool.fullName] ?? 'ask'}
+                            disabled={saving}
+                            onChange={(event) => updatePolicy(tool.fullName, event.target.value as AgentMcpToolPolicy)}
+                          >
+                            <option value="ask">{t('workspace.agentSettingsMcpPolicyAsk')}</option>
+                            <option value="allow">{t('workspace.agentSettingsMcpPolicyAllow')}</option>
+                            <option value="deny">{t('workspace.agentSettingsMcpPolicyDeny')}</option>
+                          </select>
+                        </label>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="agent-mcp-policy__list" role="list" data-testid="mcp-tool-policy-list">
+            {policyEntries.length === 0 ? (
+              <p className="agent-context-empty">{t('workspace.agentSettingsMcpPolicyEmpty')}</p>
+            ) : null}
+            {policyEntries.map(([toolName, policy]) => (
+              <div className="agent-mcp-policy-row" role="listitem" key={toolName}>
+                <label className="agent-mcp-field">
+                  <span>{t('workspace.agentSettingsMcpToolName')}</span>
+                  <input
+                    className="settings-input"
+                    value={toolName}
+                    disabled={saving}
+                    spellCheck={false}
+                    placeholder="mcp__github__create_issue"
+                    onChange={(event) => updatePolicyName(toolName, event.target.value)}
+                  />
+                </label>
+                <label className="agent-mcp-field">
+                  <span>{t('workspace.agentSettingsMcpPolicy')}</span>
+                  <select
+                    className="settings-input settings-select"
+                    value={policy}
+                    disabled={saving}
+                    onChange={(event) => updatePolicy(toolName, event.target.value as AgentMcpToolPolicy)}
+                  >
+                    <option value="ask">{t('workspace.agentSettingsMcpPolicyAsk')}</option>
+                    <option value="allow">{t('workspace.agentSettingsMcpPolicyAllow')}</option>
+                    <option value="deny">{t('workspace.agentSettingsMcpPolicyDeny')}</option>
+                  </select>
+                  <small className="settings-field-row__hint" data-testid="mcp-policy-source-hint">
+                    {t('workspace.agentSettingsMcpPolicySourceManual')}
+                  </small>
+                </label>
+                <button
+                  type="button"
+                  className="project-home-icon-button project-home-icon-button--danger"
+                  disabled={saving}
+                  title={t('workspace.agentSettingsMcpRemovePolicy')}
+                  aria-label={t('workspace.agentSettingsMcpRemovePolicyNamed', { name: toolName })}
+                  onClick={() => removePolicy(toolName)}
+                >
+                  <IconInline name="trash" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} busy={saving || testing} />
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+            reset()
+            onClose()
+          }}>
+            {t('settings.agentMode.cancel')}
+          </button>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+            <IconInline name={saving ? 'refresh' : 'save'} />
+            <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+function CardOrderSettingsPanel({
   cards,
   draftOrder,
   draftSizes,
   onDraftOrderChange,
   onDraftSizeChange,
   deletingSlug,
+  status,
+  saving,
   onDelete,
   onClose,
   onSave,
@@ -1359,6 +3088,8 @@ function SortCardsDialog({
   onDraftOrderChange: (order: string[]) => void
   onDraftSizeChange: (cardId: string, preferredSize: HomePluginCardSize) => void
   deletingSlug: string
+  status: string
+  saving: boolean
   onDelete: (item: HomePluginRunItem) => void
   onClose: () => void
   onSave: () => void
@@ -1366,6 +3097,7 @@ function SortCardsDialog({
   const { t } = useI18n()
   const byId = new Map(cards.map((item) => [item.cardId, item]))
   const ordered = draftOrder.map((cardId) => byId.get(cardId)).filter((item): item is HomeCardItem => Boolean(item))
+  const isDirty = !sameCardLayout(cards, draftOrder, draftSizes)
   const move = (cardId: string, offset: number) => {
     const index = draftOrder.indexOf(cardId)
     const nextIndex = index + offset
@@ -1394,15 +3126,13 @@ function SortCardsDialog({
   }
 
   return (
-    <div className="project-home-modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <div className="project-home-modal project-home-modal--sort" role="dialog" aria-modal="true" aria-label={t('workspace.sortAgentCards')} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="project-home-modal__header">
-          <h2>{t('workspace.sortAgentCards')}</h2>
-          <button type="button" className="project-home-icon-button" aria-label={t('filePanel.closeAria')} onClick={onClose}>
-            <IconInline name="x" />
-          </button>
-        </div>
-        <div className="project-home-sort-list" role="list">
+    <section className="settings-stack agent-settings-panel" aria-labelledby="agent-settings-card-order-heading">
+      <section className="settings-section">
+        <h3 id="agent-settings-card-order-heading" className="settings-section-heading">
+          {t('workspace.agentSettingsCardOrder')}
+        </h3>
+        <p className="settings-section-caption">{t('workspace.agentSettingsCardOrderHint')}</p>
+        <div className="project-home-sort-list project-home-sort-list--settings" role="list">
           {ordered.map((card, index) => {
             const displaySize = draftSizes[card.cardId] ?? card.size
             const title = card.kind === 'plugin' ? card.item.manifest.name : card.skill.title
@@ -1450,7 +3180,7 @@ function SortCardsDialog({
               <button type="button" className="project-home-icon-button" disabled={index === ordered.length - 1} onClick={() => move(card.cardId, 1)} aria-label={t('workspace.moveCardDown')}>
                 <IconInline name="arrowDown" />
               </button>
-              {card.kind === 'plugin' ? (
+              {card.kind === 'plugin' && !isTodoHomeCard(card.item) ? (
                 <button
                   type="button"
                   className="project-home-icon-button project-home-icon-button--danger"
@@ -1468,16 +3198,18 @@ function SortCardsDialog({
             )
           })}
         </div>
-        <div className="project-home-modal__footer">
-          <button type="button" className="agent-card-secondary-button" onClick={onClose}>
+        <div className="agent-settings-panel-actions">
+          <SaveFeedback status={status} dirty={isDirty} saving={saving} />
+          <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={onClose}>
             {t('settings.agentMode.cancel')}
           </button>
-          <button type="button" className="agent-card-primary-button" onClick={onSave}>
-            {t('settings.agentMode.confirm')}
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+            <IconInline name={saving ? 'refresh' : 'save'} />
+            <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
           </button>
         </div>
-      </div>
-    </div>
+      </section>
+    </section>
   )
 }
 
@@ -1522,6 +3254,291 @@ function buildHomeGridItems(cards: HomeCardItem[]): HomeGridItem[] {
   return output
 }
 
+function sameProjectDocuments(
+  left: Record<AgentProjectDocumentName, string>,
+  right: Record<AgentProjectDocumentName, string>,
+): boolean {
+  return AGENT_PROJECT_DOCUMENT_NAMES.every((name) => left[name] === right[name])
+}
+
+function sameCardLayout(
+  cards: HomeCardItem[],
+  draftOrder: string[],
+  draftSizes: Record<string, HomePluginCardSize>,
+): boolean {
+  const currentOrder = cards.map((card) => card.cardId)
+  if (currentOrder.length !== draftOrder.length) return false
+  if (currentOrder.some((cardId, index) => cardId !== draftOrder[index])) return false
+  return cards.every((card) => (draftSizes[card.cardId] ?? card.size) === card.size)
+}
+
+function uniquePolicyName(policies: AgentMcpToolPolicies, servers: AgentMcpServerConfig[]): string {
+  const serverName = servers.find((server) => server.name.trim())?.name.trim() || 'server'
+  const base = `mcp__${serverName}__tool`
+  let name = base
+  let suffix = 2
+  while (Object.prototype.hasOwnProperty.call(policies, name)) {
+    name = `${base}_${suffix}`
+    suffix += 1
+  }
+  return name
+}
+
+function normalizeMcpServersForSave(servers: AgentMcpServerConfig[]): AgentMcpServerConfig[] {
+  const usedNames = new Set<string>()
+  return servers.map((server) => {
+    const rawName = server.name.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) || 'mcp-server'
+    let name = rawName
+    let suffix = 2
+    while (usedNames.has(name)) {
+      name = `${rawName}-${suffix}`
+      suffix += 1
+    }
+    usedNames.add(name)
+    return {
+      name,
+      enabled: server.enabled,
+      transport: server.transport === 'http' || server.transport === 'sse' ? server.transport : 'stdio',
+      command: server.command.trim(),
+      args: server.args.map((arg) => arg.trim()).filter(Boolean),
+      env: cleanStringRecord(server.env),
+      cwd: server.cwd.trim(),
+      url: server.url.trim(),
+      headers: cleanStringRecord(server.headers),
+      alwaysLoad: server.alwaysLoad,
+    }
+  })
+}
+
+function normalizeMcpPoliciesForSave(policies: AgentMcpToolPolicies): AgentMcpToolPolicies {
+  const next: AgentMcpToolPolicies = {}
+  for (const [rawName, policy] of Object.entries(policies)) {
+    const name = rawName.trim()
+    if (!name) continue
+    next[name] = policy === 'allow' || policy === 'deny' ? policy : 'ask'
+  }
+  return next
+}
+
+function overridesFromMcpServers(servers: AgentMcpServerConfig[]): AgentMcpServerOverrides {
+  return Object.fromEntries(servers.map((server) => [server.name, { enabled: server.enabled }]))
+}
+
+type DiscoveredMcpToolOption = {
+  serverName: string
+  toolName: string
+  fullName: string
+  description?: string
+}
+
+type McpSettingsStatusTone = 'ready' | 'pending' | 'error' | 'disabled'
+
+function groupMcpDiscoveredTools(tools: DiscoveredMcpToolOption[]): { serverName: string; tools: DiscoveredMcpToolOption[] }[] {
+  const groups = new Map<string, DiscoveredMcpToolOption[]>()
+  for (const tool of tools) {
+    const groupTools = groups.get(tool.serverName) ?? []
+    groupTools.push(tool)
+    groups.set(tool.serverName, groupTools)
+  }
+  return [...groups.entries()].map(([serverName, groupTools]) => ({ serverName, tools: groupTools }))
+}
+
+function formatMcpToolRisk(
+  toolName: string,
+  description: string | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): { tone: 'low' | 'medium' | 'high'; label: string } {
+  const text = `${toolName} ${description ?? ''}`.toLowerCase()
+  if (/(delete|remove|destroy|drop|reset|execute|exec|shell|bash|terminal|run|deploy|publish)/.test(text)) {
+    return { tone: 'high', label: t('workspace.agentSettingsMcpRiskHigh') }
+  }
+  if (/(write|create|update|edit|upload|send|post|commit|merge|move|rename|apply|patch)/.test(text)) {
+    return { tone: 'medium', label: t('workspace.agentSettingsMcpRiskMedium') }
+  }
+  return { tone: 'low', label: t('workspace.agentSettingsMcpRiskLow') }
+}
+
+function formatMcpProjectRecoveryHint(
+  server: AgentMcpServerConfig,
+  runtimeStatus: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>[number] | undefined,
+  probeSnapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): string {
+  if (!server.enabled) return ''
+  const status = runtimeStatus?.status ?? probeSnapshot?.status
+  if (status !== 'failed' && status !== 'needs-auth') return ''
+  const error = `${runtimeStatus?.error ?? ''} ${probeSnapshot?.error ?? ''}`.toLowerCase()
+  if (error.includes('env') || error.includes('environment') || error.includes('variable') || error.includes('${')) {
+    return t('workspace.agentSettingsMcpRecoveryEnv')
+  }
+  if (status === 'needs-auth' || error.includes('auth') || error.includes('token') || error.includes('key')) {
+    return t('workspace.agentSettingsMcpRecoveryAuth')
+  }
+  return server.transport === 'stdio' ? t('workspace.agentSettingsMcpRecoveryCommand') : t('workspace.agentSettingsMcpRecoveryUrl')
+}
+
+function formatMcpSettingsServerStatus(
+  server: AgentMcpServerConfig,
+  runtimeStatus: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>[number] | undefined,
+  probeSnapshot: AgentMcpServerProbeSnapshot | undefined,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): { tone: McpSettingsStatusTone; text: string; title?: string } {
+  if (!server.enabled) {
+    return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
+  }
+  if (runtimeStatus?.status === 'connected') {
+    if (typeof runtimeStatus.toolCount === 'number') {
+      return {
+        tone: 'ready',
+        text: t('workspace.agentSettingsMcpStatusRuntimeConnectedTools', { count: runtimeStatus.toolCount }),
+      }
+    }
+    return { tone: 'ready', text: t('workspace.agentSettingsMcpStatusRuntimeConnected') }
+  }
+  if (runtimeStatus?.status === 'failed') {
+    const message = runtimeStatus.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusFailedDetail', { message })
+        : t('workspace.agentSettingsMcpStatusFailed'),
+      title: message,
+    }
+  }
+  if (runtimeStatus?.status === 'needs-auth') {
+    const message = runtimeStatus.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusNeedsAuthDetail', { message })
+        : t('workspace.agentSettingsMcpStatusNeedsAuth'),
+      title: message,
+    }
+  }
+  if (runtimeStatus?.error?.trim()) {
+    return {
+      tone: 'error',
+      text: t('workspace.agentSettingsMcpStatusFailedDetail', { message: runtimeStatus.error.trim() }),
+      title: runtimeStatus.error.trim(),
+    }
+  }
+  if (probeSnapshot?.status === 'connected') {
+    return {
+      tone: 'ready',
+      text: t('workspace.agentSettingsMcpStatusProjectAvailableTools', { count: probeSnapshot.tools.length }),
+    }
+  }
+  if (probeSnapshot?.status === 'needs-auth') {
+    const message = probeSnapshot.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusNeedsAuthDetail', { message })
+        : t('workspace.agentSettingsMcpStatusNeedsAuth'),
+      title: message,
+    }
+  }
+  if (probeSnapshot?.status === 'failed') {
+    const message = probeSnapshot.error?.trim()
+    return {
+      tone: 'error',
+      text: message
+        ? t('workspace.agentSettingsMcpStatusFailedDetail', { message })
+        : t('workspace.agentSettingsMcpStatusFailed'),
+      title: message,
+    }
+  }
+  if (probeSnapshot?.status === 'disabled') {
+    return { tone: 'disabled', text: t('workspace.agentSettingsMcpStatusDisabled') }
+  }
+  if (runtimeStatus?.status) {
+    return {
+      tone: 'pending',
+      text: t('workspace.agentSettingsMcpStatusRuntime', { status: runtimeStatus.status }),
+    }
+  }
+  return { tone: 'pending', text: t('settings.mcp.notTested') }
+}
+
+function validateMcpSettings(
+  servers: AgentMcpServerConfig[],
+  policies: AgentMcpToolPolicies,
+  t: (path: string, params?: Record<string, string | number>) => string,
+): string {
+  for (const server of servers) {
+    if (!server.enabled) continue
+    if (server.transport === 'stdio' && !server.command.trim()) {
+      return t('workspace.agentSettingsMcpMissingCommand', { name: server.name })
+    }
+    if (server.transport !== 'stdio' && !server.url.trim()) {
+      return t('workspace.agentSettingsMcpMissingUrl', { name: server.name })
+    }
+  }
+  for (const toolName of Object.keys(policies)) {
+    if (!toolName.startsWith('mcp__') || !/^mcp__(.+?)__(.+)$/.test(toolName)) {
+      return t('workspace.agentSettingsMcpInvalidToolName', { name: toolName })
+    }
+  }
+  return ''
+}
+
+function sameMcpSettings(
+  savedServers: AgentMcpServerConfig[],
+  draftServers: AgentMcpServerConfig[],
+  savedPolicies: AgentMcpToolPolicies,
+  draftPolicies: AgentMcpToolPolicies,
+): boolean {
+  return JSON.stringify(normalizeMcpServersForSave(savedServers)) === JSON.stringify(normalizeMcpServersForSave(draftServers)) &&
+    JSON.stringify(normalizeMcpPoliciesForSave(savedPolicies)) === JSON.stringify(normalizeMcpPoliciesForSave(draftPolicies))
+}
+
+function getMatchingMcpProbeSnapshot(
+  server: AgentMcpServerConfig,
+  probeCache: AgentMcpServerProbeCache,
+): AgentMcpServerProbeSnapshot | undefined {
+  const snapshot = probeCache[server.name]
+  if (!snapshot) return undefined
+  if (snapshot.configSignature !== buildMcpServerConfigSignature(server)) return undefined
+  return snapshot
+}
+
+function buildMcpServerConfigSignature(server: AgentMcpServerConfig): string {
+  return JSON.stringify({
+    transport: server.transport === 'http' || server.transport === 'sse' ? server.transport : 'stdio',
+    command: server.command.trim(),
+    args: server.args.map((arg) => arg.trim()).filter(Boolean),
+    env: cleanStringRecord(server.env),
+    cwd: server.cwd.trim(),
+    url: server.url.trim(),
+    headers: cleanStringRecord(server.headers),
+  })
+}
+
+function cleanStringRecord(record: Record<string, string>): Record<string, string> {
+  const output: Record<string, string> = {}
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const key = rawKey.trim()
+    const value = rawValue.trim()
+    if (key && value) output[key] = value
+  }
+  return output
+}
+
+function collectMcpEnvReferences(servers: AgentMcpServerConfig[]): string[] {
+  const refs = new Set<string>()
+  const collect = (value: string) => {
+    for (const match of value.matchAll(/\$\{([A-Z_a-z][A-Z_a-z0-9]*)\}/g)) refs.add(match[1])
+  }
+  for (const server of servers) {
+    collect(server.command)
+    server.args.forEach(collect)
+    collect(server.url)
+    Object.values(server.env).forEach(collect)
+    Object.values(server.headers).forEach(collect)
+  }
+  return [...refs]
+}
+
 function useMasonrySpan(ref: RefObject<HTMLElement | null>, deps: unknown[]) {
   useEffect(() => {
     const element = ref.current
@@ -1551,6 +3568,89 @@ function useMasonrySpan(ref: RefObject<HTMLElement | null>, deps: unknown[]) {
 
 function messagesForSize(item: HomePluginRunItem, size: HomePluginCardSize): A2uiMessage[] {
   return ((item.variants?.[size] ?? item.variants?.medium ?? item.variants?.large ?? item.variants?.small ?? item.messages ?? []) as A2uiMessage[])
+}
+
+function isTodoHomeCard(item: HomePluginRunItem): boolean {
+  return item.manifest.id === TODO_HOME_PLUGIN_ID
+}
+
+function todoHomeCardDataFromMessages(messages: A2uiMessage[]): TodoHomeCardData | null {
+  const data = messages
+    .map((message) => {
+      if (!isRecord(message) || !isRecord(message.updateDataModel)) return null
+      const value = message.updateDataModel.value
+      return isRecord(value) && isRecord(value.todo) ? value.todo : null
+    })
+    .find((todo): todo is Record<string, unknown> => Boolean(todo))
+
+  if (!data) return null
+  return {
+    phase: readTaskText(data.phase),
+    progress: readTaskText(data.progress),
+    currentTask: readTaskText(data.currentTask),
+    nextStep: readTaskText(data.nextStep),
+    blocker: readTaskText(data.blocker),
+    updatedAt: readTaskText(data.updatedAt),
+    completed: readFiniteNumber(data.completed),
+    total: readFiniteNumber(data.total),
+    percent: Math.round(Math.min(100, Math.max(0, readFiniteNumber(data.percent)))),
+    tasks: Array.isArray(data.tasks)
+      ? data.tasks.filter(isRecord).map((task) => ({
+          id: readTaskText(task.id),
+          title: readTaskText(task.title),
+          checked: task.checked === true,
+          status: readTaskText(task.status),
+          priority: readTaskText(task.priority),
+        })).filter((task) => task.id && task.title)
+      : [],
+  }
+}
+
+function readFiniteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function createProjectFileNode(projectPath: string, relativePath: string): FileTreeNode {
+  const normalizedProjectPath = projectPath.replace(/[\\/]+$/, '')
+  const normalizedRelativePath = normalizeProjectRelativePath(relativePath)
+  const name = normalizedRelativePath.split('/').filter(Boolean).at(-1) ?? normalizedRelativePath
+  return {
+    name,
+    path: `${normalizedProjectPath}/${normalizedRelativePath}`,
+    relativePath: normalizedRelativePath,
+    type: 'file',
+  }
+}
+
+function agentProjectDocumentHint(
+  name: AgentProjectDocumentName,
+  t: (path: string, values?: Record<string, string | number>) => string,
+): string {
+  if (name === 'AGENTS.md') return t('workspace.agentSettingsProjectDocumentAgentsHint')
+  if (name === 'SOUL.md') return t('workspace.agentSettingsProjectDocumentSoulHint')
+  return t('workspace.agentSettingsProjectDocumentGoalHint')
+}
+
+function agentProjectDocumentPlaceholder(
+  name: AgentProjectDocumentName,
+  t: (path: string, values?: Record<string, string | number>) => string,
+): string {
+  if (name === 'AGENTS.md') return t('workspace.agentSettingsProjectDocumentAgentsPlaceholder')
+  if (name === 'SOUL.md') return t('workspace.agentSettingsProjectDocumentSoulPlaceholder')
+  return t('workspace.agentSettingsProjectDocumentGoalPlaceholder')
+}
+
+function projectContextEntryMeta(
+  entry: ProjectContextEntry,
+  t: (path: string, values?: Record<string, string | number>) => string,
+): string {
+  const parts = [
+    entry.mode === 'reference' && entry.targetPath
+      ? t('workspace.agentSettingsContextTargetPath', { path: entry.targetPath })
+      : entry.relativePath,
+    typeof entry.size === 'number' ? formatBytes(entry.size) : '',
+  ].filter(Boolean)
+  return parts.join(' · ')
 }
 
 function taskCardViewModelFromMessages(item: HomePluginRunItem, messages: A2uiMessage[]): TaskHomeCardViewModel | null {
@@ -1699,6 +3799,10 @@ function latestThreadMessageStatus(thread: WorkspaceThread): 'done' | 'error' | 
 
 function defaultTaskSchedule(): HomePluginTaskSchedule {
   return { enabled: false, hour: 9, minute: 0, interval: 'off' }
+}
+
+function emptyAgentProjectDocuments(): Record<AgentProjectDocumentName, string> {
+  return Object.fromEntries(AGENT_PROJECT_DOCUMENT_NAMES.map((name) => [name, ''])) as Record<AgentProjectDocumentName, string>
 }
 
 function createTaskStepId(): string {

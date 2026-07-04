@@ -12,33 +12,49 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
   type KeyboardEvent,
+  type RefObject,
 } from 'react'
-import { createPortal, flushSync } from 'react-dom'
+import { flushSync } from 'react-dom'
+import { IconInline } from '../../icon-inline'
 import type {
   AgentContextCatalog,
   AgentContextSource,
+  ChatModelPick,
   ClaudeChatAttachment,
-  ClaudeAgentModelProvider,
-  ClaudeAgentSettings,
+  ClaudeChatAttachmentPickerResult,
+  ClaudeAgentStatusSnapshot,
   ClaudeAgentSettingsSnapshot,
   ClaudeChatEvent,
   ClaudeChatSubmitPayload,
   ClaudePermissionMode,
   ProjectFileSearchItem,
 } from '../../claude-chat-types'
-import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT } from '../../app-events'
+import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../../app-events'
 import type { HomePluginRunItem, SpeechRecognitionStatus } from '../../desktop-types'
 import { useI18n } from '../../i18n/i18n'
+import {
+  buildModelPickRows,
+  displayModelForPick,
+  modelPickFromRow,
+  modelPickKey,
+  modelRowForPick,
+  resolveEffectiveModelPick,
+  sameModelPick,
+  supportsImagesForPick,
+} from '../../model-pick'
 import type {
-  ChatActivityItem,
   ChatFileDiffItem,
   ChatMessageAttachment,
   ChatMessageItem,
+  ChatTaskItem,
+  ChatTaskState,
   ChatState,
-  ChatThinkingItem,
-  ChatToolItem,
+  FileTreeNode,
+  AgentSettingsPanelId,
   ProjectSkillRunRequest,
   ThreadRunState,
   TranscriptItem,
@@ -48,13 +64,20 @@ import type {
 import { AgentInputPromptModal, type PendingUserInputPrompt, type UserInputDecision } from './AgentInputPromptModal'
 import { ChatStartView } from './ChatStartView'
 import { ChatThreadView } from './ChatThreadView'
+import { ChatRun, type ChatRunTransition } from './chat-run'
+import { projectContent } from '../../project-content'
 import { writeClipboardText } from './clipboard'
 import { Composer } from './Composer'
+import { formatBytes } from './format'
 import type { BuiltInSlashCommand, ChatModelMenuRow, ComposerSuggestion, ComposerTrigger, PermissionModeRow } from './local-types'
+import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 
 const PROCESS_TRACE_TOGGLE_EVENT = 'chat-process-trace:toggle'
 const MAX_COMPOSER_SUGGESTIONS = 64
 const MAX_COMPOSER_ATTACHMENTS = 8
+const COMPOSER_ATTACHMENT_MAX_TOTAL_BYTES = 24 * 1024 * 1024
+const COMPOSER_PASTE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+const COMPOSER_PASTE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const ACTIVE_SPEECH_RECOGNITION_STATUSES = new Set<SpeechRecognitionStatus>([
   'starting',
   'requesting_permission',
@@ -114,6 +137,72 @@ function escapeCssAttributeValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
+function getNativeFilePath(file: File): string {
+  const maybeNativeFile = file as File & { path?: unknown }
+  return typeof maybeNativeFile.path === 'string' ? maybeNativeFile.path : ''
+}
+
+function dedupeFiles(files: File[]): File[] {
+  const seen = new Set<string>()
+  return files.filter((file) => {
+    const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function imageExtensionForMimeType(mimeType: string): string {
+  if (mimeType === 'image/jpeg') return 'jpg'
+  if (mimeType === 'image/gif') return 'gif'
+  if (mimeType === 'image/webp') return 'webp'
+  return 'png'
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('无法读取剪贴板图片'))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('无法读取剪贴板图片'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function mergeComposerAttachments(
+  current: ClaudeChatAttachment[],
+  incoming: ClaudeChatAttachment[],
+): { attachments: ClaudeChatAttachment[]; skipped: Array<{ name: string; reason: string }> } {
+  const byPath = new Map(current.map((attachment) => [attachment.path, attachment]))
+  const skipped: Array<{ name: string; reason: string }> = []
+
+  for (const attachment of incoming) {
+    const existing = byPath.get(attachment.path)
+    const nextAttachments = existing
+      ? [...byPath.values()].map((item) => (item.path === attachment.path ? attachment : item))
+      : [...byPath.values(), attachment]
+
+    if (!existing && byPath.size >= MAX_COMPOSER_ATTACHMENTS) {
+      skipped.push({ name: attachment.name, reason: `一次最多添加 ${MAX_COMPOSER_ATTACHMENTS} 个文件` })
+      continue
+    }
+
+    if (totalAttachmentBytes(nextAttachments) > COMPOSER_ATTACHMENT_MAX_TOTAL_BYTES) {
+      skipped.push({ name: attachment.name, reason: '附件总大小超过 24MB' })
+      continue
+    }
+
+    byPath.set(attachment.path, attachment)
+  }
+
+  return { attachments: [...byPath.values()].slice(0, MAX_COMPOSER_ATTACHMENTS), skipped }
+}
+
+function totalAttachmentBytes(attachments: ClaudeChatAttachment[]): number {
+  return attachments.reduce((sum, attachment) => sum + Math.max(0, attachment.size || 0), 0)
+}
+
 // --- Imperative handle / 命令式句柄 ---
 
 export type ChatPageHandle = {
@@ -126,14 +215,22 @@ export type ChatPageHandle = {
     projectId: string,
     threadId: string,
     prompt: string,
-    promptMode?: ClaudeChatSubmitPayload['promptMode'],
+    options?: ClaudeChatSubmitPayload['promptMode'] | SubmitPromptOptions,
   ) => Promise<boolean>
+}
+
+export type SubmitPromptOptions = {
+  promptMode?: ClaudeChatSubmitPayload['promptMode']
+  modelPick?: ChatModelPick
 }
 
 type ChatPageProps = {
   hidden: boolean
   activeProject: WorkspaceProject
   activeThread: WorkspaceThread | undefined
+  projectDefaultModelPick?: ChatModelPick
+  projectHomeModelPick?: ChatModelPick
+  agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
   /** 按 threadId 查找持久化 sessionId（重启后恢复 SDK）/ Threads list for resolving persisted session ids */
   threads: WorkspaceThread[]
   projects: WorkspaceProject[]
@@ -141,18 +238,29 @@ type ChatPageProps = {
   threadRunStates: Record<string, ThreadRunState>
   onStatusChange: (text: string) => void
   onNewThread: (projectId?: string) => string | void
+  onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onThreadChatStateChange: (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => void
   onThreadPromptSubmit: (threadId: string, prompt: string) => void
   onThreadRunStateChange: (threadId: string, state: ThreadRunState | null) => void
+  onThreadCompletionStateChange: (threadId: string, completedAt: number | null) => void
+  onProjectHomeModelPickChange: (projectId: string, pick: ChatModelPick | undefined) => void
+  onRefreshAgentStatus: (refresh?: boolean) => void
+  agentMode: WorkspaceAgentModeState
   agentModeEnabled: boolean
   todoEnabled: boolean
   agentModeLoading: boolean
+  agentSettingsOpen: boolean
+  agentSettingsPanel: AgentSettingsPanelId
+  onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
+  onAgentSettingsPanelChange: (panel: AgentSettingsPanelId) => void
+  onCloseAgentSettings: () => void
   homeModeResetKey: number
   hiddenSkillPaths: string[]
   onCreateHomePluginCardThread: (projectId: string, initialPrompt: string) => string | void
   onEditHomePluginCard: (projectId: string, item: HomePluginRunItem) => void
+  onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
 }
@@ -163,8 +271,11 @@ type SubmitPromptTarget = {
   threadId?: string
   project?: WorkspaceProject
   promptMode?: ClaudeChatSubmitPayload['promptMode']
+  modelPick?: ChatModelPick
   reuseUserMessageId?: string
   resetSession?: boolean
+  suppressUserMessage?: boolean
+  preserveComposerDraft?: boolean
 }
 
 /** 内置 slash 命令清单 / Built-in slash commands backed by i18n strings */
@@ -182,13 +293,6 @@ function getBuiltInSlashCommands(t: (path: string, vars?: Record<string, string 
       command: 'status',
       title: t('chat.slashStatusTitle'),
       description: t('chat.slashStatusDesc'),
-      argumentHint: '',
-    },
-    {
-      kind: 'built-in',
-      command: 'help',
-      title: t('chat.slashHelpTitle'),
-      description: t('chat.slashHelpDesc'),
       argumentHint: '',
     },
   ]
@@ -221,24 +325,38 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     hidden,
     activeProject,
     activeThread,
+    projectDefaultModelPick,
+    projectHomeModelPick,
+    agentStatusSnapshot,
     threads,
     projects,
     projectOrderIds,
     threadRunStates,
     onStatusChange,
     onNewThread,
+    onForkThread,
     onCreateProject,
     onSelectProject,
     onThreadChatStateChange,
     onThreadPromptSubmit,
     onThreadRunStateChange,
+    onThreadCompletionStateChange,
+    onProjectHomeModelPickChange,
+    onRefreshAgentStatus,
+    agentMode,
     agentModeEnabled,
     todoEnabled,
     agentModeLoading,
+    agentSettingsOpen,
+    agentSettingsPanel,
+    onOpenAgentSettings,
+    onAgentSettingsPanelChange,
+    onCloseAgentSettings,
     homeModeResetKey,
     hiddenSkillPaths,
     onCreateHomePluginCardThread,
     onEditHomePluginCard,
+    onOpenProjectFile,
     onRunProjectSkill,
     onStopProjectSkillRun,
   },
@@ -257,7 +375,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const [modelMenuRows, setModelMenuRows] = useState<ChatModelMenuRow[]>([])
   const [modelMenuSelectionKey, setModelMenuSelectionKey] = useState('')
   const [activeModelSupportsImages, setActiveModelSupportsImages] = useState(false)
+  const [claudeSettingsSnapshot, setClaudeSettingsSnapshot] = useState<ClaudeAgentSettingsSnapshot | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<ClaudeChatAttachment[]>([])
+  const pendingAttachmentsRef = useRef<ClaudeChatAttachment[]>([])
   const [agentContext, setAgentContext] = useState<AgentContextCatalog | null>(null)
   const [permissionMode, setPermissionMode] = useState<ClaudePermissionMode>(() => readStoredPermissionMode())
   const [permissionModeOpen, setPermissionModeOpen] = useState(false)
@@ -282,13 +402,13 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const modelPopoverSurfaceRef = useRef<HTMLDivElement>(null)
   const permissionModePopoverAnchorRef = useRef<HTMLButtonElement>(null)
   const permissionModePopoverSurfaceRef = useRef<HTMLDivElement>(null)
+  const todoButtonRef = useRef<HTMLButtonElement>(null)
+  const todoPanelRef = useRef<HTMLDivElement>(null)
   const activeThreadIdRef = useRef(activeThread?.id ?? '')
   const threadScrollTopRef = useRef(new Map<string, number>())
-  const threadRunStatesRef = useRef<Record<string, ThreadRunState>>(threadRunStates)
-  const requestThreadIdsRef = useRef(new Map<string, string>())
-  const requestAssistantMessageIdsRef = useRef(new Map<string, string>())
-  const requestStartedAtRef = useRef(new Map<string, number>())
-  const finishedRequestIdsRef = useRef(new Set<string>())
+  const chatRunRef = useRef<ChatRun | null>(null)
+  if (!chatRunRef.current) chatRunRef.current = new ChatRun()
+  const chatRun = chatRunRef.current
 
   /** Popover anchor avoids clipping by `.chat-composer` / fixed positioning avoids composer clipping */
   const [modelPopoverBox, setModelPopoverBox] = useState<{
@@ -303,6 +423,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     width: number
     maxHeight: number
   } | null>(null)
+  const newThreadModelPick = projectHomeModelPick ?? projectDefaultModelPick
   const scrollIntentRef = useRef<'none' | 'force-bottom'>('none')
   /** 取消 / Esc 关闭编辑时抑制贴底，避免 ResizeObserver 误判 isNearBottom 把视口滚到底 */
   const suppressTranscriptResizeStickRef = useRef(false)
@@ -311,12 +432,17 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const isFirstTranscriptLayoutRef = useRef(true)
   const isRunningRef = useRef(false)
   const globalDisplayModelRef = useRef(globalDisplayModel)
+  const currentModelPickRef = useRef<ChatModelPick | undefined>(undefined)
   const inputValueRef = useRef(inputValue)
   const composerSelectionRef = useRef(composerSelection)
   const speechDraftRangeRef = useRef<SpeechDraftRange | null>(null)
   const lastSpeechAppliedValueRef = useRef<string | null>(null)
   const ignoreSpeechRecognitionTextRef = useRef(false)
+  const speechRecognitionGenerationRef = useRef<number | null>(null)
+  const ignoredSpeechRecognitionGenerationsRef = useRef<Set<number>>(new Set())
   const speechRestartAfterEditRef = useRef(false)
+  const speechRecognitionStatusRef = useRef(speechRecognitionStatus)
+  const speechSettleWaitersRef = useRef<Array<() => void>>([])
 
   const [composerAutocompleteBox, setComposerAutocompleteBox] = useState<{
     left: number
@@ -324,9 +450,25 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     width: number
     maxHeight: number
   } | null>(null)
+  const [todoPanelOpen, setTodoPanelOpen] = useState(false)
 
   const hasMessages = chatItems.length > 0
-  const activeUserInputPrompt = pendingUserInputPrompts[0] ?? null
+  const activeTaskState = activeThread?.chatState.tasks
+  const visibleTaskItems = useMemo(
+    () => (activeTaskState?.items ?? []).filter((task) => task.status !== 'deleted'),
+    [activeTaskState?.items],
+  )
+  const hasVisibleTasks = visibleTaskItems.length > 0
+  const activeUserInputPrompt = useMemo(() => {
+    const activeThreadId = activeThread?.id ?? activeThreadIdRef.current
+    if (!activeThreadId) return null
+    return (
+      pendingUserInputPrompts.find((prompt) => {
+        const promptThreadId = prompt.threadId ?? chatRun.threadIdForRequest(prompt.requestId)
+        return promptThreadId === activeThreadId
+      }) ?? null
+    )
+  }, [activeThread?.id, chatRun, pendingUserInputPrompts])
   const permissionModeRows = useMemo(() => getPermissionModeRows(t), [t])
   const permissionModeLabel = permissionModeRows.find((row) => row.mode === permissionMode)?.label ?? t('chat.permissionModeAuto')
   const speechRecognitionSupported =
@@ -343,6 +485,61 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     },
     [onThreadChatStateChange],
   )
+  const setSpeechStatus = useCallback((status: SpeechRecognitionStatus) => {
+    speechRecognitionStatusRef.current = status
+    setSpeechRecognitionStatus(status)
+  }, [])
+  const rememberSpeechRecognitionGeneration = useCallback((generation: number | undefined) => {
+    if (typeof generation !== 'number') return
+    speechRecognitionGenerationRef.current = generation
+    const ignored = ignoredSpeechRecognitionGenerationsRef.current
+    for (const value of ignored) {
+      if (value < generation - 2) ignored.delete(value)
+    }
+  }, [])
+  const ignoreCurrentSpeechRecognitionGeneration = useCallback(() => {
+    const generation = speechRecognitionGenerationRef.current
+    if (generation !== null) ignoredSpeechRecognitionGenerationsRef.current.add(generation)
+  }, [])
+  const shouldIgnoreSpeechRecognitionEvent = useCallback((generation: number | undefined) => {
+    if (typeof generation !== 'number') return ignoreSpeechRecognitionTextRef.current
+    if (ignoredSpeechRecognitionGenerationsRef.current.has(generation)) return true
+    const currentGeneration = speechRecognitionGenerationRef.current
+    return currentGeneration !== null && generation < currentGeneration
+  }, [])
+  const resolveSpeechRecognitionSettleWaiters = useCallback(() => {
+    const waiters = speechSettleWaitersRef.current
+    speechSettleWaitersRef.current = []
+    waiters.forEach((resolve) => resolve())
+  }, [])
+  const waitForSpeechRecognitionSettle = useCallback((timeoutMs = 9500) => {
+    return new Promise<void>((resolve) => {
+      if (!ACTIVE_SPEECH_RECOGNITION_STATUSES.has(speechRecognitionStatusRef.current)) {
+        resolve()
+        return
+      }
+
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timeout)
+        speechSettleWaitersRef.current = speechSettleWaitersRef.current.filter((item) => item !== finish)
+        resolve()
+      }
+      const timeout = window.setTimeout(finish, timeoutMs)
+      speechSettleWaitersRef.current = [...speechSettleWaitersRef.current, finish]
+    })
+  }, [])
+  const setComposerDraftValue = useCallback((nextValue: string, selectionStart = nextValue.length, selectionEnd = selectionStart) => {
+    const start = Math.max(0, Math.min(selectionStart, nextValue.length))
+    const end = Math.max(start, Math.min(selectionEnd, nextValue.length))
+    inputValueRef.current = nextValue
+    composerSelectionRef.current = { start, end }
+    setInputValue(nextValue)
+    setComposerSelection({ start, end })
+    if (!nextValue) setDismissedAutocompleteKey('')
+  }, [])
   const beginSpeechDraft = useCallback(() => {
     const currentInput = inputValueRef.current
     const selection = composerSelectionRef.current
@@ -360,6 +557,24 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     speechDraftRangeRef.current = null
     lastSpeechAppliedValueRef.current = null
   }, [])
+  const clearComposerDraft = useCallback(() => {
+    clearSpeechDraft()
+    setComposerDraftValue('', 0, 0)
+  }, [clearSpeechDraft, setComposerDraftValue])
+  const discardSpeechDraftText = useCallback(() => {
+    const draftRange = speechDraftRangeRef.current
+    if (!draftRange) {
+      clearSpeechDraft()
+      return
+    }
+
+    const currentInput = inputValueRef.current
+    const replacementStart = Math.max(0, Math.min(draftRange.start, currentInput.length))
+    const replacementEnd = Math.max(replacementStart, Math.min(draftRange.end, currentInput.length))
+    const nextValue = `${currentInput.slice(0, replacementStart)}${currentInput.slice(replacementEnd)}`
+    clearSpeechDraft()
+    setComposerDraftValue(nextValue, replacementStart, replacementStart)
+  }, [clearSpeechDraft, setComposerDraftValue])
   const replaceSpeechDraftText = useCallback((text: string) => {
     const cleanText = text.trim()
     const currentInput = inputValueRef.current
@@ -447,8 +662,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }, [refreshAgentContext])
 
   useEffect(() => {
-    threadRunStatesRef.current = threadRunStates
-  }, [threadRunStates])
+    chatRun.syncRunStates(threadRunStates)
+  }, [chatRun, threadRunStates])
 
   useEffect(() => {
     isRunningRef.current = isRunning
@@ -471,6 +686,33 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }, [globalDisplayModel])
 
   useEffect(() => {
+    setTodoPanelOpen(false)
+  }, [activeThread?.id])
+
+  useEffect(() => {
+    if (!hasVisibleTasks) setTodoPanelOpen(false)
+  }, [hasVisibleTasks])
+
+  useEffect(() => {
+    if (!todoPanelOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (todoPanelRef.current?.contains(target) || todoButtonRef.current?.contains(target)) return
+      setTodoPanelOpen(false)
+    }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setTodoPanelOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown, { capture: true })
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, { capture: true })
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [todoPanelOpen])
+
+  useEffect(() => {
     if (!activeRunState) return
     onStatusChange(
       activeRunState.status === 'asking'
@@ -483,22 +725,35 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   useEffect(() => {
     if (!speechRecognitionSupported) {
-      setSpeechRecognitionStatus('unsupported')
+      setSpeechStatus('unsupported')
       return
     }
 
     let disposed = false
     window.desktop?.getSpeechRecognitionStatus?.()
       .then((snapshot) => {
-        if (!disposed) setSpeechRecognitionStatus(snapshot.status)
+        if (!disposed) {
+          rememberSpeechRecognitionGeneration(snapshot.generation)
+          setSpeechStatus(snapshot.status)
+        }
       })
       .catch(() => {
-        if (!disposed) setSpeechRecognitionStatus('error')
-      })
+        if (!disposed) setSpeechStatus('error')
+    })
 
     const unsubscribe = window.desktop?.onSpeechRecognitionEvent?.((event) => {
+      const hasGeneration = typeof event.generation === 'number'
+      if (hasGeneration && shouldIgnoreSpeechRecognitionEvent(event.generation)) {
+        if (event.type === 'final' || event.type === 'error') resolveSpeechRecognitionSettleWaiters()
+        return
+      }
+      rememberSpeechRecognitionGeneration(event.generation)
+
       if (event.type === 'status') {
-        setSpeechRecognitionStatus(event.status)
+        setSpeechStatus(event.status)
+        if (!ACTIVE_SPEECH_RECOGNITION_STATUSES.has(event.status)) {
+          resolveSpeechRecognitionSettleWaiters()
+        }
         if (event.status === 'requesting_permission') {
           onStatusChange(t('chat.voiceRequestingPermission'))
         } else if (event.status === 'listening') {
@@ -511,13 +766,16 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       }
 
       if (event.type === 'partial') {
-        if (ignoreSpeechRecognitionTextRef.current) return
+        if (!hasGeneration && ignoreSpeechRecognitionTextRef.current) return
         replaceSpeechDraftText(event.text)
         return
       }
 
       if (event.type === 'final') {
-        if (ignoreSpeechRecognitionTextRef.current) return
+        if (!hasGeneration && ignoreSpeechRecognitionTextRef.current) {
+          resolveSpeechRecognitionSettleWaiters()
+          return
+        }
         if (event.text.trim()) {
           replaceSpeechDraftText(event.text)
           clearSpeechDraft()
@@ -529,21 +787,35 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           clearSpeechDraft()
           onStatusChange(t('chat.voiceNoSpeech'))
         }
+        resolveSpeechRecognitionSettleWaiters()
         return
       }
 
       const message = speechRecognitionErrorMessage(event.code, event.message)
       ignoreSpeechRecognitionTextRef.current = false
       clearSpeechDraft()
-      setSpeechRecognitionStatus('error')
+      setSpeechStatus('error')
+      resolveSpeechRecognitionSettleWaiters()
       onStatusChange(message)
     })
 
     return () => {
       disposed = true
       unsubscribe?.()
+      resolveSpeechRecognitionSettleWaiters()
     }
-  }, [clearSpeechDraft, onStatusChange, replaceSpeechDraftText, speechRecognitionErrorMessage, speechRecognitionSupported, t])
+  }, [
+    clearSpeechDraft,
+    rememberSpeechRecognitionGeneration,
+    onStatusChange,
+    replaceSpeechDraftText,
+    resolveSpeechRecognitionSettleWaiters,
+    setSpeechStatus,
+    shouldIgnoreSpeechRecognitionEvent,
+    speechRecognitionErrorMessage,
+    speechRecognitionSupported,
+    t,
+  ])
 
   const applyGlobalModelFromSettings = useCallback(
     (snapshot: ClaudeAgentSettingsSnapshot) => {
@@ -555,19 +827,28 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         opus: t('chat.modelSlotOpus'),
       }
 
-      setModelMenuRows(buildChatModelMenuRows(settings.providers, slots, t))
-      setModelMenuSelectionKey(pickerSelectionKeyFromSettings(settings, t))
-
-      const model = resolvedChatDisplayModel(settings, t)
-      setGlobalDisplayModel(model)
-      setActiveModelSupportsImages(resolvedChatSupportsImages(snapshot))
-
-      if (!isRunningRef.current) {
-        onStatusChange(compactModelName(model, t))
-      }
+      setClaudeSettingsSnapshot(snapshot)
+      setModelMenuRows(buildModelPickRows(settings.providers, slots, t('chat.modelFallback')))
     },
-    [onStatusChange, t],
+    [t],
   )
+
+  useEffect(() => {
+    if (!claudeSettingsSnapshot) return
+    const settings = claudeSettingsSnapshot.settings
+    const requestedPick = activeThread?.id ? activeThread.chatState.modelPick : newThreadModelPick
+    const effectivePick = resolveEffectiveModelPick(settings, requestedPick)
+    const row = modelRowForPick(modelMenuRows, effectivePick)
+    const displayModel = row?.anthropicModelId ?? displayModelForPick(settings, effectivePick, t('chat.modelFallback'))
+    const supportsImages = supportsImagesForPick(settings, effectivePick, false)
+    currentModelPickRef.current = effectivePick
+    setModelMenuSelectionKey(effectivePick ? modelPickKey(effectivePick) : '')
+    setGlobalDisplayModel(displayModel)
+    setActiveModelSupportsImages(supportsImages)
+    if (!isRunningRef.current) {
+      onStatusChange(compactModelName(displayModel, t))
+    }
+  }, [activeThread?.chatState.modelPick, activeThread?.id, claudeSettingsSnapshot, modelMenuRows, newThreadModelPick, onStatusChange, t])
 
   useEffect(() => {
     setHomeComposerMode('normal')
@@ -613,20 +894,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       return
     }
 
-    const searchProjectFiles = window.desktop?.searchProjectFiles
-    if (!searchProjectFiles) {
-      setFileMentionResults([])
-      return
-    }
-
     const query = activeComposerTrigger.query
+    const searchSession = projectContent.createSearchSession()
     const timer = window.setTimeout(() => {
-      searchProjectFiles(activeProject.path, query)
-        .then((result) => setFileMentionResults(result.ok ? result.items : []))
-        .catch(() => setFileMentionResults([]))
+      searchSession.search({
+        rootPath: activeProject.path,
+        query,
+        onResult: (result) => setFileMentionResults(result.ok ? result.items : []),
+      })
     }, 90)
 
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      searchSession.dispose()
+    }
   }, [activeComposerTrigger, activeProject.path])
 
   useLayoutEffect(() => {
@@ -678,18 +959,33 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Model & permission pickers: floating position + click-outside / 模型与权限选择器：浮层定位与点击外部关闭 ---
 
   const pickChatMenuRow = useCallback(async (row: ChatModelMenuRow) => {
-    if (!window.claudeChat || isRunningRef.current) return
-    try {
-      const snapshot = await window.claudeChat.setActiveChatPick({
-        providerId: row.providerId,
-        anthropicModel: row.useOverlayPick ? row.anthropicModelId : undefined,
+    if (isRunningRef.current) return
+    const pick = modelPickFromRow(row)
+    if (activeThread?.id) {
+      currentModelPickRef.current = pick
+      setThreadChatState(activeThread.id, (prev) => {
+        const changed = !sameModelPick(prev.modelPick, pick)
+        return {
+          ...prev,
+          model: pick.anthropicModel,
+          modelPick: pick,
+          sessionId: changed ? undefined : prev.sessionId,
+        }
       })
-      window.dispatchEvent(new CustomEvent(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, { detail: snapshot }))
+      setModelMenuSelectionKey(row.pickKey)
+      setGlobalDisplayModel(pick.anthropicModel)
+      setActiveModelSupportsImages(row.supportsImages)
       setModelPickerOpen(false)
-    } catch {
-      /* 设置写入失败时静默 / Ignore settings write failures */
+      return
     }
-  }, [])
+
+    onProjectHomeModelPickChange(activeProject.id, pick)
+    currentModelPickRef.current = pick
+    setModelMenuSelectionKey(row.pickKey)
+    setGlobalDisplayModel(pick.anthropicModel)
+    setActiveModelSupportsImages(row.supportsImages)
+    setModelPickerOpen(false)
+  }, [activeProject.id, activeThread?.id, onProjectHomeModelPickChange, setThreadChatState])
 
   useLayoutEffect(() => {
     if (!modelPickerOpen || !modelPopoverAnchorRef.current) {
@@ -846,6 +1142,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     scrollIntentRef.current = hasSavedScrollTop ? 'none' : 'force-bottom'
     setShowScrollButton(false)
     setModelPickerOpen(false)
+    pendingAttachmentsRef.current = []
     setPendingAttachments([])
 
     let frame = 0
@@ -995,7 +1292,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     setShowScrollButton(false)
   }, [])
 
-  // --- Submit target + run state bookkeeping (request id maps, finish/cleanup) / 提交目标与运行态簿记（requestId 映射、结束清理）---
+  // --- Chat Run adapter / Chat Run 的 React adapter ---
 
   const getActiveSubmitTarget = useCallback((): SubmitPromptTarget | undefined => {
     if (!activeThread) return undefined
@@ -1007,478 +1304,79 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
   }, [activeProject, activeThread, projects])
 
-  const setThreadRunState = useCallback(
-    (threadId: string, state: ThreadRunState | null) => {
-      if (state) {
-        threadRunStatesRef.current = { ...threadRunStatesRef.current, [threadId]: state }
-      } else if (threadRunStatesRef.current[threadId]) {
-        const next = { ...threadRunStatesRef.current }
-        delete next[threadId]
-        threadRunStatesRef.current = next
+  const applyChatRunTransition = useCallback(
+    (transition: ChatRunTransition) => {
+      if (transition.updateState) {
+        const applyState = () => setThreadChatState(transition.threadId, transition.updateState!)
+        if (transition.flush) flushSync(applyState)
+        else applyState()
       }
-      onThreadRunStateChange(threadId, state)
-    },
-    [onThreadRunStateChange],
-  )
-
-  const markRequestRunning = useCallback(
-    (threadId: string, requestId: string, status: ThreadRunState['status'] = 'running') => {
-      requestThreadIdsRef.current.set(requestId, threadId)
-      const current = threadRunStatesRef.current[threadId]
-      if (current && current.requestId !== requestId && !isPendingRequestId(current.requestId)) return
-      if (current?.requestId === requestId && current.status === status) return
-      const startedAt = current?.startedAt ?? requestStartedAtRef.current.get(requestId) ?? Date.now()
-      requestStartedAtRef.current.set(requestId, startedAt)
-      setThreadRunState(threadId, { requestId, status, startedAt, updatedAt: Date.now() })
-    },
-    [setThreadRunState],
-  )
-
-  const finishRequest = useCallback(
-    (requestId: string, statusText: string, notify = false, clearPendingRun = false) => {
-      let threadId = requestThreadIdsRef.current.get(requestId)
-      if (!threadId) {
-        for (const [candidateThreadId, runState] of Object.entries(threadRunStatesRef.current)) {
-          if (runState.requestId === requestId) {
-            threadId = candidateThreadId
-            break
-          }
+      if (transition.clearCompletion) {
+        onThreadCompletionStateChange(transition.threadId, null)
+      }
+      if (transition.runState !== undefined) {
+        onThreadRunStateChange(transition.threadId, transition.runState)
+      }
+      if (transition.prompt) {
+        setPendingUserInputPrompts((prev) =>
+          prev.some((item) => item.permissionRequestId === transition.prompt?.permissionRequestId)
+            ? prev
+            : [...prev, transition.prompt!],
+        )
+        if (activeThreadIdRef.current === transition.threadId) {
+          onStatusChange(
+            transition.prompt.type === 'ask_user_question'
+              ? t('chat.waitingForAnswer')
+              : t('chat.waitingForPermission'),
+          )
         }
       }
-
-      finishedRequestIdsRef.current.add(requestId)
-      window.setTimeout(() => finishedRequestIdsRef.current.delete(requestId), 30_000)
-      requestAssistantMessageIdsRef.current.delete(requestId)
-      requestStartedAtRef.current.delete(requestId)
-      requestThreadIdsRef.current.delete(requestId)
-      setPendingUserInputPrompts((prev) => prev.filter((item) => item.requestId !== requestId))
-
-      if (threadId) {
-        const runState = threadRunStatesRef.current[threadId]
-        if (!runState || runState.requestId === requestId || (clearPendingRun && isPendingRequestId(runState.requestId))) {
-          setThreadRunState(threadId, null)
+      if (transition.removePromptsForRequest) {
+        setPendingUserInputPrompts((prev) =>
+          prev.filter((item) => item.requestId !== transition.removePromptsForRequest),
+        )
+      }
+      if (transition.markCompleted) {
+        onThreadCompletionStateChange(
+          transition.threadId,
+          activeThreadIdRef.current === transition.threadId ? null : Date.now(),
+        )
+      }
+      if (transition.scrollToBottom && activeThreadIdRef.current === transition.threadId) {
+        scrollIntentRef.current = 'force-bottom'
+      }
+      if (!transition.terminal) return
+      if (!transition.threadId || activeThreadIdRef.current === transition.threadId) {
+        if (transition.terminal.kind === 'result') {
+          onStatusChange(compactModelName(globalDisplayModelRef.current, t))
+        } else if (transition.terminal.kind === 'error') {
+          onStatusChange(
+            transition.terminal.code === 'missing_api_key'
+              ? t('chat.missingApiKey')
+              : t('chat.errorGeneric'),
+          )
+        } else {
+          onStatusChange(t('chat.stoppedStatus'))
         }
       }
-
-      if (!threadId || activeThreadIdRef.current === threadId) {
-        onStatusChange(statusText)
-      }
-      if (notify) playAgentDoneSound()
+      if (transition.terminal.kind !== 'cancelled') playAgentDoneSound()
     },
-    [onStatusChange, setThreadRunState],
+    [onStatusChange, onThreadCompletionStateChange, onThreadRunStateChange, setThreadChatState, t],
   )
 
-  // --- Map every `ClaudeChatEvent` into `ChatState.items` / 将每条 SDK 事件折叠进对话时间线 items ---
+  // --- Fold every Agent event through the Chat Run interface / 所有 Agent 事件统一穿过 Chat Run interface ---
 
   const handleClaudeEvent = useCallback(
     (event: ClaudeChatEvent) => {
-      const knownRequestBeforeEvent = requestThreadIdsRef.current.has(event.requestId)
-      const eventThreadId = event.threadId ?? requestThreadIdsRef.current.get(event.requestId) ?? activeThreadIdRef.current
-      requestThreadIdsRef.current.set(event.requestId, eventThreadId)
-      if (event.type === 'session_start') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => ({
-          ...prev,
-          sessionId: event.sessionId,
-          model: event.model || globalDisplayModelRef.current,
-          cwd: event.cwd,
-        }))
-        return
-      }
-
-      if (event.type === 'assistant_delta') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const messageId = event.messageId
-          const startedAt = requestStartedAtRef.current.get(event.requestId) ?? Date.now()
-          let { items } = prev
-          const idx = items.findIndex((it) => it.type === 'message' && it.id === messageId)
-          if (idx >= 0) {
-            const it = items[idx] as ChatMessageItem
-            const next = [...items]
-            next[idx] = { ...it, content: it.content + event.text, status: 'streaming', startedAt: it.startedAt ?? startedAt }
-            requestAssistantMessageIdsRef.current.set(event.requestId, messageId)
-            return { ...prev, items: next }
-          }
-
-          const pendingId = requestAssistantMessageIdsRef.current.get(event.requestId)
-          const pIdx = items.findIndex((it) => it.type === 'message' && it.id === pendingId && it.role === 'assistant')
-          if (pIdx >= 0) {
-            const it = items[pIdx] as ChatMessageItem
-            const next = [...items]
-            next[pIdx] = { ...it, id: messageId, content: it.content + event.text, status: 'streaming', startedAt: it.startedAt ?? startedAt }
-            requestAssistantMessageIdsRef.current.set(event.requestId, messageId)
-            return { ...prev, items: next }
-          }
-
-          if (!event.text) {
-            requestAssistantMessageIdsRef.current.set(event.requestId, messageId)
-            return prev
-          }
-
-          const msg: ChatMessageItem = {
-            type: 'message',
-            id: messageId,
-            role: 'assistant',
-            content: event.text,
-            status: 'streaming',
-            createdAt: startedAt,
-            startedAt,
-          }
-          requestAssistantMessageIdsRef.current.set(event.requestId, messageId)
-          return { ...prev, items: [...items, msg] }
-        })
-        return
-      }
-
-      if (event.type === 'thinking_start') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'thinking' && it.thinkingId === event.thinkingId)
-          if (idx >= 0) {
-            const next = [...prev.items]
-            const it = next[idx] as ChatThinkingItem
-            next[idx] = { ...it, requestId: it.requestId ?? event.requestId, status: 'running' }
-            return { ...prev, items: next }
-          }
-          const row: ChatThinkingItem = {
-            type: 'thinking',
-            id: event.thinkingId,
-            requestId: event.requestId,
-            thinkingId: event.thinkingId,
-            title: event.title,
-            content: '',
-            status: 'running',
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'thinking_delta') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'thinking' && it.thinkingId === event.thinkingId)
-          if (idx >= 0) {
-            const next = [...prev.items]
-            const it = next[idx] as ChatThinkingItem
-            next[idx] = { ...it, requestId: it.requestId ?? event.requestId, content: it.content + event.text, status: 'running' }
-            return { ...prev, items: next }
-          }
-          const row: ChatThinkingItem = {
-            type: 'thinking',
-            id: event.thinkingId,
-            requestId: event.requestId,
-            thinkingId: event.thinkingId,
-            title: 'Think',
-            content: event.text,
-            status: 'running',
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'thinking_done') {
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'thinking' && it.thinkingId === event.thinkingId)
-          if (idx < 0) return prev
-          const next = [...prev.items]
-          const it = next[idx] as ChatThinkingItem
-          next[idx] = { ...it, requestId: it.requestId ?? event.requestId, status: 'done' }
-          return { ...prev, items: next }
-        })
-        return
-      }
-
-      if (event.type === 'tool_start') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const existingIdx = prev.items.findIndex((it) => it.type === 'tool' && it.toolUseId === event.toolUseId)
-          if (existingIdx >= 0) {
-            const next = [...prev.items]
-            const it = next[existingIdx] as ChatToolItem
-            next[existingIdx] = { ...it, requestId: it.requestId ?? event.requestId, inputPreview: event.inputPreview || it.inputPreview, status: 'running' }
-            return { ...prev, items: next }
-          }
-          const row: ChatToolItem = {
-            type: 'tool',
-            id: `tool-${event.toolUseId}`,
-            requestId: event.requestId,
-            toolUseId: event.toolUseId,
-            name: event.name,
-            inputPreview: event.inputPreview,
-            status: 'running',
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'tool_update') {
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'tool' && it.toolUseId === event.toolUseId)
-          if (idx < 0) return prev
-          const next = [...prev.items]
-          const it = next[idx] as ChatToolItem
-          next[idx] = {
-            ...it,
-            requestId: it.requestId ?? event.requestId,
-            inputPreview: event.inputPreview ?? it.inputPreview,
-            detail: event.detail ?? it.detail,
-          }
-          return { ...prev, items: next }
-        })
-        return
-      }
-
-      if (event.type === 'tool_done') {
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'tool' && it.toolUseId === event.toolUseId)
-          if (idx < 0) return prev
-          const next = [...prev.items]
-          const it = next[idx] as ChatToolItem
-          next[idx] = { ...it, requestId: it.requestId ?? event.requestId, status: event.status, detail: event.detail ?? it.detail }
-          return { ...prev, items: next }
-        })
-        return
-      }
-
-      if (event.type === 'ask_user_question' || event.type === 'permission_request') {
-        markRequestRunning(eventThreadId, event.requestId, event.type === 'ask_user_question' ? 'asking' : 'waiting')
-        setPendingUserInputPrompts((prev) =>
-          prev.some((item) => item.permissionRequestId === event.permissionRequestId) ? prev : [...prev, event],
-        )
-        if (activeThreadIdRef.current === eventThreadId) {
-          onStatusChange(event.type === 'ask_user_question' ? t('chat.waitingForAnswer') : t('chat.waitingForPermission'))
-        }
-        return
-      }
-
-      if (event.type === 'agent_activity') {
-        if (event.status === 'running') markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'activity' && it.id === event.activityId)
-          if (idx >= 0) {
-            const next = [...prev.items]
-            const it = next[idx] as ChatActivityItem
-            next[idx] = {
-              ...it,
-              requestId: it.requestId ?? event.requestId,
-              title: event.title,
-              status: event.status,
-              detail: event.detail,
-              preview: event.preview,
-            }
-            return { ...prev, items: next }
-          }
-          const row: ChatActivityItem = {
-            type: 'activity',
-            id: event.activityId,
-            requestId: event.requestId,
-            title: event.title,
-            status: event.status,
-            detail: event.detail,
-            preview: event.preview,
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'file_diff') {
-        markRequestRunning(eventThreadId, event.requestId)
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex((it) => it.type === 'file_diff' && it.changeSetId === event.changeSetId)
-          if (idx >= 0) {
-            const next = [...prev.items]
-            const it = next[idx] as ChatFileDiffItem
-            next[idx] = {
-              ...it,
-              checkpointId: event.checkpointId ?? it.checkpointId,
-              files: mergeDiffFiles(it.files, event.files),
-              status: it.status === 'reverted' ? it.status : 'captured',
-              detail: undefined,
-            }
-            return { ...prev, items: next }
-          }
-          const row: ChatFileDiffItem = {
-            type: 'file_diff',
-            id: event.changeSetId,
-            requestId: event.requestId,
-            changeSetId: event.changeSetId,
-            checkpointId: event.checkpointId,
-            files: event.files,
-            status: 'captured',
-          }
-          return { ...prev, items: [...prev.items, row] }
-        })
-        return
-      }
-
-      if (event.type === 'file_rewind_result') {
-        setThreadChatState(eventThreadId, (prev) => {
-          const idx = prev.items.findIndex(
-            (it) => it.type === 'file_diff' && (!event.changeSetId || it.changeSetId === event.changeSetId),
-          )
-          if (idx < 0) return prev
-          const next = [...prev.items]
-          const it = next[idx] as ChatFileDiffItem
-          next[idx] = { ...it, status: event.status === 'reverted' ? 'reverted' : 'error', detail: event.detail ?? it.detail }
-          return { ...prev, items: next }
-        })
-        return
-      }
-
-      if (event.type === 'result') {
-        const completedAt = Date.now()
-        const requestStartedAt = requestStartedAtRef.current.get(event.requestId) ?? completedAt
-        flushSync(() => {
-          setThreadChatState(eventThreadId, (prev) => {
-            const expectedId = `assistant-${event.requestId}`
-            const pendingId = requestAssistantMessageIdsRef.current.get(event.requestId)
-            let found = false
-            const mapped = prev.items.map((item): TranscriptItem => {
-              if (item.type !== 'message' || item.role !== 'assistant') return item
-              if (item.id !== expectedId && item.id !== pendingId) return item
-              found = true
-              const content =
-                !item.content.trim() && event.result.trim() ? event.result : item.content
-              const startedAt = item.startedAt ?? requestStartedAt
-              return {
-                ...item,
-                content,
-                status: 'done',
-                startedAt,
-                completedAt,
-                durationMs: Math.max(0, completedAt - startedAt),
-              }
-            })
-            const items: TranscriptItem[] =
-              found || !event.result.trim()
-                ? mapped
-                : [
-                    ...mapped,
-                    {
-                      type: 'message',
-                      id: expectedId,
-                      role: 'assistant',
-                      content: event.result,
-                      status: 'done',
-                      createdAt: requestStartedAt,
-                      startedAt: requestStartedAt,
-                      completedAt,
-                      durationMs: Math.max(0, completedAt - requestStartedAt),
-                    },
-                  ]
-            return { ...prev, sessionId: event.sessionId, items }
-          })
-        })
-        finishRequest(event.requestId, compactModelName(globalDisplayModelRef.current, t), true, !knownRequestBeforeEvent)
-        return
-      }
-
-      if (event.type === 'error') {
-        const completedAt = Date.now()
-        const requestStartedAt = requestStartedAtRef.current.get(event.requestId) ?? completedAt
-        if (activeThreadIdRef.current === eventThreadId) scrollIntentRef.current = 'force-bottom'
-        const expectedId = `assistant-${event.requestId}`
-        const shouldClearSession =
-          event.code === 'sdk_error' && event.message.includes('No conversation found with session ID')
-        flushSync(() => {
-          setThreadChatState(eventThreadId, (prev) => {
-            const pendingId = requestAssistantMessageIdsRef.current.get(event.requestId)
-            let found = false
-            const mapped = prev.items.map((item): TranscriptItem => {
-              if (item.type !== 'message' || item.role !== 'assistant') return item
-              if (item.id !== expectedId && item.id !== pendingId) return item
-              found = true
-              const content = !item.content.trim() ? event.message : item.content
-              const startedAt = item.startedAt ?? requestStartedAt
-              return {
-                ...item,
-                content,
-                status: 'error',
-                startedAt,
-                completedAt,
-                durationMs: Math.max(0, completedAt - startedAt),
-              }
-            })
-            const itemsOut: TranscriptItem[] = found
-              ? mapped
-              : [
-                  ...mapped,
-                  {
-                    type: 'message',
-                    id: expectedId,
-                    role: 'assistant',
-                    content: event.message,
-                    status: 'error',
-                    createdAt: requestStartedAt,
-                    startedAt: requestStartedAt,
-                    completedAt,
-                    durationMs: Math.max(0, completedAt - requestStartedAt),
-                  },
-                ]
-            return { ...prev, sessionId: shouldClearSession ? undefined : prev.sessionId, items: itemsOut }
-          })
-        })
-        finishRequest(
-          event.requestId,
-          event.code === 'missing_api_key' ? t('chat.missingApiKey') : t('chat.errorGeneric'),
-          true,
-          !knownRequestBeforeEvent,
-        )
-        return
-      }
-
-      if (event.type === 'cancelled') {
-        const completedAt = Date.now()
-        const requestStartedAt = requestStartedAtRef.current.get(event.requestId) ?? completedAt
-        if (activeThreadIdRef.current === eventThreadId) scrollIntentRef.current = 'force-bottom'
-        const expectedId = `assistant-${event.requestId}`
-        flushSync(() => {
-          setThreadChatState(eventThreadId, (prev) => {
-            const pendingId = requestAssistantMessageIdsRef.current.get(event.requestId)
-            let found = false
-            const mapped = prev.items.map((item): TranscriptItem => {
-              if (item.type !== 'message' || item.role !== 'assistant') return item
-              if (item.id !== expectedId && item.id !== pendingId) return item
-              found = true
-              const content = !item.content.trim() ? t('chat.stoppedBody') : item.content
-              const startedAt = item.startedAt ?? requestStartedAt
-              return {
-                ...item,
-                content,
-                status: 'cancelled',
-                startedAt,
-                completedAt,
-                durationMs: Math.max(0, completedAt - startedAt),
-              }
-            })
-            const items: TranscriptItem[] = found
-              ? mapped
-              : [
-                  ...mapped,
-                  {
-                    type: 'message',
-                    id: expectedId,
-                    role: 'assistant',
-                    content: t('chat.stoppedBody'),
-                    status: 'cancelled',
-                    createdAt: requestStartedAt,
-                    startedAt: requestStartedAt,
-                    completedAt,
-                    durationMs: Math.max(0, completedAt - requestStartedAt),
-                  },
-                ]
-            return { ...prev, items }
-          })
-        })
-        finishRequest(event.requestId, t('chat.stoppedStatus'), false, !knownRequestBeforeEvent)
-      }
+      applyChatRunTransition(
+        chatRun.handleEvent(event, {
+          activeThreadId: activeThreadIdRef.current,
+          fallbackModel: globalDisplayModelRef.current,
+          stoppedBody: t('chat.stoppedBody'),
+        }),
+      )
     },
-    [finishRequest, markRequestRunning, onStatusChange, setThreadChatState, t],
+    [applyChatRunTransition, chatRun, t],
   )
 
   useEffect(() => {
@@ -1497,6 +1395,13 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   ) => {
     const text = rawText.trim()
     if (!text && attachmentsForSubmit.length === 0) return
+    if (text.toLowerCase() === '/status' && attachmentsForSubmit.length === 0) {
+      clearComposerDraft()
+      window.dispatchEvent(new CustomEvent(OPEN_AGENT_STATUS_EVENT, { detail: { refresh: true } }))
+      onStatusChange(t('chat.statusPanelOpened'))
+      return
+    }
+    const isLocalCompactCommand = text.toLowerCase() === '/compact' && attachmentsForSubmit.length === 0
     const projectForSubmit =
       target?.project ?? (activeThread ? projects.find((project) => project.id === activeThread.projectId) : undefined) ?? activeProject
 
@@ -1509,134 +1414,76 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       return
     }
     let submittingThreadId = target?.threadId ?? activeThreadIdRef.current
+    let createdThreadModelPick: ChatModelPick | undefined
     if (!submittingThreadId) {
       const createdThreadId = onNewThread(projectForSubmit.id)
       if (!createdThreadId) return
       submittingThreadId = createdThreadId
+      createdThreadModelPick = newThreadModelPick
       activeThreadIdRef.current = createdThreadId
       isFirstTranscriptLayoutRef.current = true
       scrollIntentRef.current = 'force-bottom'
     }
-    if (threadRunStatesRef.current[submittingThreadId]) return
-
-    const requestStartedAt = Date.now()
-    const resumeSessionId = target?.resetSession
+    const submittingThread = threads.find((thread) => thread.id === submittingThreadId)
+    const settings = claudeSettingsSnapshot?.settings
+    const modelPickForSubmit =
+      target?.modelPick ??
+      (settings
+        ? resolveEffectiveModelPick(settings, submittingThread?.chatState.modelPick ?? createdThreadModelPick ?? currentModelPickRef.current)
+        : currentModelPickRef.current)
+    const modelPickChanged = !sameModelPick(submittingThread?.chatState.modelPick, modelPickForSubmit)
+    const resumeSessionId = target?.resetSession || modelPickChanged
       ? undefined
-      : threads.find((th) => th.id === submittingThreadId)?.chatState.sessionId
+      : submittingThread?.chatState.sessionId
+    const handoffContext =
+      !resumeSessionId && submittingThread?.chatState.items.length
+        ? buildHandoffContext(submittingThread.chatState.items)
+        : undefined
 
-    const userMessage: ChatMessageItem = {
-      type: 'message',
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: text,
-      status: 'done',
-      createdAt: requestStartedAt,
-      completedAt: requestStartedAt,
+    const promptMode = target?.promptMode ?? promptModeForThreadPurpose(submittingThread?.purpose)
+    const submitAttempt = chatRun.submit({
+      threadId: submittingThreadId,
+      text,
       attachments: attachmentsForSubmit.map(toChatMessageAttachment),
-    }
+      model: modelPickForSubmit?.anthropicModel,
+      modelPick: modelPickForSubmit,
+      clearSession: modelPickChanged,
+      reuseUserMessageId: Boolean(target?.reuseUserMessageId || target?.suppressUserMessage || isLocalCompactCommand),
+      bridgeUnavailableBody: t('chat.bridgeErrorBody'),
+      submit: window.claudeChat
+        ? () =>
+            window.claudeChat!.submit({
+              text,
+              attachments: attachmentsForSubmit,
+              threadId: submittingThreadId,
+              modelPick: modelPickForSubmit,
+              handoffContext,
+              promptMode,
+              sessionId: resumeSessionId,
+              cwd: projectForSubmit.path,
+              permissionMode,
+            })
+        : undefined,
+    })
+    if (!submitAttempt) return
 
     if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-    onThreadPromptSubmit(submittingThreadId, text)
-    if (!target?.reuseUserMessageId) {
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        items: [...prev.items, userMessage],
-      }))
+    if (!target?.suppressUserMessage && !isLocalCompactCommand) onThreadPromptSubmit(submittingThreadId, text)
+    applyChatRunTransition(submitAttempt.startTransition)
+    if (!target?.preserveComposerDraft) clearComposerDraft()
+    if (attachmentsForSubmit.length > 0 || !target?.threadId) {
+      pendingAttachmentsRef.current = []
+      setPendingAttachments([])
     }
-    setInputValue('')
-    if (!target?.threadId) setPendingAttachments([])
-    const pendingRequestId = `pending-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-    requestStartedAtRef.current.set(pendingRequestId, requestStartedAt)
-    setThreadRunState(submittingThreadId, {
-      requestId: pendingRequestId,
-      status: 'running',
-      startedAt: requestStartedAt,
-      updatedAt: Date.now(),
-    })
     onStatusChange(t('chat.statusProcessing'))
 
-    if (!window.claudeChat) {
-      if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        items: [
-          ...prev.items,
-          {
-            type: 'message',
-            id: `assistant-error-${Date.now()}`,
-            role: 'assistant',
-            content: t('chat.bridgeErrorBody'),
-            status: 'error',
-            createdAt: requestStartedAt,
-            startedAt: requestStartedAt,
-            completedAt: Date.now(),
-            durationMs: Math.max(0, Date.now() - requestStartedAt),
-          },
-        ],
-      }))
-      setThreadRunState(submittingThreadId, null)
+    const submitResult = await submitAttempt.result
+    applyChatRunTransition(submitResult.transition)
+    if (submitResult.status === 'bridge_unavailable') {
       onStatusChange(t('chat.bridgeUnavailableStatus'))
       return
     }
-
-    try {
-      const submittingThread = threads.find((thread) => thread.id === submittingThreadId)
-      const promptMode = target?.promptMode ?? promptModeForThreadPurpose(submittingThread?.purpose)
-      const { requestId } = await window.claudeChat.submit({
-        text,
-        attachments: attachmentsForSubmit,
-        threadId: submittingThreadId,
-        promptMode,
-        sessionId: resumeSessionId,
-        cwd: projectForSubmit.path,
-        permissionMode,
-      })
-      if (finishedRequestIdsRef.current.delete(requestId)) {
-        requestThreadIdsRef.current.delete(requestId)
-        requestAssistantMessageIdsRef.current.delete(requestId)
-        requestStartedAtRef.current.delete(requestId)
-        requestStartedAtRef.current.delete(pendingRequestId)
-        const current = threadRunStatesRef.current[submittingThreadId] as ThreadRunState | undefined
-        if (current && (current.requestId === requestId || current.requestId === pendingRequestId)) {
-          setThreadRunState(submittingThreadId, null)
-        }
-        return
-      }
-      requestStartedAtRef.current.delete(pendingRequestId)
-      requestStartedAtRef.current.set(requestId, requestStartedAt)
-      requestThreadIdsRef.current.set(requestId, submittingThreadId)
-      requestAssistantMessageIdsRef.current.set(requestId, `assistant-${requestId}`)
-      setThreadRunState(submittingThreadId, { requestId, status: 'running', startedAt: requestStartedAt, updatedAt: Date.now() })
-    } catch (error) {
-      requestStartedAtRef.current.delete(pendingRequestId)
-      if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
-      setThreadChatState(submittingThreadId, (prev) => ({
-        ...prev,
-        items: [
-          ...prev.items,
-          {
-            type: 'message',
-            id: `assistant-error-${Date.now()}`,
-            role: 'assistant',
-            content: error instanceof Error ? error.message : String(error),
-            status: 'error',
-            createdAt: requestStartedAt,
-            startedAt: requestStartedAt,
-            completedAt: Date.now(),
-            durationMs: Math.max(0, Date.now() - requestStartedAt),
-          },
-        ],
-      }))
-      if (
-        error instanceof Error &&
-        error.message.includes('No conversation found with session ID')
-      ) {
-        setThreadChatState(submittingThreadId, (prev) => ({
-          ...prev,
-          sessionId: undefined,
-        }))
-      }
-      setThreadRunState(submittingThreadId, null)
+    if (submitResult.status === 'failed') {
       onStatusChange(t('chat.sendFailedStatus'))
     }
   }
@@ -1661,6 +1508,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       onStatusChange(ok ? t('chat.copiedMessage') : t('chat.copyFailed'))
     },
     [onStatusChange, t],
+  )
+
+  const forkMessage = useCallback(
+    (messageId: string) => {
+      if (!activeThread) return
+      const items = chatItems
+      if (items.length === 0) return
+      const idx = items.findIndex((item) => item.type === 'message' && item.id === messageId)
+      if (idx < 0) return
+      const forkedItems = items.slice(0, idx + 1).map((item) => structuredClone(item))
+      const title = activeThread.title
+      onForkThread(activeProject.id, forkedItems, title, activeThread.chatState.model, activeThread.chatState.modelPick)
+    },
+    [activeProject.id, activeThread, chatItems, onForkThread, t],
   )
 
   const editUserMessage = (messageId: string, text: string) => {
@@ -1745,10 +1606,18 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       startNewThread: async () => {
         const threadId = onNewThread()
         if (threadId) activeThreadIdRef.current = threadId
+        const modelPick = newThreadModelPick ?? projectDefaultModelPick ?? currentModelPickRef.current
+        if (threadId && modelPick) {
+          setThreadChatState(threadId, (prev) => ({
+            ...prev,
+            model: modelPick.anthropicModel,
+            modelPick,
+          }))
+        }
         scrollIntentRef.current = 'force-bottom'
         isFirstTranscriptLayoutRef.current = true
         onStatusChange(compactModelName(globalDisplayModelRef.current, t))
-        setInputValue('')
+        clearComposerDraft()
         requestAnimationFrame(() => chatInputRef.current?.focus())
       },
       focusComposer: () => {
@@ -1757,10 +1626,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       insertComposerText: (text: string) => {
         const next = text.trim()
         if (!next) return
-        setInputValue((current) => {
-          const separator = current.trim().length > 0 && !current.endsWith('\n') ? '\n' : ''
-          return `${current}${separator}${next}`
-        })
+        const current = inputValueRef.current
+        const separator = current.trim().length > 0 && !current.endsWith('\n') ? '\n' : ''
+        const nextValue = `${current}${separator}${next}`
+        clearSpeechDraft()
+        setComposerDraftValue(nextValue, nextValue.length, nextValue.length)
         requestAnimationFrame(() => chatInputRef.current?.focus())
       },
       revealMessage,
@@ -1773,7 +1643,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         activeThreadIdRef.current = threadId
         isFirstTranscriptLayoutRef.current = true
         scrollIntentRef.current = 'force-bottom'
-        await submitPrompt(prompt, { threadId, project: projectForSubmit })
+        const modelPick = newThreadModelPick ?? projectDefaultModelPick ?? currentModelPickRef.current
+        if (modelPick) {
+          setThreadChatState(threadId, (prev) => ({ ...prev, model: modelPick.anthropicModel, modelPick }))
+        }
+        await submitPrompt(prompt, { threadId, project: projectForSubmit, modelPick })
         requestAnimationFrame(() => chatInputRef.current?.focus())
         return true
       },
@@ -1781,26 +1655,48 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         projectId: string,
         threadId: string,
         prompt: string,
-        promptMode?: ClaudeChatSubmitPayload['promptMode'],
+        options?: ClaudeChatSubmitPayload['promptMode'] | SubmitPromptOptions,
       ) => {
         const projectForSubmit = projects.find((project) => project.id === projectId)
         if (!projectForSubmit) return false
 
+        const resolvedOptions: SubmitPromptOptions =
+          typeof options === 'string' ? { promptMode: options } : options ?? {}
         activeThreadIdRef.current = threadId
         isFirstTranscriptLayoutRef.current = true
         scrollIntentRef.current = 'force-bottom'
-        await submitPrompt(prompt, { threadId, project: projectForSubmit, promptMode })
+        if (resolvedOptions.modelPick) {
+          setThreadChatState(threadId, (prev) => ({
+            ...prev,
+            model: resolvedOptions.modelPick?.anthropicModel ?? prev.model,
+            modelPick: resolvedOptions.modelPick,
+            sessionId: sameModelPick(prev.modelPick, resolvedOptions.modelPick) ? prev.sessionId : undefined,
+          }))
+        }
+        await submitPrompt(prompt, { threadId, project: projectForSubmit, ...resolvedOptions })
         requestAnimationFrame(() => chatInputRef.current?.focus())
         return true
       },
     }),
-    [onNewThread, onStatusChange, projects, revealMessage, setThreadRunState, t],
+    [
+      clearComposerDraft,
+      clearSpeechDraft,
+      newThreadModelPick,
+      onNewThread,
+      onStatusChange,
+      projectDefaultModelPick,
+      projects,
+      revealMessage,
+      setComposerDraftValue,
+      setThreadChatState,
+      t,
+    ],
   )
 
   // --- Cancel streaming + answer permission / tool questions from modal / 停止生成；在弹窗中应答权限或工具提问 ---
 
   const cancelActiveRequest = async () => {
-    const requestId = threadRunStatesRef.current[activeThread?.id ?? activeThreadIdRef.current]?.requestId
+    const requestId = chatRun.runStateForThread(activeThread?.id ?? activeThreadIdRef.current)?.requestId
     if (!requestId || isPendingRequestId(requestId) || !window.claudeChat) return
     await window.claudeChat.cancel(requestId)
   }
@@ -1810,14 +1706,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!prompt) return
 
     setPendingUserInputPrompts((prev) => prev.filter((item) => item.permissionRequestId !== prompt.permissionRequestId))
-    const promptThreadId = prompt.threadId ?? requestThreadIdsRef.current.get(prompt.requestId) ?? activeThreadIdRef.current
-    const promptRunState = threadRunStatesRef.current[promptThreadId]
-    if (promptRunState?.requestId === prompt.requestId && promptRunState.status === 'asking') {
-      setThreadRunState(promptThreadId, {
-        ...promptRunState,
-        status: 'running',
-        updatedAt: Date.now(),
-      })
+    const transition = chatRun.resumeAfterPrompt(
+      prompt.requestId,
+      prompt.threadId ?? activeThreadIdRef.current,
+    )
+    if (transition.runState !== undefined) {
+      onThreadRunStateChange(transition.threadId, transition.runState)
     }
     if (!window.claudeChat) return
     await window.claudeChat.answerPermissionRequest({
@@ -1826,7 +1720,30 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     })
   }
 
-  // --- Composer attachments via native file picker (Electron) / 通过系统文件选择器添加附件（Electron）---
+  // --- Composer attachments via picker, paste, and drag/drop / 通过选择、粘贴、拖拽添加附件 ---
+
+  const applyComposerAttachmentResult = (result: ClaudeChatAttachmentPickerResult) => {
+    if (!result.ok) {
+      onStatusChange(result.message)
+      return
+    }
+
+    if (result.attachments.length > 0) {
+      const merged = mergeComposerAttachments(pendingAttachmentsRef.current, result.attachments)
+      pendingAttachmentsRef.current = merged.attachments
+      setPendingAttachments(merged.attachments)
+      const first = result.skipped[0] ?? merged.skipped[0]
+      if (first) {
+        onStatusChange(t('chat.attachmentSkipped', { name: first.name, reason: first.reason }))
+      }
+      return
+    }
+
+    const first = result.skipped[0]
+    if (first) {
+      onStatusChange(t('chat.attachmentSkipped', { name: first.name, reason: first.reason }))
+    }
+  }
 
   const addComposerAttachments = async () => {
     const pickChatAttachments = window.desktop?.pickChatAttachments
@@ -1835,37 +1752,117 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       return
     }
 
-    const result = await pickChatAttachments({ allowImages: activeModelSupportsImages })
-    if (!result.ok) {
-      onStatusChange(result.message)
+    applyComposerAttachmentResult(await pickChatAttachments({ allowImages: activeModelSupportsImages }))
+  }
+
+  const addComposerAttachmentPaths = async (filePaths: string[]) => {
+    const readChatAttachments = window.desktop?.readChatAttachments
+    if (!readChatAttachments || isRunningRef.current || filePaths.length === 0) {
+      if (!readChatAttachments) onStatusChange(t('chat.attachmentPickerUnavailable'))
       return
     }
 
-    if (result.attachments.length > 0) {
-      setPendingAttachments((current) => {
-        const byPath = new Map(current.map((attachment) => [attachment.path, attachment]))
-        for (const attachment of result.attachments) {
-          if (byPath.size >= MAX_COMPOSER_ATTACHMENTS && !byPath.has(attachment.path)) break
-          byPath.set(attachment.path, attachment)
-        }
-        return [...byPath.values()].slice(0, MAX_COMPOSER_ATTACHMENTS)
-      })
+    applyComposerAttachmentResult(await readChatAttachments(filePaths, { allowImages: activeModelSupportsImages }))
+  }
+
+  const addComposerClipboardImages = async (files: File[]) => {
+    if (isRunningRef.current || files.length === 0) return
+
+    if (!activeModelSupportsImages) {
+      onStatusChange(t('chat.imageInputDisabledStatus'))
+      return
     }
 
-    if (result.skipped.length > 0) {
-      const first = result.skipped[0]
-      onStatusChange(t('chat.attachmentSkipped', { name: first.name, reason: first.reason }))
+    const attachments: ClaudeChatAttachment[] = []
+    const skipped: Array<{ name: string; path: string; reason: string }> = []
+    for (const [index, file] of files.slice(0, MAX_COMPOSER_ATTACHMENTS).entries()) {
+      const name = file.name || `pasted-image-${Date.now()}-${index + 1}.${imageExtensionForMimeType(file.type)}`
+      if (!COMPOSER_PASTE_IMAGE_MIME_TYPES.has(file.type)) {
+        skipped.push({ name, path: name, reason: '仅支持 PNG、JPG、GIF、WEBP' })
+        continue
+      }
+      if (file.size > COMPOSER_PASTE_IMAGE_MAX_BYTES) {
+        skipped.push({ name, path: name, reason: '图片超过 5MB' })
+        continue
+      }
+      if (totalAttachmentBytes(attachments) + file.size > COMPOSER_ATTACHMENT_MAX_TOTAL_BYTES) {
+        skipped.push({ name, path: name, reason: '附件总大小超过 24MB' })
+        continue
+      }
+      try {
+        const dataUrl = await readFileAsDataUrl(file)
+        const base64 = dataUrl.split(',', 2)[1] ?? ''
+        attachments.push({
+          id: `attachment-${Date.now()}-${index}`,
+          kind: 'image',
+          name,
+          path: `clipboard://${name}`,
+          mimeType: file.type,
+          size: file.size,
+          base64,
+          dataUrl,
+          preview: formatBytes(file.size),
+        })
+      } catch (error) {
+        skipped.push({ name, path: name, reason: error instanceof Error ? error.message : '读取失败' })
+      }
     }
+    if (files.length > MAX_COMPOSER_ATTACHMENTS) {
+      for (const file of files.slice(MAX_COMPOSER_ATTACHMENTS)) {
+        skipped.push({
+          name: file.name || 'clipboard image',
+          path: file.name || 'clipboard image',
+          reason: `一次最多添加 ${MAX_COMPOSER_ATTACHMENTS} 个文件`,
+        })
+      }
+    }
+
+    applyComposerAttachmentResult({ ok: true, attachments, skipped })
+  }
+
+  const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const itemFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+    const files = dedupeFiles([...Array.from(event.clipboardData.files), ...itemFiles]).filter((file) => file.type.startsWith('image/'))
+    if (files.length === 0) return
+    event.preventDefault()
+    void addComposerClipboardImages(files)
+  }
+
+  const handleComposerDrop = (event: DragEvent<HTMLFormElement>) => {
+    const filePaths = Array.from(event.dataTransfer.files)
+      .map((file) => getNativeFilePath(file))
+      .filter((filePath): filePath is string => Boolean(filePath))
+    if (filePaths.length === 0) return
+    void addComposerAttachmentPaths(filePaths)
   }
 
   const removeComposerAttachment = (attachmentId: string) => {
-    setPendingAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId))
+    const next = pendingAttachmentsRef.current.filter((attachment) => attachment.id !== attachmentId)
+    pendingAttachmentsRef.current = next
+    setPendingAttachments(next)
   }
 
   const syncComposerSelection = useCallback(() => {
     const input = chatInputRef.current
     if (!input) return
     setComposerSelection({ start: input.selectionStart, end: input.selectionEnd })
+  }, [])
+  const focusComposerInput = useCallback(() => {
+    const restoreFocus = () => {
+      const input = chatInputRef.current
+      if (!input) return
+      const selection = composerSelectionRef.current
+      const start = Math.max(0, Math.min(selection.start, input.value.length))
+      const end = Math.max(start, Math.min(selection.end, input.value.length))
+      input.focus({ preventScroll: true })
+      input.setSelectionRange(start, end)
+    }
+
+    restoreFocus()
+    requestAnimationFrame(restoreFocus)
   }, [])
 
   const insertComposerSuggestion = useCallback(
@@ -1888,10 +1885,94 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     [activeComposerTrigger, inputValue],
   )
 
-  // --- Home “data card” draft → dedicated customization thread / 首页「数据卡片」草稿 → 专用定制线程 ---
+  // --- Voice submit boundary + Home “data card” draft / 语音提交边界 + 首页「数据卡片」草稿 ---
 
-  const submitDataCardDraft = async () => {
-    const text = inputValue.trim()
+  const cancelSpeechRecognitionDraft = useCallback(
+    async (showStatus = true) => {
+      ignoreSpeechRecognitionTextRef.current = true
+      ignoreCurrentSpeechRecognitionGeneration()
+      try {
+        const result = await window.desktop?.cancelSpeechRecognition?.()
+        discardSpeechDraftText()
+        setSpeechStatus('idle')
+        if (result && !result.ok) {
+          setSpeechStatus(result.status)
+          onStatusChange(result.message)
+          return false
+        }
+        if (showStatus) onStatusChange(t('chat.voiceCancelled'))
+        return true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : t('chat.voiceError')
+        clearSpeechDraft()
+        setSpeechStatus('error')
+        onStatusChange(message)
+        return false
+      } finally {
+        resolveSpeechRecognitionSettleWaiters()
+      }
+    },
+    [
+      clearSpeechDraft,
+      discardSpeechDraftText,
+      ignoreCurrentSpeechRecognitionGeneration,
+      onStatusChange,
+      resolveSpeechRecognitionSettleWaiters,
+      setSpeechStatus,
+      t,
+    ],
+  )
+
+  const finalizeSpeechRecognitionBeforeSubmit = useCallback(async () => {
+    if (!speechRecognitionSupported) return true
+
+    const status = speechRecognitionStatusRef.current
+    if (!ACTIVE_SPEECH_RECOGNITION_STATUSES.has(status)) return true
+
+    if (status === 'listening') {
+      setSpeechStatus('transcribing')
+      onStatusChange(t('chat.voiceTranscribing'))
+      const settled = waitForSpeechRecognitionSettle()
+      try {
+        const result = await window.desktop?.stopSpeechRecognition?.()
+        if (result && !result.ok) {
+          setSpeechStatus(result.status)
+          onStatusChange(result.message)
+          resolveSpeechRecognitionSettleWaiters()
+          return false
+        }
+        await settled
+        return true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : t('chat.voiceError')
+        clearSpeechDraft()
+        setSpeechStatus('error')
+        resolveSpeechRecognitionSettleWaiters()
+        onStatusChange(message)
+        return false
+      }
+    }
+
+    if (status === 'transcribing') {
+      onStatusChange(t('chat.voiceTranscribing'))
+      await waitForSpeechRecognitionSettle()
+      return true
+    }
+
+    return cancelSpeechRecognitionDraft(false)
+  }, [
+    cancelSpeechRecognitionDraft,
+    clearSpeechDraft,
+    onStatusChange,
+    resolveSpeechRecognitionSettleWaiters,
+    setSpeechStatus,
+    speechRecognitionSupported,
+    t,
+    waitForSpeechRecognitionSettle,
+  ])
+
+  const submitDataCardDraft = async (rawText = inputValueRef.current) => {
+    const text = rawText.trim()
     if (!text) return
     const threadId = onCreateHomePluginCardThread(activeProject.id, text)
     if (!threadId) return
@@ -1907,15 +1988,23 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     })
   }
 
+  const submitComposer = async () => {
+    const speechReady = await finalizeSpeechRecognitionBeforeSubmit()
+    if (!speechReady) return
+
+    const text = inputValueRef.current
+    if (homeComposerMode === 'data-card-draft' && !hasMessages && !activeThread) {
+      await submitDataCardDraft(text)
+      return
+    }
+    await submitPrompt(text, getActiveSubmitTarget(), pendingAttachmentsRef.current)
+  }
+
   // --- Composer form + keyboard routing (autocomplete vs send) / 表单提交与键盘路由（联想优先于发送）---
 
   const handleFormSubmit = (event: FormEvent) => {
     event.preventDefault()
-    if (homeComposerMode === 'data-card-draft' && !hasMessages && !activeThread) {
-      void submitDataCardDraft()
-      return
-    }
-    void submitPrompt(inputValue, getActiveSubmitTarget(), pendingAttachments)
+    void submitComposer()
   }
 
   const handleSendClick = (event: React.MouseEvent) => {
@@ -1935,7 +2024,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
     speechRestartAfterEditRef.current = true
     ignoreSpeechRecognitionTextRef.current = true
-    setSpeechRecognitionStatus('starting')
+    ignoreCurrentSpeechRecognitionGeneration()
+    setSpeechStatus('starting')
     onStatusChange(t('chat.voiceStarting'))
 
     void (async () => {
@@ -1947,14 +2037,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         if (result && !result.ok) {
           ignoreSpeechRecognitionTextRef.current = false
           clearSpeechDraft()
-          setSpeechRecognitionStatus(result.status)
+          setSpeechStatus(result.status)
           onStatusChange(result.message)
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : t('chat.voiceError')
         ignoreSpeechRecognitionTextRef.current = false
         clearSpeechDraft()
-        setSpeechRecognitionStatus('error')
+        setSpeechStatus('error')
         onStatusChange(message)
       } finally {
         speechRestartAfterEditRef.current = false
@@ -1963,7 +2053,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }, [
     beginSpeechDraft,
     clearSpeechDraft,
+    ignoreCurrentSpeechRecognitionGeneration,
     onStatusChange,
+    setSpeechStatus,
     speechRecognitionStatus,
     speechRecognitionSupported,
     t,
@@ -1982,9 +2074,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault()
-        insertComposerSuggestion(composerSuggestions[composerSuggestionIndex] ?? composerSuggestions[0])
-        return
+        const suggestion = composerSuggestions[composerSuggestionIndex] ?? composerSuggestions[0]
+        if (event.key === 'Enter' && activeComposerTrigger && isComposerSuggestionAlreadyApplied(inputValue, activeComposerTrigger, suggestion)) {
+          setDismissedAutocompleteKey(activeAutocompleteKey)
+        } else {
+          event.preventDefault()
+          insertComposerSuggestion(suggestion)
+          return
+        }
       }
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -1995,14 +2092,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
     if (event.key !== 'Enter' || event.shiftKey || isComposingText) return
     event.preventDefault()
-    if (homeComposerMode === 'data-card-draft' && !hasMessages && !activeThread) {
-      void submitDataCardDraft()
-      return
-    }
-    void submitPrompt(inputValue, getActiveSubmitTarget(), pendingAttachments)
+    void submitComposer()
   }
 
   const toggleSpeechRecognition = useCallback(async () => {
+    focusComposerInput()
+
     if (!speechRecognitionSupported) {
       onStatusChange(t('chat.voiceUnavailable'))
       return
@@ -2012,49 +2107,54 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     try {
       if (isActive) {
         if (speechRecognitionStatus === 'listening') {
-          setSpeechRecognitionStatus('transcribing')
+          setSpeechStatus('transcribing')
           onStatusChange(t('chat.voiceTranscribing'))
           const result = await window.desktop?.stopSpeechRecognition?.()
           if (result && !result.ok) {
-            setSpeechRecognitionStatus(result.status)
+            setSpeechStatus(result.status)
             onStatusChange(result.message)
           }
           return
         }
 
-        const result = await window.desktop?.cancelSpeechRecognition?.()
-        clearSpeechDraft()
-        if (result && !result.ok) {
-          setSpeechRecognitionStatus(result.status)
-          onStatusChange(result.message)
-        }
+        await cancelSpeechRecognitionDraft()
         return
       }
 
-      setSpeechRecognitionStatus('starting')
+      setSpeechStatus('starting')
       beginSpeechDraft()
       onStatusChange(t('chat.voiceStarting'))
       const result = await window.desktop?.startSpeechRecognition?.({ requiresOnDevice: true })
       if (result && !result.ok) {
         clearSpeechDraft()
-        setSpeechRecognitionStatus(result.status)
+        setSpeechStatus(result.status)
         onStatusChange(result.message)
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : t('chat.voiceError')
       clearSpeechDraft()
-      setSpeechRecognitionStatus('error')
+      setSpeechStatus('error')
       onStatusChange(message)
     }
-  }, [beginSpeechDraft, clearSpeechDraft, onStatusChange, speechRecognitionStatus, speechRecognitionSupported, t])
+  }, [
+    beginSpeechDraft,
+    cancelSpeechRecognitionDraft,
+    clearSpeechDraft,
+    focusComposerInput,
+    onStatusChange,
+    setSpeechStatus,
+    speechRecognitionStatus,
+    speechRecognitionSupported,
+    t,
+  ])
 
   // --- File diff UX: mark reviewed + optional rewind via SDK / 文件 diff：标记已读与可选 SDK 回滚 ---
 
   const reviewFileChanges = useCallback(
-    (changeSetId: string) => {
-      const threadId = activeThreadIdRef.current
+    (item: ChatFileDiffItem) => {
+      const threadId = item.threadId?.trim() || activeThreadIdRef.current
       setThreadChatState(threadId, (prev) => {
-        const idx = prev.items.findIndex((it) => it.type === 'file_diff' && it.changeSetId === changeSetId)
+        const idx = prev.items.findIndex((it) => it.type === 'file_diff' && it.changeSetId === item.changeSetId)
         if (idx < 0) return prev
         const next = [...prev.items]
         const it = next[idx] as ChatFileDiffItem
@@ -2067,7 +2167,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   const rewindFileChanges = useCallback(
     async (item: ChatFileDiffItem) => {
-      const threadId = activeThreadIdRef.current
+      const threadId = item.threadId?.trim() || activeThreadIdRef.current
+      const owningThread = threads.find((thread) => thread.id === threadId)
+      const projectForThread = owningThread
+        ? projects.find((project) => project.id === owningThread.projectId) ?? activeProject
+        : activeProject
       if (!item.checkpointId || !window.claudeChat?.rewindFiles) {
         setThreadChatState(threadId, (prev) => updateFileDiffStatus(prev, item.changeSetId, 'error', t('chat.fileDiffUnavailable')))
         return
@@ -2077,16 +2181,46 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       const result = await window.claudeChat.rewindFiles({
         threadId,
         requestId: item.requestId,
+        modelPick: owningThread?.chatState.modelPick ?? currentModelPickRef.current,
         changeSetId: item.changeSetId,
         checkpointId: item.checkpointId,
-        cwd: activeProject.path,
+        cwd: projectForThread.path,
       })
       if (!result.ok) {
         setThreadChatState(threadId, (prev) => updateFileDiffStatus(prev, item.changeSetId, 'error', result.message || t('chat.fileDiffUnavailable')))
       }
     },
-    [activeProject.path, setThreadChatState, t],
+    [activeProject, projects, setThreadChatState, t, threads],
   )
+
+  const composerContextUsage = useMemo(() => {
+    const sessionId = activeThread?.chatState.sessionId?.trim()
+    if (!sessionId || !agentStatusSnapshot?.contextUsage) return undefined
+    if (agentStatusSnapshot.threadId !== activeThread?.id) return undefined
+    if (agentStatusSnapshot.sessionId !== sessionId) return undefined
+    return agentStatusSnapshot.contextUsage
+  }, [activeThread?.chatState.sessionId, activeThread?.id, agentStatusSnapshot])
+
+  const compactContext = useCallback(() => {
+    const threadId = activeThread?.id
+    const sessionId = activeThread?.chatState.sessionId?.trim()
+    if (!threadId || !sessionId) {
+      onStatusChange(t('chat.contextCompactNoSessionStatus'))
+      return
+    }
+    const projectForThread = projects.find((project) => project.id === activeThread.projectId) ?? activeProject
+    void submitPrompt('/compact', {
+      threadId,
+      project: projectForThread,
+      modelPick: activeThread.chatState.modelPick ?? currentModelPickRef.current,
+      suppressUserMessage: true,
+      preserveComposerDraft: true,
+    })
+  }, [activeProject, activeThread, onStatusChange, projects, t])
+
+  const handleUnsupportedContextCompact = useCallback(() => {
+    onStatusChange(t('chat.contextCompactUnavailableStatus'))
+  }, [onStatusChange, t])
 
   // --- Composer subtree (props-only; layout lives in `Composer.tsx`) / Composer 子树（仅传参；布局在 Composer 组件内）---
 
@@ -2106,6 +2240,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       modelMenuSelectionKey={modelMenuSelectionKey}
       modelPopoverBox={modelPopoverBox}
       displayModelName={compactModelName(globalDisplayModel, t)}
+      contextUsage={composerContextUsage}
       composerAutocompleteOpen={composerAutocompleteOpen}
       composerAutocompleteBox={composerAutocompleteBox}
       activeComposerTrigger={activeComposerTrigger}
@@ -2139,11 +2274,16 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       onCompositionStart={() => setIsComposingText(true)}
       onCompositionEnd={() => setIsComposingText(false)}
       onInputKeyDown={handleInputKeydown}
+      onInputPaste={handleComposerPaste}
       onSyncComposerSelection={syncComposerSelection}
       onFormSubmit={handleFormSubmit}
+      onDropComposerFiles={handleComposerDrop}
       onSendClick={handleSendClick}
       onToggleSpeechRecognition={() => void toggleSpeechRecognition()}
       onAddComposerAttachments={() => void addComposerAttachments()}
+      onCompactContext={compactContext}
+      onCompactContextUnavailable={handleUnsupportedContextCompact}
+      onRefreshContextUsage={() => onRefreshAgentStatus(false)}
       onRemoveComposerAttachment={removeComposerAttachment}
       onInsertComposerSuggestion={insertComposerSuggestion}
       onPickChatMenuRow={(row) => void pickChatMenuRow(row)}
@@ -2177,6 +2317,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           showScrollButton={showScrollButton}
           onScrollToBottom={scrollToBottom}
           onCopyMessage={(text) => void copyMessage(text)}
+          onForkMessage={forkMessage}
           onEditUserMessage={editUserMessage}
           onUserMessageEditDismissed={notifyUserMessageEditDismissed}
           onReviewFileChanges={reviewFileChanges}
@@ -2188,9 +2329,16 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           projects={projects}
           projectOrderIds={projectOrderIds}
           composer={composer}
+          agentMode={agentMode}
           agentModeEnabled={agentModeEnabled}
           todoEnabled={todoEnabled}
           agentModeLoading={agentModeLoading}
+          agentStatusSnapshot={agentStatusSnapshot}
+          agentSettingsOpen={agentSettingsOpen}
+          agentSettingsPanel={agentSettingsPanel}
+          onOpenAgentSettings={onOpenAgentSettings}
+          onAgentSettingsPanelChange={onAgentSettingsPanelChange}
+          onCloseAgentSettings={onCloseAgentSettings}
           threads={threads.filter((thread) => thread.projectId === activeProject.id)}
           threadRunStates={threadRunStates}
           hiddenSkillPaths={hiddenSkillPaths}
@@ -2202,21 +2350,109 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           onCreateProject={onCreateProject}
           onSelectProject={onSelectProject}
           onEditHomePluginCard={(item) => onEditHomePluginCard(activeProject.id, item)}
+          onOpenProjectFile={onOpenProjectFile}
           onRunProjectSkill={onRunProjectSkill}
           onStopProjectSkillRun={onStopProjectSkillRun}
+          onRefreshAgentStatus={onRefreshAgentStatus}
         />
       )}
-      {activeUserInputPrompt
-        ? createPortal(
-            <AgentInputPromptModal prompt={activeUserInputPrompt} onResolve={(decision) => void resolveActiveUserInputPrompt(decision)} />,
-            document.body,
-          )
-        : null}
+      {showThreadView && hasVisibleTasks ? (
+        <ThreadTodoFloatingPanel
+          taskState={activeTaskState}
+          buttonRef={todoButtonRef}
+          panelRef={todoPanelRef}
+          open={todoPanelOpen}
+          onOpenChange={setTodoPanelOpen}
+        />
+      ) : null}
+      {activeUserInputPrompt ? (
+        <AgentInputPromptModal prompt={activeUserInputPrompt} onResolve={(decision) => void resolveActiveUserInputPrompt(decision)} />
+      ) : null}
     </section>
   )
 })
 
+function ThreadTodoFloatingPanel({
+  taskState,
+  buttonRef,
+  panelRef,
+  open,
+  onOpenChange,
+}: {
+  taskState: ChatTaskState | undefined
+  buttonRef: RefObject<HTMLButtonElement | null>
+  panelRef: RefObject<HTMLDivElement | null>
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const { t } = useI18n()
+  const tasks = useMemo(() => (taskState?.items ?? []).filter((task) => task.status !== 'deleted'), [taskState?.items])
+  if (tasks.length === 0) return null
+
+  const completed = tasks.filter((task) => task.status === 'completed').length
+  const activeTask = tasks.find((task) => task.status === 'in_progress')
+  const progress = Math.round((completed / Math.max(1, tasks.length)) * 100)
+  const buttonLabel = t('chat.todoPanelButton', { completed, total: tasks.length })
+
+  return (
+    <div className="thread-todo-floating">
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`thread-todo-trigger${open ? ' is-open' : ''}${activeTask ? ' has-active-task' : ''}`}
+        title={buttonLabel}
+        aria-label={buttonLabel}
+        aria-expanded={open}
+        aria-controls="thread-todo-panel"
+        onClick={() => onOpenChange(!open)}
+      >
+        <IconInline name="checklist" />
+        <span>{completed}/{tasks.length}</span>
+      </button>
+      {open ? (
+        <section
+          ref={panelRef}
+          id="thread-todo-panel"
+          className="thread-todo-panel"
+          aria-label={t('chat.todoPanelTitle')}
+        >
+          <header className="thread-todo-panel__header">
+            <div className="thread-todo-panel__title">
+              <IconInline name="checklist" />
+              <span>{t('chat.todoPanelTitle')}</span>
+            </div>
+            <span className="thread-todo-panel__count">{completed}/{tasks.length}</span>
+          </header>
+          <div className="thread-todo-panel__progress" aria-label={t('chat.todoPanelProgress', { completed, total: tasks.length })}>
+            <span style={{ width: `${progress}%` }} />
+          </div>
+          <div className="thread-todo-panel__body">
+            {tasks.map((task) => (
+              <article key={task.id} className={`thread-todo-item thread-todo-item--${task.status}`}>
+                <span className="thread-todo-item__marker" aria-hidden="true">
+                  {task.status === 'completed' ? <IconInline name="check" /> : null}
+                </span>
+                <div className="thread-todo-item__copy">
+                  <h3>{task.subject}</h3>
+                  {task.status === 'in_progress' && task.activeForm ? <p>{task.activeForm}</p> : task.description ? <p>{task.description}</p> : null}
+                </div>
+                <span className="thread-todo-item__status">{taskStatusLabel(task.status, t)}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
 // --- Module-level pure helpers (no React) / 模块级纯函数（无 React 依赖）---
+
+function taskStatusLabel(status: ChatTaskItem['status'], t: (path: string, vars?: Record<string, string | number>) => string): string {
+  if (status === 'in_progress') return t('chat.todoStatusInProgress')
+  if (status === 'completed') return t('chat.todoStatusCompleted')
+  return t('chat.todoStatusPending')
+}
 
 function getComposerTrigger(value: string, selectionStart: number, selectionEnd: number): ComposerTrigger | null {
   if (selectionStart !== selectionEnd) return null
@@ -2325,6 +2561,16 @@ function normalizeSuggestionQuery(value: string): string {
   return value.trim().toLowerCase()
 }
 
+function isComposerSuggestionAlreadyApplied(
+  value: string,
+  trigger: ComposerTrigger,
+  suggestion: ComposerSuggestion,
+): boolean {
+  const currentToken = value.slice(trigger.start, trigger.end).trim()
+  const insertedToken = suggestion.insertText.trim()
+  return currentToken.length > 0 && currentToken === insertedToken
+}
+
 function formatFileMention(relativePath: string, type: ProjectFileSearchItem['type']): string {
   const mentionPath = type === 'directory' ? `${relativePath.replace(/\/+$/u, '')}/` : relativePath
   if (!/[\s"']/u.test(mentionPath)) return `@${mentionPath}`
@@ -2344,27 +2590,6 @@ function toChatMessageAttachment(attachment: ClaudeChatAttachment): ChatMessageA
   }
 }
 
-function mergeDiffFiles(existing: ChatFileDiffItem['files'], incoming: ChatFileDiffItem['files']): ChatFileDiffItem['files'] {
-  const next = [...existing]
-  for (const file of incoming) {
-    const idx = next.findIndex((candidate) => candidate.path === file.path)
-    if (idx < 0) {
-      next.push(file)
-      continue
-    }
-    const previous = next[idx]
-    next[idx] = {
-      ...previous,
-      status: previous.status === 'added' ? previous.status : file.status,
-      additions: previous.additions + file.additions,
-      deletions: previous.deletions + file.deletions,
-      hunks: [...previous.hunks, ...file.hunks],
-      truncated: previous.truncated || file.truncated || undefined,
-    }
-  }
-  return next
-}
-
 function updateFileDiffStatus(
   state: ChatState,
   changeSetId: string,
@@ -2377,6 +2602,30 @@ function updateFileDiffStatus(
   const it = next[idx] as ChatFileDiffItem
   next[idx] = { ...it, status, detail }
   return { ...state, items: next }
+}
+
+const HANDOFF_MAX_MESSAGES = 18
+const HANDOFF_MAX_CHARS = 12_000
+
+function buildHandoffContext(items: TranscriptItem[]): string | undefined {
+  const messages = items
+    .filter((item): item is ChatMessageItem => item.type === 'message' && Boolean(item.content.trim()))
+    .slice(-HANDOFF_MAX_MESSAGES)
+  if (!messages.length) return undefined
+
+  const lines = messages.map((message) => {
+    const attachments = message.attachments?.length
+      ? `\n附件：${message.attachments.map((item) => `${item.name} (${item.kind})`).join(', ')}`
+      : ''
+    return `${message.role === 'user' ? '用户' : '助手'}：${message.content.trim()}${attachments}`
+  })
+  const omitted = messages.length < items.filter((item) => item.type === 'message').length
+    ? ['较早的对话内容已省略。', '']
+    : []
+  const text = ['以下是当前 thread 的精简历史上下文，用于在新模型 session 中延续对话。', '', ...omitted, ...lines].join('\n')
+  return text.length > HANDOFF_MAX_CHARS
+    ? `${text.slice(-HANDOFF_MAX_CHARS)}\n\n（历史上下文已按长度截断。）`
+    : text
 }
 
 function formatContextScope(scope: 'user' | 'project', t: (path: string, vars?: Record<string, string | number>) => string): string {
@@ -2428,116 +2677,6 @@ function getPermissionModeRows(t: (path: string, vars?: Record<string, string | 
       description: t('chat.permissionModeFullDesc'),
     },
   ]
-}
-
-function providerAcceptsAnthropicId(provider: ClaudeAgentModelProvider, modelId: string): boolean {
-  const m = modelId.trim()
-  if (!m) return false
-  return [
-    provider.model,
-    provider.defaultHaikuModel,
-    provider.defaultSonnetModel,
-    provider.defaultOpusModel,
-  ]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .includes(m)
-}
-
-function resolvedChatDisplayModel(
-  settings: ClaudeAgentSettings,
-  t: (path: string, vars?: Record<string, string | number>) => string,
-): string {
-  const provider =
-    settings.providers.find((item) => item.id === settings.activeProviderId) ?? settings.providers[0]
-  if (!provider) return t('chat.modelFallback')
-  const overlay = settings.activeAnthropicModel?.trim() ?? ''
-  if (overlay && providerAcceptsAnthropicId(provider, overlay)) return overlay
-  return provider.model.trim() || provider.name.trim() || t('chat.modelFallback')
-}
-
-function resolvedChatSupportsImages(snapshot: ClaudeAgentSettingsSnapshot): boolean {
-  const settings = snapshot.settings
-  if (settings.configSource === 'env') return snapshot.env.supportsImages
-  const provider =
-    settings.providers.find((item) => item.id === settings.activeProviderId) ?? settings.providers[0]
-  if (!provider) return false
-  const overlay = settings.activeAnthropicModel?.trim() ?? ''
-  const primary = provider.model.trim()
-  const model = overlay && providerAcceptsAnthropicId(provider, overlay) ? overlay : primary
-  return providerSupportsImagesForModel(provider, model, false)
-}
-
-function pickerSelectionKeyFromSettings(
-  settings: ClaudeAgentSettings,
-  t: (path: string, vars?: Record<string, string | number>) => string,
-): string {
-  const provider =
-    settings.providers.find((item) => item.id === settings.activeProviderId) ?? settings.providers[0]
-  const idModel = resolvedChatDisplayModel(settings, t)
-  if (!provider) return `:${idModel}`
-  return `${provider.id}:${idModel}`
-}
-
-function buildChatModelMenuRows(
-  providers: ClaudeAgentModelProvider[],
-  slots: { primary: string; haiku: string; sonnet: string; opus: string },
-  t: (path: string, vars?: Record<string, string | number>) => string,
-): ChatModelMenuRow[] {
-  const rows: ChatModelMenuRow[] = []
-  for (const p of providers) {
-    const seen = new Set<string>()
-    const base = providerMenuSubtitle(p)
-
-    const add = (raw: string, slotLabel: string, useOverlayPick: boolean, supportsImages: boolean) => {
-      const mid = raw.trim()
-      if (!mid || seen.has(mid)) return
-      seen.add(mid)
-      rows.push({
-        pickKey: `${p.id}:${mid}`,
-        providerId: p.id,
-        anthropicModelId: mid,
-        useOverlayPick,
-        supportsImages,
-        headline: compactModelName(mid, t),
-        metaLine: [base || null, slotLabel].filter(Boolean).join(' · '),
-      })
-    }
-
-    add(p.model, slots.primary, false, providerSupportsImagesForModel(p, p.model, false))
-    add(p.defaultHaikuModel, slots.haiku, true, providerSupportsImagesForModel(p, p.defaultHaikuModel, false))
-    add(p.defaultSonnetModel, slots.sonnet, true, providerSupportsImagesForModel(p, p.defaultSonnetModel, false))
-    add(p.defaultOpusModel, slots.opus, true, providerSupportsImagesForModel(p, p.defaultOpusModel, false))
-  }
-
-  return rows
-}
-
-function providerSupportsImagesForModel(
-  provider: ClaudeAgentModelProvider,
-  modelId: string,
-  fallback: boolean,
-): boolean {
-  const m = modelId.trim()
-  if (!m) return fallback
-  const matches = [
-    { model: provider.model, supportsImages: provider.modelSupportsImages },
-    { model: provider.defaultHaikuModel, supportsImages: provider.defaultHaikuSupportsImages },
-    { model: provider.defaultSonnetModel, supportsImages: provider.defaultSonnetSupportsImages },
-    { model: provider.defaultOpusModel, supportsImages: provider.defaultOpusSupportsImages },
-  ].filter((row) => row.model.trim() === m)
-  if (!matches.length) return fallback
-  return matches.some((row) => row.supportsImages)
-}
-
-function providerMenuSubtitle(entry: ClaudeAgentModelProvider): string {
-  const parts = [
-    entry.name?.trim() && entry.model?.trim() && entry.name.trim() !== entry.model.trim()
-      ? entry.name.trim()
-      : '',
-    entry.baseUrl?.trim() || '',
-  ].filter(Boolean)
-  return parts.join(' · ')
 }
 
 function compactModelName(model: string, t: (path: string, vars?: Record<string, string | number>) => string): string {

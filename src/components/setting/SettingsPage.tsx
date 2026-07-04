@@ -6,10 +6,10 @@
 import { AgentModeSettingsPage } from './AgentModeSettingsPage'
 import { AppUpdateSettingsPage } from './AppUpdateSettingsPage'
 import { DeveloperSettingsPage } from './DeveloperSettingsPage'
-import { ClaudeAgentSettingsPage } from './ClaudeAgentSettingsPage'
+import { ClaudeAgentSettingsPage, GlobalMcpSettingsPage, GlobalWebSearchSettingsPage } from './ClaudeAgentSettingsPage'
 import { ProjectSkillsSettingsPage } from './ProjectSkillsSettingsPage'
 import { isDeveloperSettingsEnabled } from '../app-shell-constants'
-import type { SettingsCategoryId, WorkspaceProject } from '../types'
+import type { AgentSettingsPanelId, SettingsCategoryId, WorkspaceProject } from '../types'
 
 type SettingsPageProps = {
   hidden: boolean
@@ -17,6 +17,7 @@ type SettingsPageProps = {
   activeProject: WorkspaceProject
   showProjectSkillsInSidebar: boolean
   onShowProjectSkillsInSidebarChange: (enabled: boolean) => void
+  onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
 }
 
 /** `#settings/<category>` 容器 / Host for hash-routed settings sections */
@@ -26,6 +27,7 @@ export function SettingsPage({
   activeProject,
   showProjectSkillsInSidebar,
   onShowProjectSkillsInSidebarChange,
+  onOpenAgentSettings,
 }: SettingsPageProps) {
   if (hidden) {
     return null
@@ -42,6 +44,14 @@ export function SettingsPage({
 
   if (settingsCategory === 'agent') {
     return <AgentModeSettingsPage project={activeProject} />
+  }
+
+  if (settingsCategory === 'mcp') {
+    return <GlobalMcpSettingsPage activeProject={activeProject} onOpenAgentSettings={onOpenAgentSettings} />
+  }
+
+  if (settingsCategory === 'search') {
+    return <GlobalWebSearchSettingsPage />
   }
 
   if (settingsCategory === 'updates') {

@@ -1,65 +1,37 @@
-# PRD 文档索引
+# AgentOS 产品文档
 
-本目录按功能模块维护 AgentOS 的 PRD。每个功能文档都包含 `功能概述`、`核心功能列表`、`数据结构`、`业务逻辑`、`相关代码文件`、`关联PRD文档` 六个标准章节。
+## 项目概览
 
-生成依据：2026-05-21 对当前仓库的 `src/`、`electron/`、`.agents/`、构建配置、README 与发布配置进行代码阅读后整理；2026-05-22 继续补充入口、i18n、安全区、Generative UI、自动更新轮询和 macOS Apple Speech 语音输入细节。
+AgentOS 是面向本地项目与长期任务的 Electron 桌面 Agent 工作台。当前产品以本地项目文件夹为工作单位，把项目、线程、Claude Agent SDK 运行、文件上下文、模型配置、Agent Mode、首页卡片和长期任务编排组织在同一个工作区内。
 
-## 文档清单
+本轮 PRD 是 2026-06-23 基于当前代码、README、OpenSpec 基线与历史 `prd-old/` 资料做的首次 `prd/` 全量重建。2026-06-24 已同步全量 `project-verify` 与交互流程复查结果：10 个模块共 98 个验收场景，95 个已通过、0 个失败、3 个保留为真实 Electron GUI / macOS 系统权限人工确认项。文档只描述当前代码真实存在的能力；验收事实源仍以各模块 `acceptance.md` 为准。
 
-| 文档 | 功能模块 | 说明 |
-| --- | --- | --- |
-| [agentos.md](./agentos.md) | 产品总览 | AgentOS 的定位、用户、模块边界和全局关系 |
-| [workspace-session.md](./workspace-session.md) | 工作区与会话 | 项目、线程、侧栏、活动视图与项目首页入口 |
-| [chat-agent-runtime.md](./chat-agent-runtime.md) | 聊天与 Agent 运行时 | 聊天提交、Claude Agent SDK、事件流、权限、diff、rewind、macOS 语音输入 |
-| [file-context.md](./file-context.md) | 本地文件上下文 | 文件树、文件预览、附件、`@` 文件搜索和路径安全 |
-| [agent-mode.md](./agent-mode.md) | Agent Mode | 项目人格、记忆文件、TODO 模式和运行时提示词注入 |
-| [home-plugin.md](./home-plugin.md) | Home Plugin 数据卡片 | 项目首页数据卡片、A2UI 输出、卡片布局和沙箱运行 |
-| [task-home-plugin.md](./task-home-plugin.md) | Task Home Plugin | 任务卡片、Agent/Skills 模式运行、定时和 runtime 状态 |
-| [model-settings.md](./model-settings.md) | 模型与 Provider 设置 | Provider 预设、API 配置、模型能力、连接测试 |
-| [persistence.md](./persistence.md) | 持久化 | localStorage、JSON、SQLite、JSONL 和迁移归一化 |
-| [desktop-shell-settings-release.md](./desktop-shell-settings-release.md) | 桌面外壳、设置与发布 | Electron 窗口、托盘、设置、自动更新、macOS 原生 helper 和打包发布 |
-| [official-website.md](./official-website.md) | 官网方案 | AgentOS 官网定位、Landing Page 信息架构、视觉规格和设计资产清单 |
+## 模块索引
 
-## 模块关系图
+| 模块 | 状态 | 产品文档 | 技术文档 |
+| --- | --- | --- | --- |
+| 产品总览 | 已实现，正式验收通过 | `agentos/README.md` | `agentos/technical.md` |
+| 工作区与会话 | 已实现，正式验收通过 | `workspace-session/README.md` | `workspace-session/technical.md` |
+| 聊天与 Agent 运行时 | 已实现，正式验收通过 | `chat-agent-runtime/README.md` | `chat-agent-runtime/technical.md` |
+| 本地文件上下文 | 已实现，正式验收通过 | `file-context/README.md` | `file-context/technical.md` |
+| 模型与 Provider 设置 | 已实现，正式验收通过 | `model-settings/README.md` | `model-settings/technical.md` |
+| 持久化 | 已实现，正式验收通过 | `persistence/README.md` | `persistence/technical.md` |
+| Agent Mode | 已实现，正式验收通过 | `agent-mode/README.md` | `agent-mode/technical.md` |
+| Home Plugin 数据卡片 | 已实现，正式验收通过 | `home-plugin/README.md` | `home-plugin/technical.md` |
+| Task Home Plugin | 已实现，正式验收通过 | `task-home-plugin/README.md` | `task-home-plugin/technical.md` |
+| 桌面外壳、设置与发布 | 已实现，18/21 通过，3 项人工确认 | `desktop-shell-settings-release/README.md` | `desktop-shell-settings-release/technical.md` |
 
-```mermaid
-flowchart TD
-  A[agentos.md 产品总览] --> B[workspace-session.md 工作区与会话]
-  A --> C[chat-agent-runtime.md 聊天与 Agent 运行时]
-  A --> D[file-context.md 本地文件上下文]
-  A --> E[agent-mode.md Agent Mode]
-  A --> F[home-plugin.md Home Plugin 数据卡片]
-  A --> G[task-home-plugin.md Task Home Plugin]
-  A --> H[model-settings.md 模型与 Provider 设置]
-  A --> I[persistence.md 持久化]
-  A --> J[desktop-shell-settings-release.md 桌面外壳、设置与发布]
+## 当前重点
 
-  B --> C
-  B --> D
-  B --> F
-  B --> I
-  C --> D
-  C --> E
-  C --> H
-  C --> I
-  E --> C
-  F --> C
-  F --> G
-  G --> C
-  G --> I
-  J --> H
-  J --> I
-```
+- `TODO.md` 仍以 agentic runtime 优化清单为主，本轮已把产品验收剩余细节补回 §14，后续应继续拆成 AgentOS 产品 backlog。
+- 全量正式验收已执行并回写 `acceptance.md`：当前仅剩 `desktop-shell-settings-release` 的 close-to-tray、macOS 语音授权成功、macOS 语音权限拒绝 3 项人工确认。
+- 交互流程复查未发现新的阻断级状态机缺陷；剩余工作是把 Composer 语音/提交、权限弹窗、Generative UI、状态面板跳转、项目首页任务卡等全页面点击路径沉淀成可重复 E2E 脚本证据。
+- Workspace 持久化已完成本轮架构加固：Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam 和 workspace revision clock 已落地并通过正式验收状态同步。
+- MCP 与 WebSearch 接入已完成主要实现与正式验收；真实 Brave/Tavily 外网成功搜索、真实 MCP server 进程/网络连通仍属于可选 live smoke，不作为当前通过门槛。
 
-## 维护规则
+## 文档规则
 
-- 改动项目/线程/侧栏/工作台入口时，同步更新 [workspace-session.md](./workspace-session.md)。
-- 改动聊天提交、SDK 事件、权限、工具调用、diff、回滚或 composer 语音输入时，同步更新 [chat-agent-runtime.md](./chat-agent-runtime.md)。
-- 改动文件树、预览、附件或项目路径安全时，同步更新 [file-context.md](./file-context.md)。
-- 改动 `AGENT.md`、`SOUL.md`、`MEMORY.md`、`TODO.md` 协议时，同步更新 [agent-mode.md](./agent-mode.md)。
-- 改动 `.agents/home-plugins`、A2UI 卡片或卡片布局时，同步更新 [home-plugin.md](./home-plugin.md)。
-- 改动任务卡片、定时运行或 Skills 编排时，同步更新 [task-home-plugin.md](./task-home-plugin.md)。
-- 改动 Provider、模型、API Key、Base URL 或连接测试时，同步更新 [model-settings.md](./model-settings.md)。
-- 改动工作区存储、会话索引、rollout 或数据迁移时，同步更新 [persistence.md](./persistence.md)。
-- 改动 Electron 窗口、托盘、设置、更新、原生 helper、系统权限或发布配置时，同步更新 [desktop-shell-settings-release.md](./desktop-shell-settings-release.md)。
-- 改动官网定位、Landing Page 页面结构、视觉规范或下载转化路径时，同步更新 [official-website.md](./official-website.md)。
+- `prd/<module>/README.md` 描述产品状态和用户流程。
+- `prd/<module>/technical.md` 描述实现细节、代码入口、测试与调试上下文。
+- `prd/<module>/acceptance.md` 是唯一验收事实源；README 不复制验收清单。
+- `TODO.md` 是继续开发入口，未完成目标、阻塞和下步动作以 TODO 为准。

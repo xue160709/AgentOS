@@ -4,10 +4,20 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { normalizeChatWorkspaceState } from '../src/chat-workspace-persistence'
+import {
+  normalizeChatWorkspaceState,
+} from '../src/chat-workspace-persistence'
+import {
+  readWorkspaceRevision,
+  readWorkspaceSavedAt,
+  resolveChatWorkspaceSnapshot,
+  withNextWorkspaceRevision,
+  workspaceRevisionOf,
+  type ChatWorkspaceSnapshot,
+} from '../src/workspace-snapshot-resolution'
 import { migrateLegacySeedProjects } from '../src/project-path'
 import type {
   ChatHistorySearchDocumentKind,
@@ -51,6 +61,7 @@ type ThreadRow = {
   archivedAt: number | null
   sessionId: string | null
   model: string | null
+  modelPickJson: string | null
   cwd: string | null
 }
 
@@ -58,6 +69,7 @@ type WorkspaceMetaRow = {
   activeProjectId: string
   activeThreadId: string
   sidebarPrefsJson: string
+  workspaceRevision: number | null
 }
 
 type SearchDocument = {
@@ -99,89 +111,53 @@ export class ChatWorkspaceStore {
   private readonly filePath: string
   private readonly dbPath: string
   private readonly sessionsDir: string
+  private readonly historySearchIndex: HistorySearchIndex
   private sqliteAvailable: boolean | null = null
 
   constructor(userDataPath: string) {
     this.filePath = path.join(userDataPath, WORKSPACE_FILE_NAME)
     this.dbPath = path.join(userDataPath, WORKSPACE_DB_NAME)
     this.sessionsDir = path.join(userDataPath, SESSIONS_DIR_NAME)
+    this.historySearchIndex = new HistorySearchIndex({
+      dbPath: this.dbPath,
+      canUseSqlite: () => this.canUseSqlite(),
+      runSql: (sql) => this.runSql(sql),
+      selectJson: <T>(sql: string) => this.selectJson<T>(sql),
+      readWorkspace: () => this.read(),
+    })
   }
 
   read(): ChatWorkspaceState | null {
     const fromDb = this.readFromDatabase()
-    if (fromDb) return migrateLegacySeedProjects(fromDb)
-
-    if (!existsSync(this.filePath)) return null
-    try {
-      const raw = JSON.parse(readFileSync(this.filePath, 'utf8')) as unknown
-      return migrateLegacySeedProjects(normalizeChatWorkspaceState(raw))
-    } catch {
-      return null
-    }
+    const fromJson = this.readJsonSnapshot()
+    const selected = resolveChatWorkspaceSnapshot([
+      fromDb ? { state: fromDb, savedAt: this.fileModifiedAt(this.dbPath), source: 'sqlite-index' } : null,
+      fromJson,
+    ])
+    return selected ? migrateLegacySeedProjects(selected.state) : null
   }
 
   async save(state: unknown): Promise<ChatWorkspaceState> {
     const normalized = normalizeChatWorkspaceState(state)
+    const toSave = workspaceRevisionOf(normalized) > 0 ? normalized : withNextWorkspaceRevision(normalized)
+    const savedAt = Date.now()
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await mkdir(this.sessionsDir, { recursive: true })
-    await this.saveRolloutFiles(normalized)
-    this.saveDatabaseIndex(normalized)
-    await writeFile(this.filePath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8')
-    return normalized
+    await this.saveRolloutFiles(toSave)
+    this.saveDatabaseIndex(toSave)
+    await writeFile(this.filePath, `${JSON.stringify({ ...toSave, savedAt }, null, 2)}\n`, 'utf8')
+    return toSave
   }
 
   searchChatHistory(projectId: string, query: string, options: ChatHistorySearchOptions = {}): ChatHistorySearchResult {
-    const normalizedProjectId = typeof projectId === 'string' ? projectId.trim() : ''
-    const normalizedQuery = typeof query === 'string' ? query.trim() : ''
-    if (!normalizedQuery) {
-      return { ok: true, projectId: normalizedProjectId, items: [] }
-    }
-
-    const limit = normalizeHistorySearchLimit(options.limit)
-    const includeArchived = options.includeArchived === true
-
-    if (this.canUseSqlite() && existsSync(this.dbPath)) {
-      let sqliteItems: ChatHistorySearchItem[] = []
-      try {
-        this.rebuildSearchIndexIfMissing()
-        sqliteItems = this.searchChatHistoryWithSqlite(normalizedProjectId, normalizedQuery, includeArchived, limit)
-      } catch {
-        /* FTS can be unavailable even when sqlite3 exists. */
-      }
-      try {
-        sqliteItems = mergeHistorySearchItems([
-          ...sqliteItems,
-          ...this.searchChatHistoryWithSqliteLike(normalizedProjectId, normalizedQuery, includeArchived, limit),
-        ]).slice(0, limit)
-      } catch {
-        /* Fall through to JSON/rollout scan. */
-      }
-      if (sqliteItems.length > 0) return { ok: true, projectId: normalizedProjectId, items: sqliteItems }
-    }
-
-    try {
-      const state = this.read()
-      if (!state) return { ok: true, projectId: normalizedProjectId, items: [] }
-      const documents = buildSearchDocuments(state).filter((document) => !normalizedProjectId || document.projectId === normalizedProjectId)
-      return {
-        ok: true,
-        projectId: normalizedProjectId,
-        items: searchDocumentsToItems(documents, normalizedQuery, includeArchived, limit),
-      }
-    } catch (error) {
-      return {
-        ok: false,
-        projectId: normalizedProjectId,
-        message: error instanceof Error ? error.message : 'Chat history search failed.',
-      }
-    }
+    return this.historySearchIndex.search(projectId, query, options)
   }
 
   private readFromDatabase(): ChatWorkspaceState | null {
     if (!existsSync(this.dbPath) || !this.canUseSqlite()) return null
 
     try {
-      this.ensureThreadMetadataColumns()
+      this.ensureWorkspaceSchemaColumns()
       const projects = this.selectJson<ProjectRow>(
         [
           'SELECT',
@@ -200,7 +176,7 @@ export class ChatWorkspaceStore {
           'skill_path AS skillPath, skill_command AS skillCommand, skill_title AS skillTitle,',
           'created_at AS createdAt, updated_at AS updatedAt,',
           'pinned_at AS pinnedAt, archived_at AS archivedAt,',
-          'session_id AS sessionId, model, cwd',
+          'session_id AS sessionId, model, model_pick_json AS modelPickJson, cwd',
           'FROM threads',
           'ORDER BY pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC',
         ].join(' '),
@@ -210,12 +186,14 @@ export class ChatWorkspaceStore {
           'SELECT',
           'active_project_id AS activeProjectId,',
           'active_thread_id AS activeThreadId,',
-          'sidebar_prefs_json AS sidebarPrefsJson',
+          'sidebar_prefs_json AS sidebarPrefsJson,',
+          'workspace_revision AS workspaceRevision',
           'FROM workspace_meta WHERE id = 1',
         ].join(' '),
       )[0]
 
       return normalizeChatWorkspaceState({
+        workspaceRevision: meta?.workspaceRevision ?? 0,
         activeProjectId: meta?.activeProjectId ?? projects[0]?.id ?? '',
         activeThreadId: meta?.activeThreadId ?? '',
         projects: projects.map((project): WorkspaceProject => ({
@@ -248,11 +226,34 @@ export class ChatWorkspaceStore {
     }
   }
 
+  private readJsonSnapshot(): ChatWorkspaceSnapshot | null {
+    if (!existsSync(this.filePath)) return null
+    try {
+      const raw = JSON.parse(readFileSync(this.filePath, 'utf8')) as unknown
+      return {
+        state: normalizeChatWorkspaceState(raw),
+        savedAt: readWorkspaceSavedAt(raw) ?? this.fileModifiedAt(this.filePath),
+        revision: readWorkspaceRevision(raw),
+        source: 'json-snapshot',
+      }
+    } catch {
+      return null
+    }
+  }
+
+  private fileModifiedAt(targetPath: string): number | undefined {
+    try {
+      return statSync(targetPath).mtimeMs
+    } catch {
+      return undefined
+    }
+  }
+
   private saveDatabaseIndex(state: ChatWorkspaceState): void {
     if (!this.canUseSqlite()) return
 
     try {
-      this.ensureThreadMetadataColumns()
+      this.ensureWorkspaceSchemaColumns()
       const existingRolloutPaths = this.readThreadRolloutPathMap()
       const statements: string[] = [
         'PRAGMA foreign_keys = ON;',
@@ -261,7 +262,8 @@ export class ChatWorkspaceStore {
           active_project_id TEXT NOT NULL,
           active_thread_id TEXT NOT NULL,
           sidebar_prefs_json TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
+          updated_at INTEGER NOT NULL,
+          workspace_revision INTEGER NOT NULL DEFAULT 0
         );`,
         `CREATE TABLE IF NOT EXISTS projects (
           id TEXT PRIMARY KEY,
@@ -287,6 +289,7 @@ export class ChatWorkspaceStore {
           archived_at INTEGER,
           session_id TEXT,
           model TEXT NOT NULL DEFAULT 'Claude Agent',
+          model_pick_json TEXT,
           cwd TEXT,
           message_count INTEGER NOT NULL DEFAULT 0,
           first_user_message TEXT NOT NULL DEFAULT '',
@@ -301,6 +304,8 @@ export class ChatWorkspaceStore {
 
       if (state.projects.length > 0) {
         statements.push(`DELETE FROM projects WHERE id NOT IN (${state.projects.map((project) => sqlValue(project.id)).join(', ')});`)
+      } else {
+        statements.push('DELETE FROM projects;')
       }
       if (state.threads.length > 0) {
         statements.push(`DELETE FROM threads WHERE id NOT IN (${state.threads.map((thread) => sqlValue(thread.id)).join(', ')});`)
@@ -309,15 +314,16 @@ export class ChatWorkspaceStore {
       }
 
       statements.push(
-        `INSERT INTO workspace_meta (id, active_project_id, active_thread_id, sidebar_prefs_json, updated_at)
+        `INSERT INTO workspace_meta (id, active_project_id, active_thread_id, sidebar_prefs_json, updated_at, workspace_revision)
          VALUES (1, ${sqlValue(state.activeProjectId)}, ${sqlValue(state.activeThreadId)}, ${sqlValue(
            JSON.stringify(state.sidebarPrefs),
-         )}, ${Date.now()})
+         )}, ${Date.now()}, ${sqlValue(workspaceRevisionOf(state))})
          ON CONFLICT(id) DO UPDATE SET
            active_project_id = excluded.active_project_id,
            active_thread_id = excluded.active_thread_id,
            sidebar_prefs_json = excluded.sidebar_prefs_json,
-           updated_at = excluded.updated_at;`,
+           updated_at = excluded.updated_at,
+           workspace_revision = excluded.workspace_revision;`,
       )
 
       for (const project of state.projects) {
@@ -342,13 +348,13 @@ export class ChatWorkspaceStore {
         statements.push(
           `INSERT INTO threads (
              id, project_id, rollout_path, created_at, updated_at, title, pinned_at, archived_at,
-             purpose, home_plugin_slug, skill_path, skill_command, skill_title, session_id, model, cwd, message_count, first_user_message, preview, response_duration_ms
+             purpose, home_plugin_slug, skill_path, skill_command, skill_title, session_id, model, model_pick_json, cwd, message_count, first_user_message, preview, response_duration_ms
            )
            VALUES (
              ${sqlValue(thread.id)}, ${sqlValue(thread.projectId)}, ${sqlValue(rolloutPath)}, ${sqlValue(thread.createdAt)},
              ${sqlValue(thread.updatedAt)}, ${sqlValue(thread.title)}, ${sqlValue(thread.pinnedAt)}, ${sqlValue(thread.archivedAt)},
              ${sqlValue(thread.purpose)}, ${sqlValue(thread.homePluginSlug)}, ${sqlValue(thread.skillPath)}, ${sqlValue(thread.skillCommand)}, ${sqlValue(thread.skillTitle)},
-             ${sqlValue(thread.chatState.sessionId)}, ${sqlValue(thread.chatState.model)}, ${sqlValue(thread.chatState.cwd)},
+             ${sqlValue(thread.chatState.sessionId)}, ${sqlValue(thread.chatState.model)}, ${sqlValue(thread.chatState.modelPick ? JSON.stringify(thread.chatState.modelPick) : undefined)}, ${sqlValue(thread.chatState.cwd)},
              ${sqlValue(messageCount(thread.chatState.items))}, ${sqlValue(firstUser)}, ${sqlValue(preview)},
              ${sqlValue(responseDurationMs)}
            )
@@ -367,6 +373,7 @@ export class ChatWorkspaceStore {
              archived_at = excluded.archived_at,
              session_id = excluded.session_id,
              model = excluded.model,
+             model_pick_json = excluded.model_pick_json,
              cwd = excluded.cwd,
              message_count = excluded.message_count,
              first_user_message = excluded.first_user_message,
@@ -377,13 +384,161 @@ export class ChatWorkspaceStore {
 
       statements.push('COMMIT;')
       this.runSql(statements.join('\n'))
-      this.saveSearchIndex(state)
+      this.historySearchIndex.save(state)
     } catch {
       /* Keep the compatibility JSON snapshot as the durable fallback. */
     }
   }
 
-  private saveSearchIndex(state: ChatWorkspaceState): void {
+  private async saveRolloutFiles(state: ChatWorkspaceState): Promise<void> {
+    const existingRolloutPaths = this.readThreadRolloutPathMap()
+    await Promise.all(
+      state.threads.map(async (thread) => {
+        const rolloutPath = existingRolloutPaths.get(thread.id) ?? this.rolloutPathForThread(thread)
+        await mkdir(path.dirname(rolloutPath), { recursive: true })
+        const tmpPath = `${rolloutPath}.tmp`
+        await writeFile(tmpPath, serializeRollout(thread), 'utf8')
+        await rename(tmpPath, rolloutPath)
+      }),
+    )
+  }
+
+  private readRolloutChatState(thread: ThreadRow): ChatState {
+    const state: ChatState = {
+      sessionId: thread.sessionId ?? undefined,
+      model: thread.model || 'Claude Agent',
+      modelPick: safeModelPick(safeJsonParse(thread.modelPickJson ?? undefined, undefined)),
+      cwd: thread.cwd ?? undefined,
+      items: [],
+    }
+    if (!thread.rolloutPath || !existsSync(thread.rolloutPath)) return state
+
+    try {
+      const lines = readFileSync(thread.rolloutPath, 'utf8').split(/\n/).filter(Boolean)
+      for (const line of lines) {
+        const event = JSON.parse(line) as unknown
+        if (!isRecord(event)) continue
+        const payload = event.payload
+        if (!isRecord(payload)) continue
+
+        if (event.type === 'session_meta' || event.type === 'thread_state') {
+          state.sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : state.sessionId
+          state.model = typeof payload.model === 'string' ? payload.model : state.model
+          state.modelPick = safeModelPick(payload.modelPick) ?? state.modelPick
+          state.cwd = typeof payload.cwd === 'string' ? payload.cwd : state.cwd
+          continue
+        }
+
+        if (event.type === 'response_item') {
+          state.items.push(payload as TranscriptItem)
+        }
+      }
+    } catch {
+      return state
+    }
+
+    return state
+  }
+
+  private rolloutPathForThread(thread: WorkspaceThread): string {
+    const date = new Date(thread.createdAt || Date.now())
+    const year = String(date.getFullYear())
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const stamp = date.toISOString().replace(/\.\d{3}Z$/, '').replace(/:/g, '-')
+    return path.join(this.sessionsDir, year, month, day, `rollout-${stamp}-${safeFilename(thread.id)}.jsonl`)
+  }
+
+  private readThreadRolloutPathMap(): Map<string, string> {
+    if (!existsSync(this.dbPath) || !this.canUseSqlite()) return new Map()
+    try {
+      return new Map(this.selectJson<{ id: string; rolloutPath: string }>('SELECT id, rollout_path AS rolloutPath FROM threads').map((row) => [row.id, row.rolloutPath]))
+    } catch {
+      return new Map()
+    }
+  }
+
+  private ensureWorkspaceSchemaColumns(): void {
+    if (!existsSync(this.dbPath) || !this.canUseSqlite()) return
+    try {
+      const metaColumns = this.selectJson<{ name: string }>('PRAGMA table_info(workspace_meta)')
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'workspace_revision')) {
+        this.runSql('ALTER TABLE workspace_meta ADD COLUMN workspace_revision INTEGER NOT NULL DEFAULT 0;')
+      }
+
+      const columns = this.selectJson<{ name: string }>('PRAGMA table_info(threads)')
+      if (columns.length > 0 && !columns.some((column) => column.name === 'purpose')) {
+        this.runSql('ALTER TABLE threads ADD COLUMN purpose TEXT;')
+      }
+      if (columns.length > 0 && !columns.some((column) => column.name === 'home_plugin_slug')) {
+        this.runSql('ALTER TABLE threads ADD COLUMN home_plugin_slug TEXT;')
+      }
+      if (columns.length > 0 && !columns.some((column) => column.name === 'skill_path')) {
+        this.runSql('ALTER TABLE threads ADD COLUMN skill_path TEXT;')
+      }
+      if (columns.length > 0 && !columns.some((column) => column.name === 'skill_command')) {
+        this.runSql('ALTER TABLE threads ADD COLUMN skill_command TEXT;')
+      }
+      if (columns.length > 0 && !columns.some((column) => column.name === 'skill_title')) {
+        this.runSql('ALTER TABLE threads ADD COLUMN skill_title TEXT;')
+      }
+      if (columns.length > 0 && !columns.some((column) => column.name === 'model_pick_json')) {
+        this.runSql('ALTER TABLE threads ADD COLUMN model_pick_json TEXT;')
+      }
+    } catch {
+      /* Fresh databases create the column through CREATE TABLE. */
+    }
+  }
+
+  private canUseSqlite(): boolean {
+    if (this.sqliteAvailable != null) return this.sqliteAvailable
+    try {
+      execFileSync('sqlite3', ['-version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      this.sqliteAvailable = true
+    } catch {
+      this.sqliteAvailable = false
+    }
+    return this.sqliteAvailable
+  }
+
+  private runSql(sql: string): void {
+    execFileSync('sqlite3', [this.dbPath], { input: sql, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })
+  }
+
+  private selectJson<T>(sql: string): T[] {
+    const output = execFileSync('sqlite3', ['-json', this.dbPath, sql], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim()
+    if (!output) return []
+    return JSON.parse(output) as T[]
+  }
+}
+
+type HistorySearchIndexOptions = {
+  dbPath: string
+  canUseSqlite: () => boolean
+  runSql: (sql: string) => void
+  selectJson: <T>(sql: string) => T[]
+  readWorkspace: () => ChatWorkspaceState | null
+}
+
+class HistorySearchIndex {
+  private readonly dbPath: string
+  private readonly canUseSqlite: () => boolean
+  private readonly runSql: (sql: string) => void
+  private readonly selectJson: <T>(sql: string) => T[]
+  private readonly readWorkspace: () => ChatWorkspaceState | null
+
+  constructor(options: HistorySearchIndexOptions) {
+    this.dbPath = options.dbPath
+    this.canUseSqlite = options.canUseSqlite
+    this.runSql = options.runSql
+    this.selectJson = options.selectJson
+    this.readWorkspace = options.readWorkspace
+  }
+
+  save(state: ChatWorkspaceState): void {
     if (!this.canUseSqlite()) return
 
     const documents = buildSearchDocuments(state)
@@ -435,7 +590,54 @@ export class ChatWorkspaceStore {
     }
   }
 
-  private rebuildSearchIndexIfMissing(): void {
+  search(projectId: string, query: string, options: ChatHistorySearchOptions = {}): ChatHistorySearchResult {
+    const normalizedProjectId = typeof projectId === 'string' ? projectId.trim() : ''
+    const normalizedQuery = typeof query === 'string' ? query.trim() : ''
+    if (!normalizedQuery) {
+      return { ok: true, projectId: normalizedProjectId, items: [] }
+    }
+
+    const limit = normalizeHistorySearchLimit(options.limit)
+    const includeArchived = options.includeArchived === true
+
+    if (this.canUseSqlite() && existsSync(this.dbPath)) {
+      let sqliteItems: ChatHistorySearchItem[] = []
+      try {
+        this.rebuildIfMissing()
+        sqliteItems = this.searchWithSqlite(normalizedProjectId, normalizedQuery, includeArchived, limit)
+      } catch {
+        /* FTS can be unavailable even when sqlite3 exists. */
+      }
+      try {
+        sqliteItems = mergeHistorySearchItems([
+          ...sqliteItems,
+          ...this.searchWithSqliteLike(normalizedProjectId, normalizedQuery, includeArchived, limit),
+        ]).slice(0, limit)
+      } catch {
+        /* Fall through to JSON/rollout scan. */
+      }
+      if (sqliteItems.length > 0) return { ok: true, projectId: normalizedProjectId, items: sqliteItems }
+    }
+
+    try {
+      const state = this.readWorkspace()
+      if (!state) return { ok: true, projectId: normalizedProjectId, items: [] }
+      const documents = buildSearchDocuments(state).filter((document) => !normalizedProjectId || document.projectId === normalizedProjectId)
+      return {
+        ok: true,
+        projectId: normalizedProjectId,
+        items: searchDocumentsToItems(documents, normalizedQuery, includeArchived, limit),
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        projectId: normalizedProjectId,
+        message: error instanceof Error ? error.message : 'Chat history search failed.',
+      }
+    }
+  }
+
+  private rebuildIfMissing(): void {
     if (!existsSync(this.dbPath) || !this.canUseSqlite()) return
     try {
       const documentCount = Number(this.selectJson<{ count: number }>('SELECT COUNT(*) AS count FROM search_documents')[0]?.count ?? 0)
@@ -445,11 +647,11 @@ export class ChatWorkspaceStore {
       /* Missing table or old schema: rebuild below. */
     }
 
-    const state = this.read()
-    if (state) this.saveSearchIndex(state)
+    const state = this.readWorkspace()
+    if (state) this.save(state)
   }
 
-  private searchChatHistoryWithSqlite(projectId: string, query: string, includeArchived: boolean, limit: number): ChatHistorySearchItem[] {
+  private searchWithSqlite(projectId: string, query: string, includeArchived: boolean, limit: number): ChatHistorySearchItem[] {
     const ftsQuery = buildFtsQuery(query)
     if (!ftsQuery) return []
     const rowLimit = Math.min(MAX_HISTORY_SEARCH_LIMIT * 6, Math.max(limit * 6, limit))
@@ -467,7 +669,7 @@ export class ChatWorkspaceStore {
     return searchDocumentsToItems(rows.map(rowToSearchDocument), query, includeArchived, limit)
   }
 
-  private searchChatHistoryWithSqliteLike(projectId: string, query: string, includeArchived: boolean, limit: number): ChatHistorySearchItem[] {
+  private searchWithSqliteLike(projectId: string, query: string, includeArchived: boolean, limit: number): ChatHistorySearchItem[] {
     const rowLimit = Math.min(MAX_HISTORY_SEARCH_LIMIT * 6, Math.max(limit * 6, limit))
     const pattern = sqlLikePattern(query)
     const rows = this.selectJson<SearchDocumentRow>(
@@ -486,120 +688,6 @@ export class ChatWorkspaceStore {
       ].join(' '),
     )
     return searchDocumentsToItems(rows.map(rowToSearchDocument), query, includeArchived, limit)
-  }
-
-  private async saveRolloutFiles(state: ChatWorkspaceState): Promise<void> {
-    const existingRolloutPaths = this.readThreadRolloutPathMap()
-    await Promise.all(
-      state.threads.map(async (thread) => {
-        const rolloutPath = existingRolloutPaths.get(thread.id) ?? this.rolloutPathForThread(thread)
-        await mkdir(path.dirname(rolloutPath), { recursive: true })
-        const tmpPath = `${rolloutPath}.tmp`
-        await writeFile(tmpPath, serializeRollout(thread), 'utf8')
-        await rename(tmpPath, rolloutPath)
-      }),
-    )
-  }
-
-  private readRolloutChatState(thread: ThreadRow): ChatState {
-    const state: ChatState = {
-      sessionId: thread.sessionId ?? undefined,
-      model: thread.model || 'Claude Agent',
-      cwd: thread.cwd ?? undefined,
-      items: [],
-    }
-    if (!thread.rolloutPath || !existsSync(thread.rolloutPath)) return state
-
-    try {
-      const lines = readFileSync(thread.rolloutPath, 'utf8').split(/\n/).filter(Boolean)
-      for (const line of lines) {
-        const event = JSON.parse(line) as unknown
-        if (!isRecord(event)) continue
-        const payload = event.payload
-        if (!isRecord(payload)) continue
-
-        if (event.type === 'session_meta' || event.type === 'thread_state') {
-          state.sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : state.sessionId
-          state.model = typeof payload.model === 'string' ? payload.model : state.model
-          state.cwd = typeof payload.cwd === 'string' ? payload.cwd : state.cwd
-          continue
-        }
-
-        if (event.type === 'response_item') {
-          state.items.push(payload as TranscriptItem)
-        }
-      }
-    } catch {
-      return state
-    }
-
-    return state
-  }
-
-  private rolloutPathForThread(thread: WorkspaceThread): string {
-    const date = new Date(thread.createdAt || Date.now())
-    const year = String(date.getFullYear())
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    const stamp = date.toISOString().replace(/\.\d{3}Z$/, '').replace(/:/g, '-')
-    return path.join(this.sessionsDir, year, month, day, `rollout-${stamp}-${safeFilename(thread.id)}.jsonl`)
-  }
-
-  private readThreadRolloutPathMap(): Map<string, string> {
-    if (!existsSync(this.dbPath) || !this.canUseSqlite()) return new Map()
-    try {
-      return new Map(this.selectJson<{ id: string; rolloutPath: string }>('SELECT id, rollout_path AS rolloutPath FROM threads').map((row) => [row.id, row.rolloutPath]))
-    } catch {
-      return new Map()
-    }
-  }
-
-  private ensureThreadMetadataColumns(): void {
-    if (!existsSync(this.dbPath) || !this.canUseSqlite()) return
-    try {
-      const columns = this.selectJson<{ name: string }>('PRAGMA table_info(threads)')
-      if (columns.length > 0 && !columns.some((column) => column.name === 'purpose')) {
-        this.runSql('ALTER TABLE threads ADD COLUMN purpose TEXT;')
-      }
-      if (columns.length > 0 && !columns.some((column) => column.name === 'home_plugin_slug')) {
-        this.runSql('ALTER TABLE threads ADD COLUMN home_plugin_slug TEXT;')
-      }
-      if (columns.length > 0 && !columns.some((column) => column.name === 'skill_path')) {
-        this.runSql('ALTER TABLE threads ADD COLUMN skill_path TEXT;')
-      }
-      if (columns.length > 0 && !columns.some((column) => column.name === 'skill_command')) {
-        this.runSql('ALTER TABLE threads ADD COLUMN skill_command TEXT;')
-      }
-      if (columns.length > 0 && !columns.some((column) => column.name === 'skill_title')) {
-        this.runSql('ALTER TABLE threads ADD COLUMN skill_title TEXT;')
-      }
-    } catch {
-      /* Fresh databases create the column through CREATE TABLE. */
-    }
-  }
-
-  private canUseSqlite(): boolean {
-    if (this.sqliteAvailable != null) return this.sqliteAvailable
-    try {
-      execFileSync('sqlite3', ['-version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-      this.sqliteAvailable = true
-    } catch {
-      this.sqliteAvailable = false
-    }
-    return this.sqliteAvailable
-  }
-
-  private runSql(sql: string): void {
-    execFileSync('sqlite3', [this.dbPath], { input: sql, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })
-  }
-
-  private selectJson<T>(sql: string): T[] {
-    const output = execFileSync('sqlite3', ['-json', this.dbPath, sql], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim()
-    if (!output) return []
-    return JSON.parse(output) as T[]
   }
 }
 
@@ -623,6 +711,10 @@ function buildSearchDocuments(state: ChatWorkspaceState): SearchDocument[] {
       }
       if (item.type === 'activity' && isImportantActivitySearchItem(item)) {
         documents.push(buildActivitySearchDocument(thread, project, item))
+        continue
+      }
+      if (item.type === 'context_compaction') {
+        documents.push(buildContextCompactionSearchDocument(thread, project, item))
       }
     }
   }
@@ -738,6 +830,44 @@ function buildActivitySearchDocument(
     body: compactSearchText([item.title, item.preview, item.detail].filter(Boolean).join('\n'), SEARCH_DOCUMENT_TOOL_LIMIT),
     metadataJson: JSON.stringify(metadata),
     updatedAt: thread.updatedAt,
+  }
+}
+
+function buildContextCompactionSearchDocument(
+  thread: WorkspaceThread,
+  project: WorkspaceProject | undefined,
+  item: Extract<TranscriptItem, { type: 'context_compaction' }>,
+): SearchDocument {
+  const metadata = baseSearchMetadata(thread, project, {
+    documentKind: 'activity',
+    itemId: item.id,
+    status: item.status,
+    trigger: item.trigger,
+  })
+  return {
+    id: `context-compaction:${thread.id}:${item.id}`,
+    kind: 'activity',
+    projectId: thread.projectId,
+    threadId: thread.id,
+    path: `thread:${thread.id}#${item.id}`,
+    title: thread.title || 'Untitled thread',
+    subtitle: `Context compaction · ${item.status}`,
+    body: compactSearchText(
+      [
+        'context compaction',
+        item.status,
+        item.trigger,
+        item.summary,
+        item.error,
+        typeof item.preTokens === 'number' ? `${item.preTokens} tokens` : '',
+        typeof item.postTokens === 'number' ? `${item.postTokens} tokens after compaction` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      SEARCH_DOCUMENT_TOOL_LIMIT,
+    ),
+    metadataJson: JSON.stringify(metadata),
+    updatedAt: itemTimestamp(item, thread.updatedAt),
   }
 }
 
@@ -981,6 +1111,7 @@ function serializeRollout(thread: WorkspaceThread): string {
         updatedAt: thread.updatedAt,
         archivedAt: thread.archivedAt,
         model: thread.chatState.model,
+        modelPick: thread.chatState.modelPick,
         cwd: thread.chatState.cwd,
         sessionId: thread.chatState.sessionId,
         source: 'agentos',
@@ -992,6 +1123,7 @@ function serializeRollout(thread: WorkspaceThread): string {
       payload: {
         sessionId: thread.chatState.sessionId,
         model: thread.chatState.model,
+        modelPick: thread.chatState.modelPick,
         cwd: thread.chatState.cwd,
       },
     },
@@ -1020,8 +1152,17 @@ function safeJsonParse(value: string | undefined, fallback: unknown): unknown {
   }
 }
 
+function safeModelPick(value: unknown): ChatState['modelPick'] {
+  if (!isRecord(value)) return undefined
+  const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : ''
+  const anthropicModel = typeof value.anthropicModel === 'string' ? value.anthropicModel.trim() : ''
+  if (!providerId || !anthropicModel) return undefined
+  return { providerId, anthropicModel }
+}
+
 function itemTimestamp(item: TranscriptItem, fallback: number): number {
   if (item.type === 'message') return item.completedAt ?? item.createdAt ?? fallback
+  if (item.type === 'context_compaction') return item.updatedAt ?? item.createdAt ?? fallback
   return fallback
 }
 

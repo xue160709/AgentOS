@@ -54,16 +54,22 @@ export function createModelProvider(preset?: ProviderPreset): ClaudeAgentModelPr
 
 export function normalizePresetCatalog(raw: unknown, locale: AppLocale): ProviderPresetCatalog {
   const fallbackProviders = Array.isArray(LOCAL_PROVIDER_PRESET_CATALOG.providers)
-    ? LOCAL_PROVIDER_PRESET_CATALOG.providers
-        .map((provider) => normalizeProviderPreset(provider, locale))
-        .filter((preset): preset is ProviderPreset => Boolean(preset))
+    ? dedupePresetIds(
+        LOCAL_PROVIDER_PRESET_CATALOG.providers
+          .map((provider) => normalizeProviderPreset(provider, locale))
+          .filter((preset): preset is ProviderPreset => Boolean(preset)),
+      )
     : []
   if (!isRecord(raw)) {
     return { version: LOCAL_PROVIDER_PRESET_CATALOG.version, providers: fallbackProviders }
   }
   const version = normalizePresetString(raw.version) || LOCAL_PROVIDER_PRESET_CATALOG.version
   const providers = Array.isArray(raw.providers)
-    ? raw.providers.map((provider) => normalizeProviderPreset(provider, locale)).filter((preset): preset is ProviderPreset => Boolean(preset))
+    ? dedupePresetIds(
+        raw.providers
+          .map((provider) => normalizeProviderPreset(provider, locale))
+          .filter((preset): preset is ProviderPreset => Boolean(preset)),
+      )
     : []
   return {
     version,
@@ -79,6 +85,22 @@ export function localizeProviderPresetName(
   if (!preset) return { ...provider }
   if (provider.name && !preset.nameCandidates.includes(provider.name)) return { ...provider }
   return { ...provider, name: preset.name }
+}
+
+function dedupePresetIds(providers: ProviderPreset[]): ProviderPreset[] {
+  const seen = new Set<string>()
+  return providers.map((provider, index) => {
+    const fallbackId = `provider-${index + 1}`
+    const baseId = provider.id || fallbackId
+    let id = baseId
+    let suffix = 2
+    while (seen.has(id)) {
+      id = `${baseId}-${suffix}`
+      suffix += 1
+    }
+    seen.add(id)
+    return id === provider.id ? provider : { ...provider, id }
+  })
 }
 
 function createProviderId(): string {

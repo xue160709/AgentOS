@@ -1,0 +1,18 @@
+{
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
+  "lastPrdSyncAt": "2026-06-24",
+  "module": "agent-mode",
+  "lastChangedFiles": [
+    "electron/agent-mode-settings-store.ts",
+    "electron/agent-mode-settings-store.test.mjs",
+    "electron/claude-agent-runner/mcp-probe.ts",
+    "src/desktop-types.ts",
+    "src/desktop-api.ts",
+    "src/desktop-seam.ts",
+    "src/components/chat/ProjectHomeSurface.tsx",
+    "src/components/setting/ClaudeAgentSettingsPage.tsx",
+    "electron/main.ts",
+    "prd/agent-mode/acceptance.md"
+  ],
+  "notes": "全量同步：agent-mode acceptance 已通过；项目 MCP 面板、tool policy、字段级修复提示、分组/风险标注和失败恢复完成正式验收，后续可补 Agent Mode 文件 fixture、全页面 E2E 和真实 MCP live smoke。"
+}

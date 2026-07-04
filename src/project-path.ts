@@ -36,34 +36,6 @@ export function migrateLegacySeedProjects(state: ChatWorkspaceState): ChatWorksp
   }
 }
 
-/** 若当前激活项目缺失或路径失效，则回退到首个可用项目 / Pick a valid active project when the current one is missing or broken */
-export function reconcileActiveProject(state: ChatWorkspaceState): ChatWorkspaceState {
-  if (state.projects.length === 0) {
-    return { ...state, activeProjectId: '', activeThreadId: '' }
-  }
-
-  const active = state.projects.find((project) => project.id === state.activeProjectId)
-  if (active && !active.pathMissing) return state
-
-  const fallback =
-    state.projects.find((project) => !project.pathMissing) ??
-    state.projects.find((project) => project.id === state.activeProjectId) ??
-    state.projects[0]
-  if (!fallback) {
-    return { ...state, activeProjectId: '', activeThreadId: '' }
-  }
-
-  const activeThreadStillValid = state.threads.some(
-    (thread) => thread.id === state.activeThreadId && thread.projectId === fallback.id && !thread.archivedAt,
-  )
-
-  return {
-    ...state,
-    activeProjectId: fallback.id,
-    activeThreadId: activeThreadStillValid ? state.activeThreadId : '',
-  }
-}
-
 /** 持久化前剥掉仅运行期存在的字段（如 `pathMissing`）/ Strip runtime-only fields before serializing workspace state */
 export function stripRuntimeProjectFields(state: ChatWorkspaceState): ChatWorkspaceState {
   return {

@@ -18,9 +18,10 @@ type ChatThreadViewProps = {
   showScrollButton: boolean
   onScrollToBottom: (behavior: ScrollBehavior) => void
   onCopyMessage: (text: string) => void
+  onForkMessage: (messageId: string) => void
   onEditUserMessage: (messageId: string, text: string) => void
   onUserMessageEditDismissed?: () => void
-  onReviewFileChanges: (changeSetId: string) => void
+  onReviewFileChanges: (item: ChatFileDiffItem) => void
   onRewindFileChanges: (item: ChatFileDiffItem) => void
 }
 
@@ -34,6 +35,7 @@ export function ChatThreadView({
   showScrollButton,
   onScrollToBottom,
   onCopyMessage,
+  onForkMessage,
   onEditUserMessage,
   onUserMessageEditDismissed,
   onReviewFileChanges,
@@ -51,6 +53,7 @@ export function ChatThreadView({
             isRunning={isRunning}
             activeRunState={activeRunState}
             onCopyMessage={onCopyMessage}
+            onForkMessage={onForkMessage}
             onEditUserMessage={onEditUserMessage}
             onUserMessageEditDismissed={onUserMessageEditDismissed}
             onReviewFileChanges={onReviewFileChanges}

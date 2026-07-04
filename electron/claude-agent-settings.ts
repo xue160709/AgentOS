@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type {
   ActiveChatPickPayload,
+  ChatModelPick,
   ClaudeAgentConfigSource,
   ClaudeAgentEnvSnapshot,
   ClaudeAgentModelProvider,
@@ -141,9 +142,22 @@ export class ClaudeAgentSettingsStore {
     return this.save({ ...settings, activeProviderId: id, activeAnthropicModel })
   }
 
-  resolve(): ClaudeAgentResolvedConfig {
+  resolve(modelPick?: ChatModelPick): ClaudeAgentResolvedConfig {
     const settings = this.read()
     const env = this.getEnvSnapshot()
+
+    const pickedProvider = modelPick ? selectProviderForPick(settings, modelPick) : undefined
+    if (pickedProvider) {
+      const resolved = resolveProviderConfig(pickedProvider.provider, pickedProvider.model)
+      safeConsoleInfo('[ClaudeAgentSettingsStore] resolved model-pick config', {
+        settingsFilePath: this.settingsFilePath,
+        requestedProviderId: modelPick?.providerId ?? '',
+        requestedModel: modelPick?.anthropicModel ?? '',
+        providerName: pickedProvider.provider.name,
+        resolved: summarizeResolvedConfigForLog(resolved),
+      })
+      return resolved
+    }
 
     if (this.allowEnvConfigSource && settings.configSource === 'env') {
       const resolved: ClaudeAgentResolvedConfig = {
@@ -162,34 +176,22 @@ export class ClaudeAgentSettingsStore {
     }
 
     const provider = selectActiveProvider(settings)
-    const providerApiKey = provider?.apiKey ?? ''
-
     const overlay = normalizeString(settings.activeAnthropicModel)
     const primaryModel = normalizeString(provider?.model ?? '')
     const effectiveOverlay =
       overlay && provider && providerAcceptsModel(provider, overlay) ? overlay : ''
     const resolvedModel = effectiveOverlay || primaryModel
 
-    const resolved: ClaudeAgentResolvedConfig = {
-      configSource: 'settings',
-      apiKey: providerApiKey
-        ? provider?.authMode === 'authToken'
-          ? ''
-          : providerApiKey
-        : '',
-      authToken: providerApiKey
-        ? provider?.authMode === 'authToken'
-          ? providerApiKey
-          : ''
-        : '',
-      baseUrl: provider?.baseUrl || '',
-      model: resolvedModel,
-      supportsImages: provider
-        ? providerSupportsImagesForModel(provider, resolvedModel, false)
-        : false,
-      defaultHaikuModel: provider?.defaultHaikuModel || '',
-      defaultOpusModel: provider?.defaultOpusModel || '',
-      defaultSonnetModel: provider?.defaultSonnetModel || '',
+    const resolved = provider ? resolveProviderConfig(provider, resolvedModel) : {
+      configSource: 'settings' as ClaudeAgentConfigSource,
+      apiKey: '',
+      authToken: '',
+      baseUrl: '',
+      model: '',
+      supportsImages: false,
+      defaultHaikuModel: '',
+      defaultOpusModel: '',
+      defaultSonnetModel: '',
     }
     safeConsoleInfo('[ClaudeAgentSettingsStore] resolved settings config', {
       settingsFilePath: this.settingsFilePath,
@@ -221,11 +223,44 @@ export class ClaudeAgentSettingsStore {
   }
 }
 
+function resolveProviderConfig(provider: ClaudeAgentModelProvider, model: string): ClaudeAgentResolvedConfig {
+  const providerApiKey = provider.apiKey ?? ''
+  return {
+    configSource: 'settings',
+    apiKey: providerApiKey
+      ? provider.authMode === 'authToken'
+        ? ''
+        : providerApiKey
+      : '',
+    authToken: providerApiKey
+      ? provider.authMode === 'authToken'
+        ? providerApiKey
+        : ''
+      : '',
+    baseUrl: provider.baseUrl || '',
+    model: model || provider.model || '',
+    supportsImages: providerSupportsImagesForModel(provider, model || provider.model || '', false),
+    defaultHaikuModel: provider.defaultHaikuModel || '',
+    defaultOpusModel: provider.defaultOpusModel || '',
+    defaultSonnetModel: provider.defaultSonnetModel || '',
+  }
+}
+
+function selectProviderForPick(
+  settings: ClaudeAgentSettings,
+  pick: ChatModelPick,
+): { provider: ClaudeAgentModelProvider; model: string } | undefined {
+  const provider = settings.providers.find((item) => item.id === normalizeString(pick.providerId))
+  const model = normalizeString(pick.anthropicModel)
+  if (!provider || !model || !providerAcceptsModel(provider, model)) return undefined
+  return { provider, model }
+}
+
 function normalizeSettings(raw: unknown, allowEnvConfigSource: boolean): ClaudeAgentSettings {
   if (!isRecord(raw)) return createDefaultSettings()
 
   const configSource = normalizeSource(raw.configSource, allowEnvConfigSource)
-  const providers = normalizeProviders(raw)
+  const providers = pruneLegacySeededProviders(normalizeProviders(raw))
   const activeProviderId = providers.some((provider) => provider.id === normalizeString(raw.activeProviderId))
     ? normalizeString(raw.activeProviderId)
     : providers[0].id
@@ -356,13 +391,44 @@ function createDefaultProvider(): ClaudeAgentModelProvider {
 }
 
 function createDefaultProviders(): ClaudeAgentModelProvider[] {
+  return [createDefaultProvider()]
+}
+
+function pruneLegacySeededProviders(providers: ClaudeAgentModelProvider[]): ClaudeAgentModelProvider[] {
+  const retained = providers.filter((provider) => !isLegacySeededProvider(provider))
+  return retained.length ? retained : createDefaultProviders()
+}
+
+function isLegacySeededProvider(provider: ClaudeAgentModelProvider): boolean {
+  if (normalizeString(provider.apiKey) || normalizeString(provider.presetId)) return false
   const rawProviders = isRecord(providerPresetCatalog) && Array.isArray(providerPresetCatalog.providers)
     ? providerPresetCatalog.providers
     : []
-  const providers = rawProviders
-    .map((provider, index) => normalizeProvider(provider, `provider-${index + 1}`))
-    .filter((provider): provider is ClaudeAgentModelProvider => Boolean(provider))
-  return providers.length ? dedupeProviderIds(providers) : [createDefaultProvider()]
+
+  return rawProviders.some((rawProvider, index) => {
+    const preset = normalizeProvider(rawProvider, `legacy-preset-${index + 1}`)
+    return preset ? providersMatchLegacySeed(provider, preset) : false
+  })
+}
+
+function providersMatchLegacySeed(
+  provider: ClaudeAgentModelProvider,
+  preset: ClaudeAgentModelProvider,
+): boolean {
+  return (
+    provider.name === preset.name &&
+    provider.apiKeyUrl === preset.apiKeyUrl &&
+    provider.authMode === preset.authMode &&
+    provider.baseUrl === preset.baseUrl &&
+    provider.model === preset.model &&
+    provider.modelSupportsImages === preset.modelSupportsImages &&
+    provider.defaultHaikuModel === preset.defaultHaikuModel &&
+    provider.defaultHaikuSupportsImages === preset.defaultHaikuSupportsImages &&
+    provider.defaultSonnetModel === preset.defaultSonnetModel &&
+    provider.defaultSonnetSupportsImages === preset.defaultSonnetSupportsImages &&
+    provider.defaultOpusModel === preset.defaultOpusModel &&
+    provider.defaultOpusSupportsImages === preset.defaultOpusSupportsImages
+  )
 }
 
 function normalizeSource(value: unknown, allowEnvConfigSource: boolean): ClaudeAgentConfigSource {

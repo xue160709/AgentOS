@@ -4,9 +4,11 @@
  */
 
 import type { ReactNode } from 'react'
+import type { ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
 import { useI18n } from '../../i18n/i18n'
 import type { HomePluginRunItem } from '../../desktop-types'
-import type { ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
+import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
+import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { ProjectHomeProjectSelector, ProjectHomeSurface } from './ProjectHomeSurface'
 
 type ChatStartViewProps = {
@@ -14,9 +16,16 @@ type ChatStartViewProps = {
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
   composer: ReactNode
+  agentMode: WorkspaceAgentModeState
   agentModeEnabled: boolean
   todoEnabled: boolean
   agentModeLoading: boolean
+  agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
+  agentSettingsOpen: boolean
+  agentSettingsPanel: AgentSettingsPanelId
+  onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
+  onAgentSettingsPanelChange: (panel: AgentSettingsPanelId) => void
+  onCloseAgentSettings: () => void
   threads: WorkspaceThread[]
   threadRunStates: Record<string, ThreadRunState>
   hiddenSkillPaths: string[]
@@ -25,8 +34,10 @@ type ChatStartViewProps = {
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onEditHomePluginCard: (item: HomePluginRunItem) => void
+  onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
+  onRefreshAgentStatus: (refresh?: boolean) => void
 }
 
 /** 项目主页空状态 / Project home empty rail */
@@ -35,9 +46,16 @@ export function ChatStartView({
   projects,
   projectOrderIds,
   composer,
+  agentMode,
   agentModeEnabled,
   todoEnabled,
   agentModeLoading,
+  agentStatusSnapshot,
+  agentSettingsOpen,
+  agentSettingsPanel,
+  onOpenAgentSettings,
+  onAgentSettingsPanelChange,
+  onCloseAgentSettings,
   threads,
   threadRunStates,
   hiddenSkillPaths,
@@ -46,8 +64,10 @@ export function ChatStartView({
   onCreateProject,
   onSelectProject,
   onEditHomePluginCard,
+  onOpenProjectFile,
   onRunProjectSkill,
   onStopProjectSkillRun,
+  onRefreshAgentStatus,
 }: ChatStartViewProps) {
   const { t } = useI18n()
 
@@ -69,8 +89,15 @@ export function ChatStartView({
             project={project}
             projects={projects}
             projectOrderIds={projectOrderIds}
+            agent={agentMode}
             todoEnabled={todoEnabled}
             loading={agentModeLoading}
+            agentStatusSnapshot={agentStatusSnapshot}
+            agentSettingsOpen={agentSettingsOpen}
+            agentSettingsPanel={agentSettingsPanel}
+            onOpenAgentSettings={onOpenAgentSettings}
+            onAgentSettingsPanelChange={onAgentSettingsPanelChange}
+            onCloseAgentSettings={onCloseAgentSettings}
             threads={threads}
             threadRunStates={threadRunStates}
             hiddenSkillPaths={hiddenSkillPaths}
@@ -78,8 +105,10 @@ export function ChatStartView({
             onCreateProject={onCreateProject}
             onSelectProject={onSelectProject}
             onEditHomePluginCard={onEditHomePluginCard}
+            onOpenProjectFile={onOpenProjectFile}
             onRunProjectSkill={onRunProjectSkill}
             onStopProjectSkillRun={onStopProjectSkillRun}
+            onRefreshAgentStatus={onRefreshAgentStatus}
           />
         ) : (
           <ProjectHomeProjectSelector

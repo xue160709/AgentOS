@@ -4,19 +4,32 @@
  */
 
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { ClaudeChatEvent } from '../../src/claude-chat-types'
+import type { ClaudeAgentStatusUsage, ClaudeChatEvent, ClaudeTaskSnapshot, ClaudeTaskStatus } from '../../src/claude-chat-types'
 import { fileDiffFromPostToolUse } from './file-diff'
 
 type ThreadRuntimeState = {
   sessionId?: string
   model: string
   configSignature?: string
+  cwd?: string
+  claudeCodeVersion?: string
+  apiKeySource?: string
+  permissionMode?: string
+  tools?: string[]
+  slashCommands?: string[]
+  agents?: string[]
+  mcpServers?: { name: string; status: string }[]
+  plugins?: string[]
+  lastUsage?: ClaudeAgentStatusUsage
+  lastError?: string
+  updatedAt?: number
 }
 
 type StreamBlockState = {
   id: string
   type: 'text' | 'thinking' | 'tool' | 'other'
   toolUseId?: string
+  toolName?: string
   inputJson: string
 }
 
@@ -28,7 +41,9 @@ type ActiveRequest = {
   didEmitText: boolean
   didEmitThinking: boolean
   checkpointId?: string
+  compactionItemId?: string
   seenToolUseIds: Set<string>
+  seenTaskInputToolUseIds: Set<string>
   toolNamesByUseId: Map<string, string>
   diffedToolUseIds: Set<string>
   streamBlocks: Map<number, StreamBlockState>
@@ -69,6 +84,9 @@ export class ClaudeSdkMessageRouter {
     if (message.type === 'result') {
       const threadState = this.getThreadRuntimeState(activeRequest.threadId)
       threadState.sessionId = message.session_id
+      threadState.lastUsage = statusUsageFromResult(message)
+      threadState.lastError = message.is_error ? ('errors' in message ? message.errors.join('\n') : '') : undefined
+      threadState.updatedAt = Date.now()
       const result = 'result' in message ? message.result : message.errors.join('\n')
       if (result && !activeRequest.didEmitText) {
         this.emitAssistantDelta(activeRequest, result)
@@ -102,6 +120,17 @@ export class ClaudeSdkMessageRouter {
       const agents = Array.isArray(message.agents) ? message.agents : []
       const mcpServers = Array.isArray(message.mcp_servers) ? message.mcp_servers : []
       const plugins = Array.isArray(message.plugins) ? message.plugins.map((plugin) => plugin.name) : []
+      threadState.cwd = message.cwd || activeRequest.cwd
+      threadState.claudeCodeVersion = message.claude_code_version || ''
+      threadState.apiKeySource = message.apiKeySource || ''
+      threadState.permissionMode = message.permissionMode || ''
+      if (tools.length > 0) threadState.tools = tools
+      if (slashCommands.length > 0) threadState.slashCommands = slashCommands
+      threadState.agents = agents
+      threadState.mcpServers = mcpServers
+      threadState.plugins = plugins
+      threadState.lastError = undefined
+      threadState.updatedAt = Date.now()
       this.emit({
         type: 'session_start',
         requestId: activeRequest.requestId,
@@ -158,10 +187,74 @@ export class ClaudeSdkMessageRouter {
       return
     }
 
+    if (message.subtype === 'local_command_output') {
+      const record = message as unknown
+      const content = isRecord(record) && typeof record.content === 'string' ? record.content : ''
+      if (content) this.emitAssistantDelta(activeRequest, content)
+    }
+
+    if (message.subtype === 'status' && this.emitContextCompactionFromStatus(message, activeRequest)) {
+      return
+    }
+
+    if (message.subtype === 'compact_boundary' && this.emitContextCompactionFromBoundary(message, activeRequest)) {
+      return
+    }
+
     const activity = activityFromSystemMessage(message)
     if (activity) {
       this.emitActivity(activeRequest, activity.key, activity.title, activity.status, activity.detail, activity.preview)
     }
+  }
+
+  private emitContextCompactionFromStatus(
+    message: Extract<SDKMessage, { type: 'system' }>,
+    activeRequest: ActiveRequest,
+  ): boolean {
+    const record = message as unknown
+    if (!isRecord(record) || record.subtype !== 'status') return false
+    const compactResult = typeof record.compact_result === 'string' ? record.compact_result : ''
+    const compactError = typeof record.compact_error === 'string' ? record.compact_error : ''
+    if (record.status !== 'compacting' && !compactResult && !compactError) return false
+
+    this.emit({
+      type: 'context_compaction',
+      requestId: activeRequest.requestId,
+      compactionId: this.ensureCompactionItemId(activeRequest),
+      status: compactResult === 'failed' || compactError ? 'error' : compactResult === 'success' ? 'done' : 'running',
+      error: compactError || undefined,
+    })
+    return true
+  }
+
+  private emitContextCompactionFromBoundary(
+    message: Extract<SDKMessage, { type: 'system' }>,
+    activeRequest: ActiveRequest,
+  ): boolean {
+    const record = message as unknown
+    if (!isRecord(record) || record.subtype !== 'compact_boundary') return false
+    const metadata = isRecord(record.compact_metadata) ? record.compact_metadata : {}
+    const preservedMessages = isRecord(metadata.preserved_messages) && Array.isArray(metadata.preserved_messages.uuids)
+      ? metadata.preserved_messages.uuids.length
+      : undefined
+    this.emit({
+      type: 'context_compaction',
+      requestId: activeRequest.requestId,
+      compactionId: this.ensureCompactionItemId(activeRequest, typeof record.uuid === 'string' ? `context-compact-${record.uuid}` : undefined),
+      status: 'done',
+      trigger: normalizeCompactTrigger(metadata.trigger),
+      preTokens: readFiniteNumber(metadata.pre_tokens),
+      postTokens: readFiniteNumber(metadata.post_tokens),
+      durationMs: readFiniteNumber(metadata.duration_ms),
+      preservedMessageCount: preservedMessages,
+    })
+    return true
+  }
+
+  private ensureCompactionItemId(activeRequest: ActiveRequest, preferred?: string): string {
+    const next = activeRequest.compactionItemId || preferred || `context-compact-${activeRequest.requestId}`
+    activeRequest.compactionItemId = next
+    return next
   }
 
   private handleStreamEvent(message: Extract<SDKMessage, { type: 'stream_event' }>, activeRequest: ActiveRequest): void {
@@ -260,6 +353,7 @@ export class ClaudeSdkMessageRouter {
         continue
       }
 
+      this.emitTaskEventFromToolResult(block, activeRequest)
       this.emit({
         type: 'tool_done',
         requestId: activeRequest.requestId,
@@ -296,6 +390,7 @@ export class ClaudeSdkMessageRouter {
         id: toolUseId || `tool-block-${activeRequest.requestId}-${index}`,
         type: 'tool',
         toolUseId,
+        toolName: isRecord(block) ? getToolName(block) : undefined,
         inputJson: '',
       })
       return
@@ -323,6 +418,12 @@ export class ClaudeSdkMessageRouter {
     }
 
     if (block.type === 'tool' && block.toolUseId) {
+      this.emitTaskEventFromToolInput(
+        block.toolUseId,
+        block.toolName ?? activeRequest.toolNamesByUseId.get(block.toolUseId) ?? '',
+        parseJsonInput(block.inputJson),
+        activeRequest,
+      )
       this.emit({
         type: 'tool_update',
         requestId: activeRequest.requestId,
@@ -423,7 +524,100 @@ export class ClaudeSdkMessageRouter {
       name,
       inputPreview: previewValue(block.input),
     })
+    this.emitTaskEventFromToolInput(toolUseId, name, block.input, activeRequest)
     return toolUseId
+  }
+
+  private emitTaskEventFromToolInput(
+    toolUseId: string,
+    toolName: string,
+    input: unknown,
+    activeRequest: ActiveRequest,
+  ): void {
+    if (!isRecord(input) || activeRequest.seenTaskInputToolUseIds.has(toolUseId)) return
+
+    if (toolName === 'TaskCreate') {
+      const subject = readText(input.subject)
+      if (!subject) return
+      activeRequest.seenTaskInputToolUseIds.add(toolUseId)
+      this.emit({
+        type: 'task_create',
+        requestId: activeRequest.requestId,
+        toolUseId,
+        subject,
+        description: readText(input.description),
+        activeForm: readText(input.activeForm),
+        metadata: isRecord(input.metadata) ? input.metadata : undefined,
+      })
+      return
+    }
+
+    if (toolName === 'TaskUpdate') {
+      const taskId = readTaskId(input)
+      if (!taskId) return
+      activeRequest.seenTaskInputToolUseIds.add(toolUseId)
+      this.emit({
+        type: 'task_update',
+        requestId: activeRequest.requestId,
+        toolUseId,
+        taskId,
+        status: normalizeTaskStatus(input.status),
+        subject: readText(input.subject),
+        description: readText(input.description),
+        activeForm: readText(input.activeForm),
+        owner: readText(input.owner),
+        blocks: readStringList(input.addBlocks),
+        blockedBy: readStringList(input.addBlockedBy),
+        metadata: isRecord(input.metadata) ? input.metadata : undefined,
+      })
+    }
+  }
+
+  private emitTaskEventFromToolResult(block: Record<string, unknown>, activeRequest: ActiveRequest): void {
+    const toolUseId = typeof block.tool_use_id === 'string' ? block.tool_use_id : ''
+    if (!toolUseId) return
+    const toolName = activeRequest.toolNamesByUseId.get(toolUseId) || ''
+    if (!isTaskToolName(toolName)) return
+
+    const result = normalizeToolResultValue(block)
+    if (toolName === 'TaskList') {
+      const tasks = readTaskList(result)
+      if (tasks.length > 0) {
+        this.emit({ type: 'task_list', requestId: activeRequest.requestId, toolUseId, tasks })
+      }
+      return
+    }
+
+    const task = readTaskSnapshot(result)
+    if (!task) return
+    if (toolName === 'TaskCreate') {
+      this.emit({
+        type: 'task_create',
+        requestId: activeRequest.requestId,
+        toolUseId,
+        taskId: task.taskId,
+        subject: task.subject,
+        description: task.description,
+        activeForm: task.activeForm,
+        metadata: task.metadata,
+      })
+      return
+    }
+
+    this.emit({
+      type: 'task_update',
+      requestId: activeRequest.requestId,
+      toolUseId,
+      taskId: task.taskId,
+      status: task.status,
+      subject: task.subject,
+      description: task.description,
+      activeForm: task.activeForm,
+      owner: task.owner,
+      blocks: task.blocks,
+      blockedBy: task.blockedBy,
+      metadata: task.metadata,
+    })
   }
 
   private emitFileDiffFromToolResult(
@@ -555,6 +749,23 @@ export class ClaudeSdkMessageRouter {
 
 }
 
+function statusUsageFromResult(message: Extract<SDKMessage, { type: 'result' }>): ClaudeAgentStatusUsage {
+  return {
+    costUsd: message.total_cost_usd,
+    durationMs: message.duration_ms,
+    numTurns: message.num_turns,
+    models: Object.entries(message.modelUsage).map(([model, usage]) => ({
+      model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadInputTokens: usage.cacheReadInputTokens,
+      cacheCreationInputTokens: usage.cacheCreationInputTokens,
+      costUsd: usage.costUSD,
+      contextWindow: usage.contextWindow,
+    })),
+  }
+}
+
 function extractTextFromContent(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -572,6 +783,107 @@ function getToolName(block: Record<string, unknown>): string {
   if (typeof block.tool_name === 'string') return block.tool_name
   if (typeof block.server_name === 'string') return block.server_name
   return 'Tool'
+}
+
+function isTaskToolName(value: string): boolean {
+  return value === 'TaskCreate' || value === 'TaskUpdate' || value === 'TaskList' || value === 'TaskGet'
+}
+
+function readText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function readTaskId(record: Record<string, unknown>): string {
+  return readText(record.taskId) ?? readText(record.task_id) ?? readText(record.id) ?? ''
+}
+
+function readStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  return items.length > 0 ? items : undefined
+}
+
+function normalizeTaskStatus(value: unknown): ClaudeTaskStatus | undefined {
+  return value === 'pending' || value === 'in_progress' || value === 'completed' || value === 'deleted'
+    ? value
+    : undefined
+}
+
+function parseJsonInput(value: string): unknown {
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeToolResultValue(block: Record<string, unknown>): unknown {
+  const content = block.content
+  if (typeof content === 'string') return parseMaybeJson(content)
+  if (Array.isArray(content)) {
+    const text = content
+      .map((item) => (isRecord(item) && typeof item.text === 'string' ? item.text : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+    if (text) return parseMaybeJson(text)
+  }
+  if (content !== undefined) return content
+  return block
+}
+
+function parseMaybeJson(value: string): unknown {
+  const trimmed = value.trim()
+  if (!trimmed) return value
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return value
+  }
+}
+
+function readTaskList(value: unknown): ClaudeTaskSnapshot[] {
+  const source = unwrapTaskResult(value)
+  const tasks = Array.isArray(source)
+    ? source
+    : isRecord(source) && Array.isArray(source.tasks)
+      ? source.tasks
+      : isRecord(source) && Array.isArray(source.items)
+        ? source.items
+        : []
+  return tasks.flatMap((task) => {
+    const parsed = readTaskSnapshot(task)
+    return parsed ? [parsed] : []
+  })
+}
+
+function readTaskSnapshot(value: unknown): ClaudeTaskSnapshot | undefined {
+  const source = unwrapTaskResult(value)
+  if (!isRecord(source)) return undefined
+  const taskId = readTaskId(source)
+  const subject = readText(source.subject) ?? readText(source.title) ?? readText(source.content)
+  if (!taskId || !subject) return undefined
+  return {
+    taskId,
+    subject,
+    description: readText(source.description),
+    activeForm: readText(source.activeForm) ?? readText(source.active_form),
+    status: normalizeTaskStatus(source.status),
+    owner: readText(source.owner),
+    blocks: readStringList(source.blocks),
+    blockedBy: readStringList(source.blockedBy) ?? readStringList(source.blocked_by),
+    metadata: isRecord(source.metadata) ? source.metadata : undefined,
+  }
+}
+
+function unwrapTaskResult(value: unknown): unknown {
+  if (!isRecord(value)) return value
+  if (isRecord(value.task)) return value.task
+  if (isRecord(value.result)) return unwrapTaskResult(value.result)
+  if (isRecord(value.data)) return unwrapTaskResult(value.data)
+  return value
 }
 
 function toolUseResultFromMessage(message: Extract<SDKMessage, { type: 'user' }>): unknown {
@@ -598,7 +910,15 @@ function activityFromSystemMessage(message: Extract<SDKMessage, { type: 'system'
       return { key: 'sdk-status', title: '请求模型', status: 'running', detail: formatPermissionMode(record.permissionMode) }
     }
     if (status === 'compacting') {
-      return { key: 'sdk-status', title: '压缩上下文', status: 'running', detail: formatCompactResult(record) }
+      return { key: 'sdk-compact', title: '压缩上下文', status: 'running', detail: formatCompactResult(record) }
+    }
+    if (typeof record.compact_result === 'string' || typeof record.compact_error === 'string') {
+      return {
+        key: 'sdk-compact',
+        title: '压缩上下文',
+        status: record.compact_result === 'failed' ? 'error' : 'done',
+        detail: formatCompactResult(record),
+      }
     }
     return { key: 'sdk-status', title: 'Agent 空闲', status: 'done', detail: formatCompactResult(record) }
   }
@@ -617,8 +937,8 @@ function activityFromSystemMessage(message: Extract<SDKMessage, { type: 'system'
     const metadata = isRecord(record.compact_metadata) ? record.compact_metadata : {}
     const pre = typeof metadata.pre_tokens === 'number' ? `${metadata.pre_tokens} tokens` : ''
     const post = typeof metadata.post_tokens === 'number' ? `-> ${metadata.post_tokens}` : ''
-    const trigger = typeof metadata.trigger === 'string' ? metadata.trigger : 'unknown'
-    return { key: `compact-${previewHash(`${pre}-${post}-${trigger}`)}`, title: '上下文压缩边界', status: 'done', detail: joinDetails([trigger, pre, post]) }
+    const trigger = metadata.trigger === 'auto' ? '自动' : metadata.trigger === 'manual' ? '手动' : 'unknown'
+    return { key: 'sdk-compact', title: '压缩上下文', status: 'done', detail: joinDetails([trigger, pre, post]) }
   }
 
   if (record.subtype === 'api_retry') {
@@ -771,6 +1091,15 @@ function activityFromTaskMessage(record: Record<string, unknown>): ActivityDescr
 
 function formatPermissionMode(value: unknown): string | undefined {
   return typeof value === 'string' ? `权限 ${value}` : undefined
+}
+
+function normalizeCompactTrigger(value: unknown): 'manual' | 'auto' | 'unknown' {
+  if (value === 'manual' || value === 'auto') return value
+  return 'unknown'
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function formatCompactResult(record: Record<string, unknown>): string | undefined {

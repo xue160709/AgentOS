@@ -12,11 +12,17 @@ import {
   type PermissionResult,
   type Query,
   type RewindFilesResult,
+  type SDKControlGetContextUsageResponse,
   type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type {
+  ChatModelPick,
   ClaudeAskUserQuestion,
+  AgentContextCatalog,
   ClaudeAgentResolvedConfig,
+  ClaudeAgentStatusContextUsage,
+  ClaudeAgentStatusRequest,
+  ClaudeAgentStatusSnapshot,
   ClaudeChatAttachment,
   ClaudeChatEvent,
   ClaudeChatSubmitPayload,
@@ -26,8 +32,8 @@ import type {
   ClaudePermissionMode,
   ClaudePermissionResponsePayload,
 } from '../src/claude-chat-types'
-import type { AgentModeProjectSettings, AppUiLocale } from '../src/desktop-types'
-import { buildRuntimeContext, resolvePromptWithContext } from './agent-context'
+import type { AgentModeProjectSettings, AgentWebSearchSettings, AppUiLocale } from '../src/desktop-types'
+import { buildRuntimeContext, discoverAgentContext, resolvePromptWithContext } from './agent-context'
 import {
   buildSdkEnv,
   getConfigSignature,
@@ -39,7 +45,9 @@ import { ClaudeChatEventCoalescer } from './claude-agent-runner/event-coalescer'
 import { resolveClaudeCodeExecutablePath } from './claude-agent-runner/executable'
 import { fileDiffFromPostToolUse } from './claude-agent-runner/file-diff'
 import { buildSdkPromptInput, normalizeSubmitAttachments, resolveWorkspaceCwd } from './claude-agent-runner/input'
+import { buildMcpPermissionCopy, buildMcpRuntimeOptions, mergeMcpRuntimeOptions } from './claude-agent-runner/mcp'
 import { ClaudeSdkMessageRouter } from './claude-agent-runner/sdk-message-router'
+import { buildWebSearchRuntimeOptions, isAgentOsWebSearchServerName } from './claude-agent-runner/web-search'
 import {
   HOME_PLUGIN_CARD_CUSTOMIZATION_SYSTEM_PROMPT,
   HOME_PLUGIN_CUSTOMIZATION_SYSTEM_PROMPT,
@@ -61,10 +69,14 @@ type ActiveRequest = {
   didEmitText: boolean
   didEmitThinking: boolean
   checkpointId?: string
+  compactionItemId?: string
   promptMode?: ClaudeChatSubmitPayload['promptMode']
+  modelPick?: ChatModelPick
+  handoffContext?: string
   agentModeSettingsOverride?: ClaudeChatSubmitPayload['agentModeSettingsOverride']
   permissionMode: ClaudePermissionMode
   seenToolUseIds: Set<string>
+  seenTaskInputToolUseIds: Set<string>
   toolNamesByUseId: Map<string, string>
   diffedToolUseIds: Set<string>
   streamBlocks: Map<number, StreamBlockState>
@@ -73,6 +85,8 @@ type ActiveRequest = {
 const READ_ONLY_AUTO_ALLOWED_TOOLS = ['Read', 'Glob', 'Grep', 'ListMcpResources', 'ReadMcpResource']
 const DEFAULT_AGENT_TOOLS = { type: 'preset', preset: 'claude_code' } as const
 const HOME_PLUGIN_CUSTOMIZATION_SKILL = 'a2ui-project-home-panel'
+const STATUS_QUERY_TIMEOUT_MS = 3_000
+const STATUS_PROBE_TIMEOUT_MS = 8_000
 type PendingPermissionRequest = {
   requestId: string
   toolUseId: string
@@ -88,6 +102,21 @@ type ThreadRuntimeState = {
   model: string
   configSignature?: string
   cwd?: string
+  claudeCodeVersion?: string
+  apiKeySource?: string
+  permissionMode?: string
+  tools?: string[]
+  hostSkills?: string[]
+  hostCommands?: string[]
+  hostContextCwd?: string
+  slashCommands?: string[]
+  agents?: string[]
+  mcpServers?: { name: string; status: string; error?: string; toolCount?: number }[]
+  plugins?: string[]
+  contextUsage?: ClaudeAgentStatusContextUsage
+  lastUsage?: ClaudeAgentStatusSnapshot['lastUsage']
+  lastError?: string
+  updatedAt?: number
 }
 
 type StreamBlockState = {
@@ -103,6 +132,7 @@ export class ClaudeAgentRunner {
   private readonly activeRequestIdsByThread = new Map<string, string>()
   private readonly defaultThreadId = 'default'
   private readonly threadRuntimeStates = new Map<string, ThreadRuntimeState>()
+  private readonly statusProbeByThread = new Map<string, Promise<void>>()
   private readonly pendingPermissionRequests = new Map<string, PendingPermissionRequest>()
   private readonly eventCoalescer: ClaudeChatEventCoalescer
   private readonly messageRouter: ClaudeSdkMessageRouter
@@ -110,8 +140,9 @@ export class ClaudeAgentRunner {
   constructor(
     private readonly webContents: WebContents,
     private readonly cwd: string,
-    private readonly resolveConfig: () => ClaudeAgentResolvedConfig,
+    private readonly resolveConfig: (modelPick?: ChatModelPick) => ClaudeAgentResolvedConfig,
     private readonly resolveAgentModeSettings: (rootPath: string) => Promise<AgentModeProjectSettings>,
+    private readonly resolveWebSearchSettings: () => Promise<AgentWebSearchSettings>,
     private readonly resolveUiLocale: () => AppUiLocale,
     private readonly observeEvent?: (event: ClaudeChatEvent) => void,
   ) {
@@ -168,9 +199,12 @@ export class ClaudeAgentRunner {
         payload.promptMode === 'home-plugin-task-run'
           ? payload.promptMode
           : undefined,
+      modelPick: normalizeModelPick(payload.modelPick),
+      handoffContext: typeof payload.handoffContext === 'string' ? payload.handoffContext.trim() : '',
       agentModeSettingsOverride: normalizeAgentModeSettingsOverride(payload.agentModeSettingsOverride),
       permissionMode: normalizeChatPermissionMode(payload.permissionMode),
       seenToolUseIds: new Set(),
+      seenTaskInputToolUseIds: new Set(),
       toolNamesByUseId: new Map(),
       diffedToolUseIds: new Set(),
       streamBlocks: new Map(),
@@ -220,6 +254,203 @@ export class ClaudeAgentRunner {
       if (activeRequestId) await this.cancel(activeRequestId)
     }
     this.threadRuntimeStates.delete(normalizedThreadId)
+  }
+
+  /** 返回状态面板所需的脱敏线程快照 / Return the redacted thread snapshot used by the local status panel */
+  async getStatus(payload?: ClaudeAgentStatusRequest): Promise<ClaudeAgentStatusSnapshot> {
+    const threadId = this.normalizeThreadId(payload?.threadId)
+    await Promise.all([
+      this.refreshHostContextStatus(threadId, payload?.cwd, payload?.refresh),
+      this.refreshThreadRuntimeStatus(threadId, payload),
+    ])
+    return this.buildStatusSnapshot(threadId, payload)
+  }
+
+  private buildStatusSnapshot(threadId: string, payload?: ClaudeAgentStatusRequest): ClaudeAgentStatusSnapshot {
+    const threadState = this.threadRuntimeStates.get(threadId)
+    const config = this.resolveConfig(payload?.modelPick)
+    const requestId = this.activeRequestIdsByThread.get(threadId)
+    const mcpServers = threadState?.mcpServers
+    const hasMcpIssue = (mcpServers ?? []).some((server) => server.status !== 'connected' && server.status !== 'disabled')
+    const hasCredential = Boolean(config.apiKey || config.authToken)
+    const sessionId = threadState?.sessionId || payload?.sessionId?.trim() || undefined
+    const lastError = threadState?.lastError
+    const health =
+      !hasCredential
+        ? 'unconfigured'
+        : requestId
+          ? 'running'
+          : lastError
+            ? 'error'
+            : hasMcpIssue
+              ? 'partial'
+              : sessionId
+                ? 'ready'
+                : 'idle'
+
+    return {
+      threadId,
+      health,
+      active: Boolean(requestId),
+      requestId,
+      sessionId,
+      cwd: threadState?.cwd || payload?.cwd?.trim() || undefined,
+      configSource: config.configSource,
+      authentication: config.authToken ? 'auth-token' : config.apiKey ? 'api-key' : 'missing',
+      route: config.baseUrl ? 'custom-gateway' : 'anthropic-default',
+      baseUrl: config.baseUrl,
+      endpointHost: hostFromUrl(config.baseUrl),
+      configuredModel: config.model,
+      reportedModel: threadState?.model ?? '',
+      claudeCodeVersion: threadState?.claudeCodeVersion ?? '',
+      apiKeySource: threadState?.apiKeySource ?? '',
+      permissionMode: threadState?.permissionMode ?? '',
+      tools: threadState?.tools,
+      skills: threadState?.hostSkills,
+      slashCommands: mergeKnownLists(threadState?.hostCommands, threadState?.slashCommands),
+      agents: threadState?.agents,
+      mcpServers,
+      plugins: threadState?.plugins,
+      contextUsage: threadState?.contextUsage,
+      lastUsage: threadState?.lastUsage,
+      lastError,
+      updatedAt: threadState?.updatedAt,
+    }
+  }
+
+  private async refreshHostContextStatus(threadId: string, cwd?: string, force = false): Promise<void> {
+    const threadState = this.getThreadRuntimeState(threadId)
+    const resolvedCwd = resolveWorkspaceCwd(cwd ?? threadState.cwd, this.cwd)
+    if (!force && threadState.hostContextCwd === resolvedCwd && threadState.hostSkills && threadState.hostCommands) return
+
+    const catalog = await discoverAgentContext(resolvedCwd)
+    if (!catalog.ok) return
+    this.captureHostContextCatalog(threadState, catalog)
+  }
+
+  private captureHostContextCatalog(threadState: ThreadRuntimeState, catalog: AgentContextCatalog): void {
+    threadState.hostContextCwd = catalog.rootPath
+    threadState.hostSkills = catalog.skills.filter((item) => item.kind === 'skill').map((item) => item.command)
+    threadState.hostCommands = catalog.skills.filter((item) => item.kind === 'command').map((item) => item.command)
+  }
+
+  private async refreshThreadRuntimeStatus(threadId: string, payload?: ClaudeAgentStatusRequest): Promise<void> {
+    const activeRequestId = this.activeRequestIdsByThread.get(threadId)
+    const activeQuery = activeRequestId ? this.activeRequests.get(activeRequestId)?.query : undefined
+    if (activeQuery) {
+      await this.refreshQueryStatus(activeQuery, threadId)
+      return
+    }
+    if (!payload?.refresh) return
+
+    const existingProbe = this.statusProbeByThread.get(threadId)
+    if (existingProbe) {
+      await existingProbe
+      return
+    }
+
+    const probe = this.probeThreadRuntimeStatus(threadId, payload).finally(() => {
+      this.statusProbeByThread.delete(threadId)
+    })
+    this.statusProbeByThread.set(threadId, probe)
+    await probe
+  }
+
+  private async probeThreadRuntimeStatus(threadId: string, payload: ClaudeAgentStatusRequest): Promise<void> {
+    const threadState = this.threadRuntimeStates.get(threadId)
+    const sessionId = threadState?.sessionId || payload.sessionId?.trim()
+    const config = this.resolveConfig(payload.modelPick)
+    if (!sessionId || (!config.apiKey && !config.authToken)) return
+
+    const abortController = new AbortController()
+    const timeout = setTimeout(() => abortController.abort(), STATUS_PROBE_TIMEOUT_MS)
+    const cwd = resolveWorkspaceCwd(payload.cwd ?? threadState?.cwd, this.cwd)
+    const sdkEnv = buildSdkEnv(config)
+    const agentModeSettings = await this.resolveAgentModeSettings(cwd).catch(() => undefined)
+    const webSearchSettings = await this.getWebSearchSettings()
+    const mcpRuntime = mergeMcpRuntimeOptions(
+      buildMcpRuntimeOptions(agentModeSettings, READ_ONLY_AUTO_ALLOWED_TOOLS, sdkEnv),
+      buildWebSearchRuntimeOptions(webSearchSettings, sdkEnv),
+    )
+    const response = query({
+      prompt: holdStatusProbeOpen(abortController.signal),
+      options: {
+        abortController,
+        allowedTools: mcpRuntime.allowedTools,
+        cwd,
+        disallowedTools: mcpRuntime.disallowedTools,
+        env: sdkEnv,
+        extraArgs: { 'replay-user-messages': null },
+        mcpServers: mcpRuntime.mcpServers,
+        pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath({ appRoot: this.cwd }),
+        permissionMode: 'default',
+        resume: sessionId,
+        settingSources: [],
+        skills: 'all',
+        toolAliases: mcpRuntime.toolAliases,
+        tools: DEFAULT_AGENT_TOOLS,
+      },
+    })
+
+    try {
+      await this.refreshQueryStatus(response, threadId, STATUS_PROBE_TIMEOUT_MS)
+    } catch (error) {
+      safeConsoleWarn('[ClaudeAgentRunner] status probe failed', {
+        threadId,
+        error: summarizeErrorForLog(error),
+      })
+    } finally {
+      clearTimeout(timeout)
+      abortController.abort()
+      response.close()
+    }
+  }
+
+  private async refreshQueryStatus(response: Query, threadId: string, timeoutMs = STATUS_QUERY_TIMEOUT_MS): Promise<void> {
+    const threadState = this.getThreadRuntimeState(threadId)
+    const initialization = await settledWithin(response.initializationResult(), timeoutMs)
+    if (initialization.status === 'fulfilled') {
+      threadState.slashCommands = mergeUnique(threadState.slashCommands, ...initialization.value.commands.map((command) => command.name))
+      threadState.agents = mergeUnique(threadState.agents, ...initialization.value.agents.map((agent) => agent.name))
+    }
+
+    const [mcpServers, contextUsage] = await Promise.all([
+      settledWithin(response.mcpServerStatus(), timeoutMs),
+      settledWithin(response.getContextUsage(), timeoutMs),
+    ])
+    if (mcpServers.status === 'fulfilled') {
+      threadState.mcpServers = mcpServers.value
+        .filter((server) => !isAgentOsWebSearchServerName(server.name))
+        .map((server) => ({
+          name: server.name,
+          status: server.status,
+          error: redactSensitiveStatusText(server.error),
+          toolCount: server.tools?.length,
+        }))
+      const mcpToolNames = mcpServers.value.flatMap((server) => server.tools?.map((tool) => tool.name) ?? [])
+      if (mcpToolNames.length > 0) threadState.tools = mergeUnique(threadState.tools, ...mcpToolNames)
+    }
+    if (contextUsage.status === 'fulfilled') {
+      threadState.contextUsage = statusContextUsageFromSdk(contextUsage.value)
+      const toolNames = [
+        ...(contextUsage.value.systemTools?.map((tool) => tool.name) ?? []),
+        ...(contextUsage.value.deferredBuiltinTools?.map((tool) => tool.name) ?? []),
+        ...contextUsage.value.mcpTools.map((tool) => tool.name),
+      ]
+      if (toolNames.length > 0) threadState.tools = mergeUnique(threadState.tools, ...toolNames)
+    }
+    threadState.updatedAt = Date.now()
+  }
+
+  private async getWebSearchSettings(): Promise<AgentWebSearchSettings | undefined> {
+    try {
+      return await this.resolveWebSearchSettings()
+    } catch (error) {
+      safeConsoleWarn('[ClaudeAgentRunner] failed to resolve web search settings', {
+        error: summarizeErrorForLog(error),
+      })
+      return undefined
+    }
   }
 
   /** 响应 UI 对权限或 AskUserQuestion 的决定 / Apply renderer decision for tool permission prompts */
@@ -284,7 +515,7 @@ export class ClaudeAgentRunner {
       }
     }
 
-    const config = this.resolveConfig()
+    const config = this.resolveConfig(payload.modelPick)
     if (!config.apiKey && !config.authToken) {
       const result: ClaudeFileRewindResult = {
         ok: false,
@@ -310,6 +541,13 @@ export class ClaudeAgentRunner {
     const timeout = setTimeout(() => abortController.abort(), 30_000)
     const cwd = resolveWorkspaceCwd(payload.cwd ?? threadState.cwd, this.cwd)
     const pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath({ appRoot: this.cwd })
+    const sdkEnv = buildSdkEnv(config)
+    const agentModeSettings = await this.resolveAgentModeSettings(cwd).catch(() => undefined)
+    const webSearchSettings = await this.getWebSearchSettings()
+    const mcpRuntime = mergeMcpRuntimeOptions(
+      buildMcpRuntimeOptions(agentModeSettings, READ_ONLY_AUTO_ALLOWED_TOOLS, sdkEnv),
+      buildWebSearchRuntimeOptions(webSearchSettings, sdkEnv),
+    )
     let response: Query | undefined
 
     try {
@@ -319,12 +557,16 @@ export class ClaudeAgentRunner {
           abortController,
           cwd,
           enableFileCheckpointing: true,
-          env: buildSdkEnv(config),
+          allowedTools: mcpRuntime.allowedTools,
+          disallowedTools: mcpRuntime.disallowedTools,
+          env: sdkEnv,
           extraArgs: { 'replay-user-messages': null },
+          mcpServers: mcpRuntime.mcpServers,
           pathToClaudeCodeExecutable,
           permissionMode: 'default',
           resume: threadState.sessionId,
           settingSources: [],
+          toolAliases: mcpRuntime.toolAliases,
           tools: DEFAULT_AGENT_TOOLS,
         },
       })
@@ -355,14 +597,11 @@ export class ClaudeAgentRunner {
   // --- SDK query lifecycle / SDK 查询生命周期 ---
 
   private async run(prompt: string, attachments: ClaudeChatAttachment[], activeRequest: ActiveRequest): Promise<void> {
-    const config = this.resolveConfig()
+    const config = this.resolveConfig(activeRequest.modelPick)
     const threadState = this.getThreadRuntimeState(activeRequest.threadId)
-    const nextConfigSignature = getConfigSignature(config)
-    if (threadState.configSignature && threadState.configSignature !== nextConfigSignature) {
-      threadState.sessionId = undefined
-    }
-    threadState.configSignature = nextConfigSignature
     threadState.cwd = activeRequest.cwd
+    threadState.lastError = undefined
+    threadState.updatedAt = Date.now()
 
     if (!config.apiKey && !config.authToken) {
       this.emit({
@@ -395,7 +634,19 @@ export class ClaudeAgentRunner {
         ...(await this.resolveAgentModeSettings(activeRequest.cwd)),
         ...(activeRequest.agentModeSettingsOverride ?? {}),
       }
+      const sdkEnv = buildSdkEnv(config)
+      const webSearchSettings = await this.getWebSearchSettings()
+      const mcpRuntime = mergeMcpRuntimeOptions(
+        buildMcpRuntimeOptions(agentModeSettings, READ_ONLY_AUTO_ALLOWED_TOOLS, sdkEnv),
+        buildWebSearchRuntimeOptions(webSearchSettings, sdkEnv),
+      )
+      const nextConfigSignature = JSON.stringify([getConfigSignature(config), mcpRuntime.configSignature])
+      if (threadState.configSignature && threadState.configSignature !== nextConfigSignature) {
+        threadState.sessionId = undefined
+      }
+      threadState.configSignature = nextConfigSignature
       const runtimeContext = await buildRuntimeContext(activeRequest.cwd, agentModeSettings, this.resolveUiLocale())
+      this.captureHostContextCatalog(threadState, runtimeContext.catalog)
       const appendSystemPrompt = buildRequestAppendSystemPrompt(activeRequest, runtimeContext.appendSystemPrompt)
       const resolvedPrompt = await resolvePromptWithContext(prompt, runtimeContext.catalog, {
         forcedSkillCommand:
@@ -403,8 +654,7 @@ export class ClaudeAgentRunner {
             ? HOME_PLUGIN_CUSTOMIZATION_SKILL
             : undefined,
       })
-      const promptInput = buildSdkPromptInput(resolvedPrompt, attachments)
-      const sdkEnv = buildSdkEnv(config)
+      const promptInput = buildSdkPromptInput(withHandoffContext(resolvedPrompt, activeRequest.handoffContext), attachments)
       const pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath({ appRoot: this.cwd })
       if (attachments.length > 0) {
         this.emitActivity(
@@ -437,6 +687,9 @@ export class ClaudeAgentRunner {
             claudeCodeExecutablePath: pathToClaudeCodeExecutable,
             config: summarizeConfigForLog(config),
             sdkEnv: summarizeSdkEnvForLog(sdkEnv),
+            mcpServerCount: Object.keys(mcpRuntime.mcpServers ?? {}).length,
+            mcpUnresolvedEnvCount: mcpRuntime.unresolvedEnv.length,
+            toolAliasCount: Object.keys(mcpRuntime.toolAliases ?? {}).length,
           })
           response = query({
             prompt: promptInput,
@@ -444,9 +697,10 @@ export class ClaudeAgentRunner {
               abortController: activeRequest.abortController,
               agents: runtimeContext.agents,
               allowDangerouslySkipPermissions: activeRequest.permissionMode === 'bypassPermissions' ? true : undefined,
-              allowedTools: READ_ONLY_AUTO_ALLOWED_TOOLS,
+              allowedTools: mcpRuntime.allowedTools,
               canUseTool: (toolName, input, options) => this.handleCanUseTool(activeRequest, toolName, input, options),
               cwd: activeRequest.cwd,
+              disallowedTools: mcpRuntime.disallowedTools,
               enableFileCheckpointing: true,
               env: sdkEnv,
               extraArgs: { 'replay-user-messages': null },
@@ -457,9 +711,15 @@ export class ClaudeAgentRunner {
                     hooks: [async (input) => this.handlePostToolUseHook(activeRequest, input)],
                   },
                 ],
+                PostCompact: [
+                  {
+                    hooks: [async (input) => this.handlePostCompactHook(activeRequest, input)],
+                  },
+                ],
               },
               includeHookEvents: false,
               includePartialMessages: true,
+              mcpServers: mcpRuntime.mcpServers,
               // Third-party Anthropic-compatible endpoints such as SiliconFlow expect
               // custom models through ANTHROPIC_MODEL. Passing options.model makes
               // Claude Code treat the value as its own model flag and can trigger
@@ -478,6 +738,7 @@ export class ClaudeAgentRunner {
               toolConfig: {
                 askUserQuestion: { previewFormat: 'markdown' },
               },
+              toolAliases: mcpRuntime.toolAliases,
               tools: DEFAULT_AGENT_TOOLS,
             },
           })
@@ -488,6 +749,9 @@ export class ClaudeAgentRunner {
             if (activeRequest.cancelled) break
             this.captureCheckpointFromSdkMessage(message, activeRequest)
             this.messageRouter.handleSdkMessage(message, activeRequest)
+            if (shouldRefreshStatusFromSdkMessage(message)) {
+              await this.refreshQueryStatus(response, activeRequest.threadId)
+            }
           }
           return
         } catch (error) {
@@ -582,6 +846,28 @@ export class ClaudeAgentRunner {
     return { continue: true, suppressOutput: true }
   }
 
+  private async handlePostCompactHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
+    try {
+      if (!isRecord(input) || input.hook_event_name !== 'PostCompact') return { continue: true, suppressOutput: true }
+      const summary = typeof input.compact_summary === 'string' ? input.compact_summary.trim() : ''
+      activeRequest.compactionItemId = activeRequest.compactionItemId || `context-compact-${activeRequest.requestId}`
+      this.emit({
+        type: 'context_compaction',
+        requestId: activeRequest.requestId,
+        compactionId: activeRequest.compactionItemId,
+        status: 'done',
+        trigger: input.trigger === 'auto' || input.trigger === 'manual' ? input.trigger : 'unknown',
+        summary: summary || undefined,
+      })
+    } catch (error) {
+      safeConsoleWarn('[ClaudeAgentRunner] failed to collect compact summary', {
+        requestId: activeRequest.requestId,
+        error: summarizeErrorForLog(error),
+      })
+    }
+    return { continue: true, suppressOutput: true }
+  }
+
   // --- Tool permission gating / 工具权限闸门 ---
 
   private async handleCanUseTool(
@@ -639,18 +925,19 @@ export class ClaudeAgentRunner {
       return pendingResult
     }
 
+    const permissionCopy = buildMcpPermissionCopy(toolName, options.title, options.displayName)
     this.emit({
       type: 'permission_request',
       requestId: activeRequest.requestId,
       permissionRequestId,
       toolUseId,
       toolName,
-      title: options.title || `${toolName} 需要权限`,
-      displayName: options.displayName || toolName,
+      title: permissionCopy.title,
+      displayName: permissionCopy.displayName,
       description: options.description || '',
       inputPreview: previewValue(input),
     })
-    this.emitActivity(activeRequest, `permission-request-${permissionRequestId}`, '等待权限确认', 'running', options.displayName || toolName)
+    this.emitActivity(activeRequest, `permission-request-${permissionRequestId}`, '等待权限确认', 'running', permissionCopy.displayName)
     return pendingResult
   }
 
@@ -699,6 +986,11 @@ export class ClaudeAgentRunner {
   private emit(event: ClaudeChatEvent): void {
     if (this.webContents.isDestroyed()) return
     const threadId = event.threadId ?? this.activeRequests.get(event.requestId)?.threadId
+    if (threadId && event.type === 'error') {
+      const threadState = this.getThreadRuntimeState(threadId)
+      threadState.lastError = event.message
+      threadState.updatedAt = Date.now()
+    }
     this.eventCoalescer.emit(threadId ? { ...event, threadId } : event)
   }
 
@@ -741,6 +1033,90 @@ function joinDetails(parts: Array<string | undefined | null | false>): string | 
   return text || undefined
 }
 
+function hostFromUrl(value: string): string {
+  if (!value.trim()) return ''
+  try {
+    return new URL(value).host
+  } catch {
+    return value
+  }
+}
+
+function shouldRefreshStatusFromSdkMessage(message: SDKMessage): boolean {
+  return message.type === 'result' || (message.type === 'system' && message.subtype === 'init')
+}
+
+async function* holdStatusProbeOpen(signal: AbortSignal): AsyncGenerator<never, void, unknown> {
+  if (signal.aborted) return
+  await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+}
+
+async function settledWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<PromiseSettledResult<T>> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    const value = await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Timed out while reading Agent status.')), timeoutMs)
+      }),
+    ])
+    return { status: 'fulfilled', value }
+  } catch (reason) {
+    return { status: 'rejected', reason }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
+function mergeUnique(existing: string[] | undefined, ...values: string[]): string[] {
+  return Array.from(
+    new Set(
+      [...(existing ?? []), ...values]
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function mergeKnownLists(...lists: Array<string[] | undefined>): string[] | undefined {
+  if (!lists.some((list) => list !== undefined)) return undefined
+  return mergeUnique(undefined, ...lists.flatMap((list) => list ?? []))
+}
+
+function statusContextUsageFromSdk(usage: SDKControlGetContextUsageResponse): ClaudeAgentStatusContextUsage {
+  return {
+    model: usage.model,
+    totalTokens: usage.totalTokens,
+    maxTokens: usage.maxTokens,
+    rawMaxTokens: usage.rawMaxTokens,
+    percentage: usage.percentage,
+    autoCompactThreshold: usage.autoCompactThreshold,
+    isAutoCompactEnabled: usage.isAutoCompactEnabled,
+    categories: usage.categories.map((category) => ({
+      name: category.name,
+      tokens: category.tokens,
+      color: category.color,
+      isDeferred: category.isDeferred,
+    })),
+    slashCommands: usage.slashCommands,
+    skills: usage.skills
+      ? {
+          totalSkills: usage.skills.totalSkills,
+          includedSkills: usage.skills.includedSkills,
+          tokens: usage.skills.tokens,
+        }
+      : undefined,
+    apiUsage: usage.apiUsage
+      ? {
+          inputTokens: usage.apiUsage.input_tokens,
+          outputTokens: usage.apiUsage.output_tokens,
+          cacheCreationInputTokens: usage.apiUsage.cache_creation_input_tokens,
+          cacheReadInputTokens: usage.apiUsage.cache_read_input_tokens,
+        }
+      : undefined,
+  }
+}
+
 function isMissingConversationSessionError(error: unknown): boolean {
   if (typeof error === 'string') {
     return error.includes('No conversation found with session ID')
@@ -768,6 +1144,27 @@ function buildRequestAppendSystemPrompt(activeRequest: ActiveRequest, basePrompt
   return sections.length > 0 ? sections.join('\n\n') : undefined
 }
 
+function withHandoffContext(prompt: string, handoffContext?: string): string {
+  const context = handoffContext?.trim()
+  if (!context) return prompt
+  return [
+    context,
+    '',
+    '---',
+    '',
+    '继续处理当前用户消息：',
+    prompt,
+  ].join('\n')
+}
+
+function normalizeModelPick(value: unknown): ChatModelPick | undefined {
+  if (!isRecord(value)) return undefined
+  const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : ''
+  const anthropicModel = typeof value.anthropicModel === 'string' ? value.anthropicModel.trim() : ''
+  if (!providerId || !anthropicModel) return undefined
+  return { providerId, anthropicModel }
+}
+
 function previewValue(value: unknown): string {
   if (value === undefined || value === null) return ''
   try {
@@ -777,6 +1174,15 @@ function previewValue(value: unknown): string {
   } catch {
     return truncate(String(value), 180)
   }
+}
+
+function redactSensitiveStatusText(value: string | undefined): string | undefined {
+  if (!value) return value
+  return value
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1***')
+    .replace(/\b(sk-ant-[A-Za-z0-9._-]+|ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g, '***')
+    .replace(/([?&](?:access_token|api_key|key|token)=)[^&\s]+/gi, '$1***')
+    .replace(/\b(authorization|api[-_ ]?key|token|password|secret)(["':=\s]+)([^,\s}]+)/gi, '$1$2***')
 }
 
 function truncate(value: string, maxLength: number): string {

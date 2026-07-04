@@ -6,6 +6,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
+import { projectContent } from '../project-content'
 import type { FileTreeNode, FileTreeResult, WorkspaceProject } from './types'
 
 /** `AppFileTreePane` 暴露的命令式接口 / Imperative API for parent drawers */
@@ -32,6 +33,7 @@ export const AppFileTreePane = forwardRef<AppFileTreePaneHandle, AppFileTreePane
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set())
   const loadRequestRef = useRef(0)
   const lastLoadedPathRef = useRef<string | null>(null)
+  const autoRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     setResult(null)
@@ -39,27 +41,22 @@ export const AppFileTreePane = forwardRef<AppFileTreePaneHandle, AppFileTreePane
     lastLoadedPathRef.current = null
   }, [project.path])
 
-  const loadProjectFiles = useCallback(async () => {
+  const loadProjectFiles = useCallback(async (options?: { showLoading?: boolean }) => {
     const requestId = loadRequestRef.current + 1
     loadRequestRef.current = requestId
-    setLoading(true)
-
-    const listProjectFiles = window.desktop?.listProjectFiles
-    if (!listProjectFiles) {
-      setResult({
-        ok: false,
-        rootPath: project.path,
-        message: t('filePanel.unsupported'),
-      })
-      setLoading(false)
-      return
-    }
+    const showLoading = options?.showLoading !== false
+    if (showLoading) setLoading(true)
 
     try {
-      const nextResult = await listProjectFiles(project.path)
+      const nextResult = await projectContent.list(project.path)
       if (loadRequestRef.current !== requestId) return
-      setResult(nextResult)
-      setExpandedPaths(new Set())
+      setResult(
+        nextResult ?? {
+          ok: false,
+          rootPath: project.path,
+          message: t('filePanel.unsupported'),
+        },
+      )
     } catch (error) {
       if (loadRequestRef.current !== requestId) return
       setResult({
@@ -79,6 +76,30 @@ export const AppFileTreePane = forwardRef<AppFileTreePaneHandle, AppFileTreePane
     if (!isVisible) return
     if (lastLoadedPathRef.current === project.path) return
     void loadProjectFiles()
+  }, [isVisible, project.path, loadProjectFiles])
+
+  useEffect(() => {
+    if (!isVisible) return
+
+    const scheduleSilentRefresh = () => {
+      if (autoRefreshTimerRef.current) clearTimeout(autoRefreshTimerRef.current)
+      autoRefreshTimerRef.current = setTimeout(() => {
+        autoRefreshTimerRef.current = null
+        void loadProjectFiles({ showLoading: false })
+      }, 250)
+    }
+
+    const unsubscribe = projectContent.subscribe(project.path, () => {
+      scheduleSilentRefresh()
+    })
+
+    return () => {
+      unsubscribe()
+      if (autoRefreshTimerRef.current) {
+        clearTimeout(autoRefreshTimerRef.current)
+        autoRefreshTimerRef.current = null
+      }
+    }
   }, [isVisible, project.path, loadProjectFiles])
 
   useImperativeHandle(

@@ -1,0 +1,15 @@
+{
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
+  "lastPrdSyncAt": "2026-06-24",
+  "module": "model-settings",
+  "lastChangedFiles": [
+    "electron/claude-agent-settings.ts",
+    "electron/agent-mode-settings-store.ts",
+    "src/claude-chat-types.ts",
+    "src/model-pick.ts",
+    "src/components/setting/ClaudeAgentSettingsPage.tsx",
+    "src/components/chat/ProjectHomeSurface.tsx",
+    "prd/model-settings/acceptance.md"
+  ],
+  "notes": "全量同步：model-settings acceptance 已通过；模型 Provider 与 MCP 边界、凭据脱敏、连接测试和 packaged 配置源完成验收状态同步，后续可补真实 Provider live smoke。"
+}

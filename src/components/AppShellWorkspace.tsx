@@ -3,11 +3,14 @@
  * Center pane coordinating Chat/Docs/Settings routes plus auxiliary drawers.
  */
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
-import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ProjectFileSearchItem } from '../claude-chat-types'
+import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ChatModelPick, ClaudeAgentStatusSnapshot, ProjectFileSearchItem } from '../claude-chat-types'
+import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../app-events'
 import type {
+  TranscriptItem,
+  AgentSettingsPanelId,
   AppSearchScope,
   AppViewId,
   ChatState,
@@ -19,6 +22,7 @@ import type {
   WorkspaceThread,
 } from './types'
 import { AgentModeMenu } from './AgentModeMenu'
+import { AppAgentStatusPopover } from './AppAgentStatusPopover'
 import { AppFileTreePane, type AppFileTreePaneHandle } from './AppFileTreePane'
 import { AppSearchModal } from './AppSearchModal'
 import { AppWorkspaceSidePanel, type WorkspaceSidePanelTab } from './AppWorkspaceSidePanel'
@@ -27,12 +31,59 @@ import { DocsPage } from './DocsPage'
 import { ProjectFilePreviewOverlay, type ProjectFilePreviewOverlayState } from './ProjectFilePreviewOverlay'
 import { SettingsPage } from './setting/SettingsPage'
 import { useWorkspaceAgentMode } from './useWorkspaceAgentMode'
-import type { HomePluginRunItem } from '../desktop-types'
+import type { AgentModeSettingsResult, HomePluginRunItem } from '../desktop-types'
+import { projectContent } from '../project-content'
 
 /** 右侧辅助抽屉开关与当前标签 / Auxiliary side panel open flag and active tab */
 type SidePanelState = {
   open: boolean
   tab: WorkspaceSidePanelTab
+}
+
+function withProjectMcpProbeStatus(
+  snapshot: ClaudeAgentStatusSnapshot,
+  agentModeResult: AgentModeSettingsResult | undefined,
+): ClaudeAgentStatusSnapshot {
+  if (!agentModeResult?.ok) return snapshot
+  const enabledServers = agentModeResult.settings.mcpServers.filter((server) => server.enabled)
+  if (enabledServers.length === 0) return snapshot
+
+  const runtimeByName = new Map((snapshot.mcpServers ?? []).map((server) => [server.name, server]))
+  const mcpServers = enabledServers.map((server) => {
+    const probe = agentModeResult.settings.mcpServerProbeCache[server.name]
+    if (probe) {
+      return {
+        name: server.name,
+        status: probe.status,
+        error: probe.error,
+        toolCount: probe.tools.length,
+      }
+    }
+    const runtimeStatus = runtimeByName.get(server.name)
+    if (runtimeStatus?.status === 'connected') return runtimeStatus
+    return {
+      name: server.name,
+      status: 'untested',
+      error: runtimeStatus?.error,
+      toolCount: runtimeStatus?.toolCount,
+    }
+  })
+
+  return {
+    ...snapshot,
+    health: statusHealthWithMcpServers(snapshot, mcpServers),
+    mcpServers,
+  }
+}
+
+function statusHealthWithMcpServers(
+  snapshot: ClaudeAgentStatusSnapshot,
+  mcpServers: NonNullable<ClaudeAgentStatusSnapshot['mcpServers']>,
+): ClaudeAgentStatusSnapshot['health'] {
+  if (snapshot.health === 'unconfigured' || snapshot.health === 'running' || snapshot.health === 'error') return snapshot.health
+  const hasMcpIssue = mcpServers.some((server) => server.status !== 'connected' && server.status !== 'disabled')
+  if (hasMcpIssue) return 'partial'
+  return snapshot.sessionId ? 'ready' : 'idle'
 }
 
 /** `AppShellWorkspace` 的 props：标题、活动视图、聊天委托与侧栏联动 / Props wiring title, active view, chat callbacks, and drawer prefs */
@@ -43,6 +94,8 @@ type AppShellWorkspaceProps = {
   settingsCategory: SettingsCategoryId
   activeProject: WorkspaceProject
   activeThread: WorkspaceThread | undefined
+  projectDefaultModelPick?: ChatModelPick
+  projectHomeModelPick?: ChatModelPick
   threads: WorkspaceThread[]
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
@@ -50,12 +103,15 @@ type AppShellWorkspaceProps = {
   chatRef: RefObject<ChatPageHandle | null>
   onStatusChange: (text: string) => void
   onNewThread: (projectId?: string) => string | void
+  onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
   onSelectThread: (threadId: string) => void
   onThreadChatStateChange: (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => void
   onThreadPromptSubmit: (threadId: string, prompt: string) => void
   onThreadRunStateChange: (threadId: string, state: ThreadRunState | null) => void
+  onThreadCompletionStateChange: (threadId: string, completedAt: number | null) => void
+  onProjectHomeModelPickChange: (projectId: string, pick: ChatModelPick | undefined) => void
   homeModeResetKey: number
   onCreateHomePluginCardThread: (projectId: string, initialPrompt: string) => string | void
   onEditHomePluginCard: (projectId: string, item: HomePluginRunItem) => void
@@ -75,6 +131,8 @@ export function AppShellWorkspace({
   settingsCategory,
   activeProject,
   activeThread,
+  projectDefaultModelPick,
+  projectHomeModelPick,
   threads,
   projects,
   projectOrderIds,
@@ -82,12 +140,15 @@ export function AppShellWorkspace({
   chatRef,
   onStatusChange,
   onNewThread,
+  onForkThread,
   onCreateProject,
   onSelectProject,
   onSelectThread,
   onThreadChatStateChange,
   onThreadPromptSubmit,
   onThreadRunStateChange,
+  onThreadCompletionStateChange,
+  onProjectHomeModelPickChange,
   homeModeResetKey,
   onCreateHomePluginCardThread,
   onEditHomePluginCard,
@@ -106,9 +167,26 @@ export function AppShellWorkspace({
   const [filePreview, setFilePreview] = useState<ProjectFilePreviewOverlayState | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchScope, setSearchScope] = useState<AppSearchScope>('all')
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
+  const [agentSettingsPanel, setAgentSettingsPanel] = useState<AgentSettingsPanelId>('project')
+  const [agentStatusOpen, setAgentStatusOpen] = useState(false)
+  const [agentStatusLoading, setAgentStatusLoading] = useState(false)
+  const [agentStatusSnapshot, setAgentStatusSnapshot] = useState<ClaudeAgentStatusSnapshot | null>(null)
   const filePaneRef = useRef<AppFileTreePaneHandle>(null)
   const filePreviewRequestRef = useRef(0)
+  const agentStatusRequestSeqRef = useRef(0)
+  const autoContextRefreshKeysRef = useRef<Set<string>>(new Set())
   const agentMode = useWorkspaceAgentMode(activeProject)
+  const activeThreadRunning = Boolean(activeThread && threadRunStates[activeThread.id])
+  const agentStatusRequest = useMemo(
+    () => ({
+      threadId: activeThread?.id,
+      sessionId: activeThread?.chatState.sessionId,
+      modelPick: activeThread?.chatState.modelPick ?? projectHomeModelPick ?? projectDefaultModelPick,
+      cwd: activeProject.path,
+    }),
+    [activeProject.path, activeThread?.chatState.modelPick, activeThread?.chatState.sessionId, activeThread?.id, projectDefaultModelPick, projectHomeModelPick],
+  )
 
   /** 与 ChatPage.showThreadView 一致：有消息或插件定制线程时视为对话流，否则为项目首页 / Mirrors ChatPage.showThreadView */
   const chatItems = activeThread?.chatState.items ?? []
@@ -120,12 +198,20 @@ export function AppShellWorkspace({
     activeThread?.purpose === 'task-run' ||
     activeThread?.purpose === 'skill-run'
   const showAgentModeToolbar = activeViewId === 'home' && !showConversationFlow
+  const showAgentStatusToolbar = activeViewId !== 'home' || showConversationFlow
 
   // --- Close auxiliary drawer when navigating into settings / 进入设置路由时收起辅助抽屉 ---
 
   useEffect(() => {
-    if (activeViewId === 'settings') setSidePanel((prev) => ({ ...prev, open: false }))
+    if (activeViewId === 'settings') {
+      setSidePanel((prev) => ({ ...prev, open: false }))
+      setAgentStatusOpen(false)
+    }
   }, [activeViewId])
+
+  useEffect(() => {
+    if (!showAgentStatusToolbar && agentStatusOpen) setAgentStatusOpen(false)
+  }, [agentStatusOpen, showAgentStatusToolbar])
 
   useEffect(() => {
     filePreviewRequestRef.current += 1
@@ -154,6 +240,104 @@ export function AppShellWorkspace({
     setSearchScope(scope)
     setSearchOpen(true)
   }, [])
+
+  const openAgentSettings = useCallback((panel: AgentSettingsPanelId, options?: { showProjectHome?: boolean }) => {
+    if (activeViewId !== 'home') {
+      window.location.hash = ''
+    }
+    if (options?.showProjectHome) {
+      onSelectProject(activeProject.id)
+    }
+    setAgentSettingsPanel(panel)
+    setAgentSettingsOpen(true)
+  }, [activeProject.id, activeViewId, onSelectProject])
+
+  const refreshAgentStatus = useCallback(async (refresh = false) => {
+    const getStatus = window.claudeChat?.getStatus
+    if (!getStatus) {
+      setAgentStatusSnapshot(null)
+      return
+    }
+    const requestSeq = agentStatusRequestSeqRef.current + 1
+    agentStatusRequestSeqRef.current = requestSeq
+    setAgentStatusLoading(true)
+    try {
+      const [snapshot, agentModeResult] = await Promise.all([
+        getStatus({ ...agentStatusRequest, refresh }),
+        window.desktop?.getAgentModeSettings?.(activeProject.path).catch(() => undefined),
+      ])
+      if (agentStatusRequestSeqRef.current === requestSeq) {
+        setAgentStatusSnapshot(withProjectMcpProbeStatus(snapshot, agentModeResult))
+      }
+    } catch {
+      if (agentStatusRequestSeqRef.current === requestSeq) setAgentStatusSnapshot(null)
+    } finally {
+      if (agentStatusRequestSeqRef.current === requestSeq) setAgentStatusLoading(false)
+    }
+  }, [activeProject.path, agentStatusRequest])
+
+  useEffect(() => {
+    void refreshAgentStatus(false)
+  }, [activeThreadRunning, refreshAgentStatus])
+
+  useEffect(() => {
+    const threadId = activeThread?.id
+    const sessionId = activeThread?.chatState.sessionId?.trim()
+    if (activeViewId !== 'home' || !threadId || !sessionId || activeThreadRunning) return
+    if (
+      agentStatusSnapshot?.threadId === threadId &&
+      agentStatusSnapshot.sessionId === sessionId &&
+      agentStatusSnapshot.contextUsage
+    ) {
+      return
+    }
+
+    const refreshKey = `${activeProject.path}:${threadId}:${sessionId}`
+    if (autoContextRefreshKeysRef.current.has(refreshKey)) return
+    autoContextRefreshKeysRef.current.add(refreshKey)
+    void refreshAgentStatus(true)
+  }, [
+    activeProject.path,
+    activeThread?.chatState.sessionId,
+    activeThread?.id,
+    activeThreadRunning,
+    activeViewId,
+    agentStatusSnapshot?.contextUsage,
+    agentStatusSnapshot?.sessionId,
+    agentStatusSnapshot?.threadId,
+    refreshAgentStatus,
+  ])
+
+  useEffect(() => {
+    const openStatus = (event: Event) => {
+      setAgentStatusOpen(true)
+      if ((event as CustomEvent<{ refresh?: boolean }>).detail?.refresh) {
+        void refreshAgentStatus(true)
+      }
+    }
+    window.addEventListener(OPEN_AGENT_STATUS_EVENT, openStatus)
+    return () => window.removeEventListener(OPEN_AGENT_STATUS_EVENT, openStatus)
+  }, [refreshAgentStatus])
+
+  useEffect(() => {
+    if (!agentStatusOpen) return
+    const refresh = () => void refreshAgentStatus(false)
+    const unsubscribe = window.claudeChat?.onEvent((event) => {
+      if (
+        event.type === 'session_start' ||
+        event.type === 'result' ||
+        event.type === 'error' ||
+        event.type === 'cancelled'
+      ) {
+        refresh()
+      }
+    })
+    window.addEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, refresh)
+    return () => {
+      unsubscribe?.()
+      window.removeEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, refresh)
+    }
+  }, [agentStatusOpen, refreshAgentStatus])
 
   useEffect(() => {
     const onOpenSearch = (event: Event) => {
@@ -189,21 +373,19 @@ export function AppShellWorkspace({
         name: node.name,
       })
 
-      const readProjectFile = window.desktop?.readProjectFile
-      if (!readProjectFile) {
-        setFilePreview({
-          status: 'error',
-          path: node.path,
-          relativePath: node.relativePath,
-          name: node.name,
-          message: t('filePanel.previewUnsupported'),
-        })
-        return
-      }
-
       try {
-        const result = await readProjectFile(activeProject.path, node.path)
+        const result = await projectContent.preview(activeProject.path, node.path)
         if (filePreviewRequestRef.current !== requestId) return
+        if (!result) {
+          setFilePreview({
+            status: 'error',
+            path: node.path,
+            relativePath: node.relativePath,
+            name: node.name,
+            message: t('filePanel.previewUnsupported'),
+          })
+          return
+        }
         if (result.ok) {
           setFilePreview({ status: 'ready', file: result })
           return
@@ -304,7 +486,21 @@ export function AppShellWorkspace({
           </span>
           <div className="app-workspace-drag-gap draggable" aria-hidden="true" />
           <div className="app-workspace-actions no-drag">
-            {showAgentModeToolbar ? <AgentModeMenu agent={agentMode} /> : null}
+            {showAgentModeToolbar ? <AgentModeMenu agent={agentMode} onOpenSettings={() => openAgentSettings('project')} /> : null}
+            {showAgentStatusToolbar ? (
+              <AppAgentStatusPopover
+                open={agentStatusOpen}
+                loading={agentStatusLoading}
+                running={activeThreadRunning}
+                snapshot={agentStatusSnapshot}
+                onOpenChange={setAgentStatusOpen}
+                onRefresh={() => void refreshAgentStatus(true)}
+                onOpenMcpSettings={() => {
+                  setAgentStatusOpen(false)
+                  openAgentSettings('mcp', { showProjectHome: true })
+                }}
+              />
+            ) : null}
             <button
               type="button"
               className={`btn btn-toolbar${folderToolbarActive ? ' is-active' : ''}`}
@@ -328,24 +524,38 @@ export function AppShellWorkspace({
             hidden={activeViewId !== 'home'}
             activeProject={activeProject}
             activeThread={activeThread}
+            projectDefaultModelPick={projectDefaultModelPick}
+            projectHomeModelPick={projectHomeModelPick}
+            agentStatusSnapshot={agentStatusSnapshot}
             threads={threads}
             projects={projects}
             projectOrderIds={projectOrderIds}
             threadRunStates={threadRunStates}
             onStatusChange={onStatusChange}
             onNewThread={onNewThread}
+            onForkThread={onForkThread}
             onCreateProject={onCreateProject}
             onSelectProject={onSelectProject}
             onThreadChatStateChange={onThreadChatStateChange}
             onThreadPromptSubmit={onThreadPromptSubmit}
             onThreadRunStateChange={onThreadRunStateChange}
+            onThreadCompletionStateChange={onThreadCompletionStateChange}
+            onProjectHomeModelPickChange={onProjectHomeModelPickChange}
+            onRefreshAgentStatus={refreshAgentStatus}
+            agentMode={agentMode}
             agentModeEnabled={agentMode.enabled}
             todoEnabled={agentMode.todoEnabled}
             agentModeLoading={agentMode.loading}
+            agentSettingsOpen={agentSettingsOpen}
+            agentSettingsPanel={agentSettingsPanel}
+            onOpenAgentSettings={openAgentSettings}
+            onAgentSettingsPanelChange={setAgentSettingsPanel}
+            onCloseAgentSettings={() => setAgentSettingsOpen(false)}
             homeModeResetKey={homeModeResetKey}
             hiddenSkillPaths={hiddenSkillPaths}
             onCreateHomePluginCardThread={onCreateHomePluginCardThread}
             onEditHomePluginCard={onEditHomePluginCard}
+            onOpenProjectFile={openProjectFilePreview}
             onRunProjectSkill={onRunProjectSkill}
             onStopProjectSkillRun={onStopProjectSkillRun}
           />
@@ -356,6 +566,7 @@ export function AppShellWorkspace({
             activeProject={activeProject}
             showProjectSkillsInSidebar={showProjectSkillsInSidebar}
             onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
+            onOpenAgentSettings={openAgentSettings}
           />
           {filePreview ? (
             <ProjectFilePreviewOverlay preview={filePreview} onClose={() => setFilePreview(null)} />

@@ -1,0 +1,25 @@
+{
+  "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
+  "lastPrdSyncAt": "2026-06-24",
+  "module": "desktop-shell-settings-release",
+  "lastChangedFiles": [
+    "electron/main.ts",
+    "electron/preload.ts",
+    "electron/agent-mode-settings-store.ts",
+    "electron/agent-mode-settings-store.test.mjs",
+    "electron/desktop-seam.test.mjs",
+    "src/desktop-types.ts",
+    "src/desktop-api.ts",
+    "src/desktop-seam.ts",
+    "src/components/app-shell-constants.ts",
+    "src/components/AppShellWorkspace.tsx",
+    "src/components/AppAgentStatusPopover.tsx",
+    "src/components/chat/ProjectHomeSurface.tsx",
+    "src/components/setting/ClaudeAgentSettingsPage.tsx",
+    "src/components/setting/SettingsPage.tsx",
+    "src/locales/zh.json",
+    "src/locales/en.json",
+    "prd/desktop-shell-settings-release/acceptance.md"
+  ],
+  "notes": "全量同步：desktop-shell-settings-release 当前 21 个场景中 18 个通过、3 个保留人工确认；搜索、MCP、设置导航、受控 preload、开发态更新和 packaged install 入口已验收，剩余 close-to-tray 与 macOS 语音权限 GUI 人工项，以及发布流程 live smoke。"
+}
