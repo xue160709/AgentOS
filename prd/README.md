@@ -20,10 +20,11 @@ AgentOS 是面向本地项目与长期任务的 Electron 桌面 Agent 工作台�
 | Home Plugin 数据卡片 | 已实现，正式验收通过 | `home-plugin/README.md` | `home-plugin/technical.md` |
 | Task Home Plugin | 已实现，正式验收通过 | `task-home-plugin/README.md` | `task-home-plugin/technical.md` |
 | 桌面外壳、设置与发布 | 已实现，18/21 通过，3 项人工确认 | `desktop-shell-settings-release/README.md` | `desktop-shell-settings-release/technical.md` |
+| omni-ui 多模态融合与语音控制 | 规划中，契约已建 | （实现后由 update-prd 补齐） | 设计见 `docs/omni-ui-integration.md` |
 
 ## 当前重点
 
-- `TODO.md` 仍以 agentic runtime 优化清单为主，本轮已把产品验收剩余细节补回 §14，后续应继续拆成 AgentOS 产品 backlog。
+- 2026-07-05：`TODO.md` 已重整为 AgentOS 产品 backlog（旧 agentic runtime 清单归档到 `docs/archive/TODO-agentic-runtime-2026-06.md`）；当前主线是 omni-ui 多模态融合与语音控制主窗口（`TODO.md §2.1`，契约 `prd/multimodal-voice-control/acceptance.md`）。
 - 全量正式验收已执行并回写 `acceptance.md`：当前仅剩 `desktop-shell-settings-release` 的 close-to-tray、macOS 语音授权成功、macOS 语音权限拒绝 3 项人工确认。
 - 交互流程复查未发现新的阻断级状态机缺陷；剩余工作是把 Composer 语音/提交、权限弹窗、Generative UI、状态面板跳转、项目首页任务卡等全页面点击路径沉淀成可重复 E2E 脚本证据。
 - Workspace 持久化已完成本轮架构加固：Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam 和 workspace revision clock 已落地并通过正式验收状态同步。

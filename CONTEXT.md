@@ -68,6 +68,33 @@ Project Content 负责：
 
 React 文件树、搜索框和聊天输入联想是 Project Content seam 上的调用方。
 
+## Omni Command Runtime
+
+主窗口挂载的 omni-ui（npm `@xue160709/omni-ui-react`，re-export core）多模态命令运行时。它把文本/语音 utterance 解析成命令提案，本地验证与确认后交给 AgentOS 注册的 executor 执行。
+
+Omni Command Runtime 负责：
+
+- 页面与实体标注（`MultimodalPage` / `MultimodalGroup`）形成 Interaction Snapshot
+- 本地规则 resolver 与 LLM resolver（rule-first）融合评分
+- 风险分级、确认流与多候选澄清
+- 命令执行结果反馈
+
+模型只提议命令，不直接调用业务代码；executor 与业务状态归 AgentOS 页面持有。
+
+_Avoid_：多模态组件、MultiModal Components（旧仓库名）、VUI runtime。
+
+## Voice Command Window
+
+全局快捷键唤起的置顶语音输入悬浮窗（第二个 BrowserWindow，苹果听写风格）。手动开始/停止录音，复用 Apple Speech helper 识别，final 文本可编辑，提交后经主进程转发主窗口 Omni Command Runtime 执行，并回显执行/澄清/确认状态。
+
+_Avoid_：语音面板、听写窗（口语可用，文档统一用 Voice Command Window / 语音命令窗）。
+
+## Intent Resolve IPC
+
+主进程 `intent:resolve` channel：renderer 把 omni-ui resolver prompt 交给主进程，主进程用 Claude Agent SDK 执行一次性意图识别 query（复用模型设置激活 Provider，`maxTurns: 1`，不挂 MCP/文件/Bash 等业务工具，只返回意图 JSON）。API Key 只存在于主进程；日志记录 provider/模型/utterance 长度/耗时的脱敏摘要。
+
+_Avoid_：直调 Messages API（已改走 Claude Agent SDK）。
+
 ## Desktop Seam
 
 渲染进程可以请求的、经过命名和类型约束的桌面能力集合。
