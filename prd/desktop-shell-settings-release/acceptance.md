@@ -47,7 +47,7 @@
 - WHEN 用户关闭主窗口
 - THEN 系统隐藏窗口到托盘，而不是退出应用
 
-> 实现状态：⚠️ 跳过（project-verify 2026-06-24）｜验证方式: manual GUI check｜原因: 需真实 Electron 托盘与窗口关闭事件，当前无 GUI 自动化可可靠确认系统托盘行为｜用户本地验证步骤: 打开 Electron 应用，开启“关闭到托盘”，点击窗口关闭按钮，确认主窗口隐藏且托盘图标可恢复窗口。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-06-24）｜验证方式: manual GUI check + npm run audit:omni-manual-readiness（9/9 readiness）｜原因: 需真实 Electron 托盘与窗口关闭事件，当前无 GUI 自动化可可靠确认系统托盘行为｜用户本地验证步骤: 打开 Electron 应用，开启“关闭到托盘”，点击窗口关闭按钮，确认主窗口隐藏且托盘图标可恢复窗口。｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：读取非法 locale
 - GIVEN 本地语言偏好不是 `zh` 或 `en`
@@ -81,14 +81,14 @@
 - WHEN 语音服务发送 partial/final 事件
 - THEN Composer 将识别文本写入当前输入框选区对应的 draft range
 
-> 实现状态：⚠️ 跳过（project-verify 2026-06-24）｜验证方式: manual GUI check｜原因: 需真实 macOS 语音/麦克风权限与 speech helper 事件，当前沙箱无法触发系统权限弹窗｜用户本地验证步骤: 打开 Electron 应用，点击“语音输入”，授权麦克风/语音识别，确认输入框收到转写文本。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-06-24）｜验证方式: manual GUI check + npm run audit:omni-manual-readiness（9/9 readiness）｜原因: 需真实 macOS 语音/麦克风权限与 speech helper 事件，当前沙箱无法触发系统权限弹窗｜用户本地验证步骤: 打开 Electron 应用，点击“语音输入”，授权麦克风/语音识别，确认输入框收到转写文本。｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：用户拒绝语音权限
 - GIVEN helper 请求 Speech Recognition 或 Microphone 权限被拒绝
 - WHEN helper 返回 error 事件
 - THEN 主进程推送 error 事件并将语音状态置为 error
 
-> 实现状态：⚠️ 跳过（project-verify 2026-06-24）｜验证方式: manual GUI check｜原因: 需真实 macOS 权限拒绝状态，当前沙箱无法重置并触发系统权限拒绝分支｜用户本地验证步骤: 在系统设置中拒绝应用麦克风/语音识别权限，点击“语音输入”，确认页面显示权限恢复提示。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-06-24）｜验证方式: manual GUI check + npm run audit:omni-manual-readiness（9/9 readiness）｜原因: 需真实 macOS 权限拒绝状态，当前沙箱无法重置并触发系统权限拒绝分支｜用户本地验证步骤: 在系统设置中拒绝应用麦克风/语音识别权限，点击“语音输入”，确认页面显示权限恢复提示。｜证据: TESTING_CHECKLIST.md｜
 
 ### 需求：设置导航提供 MCP 入口与恢复路径
 系统 SHALL 在全局设置、项目 Agent 设置和 Chat 状态面板之间提供一致的 MCP 设置入口，且在没有活动项目时展示可恢复空态。

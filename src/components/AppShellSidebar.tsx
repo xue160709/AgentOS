@@ -17,6 +17,7 @@ import {
 } from 'react'
 import { MultimodalGroup } from '@xue160709/omni-ui-react'
 import { IconInline } from '../icon-inline'
+import { SemanticButton, semanticAliases } from '../multimodal/semantic-controls'
 import type { AppUpdaterState } from '../desktop-types'
 import type { AppLocale } from '../i18n/i18n'
 import { useI18n } from '../i18n/i18n'
@@ -481,38 +482,61 @@ export function AppShellSidebar({
   return (
     <>
       <div className="app-chrome-toolbar no-drag" aria-label={t('sidebar.windowNav')}>
-        <button
+        <SemanticButton
           type="button"
           className="btn btn-toolbar"
           id="btn-toggle-sidebar"
           title={t('sidebar.toggleSidebar')}
           aria-label={t('sidebar.toggleSidebar')}
+          semantic={{
+            id: 'agentos.control.sidebar.toggle',
+            role: 'button',
+            label: t('sidebar.toggleSidebar'),
+            actions: ['press'],
+            hint: { aliases: semanticAliases(t, 'omni.aliases.toggleSidebar') },
+          }}
           onClick={onToggleCollapsed}
         >
           <IconInline name="sidebar" />
-        </button>
-        <button
+        </SemanticButton>
+        <SemanticButton
           type="button"
           className="btn btn-toolbar"
           id="btn-back"
           title={t('sidebar.back')}
           aria-label={t('sidebar.back')}
           disabled={!canBack}
+          semantic={{
+            id: 'agentos.control.history.back',
+            role: 'button',
+            label: t('sidebar.back'),
+            actions: ['press'],
+            state: { enabled: canBack },
+            hint: { aliases: semanticAliases(t, 'omni.aliases.back') },
+          }}
           onClick={() => window.history.back()}
         >
           <IconInline name="back" />
-        </button>
-        <button
+        </SemanticButton>
+        <SemanticButton
           type="button"
           className="btn btn-toolbar"
           id="btn-forward"
           title={t('sidebar.forward')}
           aria-label={t('sidebar.forward')}
           disabled={!canForward}
+          semantic={{
+            id: 'agentos.control.history.forward',
+            role: 'button',
+            label: t('sidebar.forward'),
+            actions: ['press'],
+            state: { enabled: canForward },
+            hint: { aliases: semanticAliases(t, 'omni.aliases.forward') },
+          }}
           onClick={() => window.history.forward()}
         >
           <IconInline name="forward" />
-        </button>
+        </SemanticButton>
       </div>
       <aside
         className={`app-sidebar${isSettingsSidebar ? ' is-settings-mode' : ''}`}
@@ -523,19 +547,38 @@ export function AppShellSidebar({
           <div className="app-sidebar-inner">
             {isSettingsSidebar ? (
               <>
-                <button type="button" className="app-sidebar-new-thread" id="btn-settings-back-app" onClick={goLeaveSettings}>
+                <SemanticButton
+                  type="button"
+                  className="app-sidebar-new-thread"
+                  id="btn-settings-back-app"
+                  semantic={{
+                    id: 'agentos.control.settings.backToApp',
+                    role: 'button',
+                    label: t('sidebar.backToApp'),
+                    actions: ['press'],
+                    hint: { aliases: semanticAliases(t, 'omni.aliases.back') },
+                  }}
+                  onClick={goLeaveSettings}
+                >
                   <IconInline name="back" />
                   <span>{t('sidebar.backToApp')}</span>
-                </button>
+                </SemanticButton>
                 <div className="app-sidebar-section-label">{t('sidebar.settingsSection')}</div>
                 {getSettingsSidebarNav().map((item) => (
-                  <button
+                  <SemanticButton
                     key={item.id}
                     type="button"
                     disabled={item.disabled}
                     title={item.disabled ? t('sidebar.notImplemented') : undefined}
                     className={`app-nav-item${settingsCategory === item.id ? ' is-active' : ''}`}
                     data-settings-category={item.id}
+                    semantic={{
+                      id: `agentos.control.settings.category.${item.id}`,
+                      role: 'button',
+                      label: t(item.labelKey),
+                      actions: ['press'],
+                      state: { active: settingsCategory === item.id, enabled: !item.disabled, category: item.id },
+                    }}
                     onClick={() => {
                       if (item.disabled) {
                         return
@@ -545,40 +588,61 @@ export function AppShellSidebar({
                   >
                     <IconInline name={item.icon} />
                     <span>{t(item.labelKey)}</span>
-                  </button>
+                  </SemanticButton>
                 ))}
               </>
             ) : (
               <>
-                <button
+                <SemanticButton
                   type="button"
                   className="app-sidebar-new-thread"
                   id="btn-sidebar-new-thread"
+                  semantic={{
+                    id: 'agentos.control.sidebar.newThread',
+                    role: 'button',
+                    label: t('sidebar.newThread'),
+                    actions: ['press'],
+                    hint: { aliases: semanticAliases(t, 'omni.aliases.newThread') },
+                  }}
                   onClick={() => onSelectProject(activeProjectId)}
                 >
                   <IconInline name="message" />
                   <span>{t('sidebar.newThread')}</span>
-                </button>
-                <button
+                </SemanticButton>
+                <SemanticButton
                   type="button"
                   className="app-sidebar-search"
                   id="btn-sidebar-search"
+                  semantic={{
+                    id: 'agentos.control.sidebar.search',
+                    role: 'button',
+                    label: t('omni.controls.globalSearch'),
+                    actions: ['press'],
+                    hint: { aliases: semanticAliases(t, 'omni.aliases.globalSearch') },
+                  }}
                   onClick={onOpenSearch}
                 >
                   <IconInline name="search" />
                   <span>{t('search.open')}</span>
-                </button>
+                </SemanticButton>
                 <div className="app-sidebar-section-heading">
                   <div className="app-sidebar-section-label">{t('sidebar.projectsSection')}</div>
-                  <button
+                  <SemanticButton
                     type="button"
                     className="app-sidebar-section-action"
                     title={t('sidebar.addProject')}
                     aria-label={t('sidebar.addProject')}
+                    semantic={{
+                      id: 'agentos.control.sidebar.addProject',
+                      role: 'button',
+                      label: t('sidebar.addProject'),
+                      actions: ['press'],
+                      hint: { aliases: semanticAliases(t, 'omni.aliases.addProject') },
+                    }}
                     onClick={() => void onCreateProject('existing')}
                   >
                     <IconInline name="plus" />
-                  </button>
+                  </SemanticButton>
                 </div>
                 <div className="app-project-list">
                   {sortedProjects.map((project) => {
@@ -631,10 +695,22 @@ export function AppShellSidebar({
                           onDrop={(event) => dropProject(event, project.id)}
                           onDragEnd={clearProjectDragState}
                         >
-                          <button
+                          <SemanticButton
                             type="button"
                             className="app-project-select"
                             aria-current={projectActive ? 'true' : undefined}
+                            semantic={{
+                              id: `agentos.control.project.${project.id}.select`,
+                              role: 'button',
+                              label: t('omni.controls.projectSelect', { name: project.name }),
+                              actions: ['press'],
+                              state: {
+                                active: projectActive,
+                                pathMissing: Boolean(project.pathMissing),
+                                projectId: project.id,
+                              },
+                              hint: { aliases: [project.name, project.path].filter(Boolean) },
+                            }}
                             onClick={() => {
                               setConfirmingArchiveThreadId(null)
                               onSelectProject(project.id)
@@ -647,8 +723,8 @@ export function AppShellSidebar({
                                 <span className="app-project-path-missing">{t('sidebar.projectPathMissingBadge')}</span>
                               ) : null}
                             </span>
-                          </button>
-                          <button
+                          </SemanticButton>
+                          <SemanticButton
                             type="button"
                             className={`app-project-toggle${projectExpanded ? ' is-expanded' : ' is-collapsed'}`}
                             title={projectExpanded ? t('sidebar.collapseProject') : t('sidebar.expandProject')}
@@ -658,6 +734,16 @@ export function AppShellSidebar({
                                 : t('sidebar.expandProjectAria', { name: project.name })
                             }
                             aria-expanded={projectExpanded}
+                            semantic={{
+                              id: `agentos.control.project.${project.id}.toggle`,
+                              role: 'button',
+                              label: projectExpanded
+                                ? t('sidebar.collapseProjectAria', { name: project.name })
+                                : t('sidebar.expandProjectAria', { name: project.name }),
+                              actions: ['press'],
+                              state: { expanded: projectExpanded, projectId: project.id },
+                              hint: { aliases: [project.name] },
+                            }}
                             onClick={(event) => {
                               event.stopPropagation()
                               setConfirmingArchiveThreadId(null)
@@ -665,7 +751,7 @@ export function AppShellSidebar({
                             }}
                           >
                             <IconInline name="chevron" />
-                          </button>
+                          </SemanticButton>
                         </div>
                         {projectExpanded ? (
                           <div className="app-project-content">
@@ -709,12 +795,27 @@ export function AppShellSidebar({
                                               <IconInline name="chip" />
                                             </span>
                                           </span>
-                                          <button
+                                          <SemanticButton
                                             type="button"
                                             className="app-skill-select"
                                             title={tipText ? undefined : skill.relativePath}
                                             aria-current={skillActive ? 'page' : undefined}
                                             aria-describedby={tipActive ? 'app-sidebar-skill-tip' : undefined}
+                                            semantic={{
+                                              id: `agentos.control.skill.${stableSemanticId(skill.path)}.select`,
+                                              role: 'button',
+                                              label: t('omni.controls.skillSelect', { title: skill.title }),
+                                              actions: ['press'],
+                                              state: {
+                                                active: skillActive,
+                                                projectId: project.id,
+                                                command: skill.command,
+                                                relativePath: skill.relativePath,
+                                              },
+                                              hint: {
+                                                aliases: [skill.title, skill.command, skill.relativePath, skill.description].filter(Boolean),
+                                              },
+                                            }}
                                             onClick={() => {
                                               setConfirmingArchiveThreadId(null)
                                               if (skillActive) {
@@ -732,14 +833,34 @@ export function AppShellSidebar({
                                             }}
                                           >
                                             <span className="app-skill-title">{skill.title}</span>
-                                          </button>
+                                          </SemanticButton>
                                           <div className="app-skill-trailing">
                                             {skillActive ? (
-                                              <button
+                                              <SemanticButton
                                                 type="button"
                                                 className="app-skill-run"
                                                 title={t('sidebar.menuRunSkill')}
                                                 aria-label={t('sidebar.runSkillAria', { title: skill.title })}
+                                                semantic={{
+                                                  id: `agentos.control.skill.${stableSemanticId(skill.path)}.run`,
+                                                  role: 'button',
+                                                  label: t('omni.controls.skillRun', { title: skill.title }),
+                                                  actions: ['press'],
+                                                  state: {
+                                                    active: skillActive,
+                                                    projectId: project.id,
+                                                    command: skill.command,
+                                                    relativePath: skill.relativePath,
+                                                  },
+                                                  hint: {
+                                                    aliases: [
+                                                      ...semanticAliases(t, 'omni.aliases.skillRun'),
+                                                      skill.title,
+                                                      skill.command,
+                                                      skill.relativePath,
+                                                    ].filter(Boolean),
+                                                  },
+                                                }}
                                                 onClick={(event) => {
                                                   event.stopPropagation()
                                                   setSkillTip(null)
@@ -748,30 +869,44 @@ export function AppShellSidebar({
                                                 }}
                                               >
                                                 <span>{t('sidebar.menuRunSkill')}</span>
-                                              </button>
+                                              </SemanticButton>
                                             ) : null}
                                           </div>
                                         </div>
                                       )
                                     })}
                                       {skillsListOverflow && !skillsListFullyExpanded ? (
-                                        <button
+                                        <SemanticButton
                                           type="button"
                                           className="app-sidebar-expand-section"
                                           aria-label={t('sidebar.expandListShowAria', { section: t('sidebar.skillsDivider') })}
+                                          semantic={{
+                                            id: `agentos.control.project.${project.id}.skills.expand`,
+                                            role: 'button',
+                                            label: t('sidebar.expandListShowAria', { section: t('sidebar.skillsDivider') }),
+                                            actions: ['press'],
+                                            state: { projectId: project.id, expanded: false },
+                                          }}
                                           onClick={() => {
                                             setConfirmingArchiveThreadId(null)
                                             setExpandedSkillListByProject((prev) => ({ ...prev, [project.id]: true }))
                                           }}
                                         >
                                           {t('sidebar.expandListShow')}
-                                        </button>
+                                        </SemanticButton>
                                       ) : null}
                                       {skillsListOverflow && skillsListFullyExpanded ? (
-                                        <button
+                                        <SemanticButton
                                           type="button"
                                           className="app-sidebar-expand-section"
                                           aria-label={t('sidebar.collapseListShowAria', { section: t('sidebar.skillsDivider') })}
+                                          semantic={{
+                                            id: `agentos.control.project.${project.id}.skills.collapse`,
+                                            role: 'button',
+                                            label: t('sidebar.collapseListShowAria', { section: t('sidebar.skillsDivider') }),
+                                            actions: ['press'],
+                                            state: { projectId: project.id, expanded: true },
+                                          }}
                                           onClick={() => {
                                             setConfirmingArchiveThreadId(null)
                                             setSkillTip(null)
@@ -779,7 +914,7 @@ export function AppShellSidebar({
                                           }}
                                         >
                                           {t('sidebar.collapseListShow')}
-                                        </button>
+                                        </SemanticButton>
                                       ) : null}
                                     </>
                                   )}
@@ -825,7 +960,7 @@ export function AppShellSidebar({
                                     className={`app-thread-row${isThreadActive ? ' is-active' : ''}${isPinned ? ' is-pinned' : ''}${isThreadRunning ? ' is-running' : ''}${isConfirming ? ' is-confirming-archive' : ''}`}
                                     onContextMenu={(event) => openThreadMenu(event, thread)}
                                   >
-                                    <button
+                                    <SemanticButton
                                       type="button"
                                       className={`app-thread-pin${isPinned ? ' is-pinned' : ''}`}
                                       title={isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
@@ -835,6 +970,22 @@ export function AppShellSidebar({
                                           : t('sidebar.pinThreadAria', { title: thread.title })
                                       }
                                       aria-pressed={isPinned}
+                                      semantic={{
+                                        id: `agentos.control.thread.${thread.id}.pin`,
+                                        role: 'button',
+                                        label: isPinned
+                                          ? t('sidebar.unpinThreadAria', { title: thread.title })
+                                          : t('sidebar.pinThreadAria', { title: thread.title }),
+                                        actions: ['press'],
+                                        state: {
+                                          pinned: isPinned,
+                                          active: isThreadActive,
+                                          running: isThreadRunning,
+                                          threadId: thread.id,
+                                          projectId: thread.projectId,
+                                        },
+                                        hint: { aliases: [thread.title] },
+                                      }}
                                       onClick={(event) => {
                                         event.stopPropagation()
                                         setConfirmingArchiveThreadId(null)
@@ -842,11 +993,25 @@ export function AppShellSidebar({
                                       }}
                                     >
                                       <IconInline name="pin" />
-                                    </button>
-                                    <button
+                                    </SemanticButton>
+                                    <SemanticButton
                                       type="button"
                                       className="app-thread-select"
                                       aria-current={isThreadActive ? 'page' : undefined}
+                                      semantic={{
+                                        id: `agentos.control.thread.${thread.id}.select`,
+                                        role: 'button',
+                                        label: t('omni.controls.threadSelect', { title: thread.title }),
+                                        actions: ['press'],
+                                        state: {
+                                          active: isThreadActive,
+                                          pinned: isPinned,
+                                          running: isThreadRunning,
+                                          threadId: thread.id,
+                                          projectId: thread.projectId,
+                                        },
+                                        hint: { aliases: [thread.title] },
+                                      }}
                                       onClick={() => {
                                         setConfirmingArchiveThreadId(null)
                                         onSelectThread(thread.id)
@@ -856,7 +1021,7 @@ export function AppShellSidebar({
                                       {isHomePluginThread || isTaskRunThread || isSkillRunThread ? (
                                         <IconInline name={isTaskRunThread ? 'play' : isSkillRunThread ? 'chip' : 'agent'} className="app-thread-purpose-icon" />
                                       ) : null}
-                                    </button>
+                                    </SemanticButton>
                                     <div className="app-thread-trailing">
                                       {runState?.status === 'asking' ? (
                                         <span
@@ -891,7 +1056,7 @@ export function AppShellSidebar({
                                           {timeLabel}
                                         </span>
                                       )}
-                                      <button
+                                      <SemanticButton
                                         type="button"
                                         className={`app-thread-archive${isConfirming ? ' is-confirming' : ''}`}
                                         title={isConfirming ? t('sidebar.confirmArchive') : t('sidebar.archive')}
@@ -900,42 +1065,72 @@ export function AppShellSidebar({
                                             ? t('sidebar.confirmArchiveAria', { title: thread.title })
                                             : t('sidebar.archiveAria', { title: thread.title })
                                         }
+                                        semantic={{
+                                          id: `agentos.control.thread.${thread.id}.archive`,
+                                          role: 'button',
+                                          label: isConfirming
+                                            ? t('sidebar.confirmArchiveAria', { title: thread.title })
+                                            : t('sidebar.archiveAria', { title: thread.title }),
+                                          actions: ['press'],
+                                          state: {
+                                            confirming: isConfirming,
+                                            active: isThreadActive,
+                                            running: isThreadRunning,
+                                            threadId: thread.id,
+                                            projectId: thread.projectId,
+                                          },
+                                          hint: { aliases: [thread.title] },
+                                        }}
                                         onClick={(event) => {
                                           event.stopPropagation()
                                           requestArchive(thread, 'button')
                                         }}
                                       >
                                         {isConfirming ? <span>{t('sidebar.confirm')}</span> : <IconInline name="trash" />}
-                                      </button>
+                                      </SemanticButton>
                                     </div>
                                   </MultimodalGroup>
                                 )
                               })}
                               {threadsListOverflow && !threadsListFullyExpanded ? (
-                                <button
+                                <SemanticButton
                                   type="button"
                                   className="app-sidebar-expand-section"
                                   aria-label={t('sidebar.expandListShowAria', { section: t('sidebar.threadHistory') })}
+                                  semantic={{
+                                    id: `agentos.control.project.${project.id}.threads.expand`,
+                                    role: 'button',
+                                    label: t('sidebar.expandListShowAria', { section: t('sidebar.threadHistory') }),
+                                    actions: ['press'],
+                                    state: { projectId: project.id, expanded: false },
+                                  }}
                                   onClick={() => {
                                     setConfirmingArchiveThreadId(null)
                                     setExpandedThreadListByProject((prev) => ({ ...prev, [project.id]: true }))
                                   }}
                                 >
                                   {t('sidebar.expandListShow')}
-                                </button>
+                                </SemanticButton>
                               ) : null}
                               {threadsListOverflow && threadsListFullyExpanded ? (
-                                <button
+                                <SemanticButton
                                   type="button"
                                   className="app-sidebar-expand-section"
                                   aria-label={t('sidebar.collapseListShowAria', { section: t('sidebar.threadHistory') })}
+                                  semantic={{
+                                    id: `agentos.control.project.${project.id}.threads.collapse`,
+                                    role: 'button',
+                                    label: t('sidebar.collapseListShowAria', { section: t('sidebar.threadHistory') }),
+                                    actions: ['press'],
+                                    state: { projectId: project.id, expanded: true },
+                                  }}
                                   onClick={() => {
                                     setConfirmingArchiveThreadId(null)
                                     setExpandedThreadListByProject((prev) => ({ ...prev, [project.id]: false }))
                                   }}
                                 >
                                   {t('sidebar.collapseListShow')}
-                                </button>
+                                </SemanticButton>
                               ) : null}
                             </div>
                           </div>
@@ -950,29 +1145,43 @@ export function AppShellSidebar({
         </div>
         {!isSettingsSidebar && (
           <footer className="app-sidebar-footer">
-            <button
+            <SemanticButton
               type="button"
               className="app-sidebar-footer-settings"
               id="btn-footer-settings"
               title={t('sidebar.globalSettings')}
               aria-label={t('sidebar.globalSettings')}
+              semantic={{
+                id: 'agentos.control.sidebar.globalSettings',
+                role: 'button',
+                label: t('sidebar.globalSettings'),
+                actions: ['press'],
+                hint: { aliases: semanticAliases(t, 'omni.aliases.globalSettings') },
+              }}
               onClick={() => {
                 onOpenSettingsCategory('general')
               }}
             >
               <IconInline name="settings" />
               <span>{t('sidebar.globalSettings')}</span>
-            </button>
+            </SemanticButton>
             {hasSidebarUpdate ? (
-              <button
+              <SemanticButton
                 type="button"
                 className="app-sidebar-update-button"
                 title={t('sidebar.versionUpdateTitle')}
                 aria-label={t('sidebar.versionUpdateTitle')}
+                semantic={{
+                  id: 'agentos.control.sidebar.installUpdate',
+                  role: 'button',
+                  label: t('sidebar.versionUpdateTitle'),
+                  actions: ['press'],
+                  state: { updateReady: true },
+                }}
                 onClick={handleSidebarUpdate}
               >
                 {t('sidebar.versionUpdate')}
-              </button>
+              </SemanticButton>
             ) : null}
           </footer>
         )}
@@ -984,6 +1193,8 @@ export function AppShellSidebar({
         role="separator"
         aria-orientation="vertical"
         aria-label={t('sidebar.resizeSidebar')}
+        data-mm-label={t('sidebar.resizeSidebar')}
+        data-mm-aliases={t('sidebar.toggleSidebar')}
         onPointerDown={onSplitterPointerDown}
       />
       {contextMenu ? (
@@ -1001,6 +1212,8 @@ export function AppShellSidebar({
               role="menuitem"
               disabled={item.disabled}
               className={`app-sidebar-context-menu__item${item.danger ? ' is-danger' : ''}`}
+              data-mm-label={item.label}
+              data-mm-aliases={t('sidebar.contextMenuAria')}
               onClick={(event) => {
                 event.stopPropagation()
                 if (item.disabled) return
@@ -1036,4 +1249,9 @@ function formatThreadTime(timestamp: number, locale: AppLocale, t: (path: string
   if (diff < 3_600_000) return t('sidebar.minutesShort', { n: Math.max(1, Math.floor(diff / 60_000)) })
   if (diff < 86_400_000) return t('sidebar.hoursShort', { n: Math.floor(diff / 3_600_000) })
   return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric' }).format(timestamp)
+}
+
+function stableSemanticId(value: string): string {
+  const normalized = value.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalized || 'item'
 }

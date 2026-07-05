@@ -207,17 +207,17 @@ export function AppUpdateSection() {
             {hasUpdateAction ? (
               <div className="settings-update-actions">
                 {showCheck ? (
-                  <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void onCheck()}>
+                  <button type="button" className="btn btn-ghost" disabled={busy} data-mm-label={t('settings.general.updateCheck')} onClick={() => void onCheck()}>
                     {t('settings.general.updateCheck')}
                   </button>
                 ) : null}
                 {showDownload ? (
-                  <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void onDownload()}>
+                  <button type="button" className="btn btn-primary" disabled={busy} data-mm-label={t('settings.general.updateDownload')} onClick={() => void onDownload()}>
                     {t('settings.general.updateDownload')}
                   </button>
                 ) : null}
                 {showInstall ? (
-                  <button type="button" className="btn btn-primary" onClick={onInstall}>
+                  <button type="button" className="btn btn-primary" data-mm-label={t('settings.general.updateInstall')} onClick={onInstall}>
                     {t('settings.general.updateInstall')}
                   </button>
                 ) : null}

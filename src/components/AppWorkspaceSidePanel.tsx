@@ -60,11 +60,12 @@ export function AppWorkspaceSidePanel({
             title={t('filePanel.refreshTitle')}
             aria-label={t('filePanel.refreshAria')}
             disabled={!open}
+            data-mm-label={t('filePanel.refreshAria')}
             onClick={() => filePaneRef.current?.refresh()}
           >
             <IconInline name="refresh" />
           </button>
-          <button type="button" className="btn btn-toolbar" title={t('filePanel.closeTitle')} aria-label={t('filePanel.closeAria')} onClick={onClose}>
+          <button type="button" className="btn btn-toolbar" title={t('filePanel.closeTitle')} aria-label={t('filePanel.closeAria')} data-mm-label={t('filePanel.closeAria')} onClick={onClose}>
             <IconInline name="x" />
           </button>
         </div>

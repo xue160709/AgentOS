@@ -71,6 +71,7 @@ export function ChatThreadView({
         aria-hidden={!showScrollButton}
         tabIndex={showScrollButton ? 0 : -1}
         data-visible={showScrollButton || undefined}
+        data-mm-label={t('chat.scrollBottomAria')}
         onClick={() => onScrollToBottom('smooth')}
       >
         <IconInline name="arrowDown" />

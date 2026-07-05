@@ -242,13 +242,13 @@ export const GenerativeWidget = memo(function GenerativeWidget({
         </pre>
       ) : null}
       <div className="generative-widget__toolbar">
-        <button type="button" onClick={() => setShowCode((value) => !value)}>
+        <button type="button" data-mm-label={showCode ? t('chat.generativeUiHideCode') : t('chat.generativeUiShowCode')} data-mm-aliases={title || t('chat.generativeUiAria')} onClick={() => setShowCode((value) => !value)}>
           {showCode ? t('chat.generativeUiHideCode') : t('chat.generativeUiShowCode')}
         </button>
-        <button type="button" onClick={requestSvgDownload}>
+        <button type="button" data-mm-label={t('chat.generativeUiDownloadSvg')} data-mm-aliases={title || t('chat.generativeUiAria')} onClick={requestSvgDownload}>
           {t('chat.generativeUiDownloadSvg')}
         </button>
-        <button type="button" onClick={requestPngCopy} disabled={copyPngState === 'copying'}>
+        <button type="button" data-mm-label={copyPngLabel} data-mm-aliases={title || t('chat.generativeUiAria')} onClick={requestPngCopy} disabled={copyPngState === 'copying'}>
           {copyPngLabel}
         </button>
       </div>

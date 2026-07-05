@@ -3,7 +3,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
-import { MultimodalGroup } from '@xue160709/omni-ui-react'
+import { MultimodalGroup, useInteractionObject } from '@xue160709/omni-ui-react'
 import { A2uiSurface, basicCatalog, MarkdownContext, type ReactComponentImplementation } from '@a2ui/react/v0_9'
 import { MessageProcessor, type A2uiClientAction, type A2uiMessage, type SurfaceModel } from '@a2ui/web_core/v0_9'
 import type { AgentContextSlashItem, ChatModelPick, ClaudeAgentSettingsSnapshot, ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
@@ -24,6 +24,7 @@ import type {
   ProjectContextEntry,
 } from '../../desktop-types'
 import { IconInline } from '../../icon-inline'
+import { SemanticButton, semanticAliases, useSemanticNodeRef } from '../../multimodal/semantic-controls'
 import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT } from '../../app-events'
 import { useI18n } from '../../i18n/i18n'
 import {
@@ -152,13 +153,21 @@ export function ProjectHomeProjectSelector({
 
   return (
     <div className="project-home-project-selector" ref={selectorRef}>
-      <button
+      <SemanticButton
         type="button"
         className="chat-start-view__project project-home-project-trigger"
         title={project.path}
         aria-label={t('chat.switchProject')}
         aria-haspopup="menu"
         aria-expanded={open}
+        semantic={{
+          id: 'agentos.control.projectHome.projectSelector',
+          role: 'button',
+          label: t('omni.controls.projectHomeSelector'),
+          actions: ['press'],
+          state: { open, projectId: project.id, projectName: project.name },
+          hint: { aliases: semanticAliases(t, 'omni.aliases.projectSelector') },
+        }}
         onClick={() => setOpen((value) => !value)}
       >
         <IconInline name="folder" />
@@ -169,20 +178,28 @@ export function ProjectHomeProjectSelector({
           ) : null}
         </span>
         <IconInline name="chevron" className="project-home-project-trigger__chevron" />
-      </button>
+      </SemanticButton>
       {open ? (
         <div className="project-home-project-menu" role="menu" aria-label={t('chat.projectMenuAria')}>
           <div className="project-home-project-menu__list">
             {orderedProjects.map((item) => {
               const active = item.id === project.id
               return (
-                <button
+                <SemanticButton
                   key={item.id}
                   type="button"
                   role="menuitem"
                   className={`project-home-project-menu__item${active ? ' is-active' : ''}`}
                   aria-current={active ? 'true' : undefined}
                   title={item.path}
+                  semantic={{
+                    id: `agentos.control.projectHome.project.${item.id}`,
+                    role: 'menuitem',
+                    label: t('omni.controls.projectSelect', { name: item.name }),
+                    actions: ['press'],
+                    state: { active, projectId: item.id, pathMissing: Boolean(item.pathMissing) },
+                    hint: { aliases: [item.name, item.path].filter(Boolean) },
+                  }}
                   onClick={() => {
                     setOpen(false)
                     if (!active) onSelectProject(item.id)
@@ -196,15 +213,22 @@ export function ProjectHomeProjectSelector({
                     </span>
                   </span>
                   {active ? <IconInline name="check" className="project-home-project-menu__check" /> : null}
-                </button>
+                </SemanticButton>
               )
             })}
           </div>
           <div className="project-home-project-menu__footer">
-            <button
+            <SemanticButton
               type="button"
               role="menuitem"
               className="project-home-project-menu__item project-home-project-menu__item--add"
+              semantic={{
+                id: 'agentos.control.projectHome.addProject',
+                role: 'menuitem',
+                label: t('chat.addProjectTitle'),
+                actions: ['press'],
+                hint: { aliases: semanticAliases(t, 'omni.aliases.addProject') },
+              }}
               onClick={() => {
                 setOpen(false)
                 void onCreateProject('existing')
@@ -212,7 +236,7 @@ export function ProjectHomeProjectSelector({
             >
               <IconInline name="plus" />
               <span>{t('chat.addProjectTitle')}</span>
-            </button>
+            </SemanticButton>
           </div>
         </div>
       ) : null}
@@ -992,27 +1016,44 @@ export function ProjectHomeSurface({
             title={t('workspace.sortAgentCards')}
             aria-label={t('workspace.sortAgentCards')}
             disabled={loading || homeCards.length === 0}
+            data-mm-label={t('workspace.sortAgentCards')}
+            data-mm-aliases={t('workspace.agentSettings')}
             onClick={() => onOpenAgentSettings('card-order')}
           >
             <IconInline name="sort" />
           </button>
           <div className="project-home-add" ref={addMenuRef}>
-            <button
+            <SemanticButton
               type="button"
               className="project-home-add-button"
               aria-haspopup="menu"
               aria-expanded={addMenuOpen}
               disabled={loading}
+              semantic={{
+                id: 'agentos.control.projectHome.addCard',
+                role: 'button',
+                label: t('omni.controls.projectHomeAddCard'),
+                actions: ['press'],
+                state: { open: addMenuOpen, enabled: !loading },
+                hint: { aliases: semanticAliases(t, 'omni.aliases.addAgentCard') },
+              }}
               onClick={() => setAddMenuOpen((open) => !open)}
             >
               <IconInline name="plus" />
               <span>{t('workspace.addAgentCard')}</span>
-            </button>
+            </SemanticButton>
             {addMenuOpen ? (
               <div className="project-home-add-menu" role="menu" aria-label={t('workspace.addAgentCard')}>
-                <button
+                <SemanticButton
                   type="button"
                   role="menuitem"
+                  semantic={{
+                    id: 'agentos.control.projectHome.addDataCard',
+                    role: 'menuitem',
+                    label: t('omni.controls.projectHomeAddDataCard'),
+                    actions: ['press'],
+                    hint: { aliases: semanticAliases(t, 'omni.aliases.addAgentCard') },
+                  }}
                   onClick={() => {
                     setAddMenuOpen(false)
                     onStartDataCardDraft()
@@ -1020,10 +1061,17 @@ export function ProjectHomeSurface({
                 >
                   <IconInline name="database" />
                   <span>{t('workspace.addDataCard')}</span>
-                </button>
-                <button
+                </SemanticButton>
+                <SemanticButton
                   type="button"
                   role="menuitem"
+                  semantic={{
+                    id: 'agentos.control.projectHome.addTaskCard',
+                    role: 'menuitem',
+                    label: t('omni.controls.projectHomeAddTaskCard'),
+                    actions: ['press'],
+                    hint: { aliases: semanticAliases(t, 'omni.aliases.addAgentCard') },
+                  }}
                   onClick={() => {
                     setAddMenuOpen(false)
                     setEditingTaskSlug(undefined)
@@ -1032,7 +1080,7 @@ export function ProjectHomeSurface({
                 >
                   <IconInline name="checklist" />
                   <span>{t('workspace.addTaskCard')}</span>
-                </button>
+                </SemanticButton>
               </div>
             ) : null}
           </div>
@@ -1235,21 +1283,41 @@ function HomePluginCard({
       style={{ '--home-card-span': sizeToColumnSpan(size) } as CSSProperties}
     >
       {editable ? <div className="project-home-card__menu">
-        <button
+        <SemanticButton
           type="button"
           className="project-home-card__menu-button"
           aria-label={t('workspace.cardMenuAria', { name: item.manifest.name })}
           aria-haspopup="menu"
           aria-expanded={menuOpen}
+          semantic={{
+            id: `agentos.control.taskCard.${stableSemanticId(item.slug)}.menu`,
+            role: 'button',
+            label: t('omni.controls.taskCardMenu', { name: item.manifest.name }),
+            actions: ['press'],
+            state: {
+              open: menuOpen,
+              slug: item.slug,
+              kind: item.manifest.kind,
+            },
+            hint: { aliases: [item.manifest.name, item.slug, ...semanticAliases(t, 'omni.aliases.cardMenu')] },
+          }}
           onClick={() => setMenuOpen((open) => !open)}
         >
           <IconInline name="moreHorizontal" />
-        </button>
+        </SemanticButton>
         {menuOpen ? (
           <div className="project-home-card__menu-popover" role="menu">
-            <button
+            <SemanticButton
               type="button"
               role="menuitem"
+              semantic={{
+                id: `agentos.control.taskCard.${stableSemanticId(item.slug)}.edit`,
+                role: 'menuitem',
+                label: t('omni.controls.taskCardEdit', { name: item.manifest.name }),
+                actions: ['press'],
+                state: { slug: item.slug, kind: item.manifest.kind },
+                hint: { aliases: [item.manifest.name, item.slug, ...semanticAliases(t, 'omni.aliases.cardMenu')] },
+              }}
               onClick={() => {
                 setMenuOpen(false)
                 onEdit()
@@ -1257,7 +1325,7 @@ function HomePluginCard({
             >
               <IconInline name="edit" />
               <span>{t('workspace.editAgentCard')}</span>
-            </button>
+            </SemanticButton>
           </div>
         ) : null}
       </div> : null}
@@ -1298,12 +1366,28 @@ type TaskHomeCardViewModel = {
 }
 
 function TodoHomeCardView({ todo, size, onOpen }: { todo: TodoHomeCardData; size: HomePluginCardSize; onOpen: () => void }) {
-  const tone = todo.blocker && todo.blocker !== '无' ? 'error' : todo.percent >= 100 ? 'done' : 'active'
+  const { t } = useI18n()
+  const blockerText = todo.blocker.trim()
+  const hasBlocker = Boolean(blockerText && blockerText !== '无' && blockerText.toLowerCase() !== 'none')
+  const tone = hasBlocker ? 'error' : todo.percent >= 100 ? 'done' : 'active'
   const visibleTasks = size === 'large'
     ? todo.tasks.slice(0, 6)
     : size === 'medium'
       ? todo.tasks.slice(0, 3)
       : []
+  const todoCardRef = useSemanticNodeRef<HTMLElement>({
+    id: 'agentos.control.todoCard.open',
+    role: 'button',
+    label: t('workspace.todoCardOpenAria'),
+    actions: ['press'],
+    state: {
+      percent: todo.percent,
+      completed: todo.completed,
+      total: todo.total,
+      tone,
+    },
+    hint: { aliases: ['TODO', 'TODO.md'] },
+  })
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -1312,10 +1396,13 @@ function TodoHomeCardView({ todo, size, onOpen }: { todo: TodoHomeCardData; size
 
   return (
     <article
+      ref={todoCardRef}
       className={`todo-home-card todo-home-card--${tone}`}
       role="button"
       tabIndex={0}
-      aria-label="打开 TODO.md"
+      aria-label={t('workspace.todoCardOpenAria')}
+      data-mm-label={t('workspace.todoCardOpenAria')}
+      data-mm-aliases="TODO|TODO.md"
       onClick={onOpen}
       onKeyDown={handleKeyDown}
     >
@@ -1329,7 +1416,7 @@ function TodoHomeCardView({ todo, size, onOpen }: { todo: TodoHomeCardData; size
         </span>
       </header>
 
-      <div className="todo-home-card__progress" aria-label={`TODO progress ${todo.percent}%`}>
+      <div className="todo-home-card__progress" aria-label={t('workspace.todoCardProgressAria', { percent: todo.percent })}>
         <div className="todo-home-card__progress-head">
           <span>{todo.progress || `${todo.completed}/${todo.total}`}</span>
           <strong>{todo.percent}%</strong>
@@ -1346,17 +1433,17 @@ function TodoHomeCardView({ todo, size, onOpen }: { todo: TodoHomeCardData; size
 
       <div className="todo-home-card__facts">
         <span>
-          <b>Next</b>
+          <b>{t('workspace.todoCardNext')}</b>
           {todo.nextStep}
         </span>
         <span>
-          <b>Blocker</b>
-          {todo.blocker || '无'}
+          <b>{t('workspace.todoCardBlocker')}</b>
+          {hasBlocker ? blockerText : t('workspace.none')}
         </span>
       </div>
 
       {visibleTasks.length > 0 ? (
-        <div className="todo-home-card__tasks" aria-label="TODO tasks">
+        <div className="todo-home-card__tasks" aria-label={t('workspace.todoCardTasksAria')}>
           {visibleTasks.map((task) => (
             <span key={task.id} className={`todo-home-card__task todo-home-card__task--${task.status || 'todo'}`}>
               <IconInline name={task.checked ? 'check' : 'branch'} />
@@ -1372,9 +1459,10 @@ function TodoHomeCardView({ todo, size, onOpen }: { todo: TodoHomeCardData; size
 }
 
 function TaskHomeCardView({ task, projectPath }: { task: TaskHomeCardViewModel; projectPath: string }) {
+  const { t } = useI18n()
   const [busy, setBusy] = useState(false)
   const iconName = task.active ? 'stop' : 'play'
-  const actionLabel = task.active ? '终止' : '执行'
+  const actionLabel = task.active ? t('workspace.skillCardStop') : t('workspace.skillCardRun')
 
   const runAction = useCallback(async () => {
     if (busy) return
@@ -1422,10 +1510,25 @@ function TaskHomeCardView({ task, projectPath }: { task: TaskHomeCardViewModel; 
       ) : null}
 
       <footer className="task-home-card__footer">
-        <button type="button" className={`task-home-card__action${task.active ? ' task-home-card__action--stop' : ''}`} disabled={busy} onClick={() => void runAction()}>
+        <SemanticButton
+          type="button"
+          className={`task-home-card__action${task.active ? ' task-home-card__action--stop' : ''}`}
+          disabled={busy}
+          semantic={{
+            id: `agentos.control.taskCard.${stableSemanticId(task.slug)}.run`,
+            role: 'button',
+            label: task.active
+              ? t('omni.controls.taskCardStop', { title: task.title })
+              : t('omni.controls.taskCardRun', { title: task.title }),
+            actions: ['press'],
+            state: { active: task.active, busy, slug: task.slug },
+            hint: { aliases: [task.title, task.slug, ...semanticAliases(t, 'omni.aliases.taskRun')] },
+          }}
+          onClick={() => void runAction()}
+        >
           <IconInline name={iconName} />
-          <span>{busy ? '处理中' : actionLabel}</span>
-        </button>
+          <span>{busy ? t('workspace.skillCardProcessing') : actionLabel}</span>
+        </SemanticButton>
       </footer>
     </article>
   )
@@ -1492,6 +1595,24 @@ function SkillHomeCard({
   const detail = skill.description || skill.relativePath
   const actionLabel = active ? t('workspace.skillCardStop') : t('workspace.skillCardRun')
   const iconName = active ? 'stop' : 'play'
+  const semanticSkillId = stableSemanticId(skill.path)
+
+  useInteractionObject({
+    id: `agentos.skill.${semanticSkillId}`,
+    type: 'composite',
+    role: 'skill',
+    label: skill.title,
+    aliases: [skill.command, skill.relativePath, skill.description].filter(Boolean),
+    entity: { type: 'skill', id: skill.path },
+    state: {
+      active,
+      projectId,
+      command: skill.command,
+      relativePath: skill.relativePath,
+      status: statusTone,
+      fixedModel: fixedModelLabel,
+    },
+  })
 
   useMasonrySpan(cardRef, [size, skill.path, skill.description, active, statusLabel, summary, detail])
 
@@ -1550,15 +1671,36 @@ function SkillHomeCard({
                   {fixedModelLabel}
                 </span>
               ) : null}
-              <button
+              <SemanticButton
                 type="button"
                 className={`task-home-card__action${active ? ' task-home-card__action--stop' : ''}`}
                 disabled={busy}
+                semantic={{
+                  id: `agentos.control.skill.${semanticSkillId}.homeRun`,
+                  role: 'button',
+                  label: t('omni.controls.skillRun', { title: skill.title }),
+                  actions: ['press'],
+                  state: {
+                    active,
+                    busy,
+                    projectId,
+                    command: skill.command,
+                    relativePath: skill.relativePath,
+                  },
+                  hint: {
+                    aliases: [
+                      ...semanticAliases(t, 'omni.aliases.skillRun'),
+                      skill.title,
+                      skill.command,
+                      skill.relativePath,
+                    ].filter(Boolean),
+                  },
+                }}
                 onClick={() => void runAction()}
               >
                 <IconInline name={iconName} />
                 <span>{busy ? t('workspace.skillCardProcessing') : actionLabel}</span>
-              </button>
+              </SemanticButton>
             </footer>
           </article>
         </div>
@@ -1880,7 +2022,7 @@ function TaskCardDialog({
       <div className="project-home-modal project-home-modal--task" role="dialog" aria-modal="true" aria-label={t('workspace.addTaskCard')} onMouseDown={(event) => event.stopPropagation()}>
         <div className="project-home-modal__header">
           <h2>{editing ? t('workspace.editTaskCard') : t('workspace.addTaskCard')}</h2>
-          <button type="button" className="project-home-icon-button" aria-label={t('filePanel.closeAria')} onClick={onClose}>
+          <button type="button" className="project-home-icon-button" aria-label={t('filePanel.closeAria')} data-mm-label={t('filePanel.closeAria')} onClick={onClose}>
             <IconInline name="x" />
           </button>
         </div>
@@ -1893,6 +2035,9 @@ function TaskCardDialog({
               maxLength={64}
               placeholder={t('workspace.taskTitlePlaceholder')}
               disabled={saving}
+              data-mm-label={t('workspace.taskTitle')}
+              data-mm-aliases={t('workspace.taskTitlePlaceholder')}
+              data-mm-exposure="value"
               onChange={(event) => setTitle(event.target.value)}
             />
           </label>
@@ -1903,6 +2048,8 @@ function TaskCardDialog({
               className={mode === 'agent' ? 'is-active' : ''}
               aria-pressed={mode === 'agent'}
               disabled={saving}
+              data-mm-label={t('workspace.taskModeAgent')}
+              data-mm-aliases={t('workspace.taskMode')}
               onClick={() => setMode('agent')}
             >
               <IconInline name="agent" />
@@ -1913,6 +2060,8 @@ function TaskCardDialog({
               className={mode === 'skills' ? 'is-active' : ''}
               aria-pressed={mode === 'skills'}
               disabled={saving}
+              data-mm-label={t('workspace.taskModeSkills')}
+              data-mm-aliases={t('workspace.taskMode')}
               onClick={() => setMode('skills')}
             >
               <IconInline name="checklist" />
@@ -1933,7 +2082,16 @@ function TaskCardDialog({
                         <span>{skill.title || skill.name}</span>
                         <span>{skill.command}</span>
                       </span>
-                      <button type="button" className="project-home-icon-button" title={t('workspace.taskAddSkill')} aria-label={t('workspace.taskAddSkill')} disabled={saving} onClick={() => addSkill(skill)}>
+                      <button
+                        type="button"
+                        className="project-home-icon-button"
+                        title={t('workspace.taskAddSkill')}
+                        aria-label={t('workspace.taskAddSkill')}
+                        disabled={saving}
+                        data-mm-label={t('workspace.taskAddSkill')}
+                        data-mm-aliases={skill.title || skill.name}
+                        onClick={() => addSkill(skill)}
+                      >
                         <IconInline name="plus" />
                       </button>
                     </div>
@@ -1966,13 +2124,13 @@ function TaskCardDialog({
                         <span>{step.title}</span>
                         <span>{step.command}</span>
                       </span>
-                      <button type="button" className="project-home-icon-button" disabled={saving || index === 0} onClick={() => moveSkillStep(step.id, -1)} aria-label={t('workspace.moveCardUp')}>
+                      <button type="button" className="project-home-icon-button" disabled={saving || index === 0} data-mm-label={t('workspace.moveCardUp')} data-mm-aliases={step.title} onClick={() => moveSkillStep(step.id, -1)} aria-label={t('workspace.moveCardUp')}>
                         <IconInline name="arrowUp" />
                       </button>
-                      <button type="button" className="project-home-icon-button" disabled={saving || index === selectedSkills.length - 1} onClick={() => moveSkillStep(step.id, 1)} aria-label={t('workspace.moveCardDown')}>
+                      <button type="button" className="project-home-icon-button" disabled={saving || index === selectedSkills.length - 1} data-mm-label={t('workspace.moveCardDown')} data-mm-aliases={step.title} onClick={() => moveSkillStep(step.id, 1)} aria-label={t('workspace.moveCardDown')}>
                         <IconInline name="arrowDown" />
                       </button>
-                      <button type="button" className="project-home-icon-button" disabled={saving} onClick={() => removeSkillStep(step.id)} aria-label={t('workspace.taskRemoveSkill')}>
+                      <button type="button" className="project-home-icon-button" disabled={saving} data-mm-label={t('workspace.taskRemoveSkill')} data-mm-aliases={step.title} onClick={() => removeSkillStep(step.id)} aria-label={t('workspace.taskRemoveSkill')}>
                         <IconInline name="x" />
                       </button>
                     </div>
@@ -1993,6 +2151,9 @@ function TaskCardDialog({
                 type="checkbox"
                 checked={draftTodoEnabled}
                 disabled={loading || saving}
+                data-mm-label={t('workspace.todoModeToggle')}
+                data-mm-aliases={t('workspace.todoModeToggleDesc')}
+                data-mm-exposure="value"
                 onChange={(event) => setDraftTodoEnabled(event.target.checked)}
               />
               <span className="settings-switch-track" aria-hidden="true">
@@ -2010,6 +2171,8 @@ function TaskCardDialog({
               max={100}
               value={runCount}
               disabled={saving}
+              data-mm-label={t('workspace.taskRunCount')}
+              data-mm-exposure="value"
               onChange={(event) => setRunCount(clampInt(Number.parseInt(event.target.value, 10), 1, 100, 1))}
             />
           </label>
@@ -2025,6 +2188,8 @@ function TaskCardDialog({
                 type="checkbox"
                 checked={schedule.enabled}
                 disabled={saving}
+                data-mm-label={t('workspace.taskScheduleToggle')}
+                data-mm-exposure="value"
                 onChange={(event) => setSchedule((prev) => ({ ...prev, enabled: event.target.checked }))}
               />
               <span className="settings-switch-track" aria-hidden="true">
@@ -2037,7 +2202,7 @@ function TaskCardDialog({
             <div className="project-home-schedule-grid">
               <label className="project-home-field">
                 <span>{t('workspace.taskScheduleTime')}</span>
-                <input className="settings-input" type="time" value={timeValue} disabled={saving} onChange={(event) => updateTime(event.target.value)} />
+                <input className="settings-input" type="time" value={timeValue} disabled={saving} data-mm-label={t('workspace.taskScheduleTime')} data-mm-exposure="value" onChange={(event) => updateTime(event.target.value)} />
               </label>
               <label className="project-home-field">
                 <span>{t('workspace.taskScheduleInterval')}</span>
@@ -2045,6 +2210,8 @@ function TaskCardDialog({
                   className="settings-input settings-select"
                   value={schedule.interval}
                   disabled={saving}
+                  data-mm-label={t('workspace.taskScheduleInterval')}
+                  data-mm-exposure="value"
                   onChange={(event) => setSchedule((prev) => ({ ...prev, interval: event.target.value as HomePluginTaskSchedule['interval'] }))}
                 >
                   <option value="off">{t('workspace.taskIntervalOff')}</option>
@@ -2062,10 +2229,10 @@ function TaskCardDialog({
           {dialogError ? <div className="project-home-task-error" role="alert">{dialogError}</div> : null}
         </div>
         <div className="project-home-modal__footer">
-          <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={onClose}>
+          <button type="button" className="agent-card-secondary-button" disabled={saving} data-mm-label={t('settings.agentMode.cancel')} onClick={onClose}>
             {t('settings.agentMode.cancel')}
           </button>
-          <button type="button" className="agent-card-primary-button" disabled={!canSave} onClick={() => void save()}>
+          <button type="button" className="agent-card-primary-button" disabled={!canSave} data-mm-label={saving ? t('workspace.taskSaving') : t('settings.agentMode.confirm')} onClick={() => void save()}>
             {saving ? t('workspace.taskSaving') : t('settings.agentMode.confirm')}
           </button>
         </div>
@@ -2238,7 +2405,7 @@ function AgentSettingsModal({
             <h2 id="agent-settings-title">{t('workspace.agentSettings')}</h2>
             <p className="project-home-modal__caption">{caption}</p>
           </div>
-          <button type="button" className="project-home-icon-button" aria-label={t('filePanel.closeAria')} onClick={onClose}>
+          <button type="button" className="project-home-icon-button" aria-label={t('filePanel.closeAria')} data-mm-label={t('filePanel.closeAria')} onClick={onClose}>
             <IconInline name="x" />
           </button>
         </div>
@@ -2251,6 +2418,8 @@ function AgentSettingsModal({
                 className={`agent-settings-nav__item${activePanel === item.id ? ' is-active' : ''}`}
                 data-testid={item.id === 'mcp' ? 'agent-settings-mcp-tab' : undefined}
                 aria-current={activePanel === item.id ? 'page' : undefined}
+                data-mm-label={item.label}
+                data-mm-aliases={t('workspace.agentSettings')}
                 onClick={() => onActivePanelChange(item.id)}
               >
                 <IconInline name={item.icon} />
@@ -2350,10 +2519,10 @@ function AgentSettingsModal({
               <h3 id="agent-disable-confirm-title">{t('workspace.disableAgentModeConfirmTitle')}</h3>
               <p>{t('workspace.disableAgentModeConfirmBody')}</p>
               <div className="agent-settings-confirm__actions">
-                <button type="button" className="btn btn-ghost" disabled={agent.loading} onClick={() => setConfirmDisableOpen(false)}>
+                <button type="button" className="btn btn-ghost" disabled={agent.loading} data-mm-label={t('settings.agentMode.cancel')} onClick={() => setConfirmDisableOpen(false)}>
                   {t('settings.agentMode.cancel')}
                 </button>
-                <button type="button" className="btn btn-primary" disabled={agent.loading} onClick={() => void disableAgentMode()}>
+                <button type="button" className="btn btn-primary" disabled={agent.loading} data-mm-label={t('workspace.disableAgentModeConfirmAction')} onClick={() => void disableAgentMode()}>
                   {t('workspace.disableAgentModeConfirmAction')}
                 </button>
               </div>
@@ -2393,7 +2562,7 @@ function AgentSettingsGeneralPanel({
               <p className="settings-field-row__hint">{t('workspace.disableAgentModeHint')}</p>
             </div>
             <div className="settings-field-row__controls">
-              <button type="button" className="agent-card-secondary-button" disabled={agent.loading} onClick={onDisable}>
+              <button type="button" className="agent-card-secondary-button" disabled={agent.loading} data-mm-label={t('workspace.disableAgentMode')} onClick={onDisable}>
                 {t('workspace.disableAgentMode')}
               </button>
             </div>
@@ -2500,6 +2669,9 @@ function ProjectSettingsPanel({
                 className="settings-input settings-select"
                 value={currentValue}
                 disabled={!hasModels}
+                data-mm-label={t('workspace.agentSettingsProjectModel')}
+                data-mm-aliases={t('workspace.agentSettingsProjectModelHint')}
+                data-mm-exposure="value"
                 onChange={(event) => setProjectPick(event.target.value)}
               >
                 <option value="">{defaultLabel}</option>
@@ -2522,6 +2694,9 @@ function ProjectSettingsPanel({
                 value={documents[name]}
                 spellCheck={false}
                 placeholder={agentProjectDocumentPlaceholder(name, t)}
+                data-mm-label={name}
+                data-mm-aliases={agentProjectDocumentHint(name, t)}
+                data-mm-exposure="value"
                 onChange={(event) => setDocument(name, event.target.value)}
               />
             </label>
@@ -2529,13 +2704,13 @@ function ProjectSettingsPanel({
         </div>
         <div className="agent-settings-panel-actions">
           <SaveFeedback status={status} dirty={isDirty} saving={saving} />
-          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} data-mm-label={t('settings.agentMode.cancel')} onClick={() => {
             reset()
             onClose()
           }}>
             {t('settings.agentMode.cancel')}
           </button>
-          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} data-mm-label={saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')} onClick={onSave}>
             <IconInline name={saving ? 'refresh' : 'save'} />
             <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
           </button>
@@ -2600,21 +2775,24 @@ function ProjectContextSettingsPanel({
               value={instructions}
               spellCheck={false}
               placeholder={t('workspace.agentSettingsContextInstructionsPlaceholder')}
+              data-mm-label="CONTEXT.md"
+              data-mm-aliases={t('workspace.agentSettingsContextInstructionsHint')}
+              data-mm-exposure="value"
               onChange={(event) => onInstructionsChange(event.target.value)}
             />
           </label>
         </div>
 
         <div className="agent-context-actions" aria-label={t('workspace.agentSettingsContextAdd')}>
-          <button type="button" className="agent-card-secondary-button" disabled={busy || readOnly} onClick={() => onAdd('reference')}>
+          <button type="button" className="agent-card-secondary-button" disabled={busy || readOnly} data-mm-label={t('workspace.agentSettingsContextAddReference')} onClick={() => onAdd('reference')}>
             <IconInline name="paperclip" />
             <span>{t('workspace.agentSettingsContextAddReference')}</span>
           </button>
-          <button type="button" className="agent-card-secondary-button" disabled={busy || readOnly} onClick={() => onAdd('copy')}>
+          <button type="button" className="agent-card-secondary-button" disabled={busy || readOnly} data-mm-label={t('workspace.agentSettingsContextAddCopy')} onClick={() => onAdd('copy')}>
             <IconInline name="copy" />
             <span>{t('workspace.agentSettingsContextAddCopy')}</span>
           </button>
-          <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onRefresh}>
+          <button type="button" className="agent-card-secondary-button" disabled={busy} data-mm-label={t('workspace.agentSettingsContextRefresh')} onClick={onRefresh}>
             <IconInline name="refresh" />
             <span>{t('workspace.agentSettingsContextRefresh')}</span>
           </button>
@@ -2666,6 +2844,8 @@ function ProjectContextSettingsPanel({
                   disabled={busy || readOnly}
                   title={t('workspace.agentSettingsContextRemove')}
                   aria-label={t('workspace.agentSettingsContextRemoveNamed', { name: entry.name })}
+                  data-mm-label={t('workspace.agentSettingsContextRemoveNamed', { name: entry.name })}
+                  data-mm-aliases={entry.relativePath}
                   onClick={() => onRemove(entry)}
                 >
                   <IconInline name="trash" />
@@ -2677,7 +2857,7 @@ function ProjectContextSettingsPanel({
 
         <div className="agent-settings-panel-actions">
           <SaveFeedback status={status} dirty={instructionsDirty} saving={busy} />
-          <button type="button" className="agent-card-primary-button" disabled={busy || readOnly || !instructionsDirty} onClick={onSaveInstructions}>
+          <button type="button" className="agent-card-primary-button" disabled={busy || readOnly || !instructionsDirty} data-mm-label={busy ? t('settings.agentMode.saving') : t('workspace.agentSettingsContextSaveInstructions')} onClick={onSaveInstructions}>
             <IconInline name={busy ? 'refresh' : 'save'} />
             <span>{busy ? t('settings.agentMode.saving') : t('workspace.agentSettingsContextSaveInstructions')}</span>
           </button>
@@ -2757,6 +2937,9 @@ function SkillsModelSettingsPanel({
                     className="settings-input settings-select"
                     value={currentValue}
                     disabled={!hasModels}
+                    data-mm-label={t('workspace.agentSettingsSkillModelFor', { name: skill.title || skill.name })}
+                    data-mm-aliases={skill.command ? `/${skill.command}` : skill.relativePath}
+                    data-mm-exposure="value"
                     onChange={(event) => setSkillPick(skill.path, event.target.value)}
                   >
                     <option value="">{defaultLabel}</option>
@@ -2773,13 +2956,13 @@ function SkillsModelSettingsPanel({
         </div>
         <div className="agent-settings-panel-actions">
           <SaveFeedback status={status} dirty={isDirty} saving={saving} />
-          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} data-mm-label={t('settings.agentMode.cancel')} onClick={() => {
             reset()
             onClose()
           }}>
             {t('settings.agentMode.cancel')}
           </button>
-          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty || (!hasModels && skills.length > 0)} onClick={onSave}>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty || (!hasModels && skills.length > 0)} data-mm-label={saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')} onClick={onSave}>
             <IconInline name={saving ? 'refresh' : 'save'} />
             <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
           </button>
@@ -2898,7 +3081,7 @@ function McpSettingsPanel({
               <h4 id="agent-settings-mcp-installed-heading">{t('workspace.agentSettingsMcpInstalledHeading')}</h4>
               <p>{t('workspace.agentSettingsMcpInstallHint')}</p>
             </div>
-            <button type="button" className="agent-card-secondary-button" disabled={saving || testing} onClick={onRefreshStatus}>
+            <button type="button" className="agent-card-secondary-button" disabled={saving || testing} onClick={onRefreshStatus} data-mm-label={t('workspace.agentSettingsMcpRefreshStatus')}>
               <IconInline name="refresh" />
               <span>{t('workspace.agentSettingsMcpRefreshStatus')}</span>
             </button>
@@ -2937,6 +3120,9 @@ function McpSettingsPanel({
                         className="settings-switch-input"
                         checked={server.enabled}
                         disabled={saving}
+                        data-mm-label={t('workspace.agentSettingsMcpToggleServer', { name: displayName })}
+                        data-mm-aliases={displayName}
+                        data-mm-exposure="value"
                         onChange={(event) => updateServer(index, { enabled: event.target.checked })}
                       />
                       <span className="settings-switch-track" aria-hidden="true">
@@ -2965,7 +3151,7 @@ function McpSettingsPanel({
               <h4 id="agent-settings-mcp-policy-heading">{t('workspace.agentSettingsMcpPolicies')}</h4>
               <p>{t('workspace.agentSettingsMcpPoliciesHint')}</p>
             </div>
-            <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={addPolicy}>
+            <button type="button" className="agent-card-secondary-button" disabled={saving} data-mm-label={t('workspace.agentSettingsMcpAddPolicy')} onClick={addPolicy}>
               <IconInline name="plus" />
               <span>{t('workspace.agentSettingsMcpAddPolicy')}</span>
             </button>
@@ -3005,6 +3191,9 @@ function McpSettingsPanel({
                             className="settings-input settings-select"
                             value={draftPolicies[tool.fullName] ?? 'ask'}
                             disabled={saving}
+                            data-mm-label={`${tool.toolName} ${t('workspace.agentSettingsMcpPolicy')}`}
+                            data-mm-aliases={tool.fullName}
+                            data-mm-exposure="value"
                             onChange={(event) => updatePolicy(tool.fullName, event.target.value as AgentMcpToolPolicy)}
                           >
                             <option value="ask">{t('workspace.agentSettingsMcpPolicyAsk')}</option>
@@ -3033,6 +3222,9 @@ function McpSettingsPanel({
                     disabled={saving}
                     spellCheck={false}
                     placeholder="mcp__github__create_issue"
+                    data-mm-label={t('workspace.agentSettingsMcpToolName')}
+                    data-mm-aliases={toolName}
+                    data-mm-exposure="value"
                     onChange={(event) => updatePolicyName(toolName, event.target.value)}
                   />
                 </label>
@@ -3042,6 +3234,9 @@ function McpSettingsPanel({
                     className="settings-input settings-select"
                     value={policy}
                     disabled={saving}
+                    data-mm-label={`${toolName} ${t('workspace.agentSettingsMcpPolicy')}`}
+                    data-mm-aliases={toolName}
+                    data-mm-exposure="value"
                     onChange={(event) => updatePolicy(toolName, event.target.value as AgentMcpToolPolicy)}
                   >
                     <option value="ask">{t('workspace.agentSettingsMcpPolicyAsk')}</option>
@@ -3058,6 +3253,8 @@ function McpSettingsPanel({
                   disabled={saving}
                   title={t('workspace.agentSettingsMcpRemovePolicy')}
                   aria-label={t('workspace.agentSettingsMcpRemovePolicyNamed', { name: toolName })}
+                  data-mm-label={t('workspace.agentSettingsMcpRemovePolicyNamed', { name: toolName })}
+                  data-mm-aliases={toolName}
                   onClick={() => removePolicy(toolName)}
                 >
                   <IconInline name="trash" />
@@ -3069,13 +3266,13 @@ function McpSettingsPanel({
 
         <div className="agent-settings-panel-actions">
           <SaveFeedback status={status} dirty={isDirty} saving={saving} busy={saving || testing} />
-          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} onClick={() => {
+          <button type="button" className="agent-card-secondary-button" disabled={saving || !isDirty} data-mm-label={t('settings.agentMode.cancel')} onClick={() => {
             reset()
             onClose()
           }}>
             {t('settings.agentMode.cancel')}
           </button>
-          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} data-mm-label={saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')} onClick={onSave}>
             <IconInline name={saving ? 'refresh' : 'save'} />
             <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
           </button>
@@ -3183,6 +3380,8 @@ function CardOrderSettingsPanel({
                     type="button"
                     className={`project-home-size-switch__button${displaySize === size ? ' is-active' : ''}`}
                     aria-pressed={displaySize === size}
+                    data-mm-label={t(`workspace.cardSize.${size}`)}
+                    data-mm-aliases={title}
                     onClick={() => onDraftSizeChange(card.cardId, size)}
                   >
                     {t(`workspace.cardSize.${size}`)}
@@ -3190,10 +3389,10 @@ function CardOrderSettingsPanel({
                 ))}
               </div>
               <span className="project-home-kind-badge">{badge}</span>
-              <button type="button" className="project-home-icon-button" disabled={index === 0} onClick={() => move(card.cardId, -1)} aria-label={t('workspace.moveCardUp')}>
+              <button type="button" className="project-home-icon-button" disabled={index === 0} data-mm-label={t('workspace.moveCardUp')} data-mm-aliases={title} onClick={() => move(card.cardId, -1)} aria-label={t('workspace.moveCardUp')}>
                 <IconInline name="arrowUp" />
               </button>
-              <button type="button" className="project-home-icon-button" disabled={index === ordered.length - 1} onClick={() => move(card.cardId, 1)} aria-label={t('workspace.moveCardDown')}>
+              <button type="button" className="project-home-icon-button" disabled={index === ordered.length - 1} data-mm-label={t('workspace.moveCardDown')} data-mm-aliases={title} onClick={() => move(card.cardId, 1)} aria-label={t('workspace.moveCardDown')}>
                 <IconInline name="arrowDown" />
               </button>
               {card.kind === 'plugin' && !isTodoHomeCard(card.item) ? (
@@ -3202,6 +3401,8 @@ function CardOrderSettingsPanel({
                   className="project-home-icon-button project-home-icon-button--danger"
                   disabled={Boolean(deletingSlug)}
                   title={t('workspace.deleteAgentCard')}
+                  data-mm-label={t('workspace.deleteAgentCard')}
+                  data-mm-aliases={title}
                   onClick={() => onDelete(card.item)}
                   aria-label={t('workspace.deleteAgentCard')}
                 >
@@ -3216,10 +3417,10 @@ function CardOrderSettingsPanel({
         </div>
         <div className="agent-settings-panel-actions">
           <SaveFeedback status={status} dirty={isDirty} saving={saving} />
-          <button type="button" className="agent-card-secondary-button" disabled={saving} onClick={onClose}>
+          <button type="button" className="agent-card-secondary-button" disabled={saving} data-mm-label={t('settings.agentMode.cancel')} onClick={onClose}>
             {t('settings.agentMode.cancel')}
           </button>
-          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} onClick={onSave}>
+          <button type="button" className="agent-card-primary-button" disabled={saving || !isDirty} data-mm-label={saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')} onClick={onSave}>
             <IconInline name={saving ? 'refresh' : 'save'} />
             <span>{saving ? t('settings.agentMode.saving') : t('settings.agentMode.confirm')}</span>
           </button>
@@ -3754,6 +3955,11 @@ function shortHash(value: string): string {
     hash = Math.imul(hash, 16777619)
   }
   return (hash >>> 0).toString(36).slice(0, 7)
+}
+
+function stableSemanticId(value: string): string {
+  const normalized = value.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalized || 'item'
 }
 
 function readHomeCardLayout(projectPath: string): HomeCardLayout {

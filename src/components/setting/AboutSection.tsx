@@ -36,13 +36,25 @@ export function AboutSection() {
           <div className="settings-about-row">
             <dt>{t('settings.about.email')}</dt>
             <dd>
-              <a href={`mailto:${APP_METADATA.authorEmail}`}>{APP_METADATA.authorEmail}</a>
+              <a
+                href={`mailto:${APP_METADATA.authorEmail}`}
+                data-mm-label={t('settings.about.email')}
+                data-mm-aliases={APP_METADATA.authorEmail}
+              >
+                {APP_METADATA.authorEmail}
+              </a>
             </dd>
           </div>
           <div className="settings-about-row">
             <dt>{t('settings.about.github')}</dt>
             <dd>
-              <a href={githubUrl} target="_blank" rel="noreferrer">
+              <a
+                href={githubUrl}
+                target="_blank"
+                rel="noreferrer"
+                data-mm-label={t('settings.about.github')}
+                data-mm-aliases={githubUrl}
+              >
                 github.com/{APP_METADATA.githubOwner}/{APP_METADATA.githubRepo}
               </a>
             </dd>

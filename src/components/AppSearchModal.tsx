@@ -472,12 +472,21 @@ export function AppSearchModal({
               type="search"
               value={query}
               placeholder={t('search.placeholder', { project: activeProject.name })}
+              data-mm-label={t('search.inputLabel')}
+              data-mm-aliases={`${t('search.open')}|${t('search.placeholder', { project: activeProject.name })}`}
+              data-mm-exposure="value"
               aria-controls="app-search-results"
               aria-activedescendant={activeIndex >= 0 ? `app-search-result-${activeIndex}` : undefined}
               onChange={(event) => setQuery(event.currentTarget.value)}
               onKeyDown={handleKeyDown}
             />
-            <button type="button" className="btn btn-toolbar app-search-close" aria-label={t('search.close')} onClick={onClose}>
+            <button
+              type="button"
+              className="btn btn-toolbar app-search-close"
+              aria-label={t('search.close')}
+              data-mm-label={t('search.close')}
+              onClick={onClose}
+            >
               <IconInline name="x" />
             </button>
           </div>
@@ -488,6 +497,8 @@ export function AppSearchModal({
                 type="button"
                 className={`app-search-scope${scope === item ? ' is-active' : ''}`}
                 aria-pressed={scope === item}
+                data-mm-label={t(`search.scope.${item}`)}
+                data-mm-aliases={t('search.scopeAria')}
                 onClick={() => setScope(item)}
               >
                 {t(`search.scope.${item}`)}
@@ -497,21 +508,40 @@ export function AppSearchModal({
           <div className="app-search-options" aria-label={t('search.filtersAria')}>
             <label className="app-search-select">
               <span>{t('search.projectScope.label')}</span>
-              <select value={projectScope} onChange={(event) => setProjectScope(event.currentTarget.value as SearchProjectScope)}>
+              <select
+                value={projectScope}
+                data-mm-label={t('search.projectScope.label')}
+                data-mm-aliases={t('search.filtersAria')}
+                data-mm-exposure="value"
+                onChange={(event) => setProjectScope(event.currentTarget.value as SearchProjectScope)}
+              >
                 <option value="current">{t('search.projectScope.current')}</option>
                 <option value="all">{t('search.projectScope.all')}</option>
               </select>
             </label>
             <label className="app-search-select">
               <span>{t('search.recent.label')}</span>
-              <select value={recentFilter} onChange={(event) => setRecentFilter(event.currentTarget.value as SearchRecentFilter)}>
+              <select
+                value={recentFilter}
+                data-mm-label={t('search.recent.label')}
+                data-mm-aliases={t('search.filtersAria')}
+                data-mm-exposure="value"
+                onChange={(event) => setRecentFilter(event.currentTarget.value as SearchRecentFilter)}
+              >
                 <option value="all">{t('search.recent.all')}</option>
                 <option value="7d">{t('search.recent.7d')}</option>
                 <option value="30d">{t('search.recent.30d')}</option>
               </select>
             </label>
             <label className="app-search-option">
-              <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.currentTarget.checked)} />
+              <input
+                type="checkbox"
+                checked={includeArchived}
+                data-mm-label={t('search.includeArchived')}
+                data-mm-aliases={t('search.filtersAria')}
+                data-mm-exposure="value"
+                onChange={(event) => setIncludeArchived(event.currentTarget.checked)}
+              />
               <span>{t('search.includeArchived')}</span>
             </label>
           </div>
@@ -549,6 +579,8 @@ export function AppSearchModal({
                           type="button"
                           id={`app-search-result-${index}`}
                           data-search-index={index}
+                          data-mm-label={hit.title}
+                          data-mm-aliases={[hit.subtitle, actionLabelForHit(hit, t)].filter(Boolean).join('|')}
                           role="option"
                           aria-selected={isActive}
                           className={`app-search-result${isActive ? ' is-active' : ''}`}

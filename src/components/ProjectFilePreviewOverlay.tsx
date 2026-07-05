@@ -78,6 +78,7 @@ export function ProjectFilePreviewOverlay({ preview, onClose }: ProjectFilePrevi
               className="btn btn-toolbar project-file-preview-close"
               title={t('filePanel.previewCloseTitle')}
               aria-label={t('filePanel.previewCloseAria')}
+              data-mm-label={t('filePanel.previewCloseAria')}
               onClick={onClose}
             >
               <IconInline name="x" />

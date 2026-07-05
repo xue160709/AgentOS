@@ -4,6 +4,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { MultimodalGroup, useInteractionObjects, type InteractionObject } from '@xue160709/omni-ui-react'
 import type {
   ClaudeAgentConfigSource,
   ClaudeAgentModelProvider,
@@ -33,6 +34,7 @@ import type {
   AgentWebSearchSettings,
 } from '../../desktop-types'
 import type { AgentSettingsPanelId, WorkspaceProject } from '../types'
+import { SemanticButton, semanticAliases } from '../../multimodal/semantic-controls'
 
 const IS_DEV_BUILD = import.meta.env.DEV
 const REMOTE_PROVIDER_PRESETS_URL =
@@ -521,6 +523,38 @@ export function ClaudeAgentSettingsPage() {
     [pendingDeleteProviderId, providers],
   )
 
+  const modelSettingsSummaryObjects = useMemo<InteractionObject[]>(() => {
+    const providerNames = providers.map((provider) => providerDisplayName(provider, t))
+    const activeProvider = providers.find((provider) => provider.id === chatActiveProviderId) ?? providers[0]
+    const activeModel = activeProvider ? activeProviderModel(activeProvider, chatActiveAnthropicModel) : ''
+    const expandedProvider = providers.find((provider) => provider.id === expandedProviderId)
+    return [
+      {
+        id: 'agentos.settings.models.summary',
+        type: 'composite',
+        role: 'settings_summary',
+        label: t('omni.controls.settingsModelSummary'),
+        aliases: semanticAliases(t, 'omni.aliases.settingsModelSummary'),
+        entity: { type: 'settings-summary', id: 'models' },
+        state: {
+          category: 'models',
+          configSource: effectiveConfigSource,
+          providerCount: providers.length,
+          providerNames,
+          configuredProviderCount: providers.filter(providerHasConfiguredCredential).length,
+          activeProviderId: activeProvider?.id ?? '',
+          activeProviderName: activeProvider ? providerDisplayName(activeProvider, t) : '',
+          activeModel,
+          expandedProviderId,
+          expandedProviderName: expandedProvider ? providerDisplayName(expandedProvider, t) : '',
+          dirty: isDirty,
+          busy,
+        },
+      },
+    ]
+  }, [busy, chatActiveAnthropicModel, chatActiveProviderId, effectiveConfigSource, expandedProviderId, isDirty, providers, t])
+  useInteractionObjects(modelSettingsSummaryObjects)
+
   const openDeleteConfirmDialog = useCallback((providerId: string) => {
     setPendingDeleteProviderId(providerId)
     setDeleteConfirmDialogOpen(true)
@@ -566,6 +600,8 @@ export function ClaudeAgentSettingsPage() {
                     value={configSource}
                     aria-labelledby="settings-section-source-heading"
                     aria-label={t('settings.models.configSourceRadiogroup')}
+                    data-mm-label={t('settings.models.configSource')}
+                    data-mm-exposure="value"
                     onChange={(event) => {
                       setConfigSource(event.target.value as ClaudeAgentConfigSource)
                     }}
@@ -588,13 +624,29 @@ export function ClaudeAgentSettingsPage() {
               <h2 id="settings-section-providers-heading" className="settings-section-heading">
                 {t('settings.models.providersHeading')}
               </h2>
-              <button type="button" className="btn btn-ghost btn-compact" onClick={openAddProviderDialog}>
+              <SemanticButton
+                type="button"
+                className="btn btn-ghost btn-compact"
+                semantic={{
+                  id: 'agentos.control.settings.models.addProvider',
+                  role: 'button',
+                  label: t('omni.controls.settingsAddProvider'),
+                  hint: { aliases: semanticAliases(t, 'omni.aliases.settingsAddProvider') },
+                  state: { providerCount: providers.length, enabled: !busy },
+                }}
+                onClick={openAddProviderDialog}
+              >
                 <IconInline name="plus" />
                 <span>{t('settings.models.add')}</span>
-              </button>
+              </SemanticButton>
             </div>
             <p className="settings-section-caption">{t('settings.models.providersCaption')}</p>
-            <div className="settings-provider-list" role="list" aria-label={t('settings.models.providerListAria')}>
+            <div
+              className="settings-provider-list"
+              role="list"
+              aria-label={t('settings.models.providerListAria')}
+              data-testid="settings-model-provider-list"
+            >
               {providers.map((provider) => {
                 const isExpanded = provider.id === expandedProviderId
                 const bodyId = `provider-body-${provider.id}`
@@ -648,16 +700,46 @@ export function ClaudeAgentSettingsPage() {
                   },
                 ]
                 return (
-                  <div
+                  <MultimodalGroup
                     key={provider.id}
+                    id={`agentos.settings.modelProvider.${provider.id}`}
+                    role="list_item"
+                    label={providerDisplayName(provider, t)}
+                    aliases={[
+                      provider.name,
+                      provider.model,
+                      provider.baseUrl,
+                      provider.presetId,
+                      ...semanticAliases(t, 'omni.aliases.settingsModelProvider', { name: providerDisplayName(provider, t) }),
+                    ].filter((alias): alias is string => Boolean(alias))}
+                    entity={{ type: 'model-provider', id: provider.id }}
+                    state={{
+                      providerId: provider.id,
+                      presetId: provider.presetId,
+                      expanded: isExpanded,
+                      active: chatActiveProviderId === provider.id,
+                      apiKeyConfigured: providerHasConfiguredCredential(provider),
+                      baseUrl: provider.baseUrl,
+                      model: provider.model,
+                      defaultHaikuModel: provider.defaultHaikuModel,
+                      defaultSonnetModel: provider.defaultSonnetModel,
+                      defaultOpusModel: provider.defaultOpusModel,
+                      supportsImages: providerSupportsAnyImages(provider),
+                    }}
                     className={['settings-provider-accordion', isExpanded ? 'is-expanded' : ''].filter(Boolean).join(' ')}
-                    role="listitem"
                   >
                     <div className="settings-provider-row">
-                      <button
+                      <SemanticButton
                         type="button"
                         className="settings-provider-select"
                         id={triggerId}
+                        semantic={{
+                          id: `agentos.control.settings.models.provider.${provider.id}.expand`,
+                          role: 'button',
+                          label: t('omni.controls.settingsModelProvider', { name: providerDisplayName(provider, t) }),
+                          hint: { aliases: semanticAliases(t, 'omni.aliases.settingsModelProvider', { name: providerDisplayName(provider, t) }) },
+                          state: { expanded: isExpanded, active: chatActiveProviderId === provider.id, providerId: provider.id },
+                        }}
                         aria-expanded={isExpanded}
                         aria-controls={bodyId}
                         onClick={() => toggleProviderExpanded(provider.id)}
@@ -669,7 +751,7 @@ export function ClaudeAgentSettingsPage() {
                           <span className="settings-provider-model">{providerDisplayName(provider, t)}</span>
                           <span className="settings-provider-meta">{providerMeta(provider, t)}</span>
                         </span>
-                      </button>
+                      </SemanticButton>
                     </div>
                     {isExpanded ? (
                       <div
@@ -695,6 +777,9 @@ export function ClaudeAgentSettingsPage() {
                               id={`claude-provider-name-${pid}`}
                               type="text"
                               className="settings-input"
+                              data-mm-label={t('omni.controls.settingsProviderNameField', { name: providerDisplayName(provider, t) })}
+                              data-mm-aliases={semanticAliases(t, 'omni.aliases.settingsProviderNameField').join('|')}
+                              data-mm-exposure="value"
                               autoComplete="off"
                               spellCheck={false}
                               placeholder={t('settings.models.fieldNamePlaceholder')}
@@ -715,6 +800,8 @@ export function ClaudeAgentSettingsPage() {
                                   href={provider.apiKeyUrl}
                                   target="_blank"
                                   rel="noreferrer"
+                                  data-mm-label={t('settings.models.getApiKey')}
+                                  data-mm-aliases={provider.name}
                                   onClick={(event) => openExternalLink(event, provider.apiKeyUrl)}
                                 >
                                   {t('settings.models.getApiKey')}
@@ -725,6 +812,9 @@ export function ClaudeAgentSettingsPage() {
                               id={`claude-api-key-${pid}`}
                               type="password"
                               className="settings-input"
+                              data-mm-label={t('omni.controls.settingsProviderApiKeyField', { name: providerDisplayName(provider, t) })}
+                              data-mm-aliases={semanticAliases(t, 'omni.aliases.settingsProviderApiKeyField').join('|')}
+                              data-mm-sensitive="true"
                               autoComplete="off"
                               spellCheck={false}
                               placeholder="sk-ant-..."
@@ -744,6 +834,9 @@ export function ClaudeAgentSettingsPage() {
                               id={`claude-base-url-${pid}`}
                               type="url"
                               className="settings-input"
+                              data-mm-label={t('omni.controls.settingsProviderBaseUrlField', { name: providerDisplayName(provider, t) })}
+                              data-mm-aliases={semanticAliases(t, 'omni.aliases.settingsProviderBaseUrlField').join('|')}
+                              data-mm-exposure="value"
                               autoComplete="off"
                               spellCheck={false}
                               placeholder="https://open.bigmodel.cn/api/anthropic"
@@ -753,7 +846,28 @@ export function ClaudeAgentSettingsPage() {
                           </div>
                           <div className="settings-model-map" aria-label={t('settings.models.modelMappingsAria')}>
                             {modelRows.map((row) => (
-                              <div className="settings-field-row settings-model-row" key={row.field}>
+                              <MultimodalGroup
+                                className="settings-field-row settings-model-row"
+                                key={row.field}
+                                id={`agentos.settings.modelProvider.${provider.id}.${row.field}`}
+                                role="form_field"
+                                label={t('omni.controls.settingsProviderModelField', {
+                                  name: providerDisplayName(provider, t),
+                                  slot: row.label,
+                                })}
+                                aliases={[
+                                  row.label,
+                                  row.value,
+                                  ...semanticAliases(t, 'omni.aliases.settingsProviderModelField', { slot: row.label }),
+                                ].filter((alias): alias is string => Boolean(alias))}
+                                entity={{ type: 'model-provider-field', id: `${provider.id}:${row.field}` }}
+                                state={{
+                                  providerId: provider.id,
+                                  field: row.field,
+                                  model: row.value,
+                                  supportsImages: row.supportsImages,
+                                }}
+                              >
                                 <div className="settings-field-row__meta">
                                   <label htmlFor={row.inputId} className="settings-field-row__label">
                                     <IconInline name="chip" />
@@ -765,6 +879,12 @@ export function ClaudeAgentSettingsPage() {
                                   id={row.inputId}
                                   type="text"
                                   className="settings-input"
+                                  data-mm-label={t('omni.controls.settingsProviderModelField', {
+                                    name: providerDisplayName(provider, t),
+                                    slot: row.label,
+                                  })}
+                                  data-mm-aliases={semanticAliases(t, 'omni.aliases.settingsProviderModelField', { slot: row.label }).join('|')}
+                                  data-mm-exposure="value"
                                   autoComplete="off"
                                   spellCheck={false}
                                   placeholder={row.placeholder}
@@ -783,6 +903,11 @@ export function ClaudeAgentSettingsPage() {
                                       id={row.toggleId}
                                       type="checkbox"
                                       className="settings-switch-input"
+                                      data-mm-label={t('omni.controls.settingsProviderImageToggle', {
+                                        name: providerDisplayName(provider, t),
+                                        slot: row.label,
+                                      })}
+                                      data-mm-aliases={semanticAliases(t, 'omni.aliases.settingsProviderImageToggle', { slot: row.label }).join('|')}
                                       checked={row.supportsImages}
                                       aria-label={t('settings.models.modelImageToggleAria', { slot: row.label })}
                                       onChange={(event) => updateProvider(pid, row.supportField, event.target.checked)}
@@ -792,7 +917,7 @@ export function ClaudeAgentSettingsPage() {
                                     </span>
                                   </span>
                                 </label>
-                              </div>
+                              </MultimodalGroup>
                             ))}
                           </div>
                         </div>
@@ -812,9 +937,16 @@ export function ClaudeAgentSettingsPage() {
                             </p>
                           ) : null}
                           <div className="settings-provider-body__actions-row">
-                            <button
+                            <SemanticButton
                               type="button"
                               className="btn btn-ghost btn-compact"
+                              semantic={{
+                                id: `agentos.control.settings.models.provider.${provider.id}.test`,
+                                role: 'button',
+                                label: t('omni.controls.settingsProviderTest', { name: providerDisplayName(provider, t) }),
+                                hint: { aliases: semanticAliases(t, 'omni.aliases.settingsProviderTest') },
+                                state: { providerId: provider.id, busy: Boolean(testState?.busy), enabled: !(busy || Boolean(testState?.busy)) },
+                              }}
                               disabled={busy || Boolean(testState?.busy)}
                               onClick={() => void testProviderConnection(provider)}
                             >
@@ -824,37 +956,58 @@ export function ClaudeAgentSettingsPage() {
                                   ? t('settings.models.testingConnection')
                                   : t('settings.models.testConnection')}
                               </span>
-                            </button>
-                            <button
+                            </SemanticButton>
+                            <SemanticButton
                               type="button"
                               className="btn btn-primary btn-compact"
+                              semantic={{
+                                id: `agentos.control.settings.models.provider.${provider.id}.confirm`,
+                                role: 'button',
+                                label: t('omni.controls.settingsProviderConfirm', { name: providerDisplayName(provider, t) }),
+                                hint: { aliases: semanticAliases(t, 'omni.aliases.settingsProviderConfirm') },
+                                state: { providerId: provider.id, dirty: isDirty, enabled: !(!isDirty || busy || saveDisabled) },
+                              }}
                               disabled={!isDirty || busy || saveDisabled}
                               onClick={() => void persist()}
                             >
                               {t('settings.models.editorConfirm')}
-                            </button>
-                            <button
+                            </SemanticButton>
+                            <SemanticButton
                               type="button"
                               className="btn btn-ghost btn-compact"
+                              semantic={{
+                                id: `agentos.control.settings.models.provider.${provider.id}.cancel`,
+                                role: 'button',
+                                label: t('omni.controls.settingsProviderCancel', { name: providerDisplayName(provider, t) }),
+                                hint: { aliases: semanticAliases(t, 'omni.aliases.settingsProviderCancel') },
+                                state: { providerId: provider.id, dirty: isDirty, enabled: !(!isDirty || busy) },
+                              }}
                               disabled={!isDirty || busy}
                               onClick={cancelExpandedProviderEdits}
                             >
                               {t('settings.models.editorCancel')}
-                            </button>
-                            <button
+                            </SemanticButton>
+                            <SemanticButton
                               type="button"
                               className="settings-provider-delete-link"
+                              semantic={{
+                                id: `agentos.control.settings.models.provider.${provider.id}.delete`,
+                                role: 'button',
+                                label: t('omni.controls.settingsProviderDelete', { name: providerDisplayName(provider, t) }),
+                                hint: { aliases: semanticAliases(t, 'omni.aliases.settingsProviderDelete') },
+                                state: { providerId: provider.id, enabled: !(providers.length <= 1 || busy) },
+                              }}
                               disabled={providers.length <= 1 || busy}
                               title={providers.length <= 1 ? t('settings.models.deleteKeepOne') : undefined}
                               onClick={() => openDeleteConfirmDialog(pid)}
                             >
                               {t('settings.models.deleteProviderEntry')}
-                            </button>
+                            </SemanticButton>
                           </div>
                         </div>
                       </div>
                     ) : null}
-                  </div>
+                  </MultimodalGroup>
                 )
               })}
             </div>
@@ -879,15 +1032,22 @@ export function ClaudeAgentSettingsPage() {
 
         <div className="settings-footer">
           <div className="settings-actions">
-            <button
+            <SemanticButton
               type="button"
               className="btn btn-primary btn-compact"
+              semantic={{
+                id: 'agentos.control.settings.models.save',
+                role: 'button',
+                label: t('omni.controls.settingsSaveModels'),
+                hint: { aliases: semanticAliases(t, 'omni.aliases.settingsSaveModels') },
+                state: { dirty: isDirty, busy, enabled: !(!isDirty || busy || saveDisabled) },
+              }}
               disabled={!isDirty || busy || saveDisabled}
               onClick={() => void persist()}
               aria-controls="claude-settings-form"
             >
               {t('settings.models.saveChanges')}
-            </button>
+            </SemanticButton>
             <span className="settings-status" id="claude-settings-status" role="status" aria-live="polite">
               {status}
             </span>
@@ -921,23 +1081,40 @@ export function ClaudeAgentSettingsPage() {
             </p>
             <div className="settings-provider-preset-grid">
               {providerPresets.map((preset) => (
-                <button
+                <SemanticButton
                   key={preset.id}
                   type="button"
                   className="settings-provider-preset-card"
+                  semantic={{
+                    id: `agentos.control.settings.models.addPreset.${preset.id}`,
+                    role: 'button',
+                    label: t('omni.controls.settingsProviderPreset', { name: preset.name }),
+                    hint: { aliases: [preset.name, preset.baseUrl, ...semanticAliases(t, 'omni.aliases.settingsProviderPreset')] },
+                    state: { presetId: preset.id, baseUrl: preset.baseUrl, model: preset.model },
+                  }}
                   onClick={() => addProvider(preset)}
                 >
                   <span className="settings-provider-preset-card__title">{preset.name}</span>
                   <span className="settings-provider-preset-card__meta">{preset.baseUrl}</span>
-                </button>
+                </SemanticButton>
               ))}
-              <button type="button" className="settings-provider-preset-card" onClick={() => addProvider()}>
+              <SemanticButton
+                type="button"
+                className="settings-provider-preset-card"
+                semantic={{
+                  id: 'agentos.control.settings.models.addCustomProvider',
+                  role: 'button',
+                  label: t('omni.controls.settingsCustomProvider'),
+                  hint: { aliases: semanticAliases(t, 'omni.aliases.settingsCustomProvider') },
+                }}
+                onClick={() => addProvider()}
+              >
                 <span className="settings-provider-preset-card__title">{t('settings.models.customProvider')}</span>
                 <span className="settings-provider-preset-card__meta">{t('settings.models.customProviderMeta')}</span>
-              </button>
+              </SemanticButton>
             </div>
             <div className="settings-restart-dialog__actions">
-              <button type="button" className="btn btn-ghost" onClick={() => addProviderDialogRef.current?.close()}>
+              <button type="button" className="btn btn-ghost" data-mm-label={t('settings.models.deleteDialogDismiss')} onClick={() => addProviderDialogRef.current?.close()}>
                 {t('settings.models.deleteDialogDismiss')}
               </button>
             </div>
@@ -966,10 +1143,10 @@ export function ClaudeAgentSettingsPage() {
                 : t('settings.models.deleteDialogBodyFallback')}
             </p>
             <div className="settings-restart-dialog__actions">
-              <button type="button" className="btn btn-ghost" onClick={() => deleteConfirmDialogRef.current?.close()}>
+              <button type="button" className="btn btn-ghost" data-mm-label={t('settings.models.deleteDialogDismiss')} onClick={() => deleteConfirmDialogRef.current?.close()}>
                 {t('settings.models.deleteDialogDismiss')}
               </button>
-              <button type="button" className="btn btn-primary" onClick={confirmDeleteProvider}>
+              <button type="button" className="btn btn-primary" data-mm-label={t('settings.models.deleteDialogConfirm')} onClick={confirmDeleteProvider}>
                 {t('settings.models.deleteDialogConfirm')}
               </button>
             </div>
@@ -1374,6 +1551,9 @@ export function GlobalWebSearchSettingsPage() {
                 value={mode}
                 checked={draftSettings.mode === mode}
                 disabled={saving || testingProvider}
+                data-mm-label={t(`settings.search.mode.${mode}.title`)}
+                data-mm-aliases={t('settings.search.modeAria')}
+                data-mm-exposure="value"
                 onChange={() => updateDraftSettings((current) => ({ ...current, mode }))}
               />
               <span>
@@ -1395,6 +1575,8 @@ export function GlobalWebSearchSettingsPage() {
               className="btn btn-ghost btn-compact"
               data-testid="web-search-provider-test"
               disabled={saving || testingProvider || !usingAgentOs}
+              data-mm-label={testingProvider ? t('settings.search.testingShort') : t('settings.search.test')}
+              data-mm-aliases={t('settings.search.providerHeading')}
               onClick={() => void testWebSearchProvider()}
             >
               <IconInline name={providerTestResult?.ok ? 'check' : 'refresh'} />
@@ -1411,6 +1593,9 @@ export function GlobalWebSearchSettingsPage() {
                   value={provider}
                   checked={draftSettings.provider === provider}
                   disabled={saving || testingProvider || !usingAgentOs}
+                  data-mm-label={t(`settings.search.provider.${provider}.title`)}
+                  data-mm-aliases={t('settings.search.providerAria')}
+                  data-mm-exposure="value"
                   onChange={() => updateDraftSettings((current) => ({ ...current, provider }))}
                 />
                 <span>
@@ -1446,6 +1631,8 @@ export function GlobalWebSearchSettingsPage() {
                           disabled={saving || testingProvider || !usingAgentOs}
                           spellCheck={false}
                           placeholder={activeKeyProvider === 'brave' ? '${BRAVE_SEARCH_API_KEY}' : '${TAVILY_API_KEY}'}
+                          data-mm-label={t('settings.search.apiKeyPoolItemLabel', { index: index + 1 })}
+                          data-mm-sensitive="true"
                           onChange={(event) =>
                             updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
                               const next = keys.length > 0 ? [...keys] : ['']
@@ -1460,6 +1647,7 @@ export function GlobalWebSearchSettingsPage() {
                             className="btn btn-ghost btn-compact web-search-key-pool__button"
                             aria-label={t('settings.search.apiKeyMoveUp', { index: index + 1 })}
                             disabled={moveDisabled || index === 0}
+                            data-mm-label={t('settings.search.apiKeyMoveUp', { index: index + 1 })}
                             onClick={() =>
                               updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
                                 const next = [...keys]
@@ -1477,6 +1665,7 @@ export function GlobalWebSearchSettingsPage() {
                             className="btn btn-ghost btn-compact web-search-key-pool__button"
                             aria-label={t('settings.search.apiKeyMoveDown', { index: index + 1 })}
                             disabled={moveDisabled || index >= visibleApiKeys.length - 1}
+                            data-mm-label={t('settings.search.apiKeyMoveDown', { index: index + 1 })}
                             onClick={() =>
                               updateWebSearchApiKeyPool(activeKeyProvider, (keys) => {
                                 const next = [...keys]
@@ -1494,6 +1683,7 @@ export function GlobalWebSearchSettingsPage() {
                             className="btn btn-ghost btn-compact web-search-key-pool__button web-search-key-pool__button--danger"
                             aria-label={t('settings.search.apiKeyRemove', { index: index + 1 })}
                             disabled={saving || testingProvider || !usingAgentOs}
+                            data-mm-label={t('settings.search.apiKeyRemove', { index: index + 1 })}
                             onClick={() =>
                               updateWebSearchApiKeyPool(activeKeyProvider, (keys) => keys.filter((_key, keyIndex) => keyIndex !== index))
                             }
@@ -1511,6 +1701,7 @@ export function GlobalWebSearchSettingsPage() {
                     type="button"
                     className="btn btn-ghost btn-compact"
                     disabled={saving || testingProvider || !usingAgentOs}
+                    data-mm-label={t('settings.search.apiKeyAdd')}
                     onClick={() => updateWebSearchApiKeyPool(activeKeyProvider, (keys) => [...keys, ''])}
                   >
                     <IconInline name="plus" />
@@ -1538,7 +1729,7 @@ export function GlobalWebSearchSettingsPage() {
         <div className="settings-footer settings-footer--inline">
           <span>{status}</span>
           <div className="settings-footer__actions">
-            <button type="button" className="btn btn-ghost" disabled={saving || testingProvider || !dirty} onClick={() => {
+            <button type="button" className="btn btn-ghost" disabled={saving || testingProvider || !dirty} data-mm-label={t('settings.search.revert')} onClick={() => {
               setDraftSettings(savedSettings)
               setProviderTestResult(null)
               setStatus(t('settings.search.reverted'))
@@ -1550,6 +1741,7 @@ export function GlobalWebSearchSettingsPage() {
               className="btn btn-primary"
               data-testid="web-search-settings-save"
               disabled={saving || testingProvider || !dirty}
+              data-mm-label={t('settings.search.save')}
               onClick={() => void saveWebSearchSettings()}
             >
               <IconInline name="save" />
@@ -1657,7 +1849,7 @@ function GlobalMcpSettingsSection({
               const statusView = formatGlobalMcpProbeStatus(server, snapshot, t)
               return (
                 <div key={`${server.name}-${index}`} className={`agent-mcp-installed-row agent-mcp-installed-row--${statusView.tone}`} role="listitem">
-                  <button type="button" className="global-mcp-installed-row__main" disabled={busy} onClick={() => onOpenEditor(index)}>
+                  <button type="button" className="global-mcp-installed-row__main" disabled={busy} data-mm-label={displayName} data-mm-aliases={statusView.text} onClick={() => onOpenEditor(index)}>
                     <span className="agent-mcp-installed-row__avatar" aria-hidden="true">
                       <span>{displayName.slice(0, 1).toUpperCase()}</span>
                       <span className={`agent-mcp-installed-row__dot agent-mcp-installed-row__dot--${statusView.tone}`} />
@@ -1674,6 +1866,7 @@ function GlobalMcpSettingsSection({
                       disabled={busy}
                       title={t('settings.mcp.duplicateServer')}
                       aria-label={t('settings.mcp.duplicateServerNamed', { name: displayName })}
+                      data-mm-label={t('settings.mcp.duplicateServerNamed', { name: displayName })}
                       onClick={() => onDuplicateServer(index)}
                     >
                       <IconInline name="copy" />
@@ -1686,6 +1879,9 @@ function GlobalMcpSettingsSection({
                           className="settings-switch-input"
                           checked={server.enabled}
                           disabled={busy}
+                          data-mm-label={t('workspace.agentSettingsMcpToggleServer', { name: displayName })}
+                          data-mm-aliases={displayName}
+                          data-mm-exposure="value"
                           onChange={(event) => onServerChange(index, { enabled: event.target.checked })}
                         />
                         <span className="settings-switch-track" aria-hidden="true">
@@ -1697,7 +1893,7 @@ function GlobalMcpSettingsSection({
                 </div>
               )
             })}
-            <button type="button" className="agent-mcp-installed-row agent-mcp-installed-row--add" data-testid="global-mcp-add-server" disabled={busy} onClick={() => onOpenEditor(null)}>
+            <button type="button" className="agent-mcp-installed-row agent-mcp-installed-row--add" data-testid="global-mcp-add-server" disabled={busy} data-mm-label={t('workspace.agentSettingsMcpNewServer')} data-mm-aliases={t('workspace.agentSettingsMcpAddCustomServer')} onClick={() => onOpenEditor(null)}>
               <span className="agent-mcp-installed-row__avatar" aria-hidden="true">
                 <IconInline name="plus" />
               </span>
@@ -1713,10 +1909,10 @@ function GlobalMcpSettingsSection({
               <IconInline name={busy ? 'refresh' : dirty ? 'save' : 'check'} />
               <span>{status || (dirty ? t('workspace.agentSettingsUnsavedChanges') : t('workspace.agentSettingsNoChanges'))}</span>
             </p>
-            <button type="button" className="agent-card-secondary-button" disabled={busy || !dirty} onClick={onReset}>
+            <button type="button" className="agent-card-secondary-button" disabled={busy || !dirty} data-mm-label={t('settings.mcp.cancel')} onClick={onReset}>
               {t('settings.mcp.cancel')}
             </button>
-            <button type="button" className="agent-card-primary-button" disabled={busy || !dirty} onClick={onSave}>
+            <button type="button" className="agent-card-primary-button" disabled={busy || !dirty} data-mm-label={operation === 'saving' ? t('settings.mcp.saving') : t('settings.mcp.save')} onClick={onSave}>
               <IconInline name={operation === 'saving' ? 'refresh' : 'save'} />
               <span>{operation === 'saving' ? t('settings.mcp.saving') : t('settings.mcp.save')}</span>
             </button>
@@ -1762,12 +1958,12 @@ function GlobalMcpServerEditor({
   return (
     <div className="global-mcp-editor" data-testid="global-mcp-server-editor">
       <div className="global-mcp-editor__topbar">
-        <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onCancel}>
+        <button type="button" className="agent-card-secondary-button" disabled={busy} data-mm-label={t('settings.mcp.backToList')} onClick={onCancel}>
           <IconInline name="back" />
           <span>{t('settings.mcp.backToList')}</span>
         </button>
         {onDelete ? (
-          <button type="button" className="project-home-icon-button project-home-icon-button--danger" disabled={busy} title={t('workspace.agentSettingsMcpRemoveServer')} onClick={onDelete}>
+          <button type="button" className="project-home-icon-button project-home-icon-button--danger" disabled={busy} title={t('workspace.agentSettingsMcpRemoveServer')} data-mm-label={t('workspace.agentSettingsMcpRemoveServer')} onClick={onDelete}>
             <IconInline name="trash" />
           </button>
         ) : null}
@@ -1795,6 +1991,8 @@ function GlobalMcpServerEditor({
             disabled={busy}
             spellCheck={false}
             placeholder="chrome-devtools"
+            data-mm-label={t('workspace.agentSettingsMcpServerName')}
+            data-mm-exposure="value"
             onChange={(event) => onChange({ name: event.target.value })}
           />
         </label>
@@ -1808,6 +2006,8 @@ function GlobalMcpServerEditor({
               aria-selected={server.transport === transport}
               className={`global-mcp-segmented__item${server.transport === transport ? ' is-active' : ''}`}
               disabled={busy}
+              data-mm-label={t(`workspace.agentSettingsMcpTransport.${transport}`)}
+              data-mm-aliases={t('workspace.agentSettingsMcpTransportLabel')}
               onClick={() => onChange({ transport })}
             >
               {t(`workspace.agentSettingsMcpTransport.${transport}`)}
@@ -1827,6 +2027,8 @@ function GlobalMcpServerEditor({
                   disabled={busy}
                   spellCheck={false}
                   placeholder="npx"
+                  data-mm-label={t('workspace.agentSettingsMcpCommand')}
+                  data-mm-exposure="value"
                   onChange={(event) => onChange({ command: event.target.value })}
                 />
                 <GlobalMcpEnvHint hint={envHints.command} />
@@ -1840,6 +2042,7 @@ function GlobalMcpServerEditor({
                   disabled={busy}
                   spellCheck={false}
                   placeholder="-y\nchrome-devtools-mcp@latest"
+                  data-mm-label={t('workspace.agentSettingsMcpArgs')}
                   onChange={(event) => onChange({ args: linesToList(event.target.value) })}
                 />
                 <GlobalMcpEnvHint hint={envHints.args} />
@@ -1853,6 +2056,8 @@ function GlobalMcpServerEditor({
                   disabled={busy}
                   spellCheck={false}
                   placeholder="~/code"
+                  data-mm-label={t('workspace.agentSettingsMcpCwd')}
+                  data-mm-exposure="value"
                   onChange={(event) => onChange({ cwd: event.target.value })}
                 />
                 <GlobalMcpEnvHint hint={envHints.cwd} />
@@ -1869,6 +2074,8 @@ function GlobalMcpServerEditor({
                   disabled={busy}
                   spellCheck={false}
                   placeholder="https://mcp.example.com/mcp"
+                  data-mm-label={t('workspace.agentSettingsMcpUrl')}
+                  data-mm-exposure="value"
                   onChange={(event) => onChange({ url: event.target.value })}
                 />
                 <GlobalMcpEnvHint hint={envHints.url} />
@@ -1882,6 +2089,8 @@ function GlobalMcpServerEditor({
                   disabled={busy}
                   spellCheck={false}
                   placeholder="Authorization=Bearer ${MCP_TOKEN}"
+                  data-mm-label={t('workspace.agentSettingsMcpHeaders')}
+                  data-mm-sensitive="true"
                   onChange={(event) => onChange({ headers: keyValueLinesToRecord(event.target.value) })}
                 />
                 <GlobalMcpEnvHint hint={envHints.headers} />
@@ -1898,6 +2107,8 @@ function GlobalMcpServerEditor({
               disabled={busy}
               spellCheck={false}
               placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_TOKEN}"
+              data-mm-label={t('workspace.agentSettingsMcpEnv')}
+              data-mm-sensitive="true"
               onChange={(event) => onChange({ env: keyValueLinesToRecord(event.target.value) })}
             />
             <GlobalMcpEnvHint hint={envHints.env} />
@@ -1908,6 +2119,9 @@ function GlobalMcpServerEditor({
               type="checkbox"
               checked={server.alwaysLoad}
               disabled={busy}
+              data-mm-label={t('workspace.agentSettingsMcpAlwaysLoad')}
+              data-mm-aliases={t('workspace.agentSettingsMcpAlwaysLoadHint')}
+              data-mm-exposure="value"
               onChange={(event) => onChange({ alwaysLoad: event.target.checked })}
             />
             <span>
@@ -1923,11 +2137,11 @@ function GlobalMcpServerEditor({
           <IconInline name={busy ? 'refresh' : statusView.tone === 'ready' ? 'check' : 'server'} />
           <span>{status || statusView.text}</span>
         </p>
-        <button type="button" className="agent-card-secondary-button" disabled={busy} onClick={onSave}>
+        <button type="button" className="agent-card-secondary-button" disabled={busy} data-mm-label={t('settings.mcp.save')} onClick={onSave}>
           <IconInline name="save" />
           <span>{t('settings.mcp.save')}</span>
         </button>
-        <button type="button" className="agent-card-primary-button" disabled={busy} onClick={onSaveAndTest}>
+        <button type="button" className="agent-card-primary-button" disabled={busy} data-mm-label={operation === 'saving' ? t('settings.mcp.savingShort') : operation === 'testing' ? t('settings.mcp.testingShort') : t('settings.mcp.saveAndTest')} onClick={onSaveAndTest}>
           <IconInline name={busy ? 'refresh' : 'server'} />
           <span>
             {operation === 'saving'
@@ -2227,6 +2441,23 @@ function providerDisplayName(
   t: (path: string, vars?: Record<string, string | number>) => string,
 ): string {
   return provider.name || provider.model || t('settings.models.unnamedModel')
+}
+
+function activeProviderModel(provider: ClaudeAgentModelProvider, overlay: string): string {
+  return overlay.trim() || provider.model || provider.defaultSonnetModel || provider.defaultOpusModel || provider.defaultHaikuModel
+}
+
+function providerHasConfiguredCredential(provider: ClaudeAgentModelProvider): boolean {
+  return Boolean(provider.apiKey.trim() || provider.authToken.trim())
+}
+
+function providerSupportsAnyImages(provider: ClaudeAgentModelProvider): boolean {
+  return Boolean(
+    provider.modelSupportsImages ||
+    provider.defaultHaikuSupportsImages ||
+    provider.defaultSonnetSupportsImages ||
+    provider.defaultOpusSupportsImages
+  )
 }
 
 function providerMeta(

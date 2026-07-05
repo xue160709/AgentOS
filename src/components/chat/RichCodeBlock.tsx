@@ -93,6 +93,8 @@ const CodeBlock = memo(function CodeBlock({ code, language }: { code: string; la
           disabled={copyState === 'copying'}
           title={t('chat.codeBlockCopyAria', { language: languageLabel })}
           aria-label={t('chat.codeBlockCopyAria', { language: languageLabel })}
+          data-mm-label={t('chat.codeBlockCopyAria', { language: languageLabel })}
+          data-mm-aliases={codeLabel}
           onClick={copyCode}
         >
           <IconInline name={copyState === 'copied' ? 'check' : 'copy'} />
@@ -207,6 +209,8 @@ const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: string }) 
             type="button"
             className="mermaid-diagram__action"
             disabled={copySourceState === 'copying'}
+            data-mm-label={sourceCopyLabel}
+            data-mm-aliases={t('chat.mermaidDiagramLabel')}
             onClick={copySource}
           >
             <IconInline name={copySourceState === 'copied' ? 'check' : 'copy'} />
@@ -216,6 +220,8 @@ const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: string }) 
             type="button"
             className="mermaid-diagram__action"
             disabled={!svg}
+            data-mm-label={t('chat.generativeUiDownloadSvg')}
+            data-mm-aliases={t('chat.mermaidDiagramLabel')}
             onClick={() => downloadSvgFile(svg, 'mermaid-diagram')}
           >
             <IconInline name="download" />
@@ -225,6 +231,8 @@ const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: string }) 
             type="button"
             className="mermaid-diagram__action"
             disabled={!svg || copyPngState === 'copying'}
+            data-mm-label={copyPngLabel}
+            data-mm-aliases={t('chat.mermaidDiagramLabel')}
             onClick={copyPng}
           >
             <IconInline name={copyPngState === 'copied' ? 'check' : 'copy'} />

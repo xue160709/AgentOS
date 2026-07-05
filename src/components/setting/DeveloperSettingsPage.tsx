@@ -134,6 +134,8 @@ export function DeveloperSettingsPage() {
                   type="button"
                   className="btn btn-danger btn-compact"
                   disabled={busy}
+                  data-mm-label={item.button}
+                  data-mm-aliases={item.title}
                   onClick={() => openDialog(item.target)}
                 >
                   <IconInline name="trash" />
@@ -178,6 +180,7 @@ export function DeveloperSettingsPage() {
               <button
                 type="button"
                 className="btn btn-ghost"
+                data-mm-label={t('settings.developer.dialogDismiss')}
                 onClick={() => dialogRef.current?.close()}
               >
                 {t('settings.developer.dialogDismiss')}
@@ -186,6 +189,8 @@ export function DeveloperSettingsPage() {
                 type="button"
                 className="btn btn-danger"
                 disabled={!dialogMeta || busy}
+                data-mm-label={dialogMeta?.dialogConfirm ?? ''}
+                data-mm-aliases={dialogMeta?.dialogTitle ?? ''}
                 onClick={() => {
                   if (!dialogTarget) return
                   void runClear(dialogTarget)

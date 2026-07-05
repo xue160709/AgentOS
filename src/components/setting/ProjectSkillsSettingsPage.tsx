@@ -127,6 +127,9 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
                   className="settings-input settings-select"
                   value={pickerLocale}
                   aria-labelledby="settings-section-language-heading"
+                  data-mm-label={t('settings.general.languageHeading')}
+                  data-mm-aliases={t('settings.general.languageCaption')}
+                  data-mm-exposure="value"
                   onChange={(event) => handleLocaleSelectChange(event.target.value as AppLocale)}
                 >
                   <option value="zh">{t('settings.general.languageZh')}</option>
@@ -155,10 +158,20 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
               </h3>
               <p className="settings-restart-dialog__body">{t('settings.general.languageRestartHint')}</p>
               <div className="settings-restart-dialog__actions">
-                <button type="button" className="btn btn-ghost" onClick={() => languageRestartDialogRef.current?.close()}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  data-mm-label={t('settings.general.languageRestartLater')}
+                  onClick={() => languageRestartDialogRef.current?.close()}
+                >
                   {t('settings.general.languageRestartLater')}
                 </button>
-                <button type="button" className="btn btn-primary" onClick={requestQuit}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  data-mm-label={t('settings.general.quitApp')}
+                  onClick={requestQuit}
+                >
                   {t('settings.general.quitApp')}
                 </button>
               </div>
@@ -183,6 +196,9 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
                     className="settings-switch-input"
                     checked={closeToTray}
                     disabled={!desktopPrefsHydrated}
+                    data-mm-label={t('settings.general.closeToTray')}
+                    data-mm-aliases={t('settings.general.closeToTrayHint')}
+                    data-mm-exposure="value"
                     onChange={(event) => onCloseToTrayChange(event.target.checked)}
                   />
                   <span className="settings-switch-track" aria-hidden="true">
@@ -201,6 +217,9 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
                     className="settings-switch-input"
                     checked={openAtLogin}
                     disabled={!desktopPrefsHydrated}
+                    data-mm-label={t('settings.general.openAtLogin')}
+                    data-mm-aliases={t('settings.general.openAtLoginHint')}
+                    data-mm-exposure="value"
                     onChange={(event) => onOpenAtLoginChange(event.target.checked)}
                   />
                   <span className="settings-switch-track" aria-hidden="true">
@@ -219,6 +238,9 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
                     className="settings-switch-input"
                     checked={eyeComfortMode}
                     disabled={!desktopPrefsHydrated}
+                    data-mm-label={t('settings.general.eyeComfortMode')}
+                    data-mm-aliases={t('settings.general.eyeComfortModeHint')}
+                    data-mm-exposure="value"
                     onChange={(event) => onEyeComfortModeChange(event.target.checked)}
                   />
                   <span className="settings-switch-track" aria-hidden="true">
@@ -249,6 +271,9 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
                   type="checkbox"
                   className="settings-switch-input"
                   checked={enabled}
+                  data-mm-label={t('settings.general.showProjectSkills')}
+                  data-mm-aliases={t('settings.general.showProjectSkillsHint')}
+                  data-mm-exposure="value"
                   onChange={(event) => onEnabledChange(event.target.checked)}
                 />
                 <span className="settings-switch-track" aria-hidden="true">

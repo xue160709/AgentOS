@@ -200,6 +200,8 @@ function FileTreeRows({ nodes, expandedPaths, activeFilePath, onToggle, onOpenFi
                 className={`app-file-tree-row is-directory${isExpanded ? ' is-expanded' : ''}`}
                 style={style}
                 title={node.relativePath}
+                data-mm-label={node.name}
+                data-mm-aliases={node.relativePath}
                 onClick={() => onToggle(node.path)}
               >
                 <span className="app-file-tree-chevron">
@@ -215,6 +217,8 @@ function FileTreeRows({ nodes, expandedPaths, activeFilePath, onToggle, onOpenFi
                 style={style}
                 title={node.relativePath}
                 aria-label={openFileLabel(node.name)}
+                data-mm-label={openFileLabel(node.name)}
+                data-mm-aliases={node.relativePath}
                 onClick={() => onOpenFile?.(node)}
               >
                 <span className="app-file-tree-spacer" />

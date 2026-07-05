@@ -3,7 +3,7 @@
 ## 代码入口
 
 - `src/main.tsx`：挂载 `MultimodalProvider`，加载 omni-ui 样式，注册规则优先 resolver。
-- `src/multimodal/config.ts`：定义本地规则、LLM action policy 与 Claude SDK resolver prompt。
+- `src/multimodal/config.ts`：定义确定性应用内本地规则、LLM action policy 与 Claude SDK resolver prompt；Google/谷歌等已知安全网页有窄范围本地规则，其它开放应用/网页名不在本地 rules 中泛化硬编码。
 - `src/multimodal/actions.ts`：定义 AgentOS 命令 action 与运行时参数 schema。
 - `src/multimodal/AgentOsMultimodal.tsx`：注册 action executor，作为主窗口 headless runtime 处理独立窗口提交、确认和澄清响应。
 - `src/components/AppShell.tsx`、`src/components/AppShellSidebar.tsx`、`src/components/chat/ProjectHomeSurface.tsx`：用 `MultimodalPage` / `MultimodalGroup` 标注页面、项目、会话和任务卡。
@@ -17,6 +17,8 @@
 
 - 意图识别只在主进程执行，renderer 不接触 API Key 或 auth token。
 - Claude Agent SDK query 使用 `maxTurns: 1`，`allowedTools: []`、`tools: []`、`mcpServers: {}`、`settingSources: []`、`skills: []`，仅作为无副作用 JSON 意图解析器。
+- `system.openApp` 不配置本地短语 rules，也不进入 local fast path；`system.openUrl` 仅为 Google/谷歌等已知安全网页提供窄范围本地规则，其它网页名仍由模型从 allowlisted `modelActionPolicy` 中选择；执行始终由本地 action executor 接管。
+- SDK JSON 返回后会对 page/app/system 级 action 做 target 规范化：模型负责选择 `actionId` 与业务参数，本地只把这类 action 绑定回当前 `snapshot.page.id`，避免把网站名或应用名误当成 UI target 后被 omni-ui hard validation 拦截。
 - `system.openApp` 使用 `spawn('/usr/bin/open', ['-a', appName], { shell: false })`，应用名永远作为单一参数，不经 shell 拼接。
 - `system.openUrl` 只把规范化后的 HTTP/HTTPS URL 交给既有 `desktop.openExternal`，用于默认浏览器打开网页；不接受 shell 片段或非网页协议。
 - 语音悬浮窗只采集 utterance 和显示结果，主窗口仍是唯一命令执行方。

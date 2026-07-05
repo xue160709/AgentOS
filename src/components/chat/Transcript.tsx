@@ -335,6 +335,8 @@ function ProcessTraceBlock({
         title={t('chat.responseDurationTitle')}
         aria-label={t('chat.responseDurationTitle')}
         aria-expanded={isOpen}
+        data-mm-label={t('chat.responseDurationTitle')}
+        data-mm-aliases={t('chat.responseProcessed')}
         onClick={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen((value) => !value))}
       >
         <span>{t('chat.responseProcessed')}</span>
@@ -409,6 +411,9 @@ const ChatMessage = memo(function ChatMessage({
             ref={editTextareaRef}
             value={draft}
             aria-label={t('chat.editMessageAria')}
+            data-mm-label={t('chat.editMessageAria')}
+            data-mm-aliases={t('chat.editMessage')}
+            data-mm-exposure="value"
             onChange={(event) => setDraft(event.currentTarget.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -427,6 +432,8 @@ const ChatMessage = memo(function ChatMessage({
             <button
               type="button"
               className="chat-message-edit__btn chat-message-edit__btn--cancel"
+              data-mm-label={t('chat.editCancel')}
+              data-mm-aliases={t('chat.editMessageAria')}
               onClick={() => {
                 onUserMessageEditDismissed?.()
                 setIsEditing(false)
@@ -435,7 +442,14 @@ const ChatMessage = memo(function ChatMessage({
               <IconInline name="x" />
               <span>{t('chat.editCancel')}</span>
             </button>
-            <button type="button" className="chat-message-edit__btn chat-message-edit__btn--submit" disabled={!canSaveEdit} onClick={saveEdit}>
+            <button
+              type="button"
+              className="chat-message-edit__btn chat-message-edit__btn--submit"
+              disabled={!canSaveEdit}
+              data-mm-label={t('chat.editSubmit')}
+              data-mm-aliases={t('chat.editMessageAria')}
+              onClick={saveEdit}
+            >
               <IconInline name="check" />
               <span>{t('chat.editSubmit')}</span>
             </button>
@@ -469,6 +483,8 @@ const ChatMessage = memo(function ChatMessage({
               disabled={!canCopy}
               title={t('chat.copyMessage')}
               aria-label={t('chat.copyMessage')}
+              data-mm-label={t('chat.copyMessage')}
+              data-mm-aliases={t('chat.messageActionsAria')}
               onClick={() => onCopyMessage?.(item.content)}
             >
               <IconInline name="copy" />
@@ -480,6 +496,8 @@ const ChatMessage = memo(function ChatMessage({
                 disabled={!canFork}
                 title={t('chat.forkMessage')}
                 aria-label={t('chat.forkMessage')}
+                data-mm-label={t('chat.forkMessage')}
+                data-mm-aliases={t('chat.messageActionsAria')}
                 onClick={() => onForkMessage?.(item.id)}
               >
                 <IconInline name="fork" />
@@ -492,6 +510,8 @@ const ChatMessage = memo(function ChatMessage({
                 disabled={!canEdit}
                 title={t('chat.editMessage')}
                 aria-label={t('chat.editMessage')}
+                data-mm-label={t('chat.editMessage')}
+                data-mm-aliases={t('chat.messageActionsAria')}
                 onClick={() => setIsEditing(true)}
               >
                 <IconInline name="edit" />
@@ -620,13 +640,15 @@ const ToolRow = memo(function ToolRow({ item }: { item: ChatToolItem }) {
 
   return (
     <details
-    className={`tool-row tool-row--${item.status}`}
-    data-transcript-item-id={item.id}
-    data-testid={isMcpTool ? 'transcript-mcp-tool-call' : undefined}
-    open={isOpen}
+      className={`tool-row tool-row--${item.status}`}
+      data-transcript-item-id={item.id}
+      data-testid={isMcpTool ? 'transcript-mcp-tool-call' : undefined}
+      data-mm-label={formatToolDisplayName(item.name)}
+      data-mm-aliases={statusLabel[item.status]}
+      open={isOpen}
       onToggle={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen(event.currentTarget.open))}
     >
-      <summary className="status-row__summary">{summary}</summary>
+      <summary className="status-row__summary" data-mm-label={formatToolDisplayName(item.name)} data-mm-aliases={statusLabel[item.status]}>{summary}</summary>
       <div className="status-row__body">{item.inputPreview ? <code>{item.inputPreview}</code> : null}</div>
     </details>
   )
@@ -721,10 +743,12 @@ const ThinkingRow = memo(function ThinkingRow({ item }: { item: ChatThinkingItem
     <details
       className={`thinking-row thinking-row--${item.status}`}
       data-transcript-item-id={item.id}
+      data-mm-label={item.title}
+      data-mm-aliases={item.status === 'running' ? t('chat.thinkingRunning') : t('chat.thinkingDone')}
       open={isOpen}
       onToggle={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen(event.currentTarget.open))}
     >
-      <summary className="thinking-row__header">{summary}</summary>
+      <summary className="thinking-row__header" data-mm-label={item.title}>{summary}</summary>
       {item.content ? <pre>{item.content}</pre> : null}
     </details>
   )
@@ -767,10 +791,12 @@ const ActivityRow = memo(function ActivityRow({ item }: { item: ChatActivityItem
     <details
       className={`activity-row activity-row--${item.status}`}
       data-transcript-item-id={item.id}
+      data-mm-label={item.title}
+      data-mm-aliases={statusLabel[item.status]}
       open={isOpen}
       onToggle={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen(event.currentTarget.open))}
     >
-      <summary className="activity-row__main">{summary}</summary>
+      <summary className="activity-row__main" data-mm-label={item.title} data-mm-aliases={statusLabel[item.status]}>{summary}</summary>
       {item.preview ? <pre>{item.preview}</pre> : null}
     </details>
   )
@@ -818,10 +844,12 @@ const ContextCompactionRow = memo(function ContextCompactionRow({ item }: { item
     <details
       className={`context-compaction-row context-compaction-row--${item.status}`}
       data-transcript-item-id={item.id}
+      data-mm-label={title}
+      data-mm-aliases={meta.join('|')}
       open={isOpen}
       onToggle={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen(event.currentTarget.open))}
     >
-      <summary className="context-compaction-row__summary">{summary}</summary>
+      <summary className="context-compaction-row__summary" data-mm-label={title}>{summary}</summary>
       <div className="context-compaction-row__body">
         {item.error ? <p>{item.error}</p> : null}
         {item.summary ? (
@@ -887,6 +915,8 @@ const FileDiffRow = memo(function FileDiffRow({
           <button
             type="button"
             className="file-diff-row__link"
+            data-mm-label={isOpen ? t('chat.fileDiffHide') : t('chat.fileDiffView')}
+            data-mm-aliases={t('chat.fileDiffAria')}
             onClick={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen((value) => !value))}
           >
             {isOpen ? t('chat.fileDiffHide') : t('chat.fileDiffView')}
@@ -903,6 +933,8 @@ const FileDiffRow = memo(function FileDiffRow({
             className="btn btn-ghost btn-compact"
             disabled={!canRewind}
             title={canRewind ? t('chat.fileDiffRevert') : t('chat.fileDiffUnavailable')}
+            data-mm-label={item.status === 'reverted' ? t('chat.fileDiffReverted') : t('chat.fileDiffRevert')}
+            data-mm-aliases={t('chat.fileDiffAria')}
             onClick={() => onRewindFileChanges?.(item)}
           >
             <IconInline name="undo" />
@@ -912,6 +944,8 @@ const FileDiffRow = memo(function FileDiffRow({
             type="button"
             className="btn btn-primary btn-compact"
             disabled={!canReview}
+            data-mm-label={item.status === 'reviewed' ? t('chat.fileDiffReviewed') : t('chat.fileDiffReview')}
+            data-mm-aliases={t('chat.fileDiffAria')}
             onClick={() => onReviewFileChanges?.(item)}
           >
             <IconInline name="check" />
@@ -924,7 +958,11 @@ const FileDiffRow = memo(function FileDiffRow({
           {item.files.length > 0 ? (
             item.files.map((file, index) => (
               <details className="file-diff-file" key={`${file.path}-${index}`} open={index === 0}>
-                <summary className="file-diff-file__summary">
+                <summary
+                  className="file-diff-file__summary"
+                  data-mm-label={file.relativePath || file.path}
+                  data-mm-aliases={t('chat.fileDiffAria')}
+                >
                   <span>{file.relativePath || file.path}</span>
                   <span className="file-diff-file__stats">
                     <span className="file-diff-row__stat file-diff-row__stat--add">+{file.additions}</span>

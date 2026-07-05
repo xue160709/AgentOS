@@ -2,13 +2,13 @@
 
 ## 状态
 
-首版已实现。AgentOS 主窗口已接入 `@xue160709/omni-ui-*` 0.1.0，并以 headless executor 方式持有命令执行上下文；独立命令窗口提供文本/语音输入、规则优先的意图解析、Claude Agent SDK 意图识别代理、Apple Speech 多窗口路由、`system.openApp`、`system.openUrl` 和确认/澄清 UI。
+首版已实现。AgentOS 主窗口已接入 `@xue160709/omni-ui-*` 0.1.0，并以 headless executor 方式持有命令执行上下文；独立命令窗口提供文本/语音输入、确定性应用内命令 rules、Claude Agent SDK 意图识别代理、Apple Speech 多窗口路由、`system.openApp`、`system.openUrl` 和确认/澄清 UI。
 
-正式验收快照：首版 18 个场景中 13 个通过、5 个保留为真实环境人工确认项；后续新增 2 个网页打开场景待 `project-verify` 正式验收。详见 `acceptance.md` 与 `TESTING_CHECKLIST.md`。
+正式验收快照：22 个场景中 16 个通过、6 个保留为真实环境人工确认项。详见 `acceptance.md` 与 `TESTING_CHECKLIST.md`。
 
 ## 用户能力
 
-- 在独立命令窗口中提交自然语言命令，例如新建对话、切换项目、打开设置、发送 Composer 文本、打开本机应用、打开 Google 页面。
+- 在独立命令窗口中提交自然语言命令，例如新建对话、切换项目、打开设置、发送 Composer 文本、打开本机应用、打开 Google 页面；其中 Google/谷歌等已知安全网页走本地规则，其它开放名词命令由 Claude Agent SDK 解析。
 - 通过 Option+Space 或托盘入口打开独立命令窗口，录音、编辑 final 文本并提交给主窗口执行。
 - 对模型切换、MCP 开关、会话归档等中风险命令展示确认卡。
 - 对多候选解析展示澄清列表，选择后继续执行。
@@ -26,5 +26,6 @@
 
 - 融合设计与 omni-ui 反馈：`docs/omni-ui-integration.md`
 - 技术入口：`technical.md`
+- 常用语音命令与 BDD：`voice-command-bdd.md`
 - omni-ui 改进建议与影响评估：`omni-ui-improvement-notes.md`
 - 验收契约：`acceptance.md`

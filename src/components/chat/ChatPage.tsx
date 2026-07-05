@@ -2421,6 +2421,8 @@ function ThreadTodoFloatingPanel({
         aria-label={buttonLabel}
         aria-expanded={open}
         aria-controls="thread-todo-panel"
+        data-mm-label={buttonLabel}
+        data-mm-aliases={t('chat.todoPanelTitle')}
         onClick={() => onOpenChange(!open)}
       >
         <IconInline name="checklist" />

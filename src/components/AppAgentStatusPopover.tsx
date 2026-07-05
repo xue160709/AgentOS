@@ -69,6 +69,8 @@ export function AppAgentStatusPopover({
         aria-label={t('statusPanel.openAria')}
         aria-controls="agent-status-panel"
         aria-expanded={open}
+        data-mm-label={t('statusPanel.openAria')}
+        data-mm-aliases={t(`statusPanel.health.${health}`)}
         onClick={() => {
           const nextOpen = !open
           onOpenChange(nextOpen)
@@ -91,6 +93,7 @@ export function AppAgentStatusPopover({
               title={t('statusPanel.refreshTitle')}
               aria-label={t('statusPanel.refreshAria')}
               disabled={loading}
+              data-mm-label={t('statusPanel.refreshAria')}
               onClick={onRefresh}
             >
               <IconInline name="refresh" />
@@ -215,7 +218,7 @@ function StatusSection({ title, accessory, children }: { title: string; accessor
 function StatusDetails({ title, summary, children }: { title: string; summary?: string; children: ReactNode }) {
   return (
     <details className="agent-status-panel__details">
-      <summary>
+      <summary data-mm-label={title} data-mm-aliases={summary ?? ''}>
         <span>{title}</span>
         {summary ? <strong>{summary}</strong> : null}
       </summary>
@@ -260,6 +263,7 @@ function McpList({
       type="button"
       className="agent-status-panel__link-button"
       data-testid="agent-status-open-mcp-settings"
+      data-mm-label={t('statusPanel.openMcpSettings')}
       onClick={onOpenMcpSettings}
     >
       {t('statusPanel.openMcpSettings')}

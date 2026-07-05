@@ -7,7 +7,7 @@
 
 - 工具形态：Electron 桌面应用（macOS 优先）+ Vite 5 + React 19 + TypeScript。
 - 产品名称：AgentOS —— 面向本地项目与长期任务的桌面 Agent 工作台。
-- 现状：11 个 prd 模块、118 个验收场景中 108 ✅ / 0 ❌ / 8 ⚠️ / 2 ⬜ 待正式验收（`desktop-shell-settings-release` 的真实托盘/macOS 语音权限人工项；`multimodal-voice-control` 的 live Provider、真实语音悬浮窗、helper 异常恢复、真实打开应用人工项，以及新增网页打开场景待 `project-verify`）。
+- 现状：11 个 prd 模块、120 个验收场景中 111 ✅ / 0 ❌ / 9 ⚠️ / 0 ⬜（`desktop-shell-settings-release` 的真实托盘/macOS 语音权限人工项；`multimodal-voice-control` 的 live Provider、真实语音悬浮窗、helper 异常恢复、真实打开应用与默认浏览器打开人工项）。
 - 当前主线：**omni-ui 多模态组件融合 + 语音输入悬浮窗控制主窗口**（§2）。
 
 ## §2 开发任务
@@ -24,6 +24,7 @@
 - [x] 在 `src/main.tsx` / `AppShell` 外层挂 `MultimodalProvider`，配置 `defineMultimodalConfig`（本地规则 resolver 先行）。
 - [x] 用 `MultimodalPage` 标注主要页面：项目首页、Chat 会话页、全局设置页。
 - [x] 用 `MultimodalGroup` 标注首批实体：侧栏项目列表项（entity `project`）、会话列表项（entity `thread`）、项目首页任务卡（entity `task-card`）。
+- [x] 用 `useInteractionNode` / `useInteractionObject` 为高价值控件补显式语义：侧栏导航/项目/对话/Skill 控件、工作区文件面板、Composer 输入/发送/模型/权限/语音、项目首页卡片与 Skill 卡片；语义 label/alias 走 i18n。
 - [x] `defineAction` + `useActionExecutor` 注册首批低风险 action：`project.switch`、`thread.new`、`settings.open`、`composer.setText`、`composer.send`。
 - [x] 用独立命令窗口打通「文本命令 → 规则解析 → executor 执行」全链路；主窗口只保留 headless executor，不覆盖 Composer。
 - [x] 大 DOM 快照性能实测：在真实项目工作区连续输入/切换页面，确认 Provider 重渲染与快照重建次数符合 omni-ui benchmark 口径。
@@ -48,17 +49,20 @@
 **阶段 D｜命令面扩展与安全交互（约 2–3 天）**
 
 - [x] 扩展 action 覆盖：任务卡操作（打开/刷新）、模型切换（`model.switch`）、MCP server 项目开关（`mcp.toggle`）、侧栏/面板显隐、会话归档/置顶。
+- [x] 补齐语音/文本命令映射：主页面/文档页、设置分类、全局搜索范围、侧栏/文件面板、Agent 状态、项目/会话置顶、会话切换、任务卡刷新、项目技能运行等，修复规则解析后没有可执行 action 的路径。
+- [x] 读取当前 UI 数据（`settings.describe` 首批）：命令窗口能回答设置 · 模型里的模型厂商数量、名称、当前请求模型和 API Key 配置状态，也能回答“还有多少控件没接入 omni”的静态覆盖统计；模型设置页、搜索、Transcript、项目首页、Composer、状态弹窗、文件面板、设置/开发者/更新页等原生控件已接入显式 omni 语义，API Key / Token / MCP headers/env 等敏感字段仅标记敏感不暴露明文；`project-verify` 已通过（2026-07-05），见本模块验收契约。
 - [x] 打开电脑应用（`system.openApp`）：主进程新增参数化 `open -a` IPC（spawn 参数数组，禁止 shell 拼接）；应用不存在时回显「未找到应用」；覆盖应用名注入防护单测。
-- [ ] 打开网页（`system.openUrl`）：语音/文本命令「打开 Google 页面」经默认浏览器打开网页，不再误判为本机应用；Codex 自检已通过，待 `project-verify` 正式验收 2 个新增场景。
+- [ ] 打开网页（`system.openUrl`）：语音/文本命令「打开 Google 页面」优先由本地安全规则解析为网页 action，再经默认浏览器打开网页，不再误判为本机应用，也不依赖 live Provider；`project-verify` 已覆盖 2 个新增场景，其中非法 URL 拦截 ✅，真实打开 Google 页面仍因默认浏览器副作用标 ⚠️ 跳过，待用户本机 GUI 复验后打勾。
 - [x] 风险分级：读/导航类 `risk: low` 直接执行；写/状态变更类 `risk: medium` 以上走 omni-ui 确认流，在悬浮窗或主窗口展示确认卡。
 - [x] 多候选澄清：解析出多个假设时在悬浮窗列出候选让用户点选。
 - [x] `OmniDevTools` 开发者入口（仅 dev 或设置开关后可见），用于调试命令轨迹。
 
 **阶段 E｜验收与证据（约 1–2 天）**
 
-- [x] 为 `prd/multimodal-voice-control/acceptance.md` 全部场景补稳定 selector 与自动化/人工验收路径。
+- [x] 为 `multimodal-voice-control` 全部场景补稳定 selector 与自动化/人工验收路径。
 - [x] 语音链路（依赖真实 macOS 权限）沉淀人工验收步骤；文本/LLM 链路沉淀可复现自动化测试。
-- [x] 正式验收：按 `project-verify` 回写状态戳，同步本节 checkbox（2026-07-05：18 个场景中 13 ✅ / 5 ⚠️，详见 `TESTING_CHECKLIST.md`）。
+- [x] 为剩余 9 个 manual-only 场景补 readiness 门禁：`npm run audit:omni-manual-readiness` 检查 acceptance 跳过状态、人工步骤、`TESTING_CHECKLIST.md` 行与源码支撑，防止人工项被误当成控件缺口。
+- [x] 正式验收：按 `project-verify` 回写状态戳，同步本节 checkbox（2026-07-05：22 个场景中 16 ✅ / 6 ⚠️，详见 `TESTING_CHECKLIST.md`）。
 
 ### 2.2 遗留正式验收收口（沿自旧 §14）
 
@@ -89,6 +93,7 @@
 - omni-ui 以 npm 依赖接入，不 fork、不复制源码进本仓库；升级走版本号。
 - 模型永远不直接调用业务代码：omni-ui 只提议命令，所有 executor 由 AgentOS 页面注册并持有。
 - LLM 意图识别走 Claude Agent SDK：主进程一次性 query、不挂任何业务工具（无 MCP/文件/Bash），复用模型设置 active Provider；renderer 经 Desktop Seam IPC 调用，Key 不外泄到 renderer。
+- 开放名词系统命令中，`Google/谷歌` 等已知安全网页可走窄范围本地 rules；任意应用名与其它开放网页名不配置泛化本地短语 rules，只保留 allowlisted `system.openApp` / `system.openUrl` executor 和安全校验，意图理解交给 Claude Agent SDK。
 - 系统级 action 目前仅覆盖打开本机应用与打开明确网页：`system.openApp` 在主进程参数化 `open -a`，禁止任意 shell 命令执行；`system.openUrl` 复用 `desktop.openExternal`，只允许 HTTP/HTTPS 网页。
 - 语音识别复用现有 Swift Apple Speech helper（NDJSON/unix socket），不引入 Web Speech API。
 - 悬浮窗与主窗口通过主进程中转 utterance / 结果事件；主窗口是唯一的命令执行方。
@@ -101,6 +106,7 @@
 - 测试补齐：`agent-mode-files` fixture、真实 Home Plugin action 回归、`task-home-plugin-manager` 专项单测、真实 release/updater smoke、真实 MCP server 进程/网络连通。
 - golden fixtures 异常/边界场景扩充，并把「正常 + 异常路径」从文档规范升级为脚本门禁（沿自旧 §13）。
 - 独立命令窗口体验增强：若真实语音链路验证成功，继续评估是否增加可配置快捷键、窗口尺寸记忆和更接近 Composer 的附件/上下文提示。
+- 常用系统级语音命令补齐：基于 `prd/multimodal-voice-control/voice-command-bdd.md`，补 macOS 设置深链、用 Safari 打开/搜索百度、百度本地网页规则、常用 macOS 应用别名、截图/音量/专注模式/窗口/文件夹快捷入口。
 
 ## 产品发现记录
 
@@ -121,5 +127,38 @@
 - 本轮：实现 `multimodal-voice-control` 首版，包括 omni-ui 运行时接入、独立命令窗口、Claude Agent SDK intent IPC、语音命令悬浮窗、speech 多窗口路由、`system.openApp` 与安全/确认/澄清 UI。
 - 本轮修复：移除主窗口底部 omni 命令覆盖层，改为主窗口 headless executor + 独立可移动命令窗口；同时为 omni-ui `div[data-mm-root]` / `MultimodalPage` 补齐主窗口高度链与 `display: contents` 布局防护，恢复 Composer 可见性和底部滚动/点击区域。
 - 验证类别：正式验收（project-verify）。`npm run typecheck` ✅；`npm run test:electron` ✅（83/83）；`npm run build` ✅（生成 `dist/voice.html`、macOS app/dmg/zip；notarization 因未配置选项按预期跳过）。`prd/multimodal-voice-control/acceptance.md` 已回写 13 ✅ / 5 ⚠️。
-- 本轮修复：语音命令「打开 Google 页面」新增 `system.openUrl`，经默认浏览器打开 `https://www.google.com`，避免落入 `system.openApp` 的「未找到应用 Google」路径；语音窗口输入区复用主 Composer 面板样式与按钮结构。新增 2 个 acceptance 场景暂不盖 ✅，待 `project-verify` 正式验收。
+- 本轮修复：语音命令「打开 Google 页面」新增 `system.openUrl`，经默认浏览器打开 `https://www.google.com`，避免落入 `system.openApp` 的「未找到应用 Google」路径；语音窗口输入区复用主 Composer 面板样式与按钮结构。后续 `project-verify` 已覆盖 2 个新增场景：非法 URL ✅，真实打开 Google 页面因 live Provider + 默认浏览器副作用 ⚠️。
 - 验证类别：Codex 自检。`npm run typecheck` ✅；`node --test electron/omni-intent-voice.test.mjs` ✅（5/5）；`npm run test:electron` ✅（84/84）；`npx vite build --mode test` ✅（生成 `dist/voice.html`，有既有大 chunk 提示）；`git diff --check` ✅（仅提示 `vite.config.ts` 既有 CRLF/LF 转换）。
+- 本轮修复：补齐命令窗口对主页面/文档页、设置分类、全局搜索范围、侧栏/文件面板、Agent 状态、项目/会话置顶、会话切换、任务卡刷新和项目技能运行的语音/文本命令映射；为 page.current 的全局 action 补可执行挂载，并把 `Resolved interaction has no executable action.` 映射为可本地化提示。
+- 验证类别：Codex 自检。`bash .codex/scripts/check-acceptance.sh multimodal-voice-control` ✅；`npm run typecheck` ✅；`node --test electron/omni-intent-voice.test.mjs` ✅（6/6）；`npm run test:electron` ✅（85/85）；`git diff --check` ✅。
+- 本轮调整：移除 `system.openApp` / `system.openUrl` 的泛化本地短语 rules 与 local fast path，开放名词的「打开 xxx 应用 / 打开 xxx 页面」统一交给 Claude Agent SDK resolver 产出结构化 action；本地只保留安全 executor、allowlist、URL 规范化和 `open -a` 注入防护。
+- 本轮修复：命令窗口运行时回显与错误提示改为 `multimodal.*` i18n key，补齐 zh/en 文案；本地规则补英文 alias（如 `open docs`、`open search settings`、`collapse sidebar`、`run {skillName} skill`）；新增 `semantic-controls` 语义辅助层，并为侧栏、工作区文件面板、Composer、项目首页/任务/Skill 卡片补 `useInteractionNode` / `useInteractionObject` 显式语义；语义 label/alias 使用 `omni.*` zh/en i18n key；补 `ProjectHomeSurface` 漏导入的 `useInteractionObject`，恢复 typecheck。
+- 验证类别：Codex 自检。`bash .codex/scripts/check-acceptance.sh multimodal-voice-control` ✅；locale key 对齐检查 ✅；`npm run typecheck` ✅；`node --test electron/omni-intent-voice.test.mjs` ✅（7/7）；`npm run test:electron` ✅（86/86）；`git diff --check` ✅。
+- 本轮修复：命令窗口提交「打开google」后出现「没有通过硬性校验的候选目标」；根因是 SDK JSON 选中了 `system.openUrl` 这类 page 级 action，但没有稳定绑定当前 page target，fusion 把 `google` 当成候选 UI 目标后被 hard validation 拦截。已在 SDK prompt 与 renderer 规范化层补齐 page action target，不新增本地短语 rules。后续正式验收已覆盖安全 executor；真实打开 Google 页面保留 live Provider / GUI 人工复验。
+- 验证类别：Codex 自检。`npm run typecheck` ✅；`node --test electron/omni-intent-voice.test.mjs` ✅（7/7）；`npm run test:electron` ✅（86/86）；`bash .codex/scripts/check-acceptance.sh multimodal-voice-control` ✅；`git diff --check` ✅。
+- 本轮修复：命令窗口询问「现在模型设置页面有几个模型厂商」时无法读取设置页数据、提示需要选择目标；已新增 `settings.describe` 读类 action，模型设置页注册 provider/字段/模型映射/关键按钮的 omni 显式语义，非敏感字段可读，API Key 仅暴露已设置/未设置状态。覆盖率粗略审计：全仓库交互控件约 181 个、显式语义/安全值暴露 74 处；模型设置页从 50/0 的显式语义缺口降到 41/22，剩余主要是全局 MCP/Search/弹窗动作和其它页面深层控件。
+- 验证类别：Codex 自检。`bash .codex/scripts/check-acceptance.sh multimodal-voice-control` ✅；`npm run typecheck` ✅；`node --test electron/omni-intent-voice.test.mjs` ✅（7/7）；`npm run test:electron` ✅（86/86）；`git diff --check` ✅。新增读取设置页安全摘要场景已写入 `prd/multimodal-voice-control/acceptance.md`，后续已由 `project-verify` 正式验收通过。
+- 本轮修复：命令窗口询问「现在设置了多少模型厂商」时被设置/模型目标候选抢走、提示需要选择目标；已将 `settings.describe` 读类规则前移到设置打开规则之前，并补齐「设置了多少 / 配置了几个 / 有哪些模型厂商」等表达。继续补齐搜索、Transcript、项目首页、弹窗、Composer、状态、文件面板、设置页、更新页和开发者页等控件的 `data-mm-*` 显式语义/安全值暴露；敏感字段只标记 `data-mm-sensitive`。启发式静态审计：原生 `<button|input|select|textarea>` 控件 167/167 有显式语义覆盖，粗略缺口 0。
+- 验证类别：Codex 自检。`node --test electron/omni-intent-voice.test.mjs` ✅（8/8）；`npm run typecheck` ✅；`npm run test:electron` ✅（87/87）；原生控件 omni 语义静态审计 ✅（167/167，rough gap 0）。新增/扩展读取设置页安全摘要场景后续已由 `project-verify` 正式验收通过。
+- 本轮正式验收：`settings.describe` 设置页安全摘要场景 ✅；`system.openUrl` 非法 URL 拦截场景 ✅；真实「打开 Google 页面」场景 ⚠️ 跳过（需 live Provider + 默认浏览器副作用，本机 GUI 复验）。正式验收中补齐 Composer 上下文入口与项目首页卡片排序按钮的 `data-mm-*` 标签；TypeScript AST 审计覆盖 166/166 个原生 `<button|input|select|textarea>` 控件，gap 0。
+- 验证类别：正式验收（project-verify）。`node --test electron/omni-intent-voice.test.mjs` ✅（8/8）；`npm run typecheck` ✅；`npm run test:electron` ✅（87/87）；`bash .codex/scripts/check-acceptance.sh multimodal-voice-control` ✅；TypeScript AST 控件审计 ✅（166/166，gap 0）。证据已写入 `TESTING_CHECKLIST.md` 与 `test-results/multimodal-voice-control-verification.md`。
+- 本轮补证据：将 SDK system action 的 page target 规范化逻辑抽出为 `src/multimodal/intent-normalizer.ts`，新增可执行单测证明 SDK 返回 `system.openUrl` / `system.openApp` 时会绑定当前 page target，避免把 Google/Safari 当 UI 目标。
+- 验证类别：Codex 自检。`node --test electron/omni-intent-voice.test.mjs` ✅（9/9）；`npm run typecheck` ✅；`npm run test:electron` ✅（88/88）。
+- 本轮接入收口：把 omni 控件审计从主要组件清单扩到全 `src/**/*.tsx`，补齐独立语音命令窗口（关闭、命令输入、录音、清空、提交、确认/取消、澄清候选）和侧栏上下文菜单的 `data-mm-*` 语义标签；新增全 TSX 原生控件 AST 门禁。
+- 验证类别：Codex 自检。全 TSX AST 控件审计 ✅（35 个 TSX 文件，176/176，gap 0）；`node --test electron/omni-intent-voice.test.mjs` ✅（10/10）；`npm run typecheck` ✅；`npm run test:electron` ✅（89/89）。
+- 本轮接入收口：继续覆盖非原生交互元素，补齐 API Key 获取链接、关于页邮箱/GitHub 链接、侧栏 resize separator、TODO 卡片、file diff summary 与 Agent 状态详情 summary 的 `data-mm-*` 语义；新增自定义交互控件 AST 门禁。
+- 验证类别：Codex 自检。非原生交互 AST 审计 ✅（35 个 TSX 文件，52/52，gap 0）；`node --test electron/omni-intent-voice.test.mjs` ✅（11/11）；`npm run typecheck` ✅；`npm run test:electron` ✅（90/90）。
+- 本轮补证据：抽出 `src/voice-state.ts` 语音悬浮窗纯状态机，自动化覆盖 final 文本优先提交、`speech_denied` 权限恢复提示、`helper_exited` 错误可重试状态和过期执行结果隔离；真实 macOS 权限、全局快捷键、speech helper 进程与 GUI 回显仍保留人工复验。
+- 验证类别：Codex 自检。`node --test electron/omni-intent-voice.test.mjs` ✅（12/12）；`npm run typecheck` ✅；`npm run test:electron` ✅（91/91）。
+- 本轮接入收口：新增 `settings.describe.controls` 读类命令，命令窗口可回答「还有多少控件没有实现 / 多少控件没接入 omni」，回显静态缺口、原生/非原生覆盖数、当前页面对象数，并明确 manual-only 项不是控件缺口；抽出 `electron/omni-control-audit.mjs` 和 `src/multimodal/settings-describe.ts`，`coverage-summary` 数字由同一 AST 审计 helper 对账测试守住，模型设置/控件摘要由纯函数单测直接执行验证。
+- 验证类别：Codex 自检。`node --test electron/omni-intent-voice.test.mjs` ✅（14/14）；`npm run audit:omni-controls` ✅（missing 0）；`npm run typecheck` ✅；`npm run test:electron` ✅（93/93）。
+- 本轮补证据：新增 `electron/omni-rule-audit.mjs` 和 `npm run audit:omni-rules`，直接导入当前 `agentOsMultimodalConfig.rules` 并用 omni-ui `createConfiguredRuleResolver` 实跑 7 个关键问句，证明「现在设置了多少模型厂商」「还有多少控件没有实现」命中 `settings.describe`；`Google/谷歌` 已知安全网页命中窄范围 `system.openUrl` 规则，而「打开 Safari」不会被本地规则误吃，仍交给 SDK 安全解析。
+- 验证类别：Codex 自检。`npm run audit:omni-rules` ✅（7/7）；`node --test electron/omni-intent-voice.test.mjs` ✅（15/15）；`npm run audit:omni-controls` ✅（missing 0）；`npm run typecheck` ✅；`npm run test:electron` ✅（94/94）。
+- 本轮补证据：抽出 `src/multimodal/voice-result.ts`，让命令提交结果到悬浮窗回显的映射可单测；新增断言证明 `settings.describe` 的模型厂商摘要和控件覆盖摘要会作为 `voice-window-result` 消息返回，不只停留在 action execution 的 reason/data。
+- 验证类别：Codex 自检。`node --test electron/omni-intent-voice.test.mjs` ✅（15/15）；`npm run typecheck` ✅。
+- 本轮补证据：新增 `electron/omni-answer-audit.mjs` 与 `npm run audit:omni-answers`，把规则解析、`settings.describe` 读快照和 `voice-result` 回显映射串成一条可运行审计链；覆盖模型厂商、控件接入统计和当前页面摘要 3 类问答，并校验不泄露 API Key 明文。
+- 验证类别：Codex 自检。`npm run audit:omni-answers` ✅（3/3）；`node --test electron/omni-intent-voice.test.mjs` ✅（16/16）；`npm run typecheck` ✅。
+- 本轮补证据：新增 `electron/omni-manual-readiness-audit.mjs` 与 `npm run audit:omni-manual-readiness`，把剩余 9 个 manual-only 场景的 acceptance 跳过状态、人工验证步骤、全量清单行和源码支撑做成门禁；同时显式处理 `helper_exited`，避免 helper 异常退出沿用旧权限提示。
+- 验证类别：Codex 自检。`npm run audit:omni-manual-readiness` ✅（9/9）；`node --test electron/omni-intent-voice.test.mjs` ✅（17/17）；`npm run audit:omni-controls` ✅（missing 0）；`npm run audit:omni-rules` ✅（7/7）；`npm run audit:omni-answers` ✅（3/3）；`npm run typecheck` ✅；`npm run test:electron` ✅（96/96）。
+- 本轮修复：真实 dev 启动时观察到「打开 Google 页面」仍会进入 live SDK 解析并在 Provider 超时后失败；已给 Google/谷歌这类已知安全网页增加窄范围本地 `system.openUrl` 规则，避免典型网页命令依赖模型可用性，任意应用名与其它开放网页名仍走 SDK。
+- 验证类别：Codex 自检。`npm run audit:omni-rules` ✅（7/7，Google resolved、Safari not_found）；`node --test electron/omni-intent-voice.test.mjs` ✅（17/17）；`npm run audit:omni-answers` ✅（3/3）；`npm run audit:omni-manual-readiness` ✅（9/9）；`npm run typecheck` ✅。

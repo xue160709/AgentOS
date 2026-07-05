@@ -131,6 +131,9 @@ export function AgentModeSettingsPage({ project }: AgentModeSettingsPageProps) {
                 value={user}
                 spellCheck={false}
                 placeholder={t('settings.agentMode.userPlaceholder')}
+                data-mm-label={t('settings.agentMode.userLabel')}
+                data-mm-aliases={t('settings.agentMode.userHint')}
+                data-mm-exposure="value"
                 onChange={(event) => setUser(event.target.value)}
               />
             </div>
@@ -150,6 +153,9 @@ export function AgentModeSettingsPage({ project }: AgentModeSettingsPageProps) {
                 value={identity}
                 spellCheck={false}
                 placeholder={t('settings.agentMode.identityPlaceholder')}
+                data-mm-label={t('settings.agentMode.identityLabel')}
+                data-mm-aliases={t('settings.agentMode.identityHint')}
+                data-mm-exposure="value"
                 onChange={(event) => setIdentity(event.target.value)}
               />
             </div>
@@ -159,10 +165,10 @@ export function AgentModeSettingsPage({ project }: AgentModeSettingsPageProps) {
         <div className="settings-editor-actions" aria-label={t('settings.agentMode.actionsAria')}>
           <p className="settings-editor-actions__hint">{t('settings.agentMode.actionsHint')}</p>
           <div className="settings-editor-actions__buttons">
-            <button type="button" className="btn btn-ghost" disabled={busy || !isDirty} onClick={cancel}>
+            <button type="button" className="btn btn-ghost" disabled={busy || !isDirty} data-mm-label={t('settings.agentMode.cancel')} onClick={cancel}>
               {t('settings.agentMode.cancel')}
             </button>
-            <button type="submit" className="btn btn-primary" disabled={busy || saveDisabled || !isDirty}>
+            <button type="submit" className="btn btn-primary" disabled={busy || saveDisabled || !isDirty} data-mm-label={t('settings.agentMode.confirm')}>
               <IconInline name="save" />
               <span>{t('settings.agentMode.confirm')}</span>
             </button>

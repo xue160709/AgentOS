@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
+import { SemanticButton, semanticAliases } from '../multimodal/semantic-controls'
 import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ChatModelPick, ClaudeAgentStatusSnapshot, ProjectFileSearchItem } from '../claude-chat-types'
 import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../app-events'
 import type {
@@ -349,6 +350,16 @@ export function AppShellWorkspace({
   }, [openSearch])
 
   useEffect(() => {
+    const onOpenSidePanel = (event: Event) => {
+      const detail = (event as CustomEvent<{ panel?: WorkspaceSidePanelTab; open?: boolean }>).detail
+      const tab = detail?.panel === 'files' ? 'files' : 'files'
+      setSidePanel({ tab, open: detail?.open !== false })
+    }
+    window.addEventListener('agentos:open-side-panel', onOpenSidePanel)
+    return () => window.removeEventListener('agentos:open-side-panel', onOpenSidePanel)
+  }, [])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
       const key = event.key.toLowerCase()
@@ -501,7 +512,7 @@ export function AppShellWorkspace({
                 }}
               />
             ) : null}
-            <button
+            <SemanticButton
               type="button"
               className={`btn btn-toolbar${folderToolbarActive ? ' is-active' : ''}`}
               id="btn-toggle-file-panel"
@@ -509,10 +520,18 @@ export function AppShellWorkspace({
               aria-label={t('workspace.toggleFilePanel')}
               aria-controls="app-file-panel"
               aria-expanded={folderToolbarActive}
+              semantic={{
+                id: 'agentos.control.workspace.filePanel',
+                role: 'button',
+                label: t('omni.controls.filePanel'),
+                actions: ['press'],
+                state: { open: folderToolbarActive, panel: 'files' },
+                hint: { aliases: semanticAliases(t, 'omni.aliases.filePanel') },
+              }}
               onClick={() => toggleSidePanelTab('files')}
             >
               <IconInline name="folder" />
-            </button>
+            </SemanticButton>
           </div>
         </header>
       )}

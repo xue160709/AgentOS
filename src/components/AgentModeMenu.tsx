@@ -32,6 +32,7 @@ export function AgentModeMenu({ agent, onOpenSettings }: AgentModeMenuProps) {
         title={t('workspace.agentSettings')}
         aria-label={t('workspace.agentSettings')}
         disabled={agent.loading}
+        data-mm-label={t('workspace.agentSettings')}
         onClick={onOpenSettings}
       >
         <IconInline name="settings" />
@@ -50,6 +51,9 @@ export function AgentModeMenu({ agent, onOpenSettings }: AgentModeMenuProps) {
         type="checkbox"
         checked={agent.enabled}
         disabled={agent.loading}
+        data-mm-label={t('workspace.agentModeTitle')}
+        data-mm-aliases={agent.enabled ? t('workspace.agentModeReady') : t('workspace.agentModeToggle')}
+        data-mm-exposure="value"
         onChange={(event) => toggle(event.target.checked)}
       />
       <span className="agent-mode-toolbar-switch__track" aria-hidden="true">

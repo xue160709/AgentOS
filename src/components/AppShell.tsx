@@ -1147,6 +1147,14 @@ export function AppShell() {
     updateChatWorkspace((prev) => workspaceSession.toggleSidebar(prev))
   }, [updateChatWorkspace, workspaceSession])
 
+  const setSidebarCollapsedState = useCallback((collapsed: boolean) => {
+    updateChatWorkspace((prev) => (
+      prev.sidebarPrefs.collapsed === collapsed
+        ? prev
+        : { ...prev, sidebarPrefs: { ...prev.sidebarPrefs, collapsed } }
+    ))
+  }, [updateChatWorkspace])
+
   const toggleSidebarProjectCollapsed = useCallback((projectId: string) => {
     updateChatWorkspace((prev) => workspaceSession.toggleProjectCollapsed(prev, projectId))
   }, [updateChatWorkspace, workspaceSession])
@@ -1277,6 +1285,23 @@ export function AppShell() {
       })
 
       const nextHash = `settings/${category}`
+      const currentHash = window.location.hash.replace(/^#\/?/, '')
+      if (currentHash !== nextHash) {
+        window.location.hash = nextHash
+      } else {
+        syncHistoryButtons()
+      }
+    },
+    [syncHistoryButtons],
+  )
+
+  const navigateAppView = useCallback(
+    (view: Exclude<AppViewId, 'settings'>) => {
+      flushSync(() => {
+        setActiveViewId(view)
+      })
+
+      const nextHash = view === 'docs' ? 'docs' : ''
       const currentHash = window.location.hash.replace(/^#\/?/, '')
       if (currentHash !== nextHash) {
         window.location.hash = nextHash
@@ -1459,6 +1484,8 @@ export function AppShell() {
               <button
                 type="button"
                 className={`app-shell-empty__project-preview${initialProjectComplete ? ' is-selected' : ''}`}
+                data-mm-label={t('shell.initProjectFolderTitle')}
+                data-mm-aliases={initialProjectName ? initialProjectPath : t('shell.initProjectFolderHint')}
                 onClick={() => void pickInitialProjectFolder()}
                 disabled={initialModelBusy}
               >
@@ -1490,6 +1517,9 @@ export function AppShell() {
                     value={initialProviderSelectValue}
                     aria-label={t('shell.initModelPresetAria')}
                     disabled={initialModelBusy}
+                    data-mm-label={t('shell.initModelPresetAria')}
+                    data-mm-aliases={t('settings.models.addProviderDialogTitle')}
+                    data-mm-exposure="value"
                     onChange={(event) => {
                       const value = event.target.value
                       if (value === INITIAL_PROVIDER_SKIP_VALUE) {
@@ -1542,6 +1572,9 @@ export function AppShell() {
                           spellCheck={false}
                           placeholder={t('settings.models.fieldNamePlaceholder')}
                           value={initialModelForm.name}
+                          data-mm-label={t('settings.models.fieldName')}
+                          data-mm-aliases={t('settings.models.fieldNameHint')}
+                          data-mm-exposure="value"
                           onChange={(event) => updateInitialModelField('name', event.target.value)}
                           disabled={initialModelBusy}
                         />
@@ -1560,6 +1593,8 @@ export function AppShell() {
                             href={initialModelForm.apiKeyUrl}
                             target="_blank"
                             rel="noreferrer"
+                            data-mm-label={t('settings.models.getApiKey')}
+                            data-mm-aliases={selectedInitialProviderPreset?.name || initialModelForm.name}
                             onClick={(event) => openInitialModelApiKeyLink(event, initialModelForm.apiKeyUrl)}
                           >
                             {t('settings.models.getApiKey')}
@@ -1573,6 +1608,8 @@ export function AppShell() {
                         autoComplete="off"
                         spellCheck={false}
                         value={initialModelForm.apiKey}
+                        data-mm-label={t('settings.models.fieldApiKey')}
+                        data-mm-sensitive="true"
                         onChange={(event) => updateInitialModelField('apiKey', event.target.value)}
                         disabled={initialModelBusy}
                       />
@@ -1594,6 +1631,9 @@ export function AppShell() {
                           spellCheck={false}
                           placeholder={t('shell.initModelBaseUrlPlaceholder')}
                           value={initialModelForm.baseUrl}
+                          data-mm-label={t('settings.models.fieldBaseUrl')}
+                          data-mm-aliases={t('settings.models.fieldBaseUrlHint')}
+                          data-mm-exposure="value"
                           onChange={(event) => updateInitialModelField('baseUrl', event.target.value)}
                           disabled={initialModelBusy}
                         />
@@ -1618,6 +1658,9 @@ export function AppShell() {
                               spellCheck={false}
                               placeholder={t('shell.initModelIdPlaceholder')}
                               value={row.value}
+                              data-mm-label={row.label}
+                              data-mm-aliases={row.hint}
+                              data-mm-exposure="value"
                               onChange={(event) => updateInitialModelField(row.field, event.target.value)}
                               disabled={initialModelBusy}
                             />
@@ -1634,6 +1677,9 @@ export function AppShell() {
                                   className="settings-switch-input"
                                   checked={row.supportsImages}
                                   aria-label={t('settings.models.modelImageToggleAria', { slot: row.label })}
+                                  data-mm-label={t('settings.models.modelImageToggleAria', { slot: row.label })}
+                                  data-mm-aliases={t('settings.models.modelImageToggleTitle', { slot: row.label })}
+                                  data-mm-exposure="value"
                                   onChange={(event) => updateInitialModelField(row.supportField, event.target.checked)}
                                   disabled={initialModelBusy}
                                 />
@@ -1656,7 +1702,7 @@ export function AppShell() {
             <p className="app-shell-empty__status" role="status">
               {initialModelStatus || t('shell.initModelIdle')}
             </p>
-            <button type="submit" className="btn btn-primary app-shell-empty__submit" disabled={!initialSetupReady}>
+            <button type="submit" className="btn btn-primary app-shell-empty__submit" disabled={!initialSetupReady} data-mm-label={initialModelBusy ? t('shell.initModelSaving') : t('shell.initSubmit')}>
               <IconInline name="check" />
               <span>{initialModelBusy ? t('shell.initModelSaving') : t('shell.initSubmit')}</span>
             </button>
@@ -1814,14 +1860,24 @@ export function AppShell() {
             onShowProjectSkillsInSidebarChange={updateShowProjectSkillsInSidebar}
           />
           <AgentOsMultimodalRuntime
+            activeViewId={activeViewId}
+            settingsCategory={settingsCategory}
+            sidebarCollapsed={sidebarCollapsed}
             activeProject={activeProject}
             activeThread={activeThread}
             projects={chatWorkspace.projects}
             threads={chatWorkspace.threads}
+            projectSkills={projectSkillStates[activeProject.id]?.skills ?? []}
             chatRef={chatRef}
+            onNavigateView={navigateAppView}
             onSelectProject={selectProject}
+            onSelectThread={selectThread}
+            onToggleProjectPinned={toggleProjectPinned}
+            onToggleThreadPinned={toggleThreadPinned}
+            onRunProjectSkill={runProjectSkill}
             onNewThread={createThreadInProject}
             onOpenSettingsCategory={openSettingsCategory}
+            onSetSidebarCollapsed={setSidebarCollapsedState}
             onArchiveThread={archiveThread}
           />
         </div>

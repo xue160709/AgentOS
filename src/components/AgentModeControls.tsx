@@ -43,6 +43,9 @@ export function AgentModeControls({
             type="checkbox"
             checked={enabled}
             disabled={loading}
+            data-mm-label={t('workspace.agentModeToggle')}
+            data-mm-aliases={t('workspace.agentModeToggleDesc')}
+            data-mm-exposure="value"
             onChange={(event) => {
               onAgentSwitchChange(event.target.checked)
             }}
@@ -65,6 +68,9 @@ export function AgentModeControls({
                 type="checkbox"
                 checked={todoEnabled}
                 disabled={loading}
+                data-mm-label={t('workspace.todoModeToggle')}
+                data-mm-aliases={t('workspace.todoModeToggleDesc')}
+                data-mm-exposure="value"
                 onChange={(event) => {
                   onTodoSwitchChange(event.target.checked)
                 }}
@@ -79,6 +85,7 @@ export function AgentModeControls({
               type="button"
               className="agent-mode-customize-home"
               disabled={loading}
+              data-mm-label={t('workspace.customizeAgentPanel')}
               onClick={onCustomizeHome}
             >
               {t('workspace.customizeAgentPanel')}

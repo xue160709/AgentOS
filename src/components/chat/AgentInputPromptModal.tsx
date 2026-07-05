@@ -48,11 +48,13 @@ export function AgentInputPromptModal({
             <button
               type="button"
               className="btn btn-ghost"
+              data-mm-label={t('chat.permissionDeny')}
+              data-mm-aliases={prompt.displayName || prompt.toolName}
               onClick={() => onResolve({ behavior: 'deny', message: t('chat.permissionDeniedByUser') })}
             >
               {t('chat.permissionDeny')}
             </button>
-            <button type="button" className="btn btn-primary" onClick={() => onResolve({ behavior: 'allow' })}>
+            <button type="button" className="btn btn-primary" data-mm-label={t('chat.permissionAllow')} data-mm-aliases={prompt.displayName || prompt.toolName} onClick={() => onResolve({ behavior: 'allow' })}>
               {t('chat.permissionAllow')}
             </button>
           </div>
@@ -153,11 +155,12 @@ function AskUserQuestionModal({
           <button
             type="button"
             className="btn btn-ghost"
+            data-mm-label={t('chat.askQuestionCancel')}
             onClick={() => onResolve({ behavior: 'deny', message: t('chat.askQuestionCancelled') })}
           >
             {t('chat.askQuestionCancel')}
           </button>
-          <button type="button" className="btn btn-primary" disabled={!canSubmit} onClick={submitAnswers}>
+          <button type="button" className="btn btn-primary" disabled={!canSubmit} data-mm-label={t('chat.askQuestionSubmit')} onClick={submitAnswers}>
             {t('chat.askQuestionSubmit')}
           </button>
         </div>
@@ -205,6 +208,9 @@ function AskUserQuestionBlock({
                 type={question.multiSelect ? 'checkbox' : 'radio'}
                 name={inputName}
                 checked={checked}
+                data-mm-label={option.label}
+                data-mm-aliases={question.question}
+                data-mm-exposure="value"
                 onChange={(event) => {
                   if (question.multiSelect) {
                     onMultiChange(option.label, event.currentTarget.checked)
@@ -233,6 +239,9 @@ function AskUserQuestionBlock({
           type="text"
           value={customValue}
           placeholder={t('chat.askQuestionCustomPlaceholder')}
+          data-mm-label={t('chat.askQuestionCustom')}
+          data-mm-aliases={question.question}
+          data-mm-exposure="value"
           onChange={(event) => onCustomChange(event.currentTarget.value)}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.nativeEvent.isComposing) return

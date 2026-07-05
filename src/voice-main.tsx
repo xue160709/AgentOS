@@ -1,44 +1,24 @@
 import { StrictMode, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type {
-  SpeechRecognitionEvent,
-  SpeechRecognitionStatus,
-  VoiceCommandExecutionResult,
-} from './desktop-types'
 import { IconInline } from './icon-inline'
+import {
+  composerStatusLabel,
+  createInitialVoiceUiState,
+  isSpeechRecordingStatus,
+  reduceSpeechEvent,
+  reduceVoiceCommandResult,
+  selectVoiceCommandText,
+  statusLabel,
+  voiceButtonClassName,
+} from './voice-state'
 import './style.css'
 import './voice.css'
 
-type VoiceUiState = {
-  status: SpeechRecognitionStatus
-  partialText: string
-  finalText: string
-  result: VoiceCommandExecutionResult | null
-  error: string
-  permissionHint: string
-  submittingId: string | null
-}
-
-const ACTIVE_SPEECH_STATUSES = new Set<SpeechRecognitionStatus>([
-  'starting',
-  'requesting_permission',
-  'listening',
-  'transcribing',
-])
-
 function VoiceCommandWindow() {
-  const [state, setState] = useState<VoiceUiState>({
-    status: 'idle',
-    partialText: '',
-    finalText: '',
-    result: null,
-    error: '',
-    permissionHint: '',
-    submittingId: null,
-  })
+  const [state, setState] = useState(createInitialVoiceUiState)
 
-  const recording = ACTIVE_SPEECH_STATUSES.has(state.status)
-  const commandText = useMemo(() => state.finalText.trim() || state.partialText.trim(), [state.finalText, state.partialText])
+  const recording = isSpeechRecordingStatus(state.status)
+  const commandText = useMemo(() => selectVoiceCommandText(state), [state.finalText, state.partialText])
 
   useEffect(() => {
     window.desktop?.getSpeechRecognitionStatus?.()
@@ -53,15 +33,7 @@ function VoiceCommandWindow() {
       setState((current) => reduceSpeechEvent(current, event))
     })
     const unsubscribeResult = window.desktop?.onVoiceCommandResult?.((result) => {
-      setState((current) => {
-        if (result.id !== 'voice-window-meta' && current.submittingId && result.id !== current.submittingId) return current
-        return {
-          ...current,
-          result,
-          submittingId: result.id === current.submittingId ? null : current.submittingId,
-          error: result.status === 'failed' ? result.message : current.error,
-        }
-      })
+      setState((current) => reduceVoiceCommandResult(current, result))
     })
 
     return () => {
@@ -103,16 +75,7 @@ function VoiceCommandWindow() {
 
   const cancelRecording = async () => {
     await window.desktop?.cancelSpeechRecognition?.()
-    setState((current) => ({
-      ...current,
-      status: 'idle',
-      partialText: '',
-      finalText: '',
-      result: null,
-      error: '',
-      permissionHint: '',
-      submittingId: null,
-    }))
+    setState(createInitialVoiceUiState())
   }
 
   const submitCommand = async () => {
@@ -157,7 +120,14 @@ function VoiceCommandWindow() {
           <span className="voice-window__eyebrow">AgentOS</span>
           <h1>命令窗口</h1>
         </div>
-        <button type="button" className="voice-window__ghost" aria-label="关闭语音命令窗口" onClick={() => window.close()}>
+        <button
+          type="button"
+          className="voice-window__ghost"
+          aria-label="关闭语音命令窗口"
+          data-mm-label="关闭语音命令窗口"
+          data-mm-aliases="关闭命令窗口|关闭悬浮窗"
+          onClick={() => window.close()}
+        >
           ×
         </button>
       </header>
@@ -175,6 +145,9 @@ function VoiceCommandWindow() {
             rows={1}
             value={state.finalText}
             placeholder="例如：打开 Google 页面，新建对话"
+            data-mm-label="语音命令输入框"
+            data-mm-aliases="命令输入|编辑命令|输入语音命令"
+            data-mm-exposure="value"
             onChange={(event) => setState((current) => ({ ...current, finalText: event.target.value, error: '' }))}
           />
           <div className="voice-window__partial" data-testid="voice-window-partial">
@@ -189,6 +162,8 @@ function VoiceCommandWindow() {
                 aria-label={recording ? '停止语音输入' : '开始语音输入'}
                 aria-pressed={recording}
                 data-testid="voice-window-start"
+                data-mm-label={recording ? '停止语音输入' : '开始语音输入'}
+                data-mm-aliases="语音输入|听写命令|录音命令"
                 onClick={() => void toggleRecording()}
               >
                 <IconInline name="mic" />
@@ -198,6 +173,8 @@ function VoiceCommandWindow() {
                 className="composer-icon-button"
                 title="清空命令"
                 aria-label="清空命令"
+                data-mm-label="清空命令"
+                data-mm-aliases="取消语音输入|清除命令"
                 onClick={() => void cancelRecording()}
               >
                 <IconInline name="x" />
@@ -211,6 +188,8 @@ function VoiceCommandWindow() {
                 title="执行命令"
                 aria-label="执行命令"
                 data-testid="voice-window-submit"
+                data-mm-label="执行命令"
+                data-mm-aliases="提交命令|发送命令"
                 disabled={!commandText || Boolean(state.submittingId)}
               >
                 <IconInline name={state.submittingId ? 'stop' : 'send'} />
@@ -230,8 +209,8 @@ function VoiceCommandWindow() {
       {state.result?.status === 'needs_confirmation' ? (
         <div className="voice-window__confirm" data-testid="voice-window-confirm-card" role="dialog" aria-label="确认执行命令">
           <span>{state.result.message}</span>
-          <button type="button" onClick={() => void respondToCommand('confirm')}>确认</button>
-          <button type="button" onClick={() => void respondToCommand('cancel')}>取消</button>
+          <button type="button" data-mm-label="确认执行命令" data-mm-aliases="确认|继续执行" onClick={() => void respondToCommand('confirm')}>确认</button>
+          <button type="button" data-mm-label="取消执行命令" data-mm-aliases="取消|停止执行" onClick={() => void respondToCommand('cancel')}>取消</button>
         </div>
       ) : null}
 
@@ -242,6 +221,8 @@ function VoiceCommandWindow() {
               key={candidate.id}
               type="button"
               role="option"
+              data-mm-label={candidate.label}
+              data-mm-aliases="选择命令目标|澄清候选"
               onClick={() => void respondToCommand('choose', candidate.id)}
             >
               {candidate.label}
@@ -255,67 +236,6 @@ function VoiceCommandWindow() {
       </div>
     </main>
   )
-}
-
-function reduceSpeechEvent(state: VoiceUiState, event: SpeechRecognitionEvent): VoiceUiState {
-  if (event.type === 'status') {
-    return { ...state, status: event.status, error: event.status === 'error' ? state.error : '' }
-  }
-  if (event.type === 'partial') {
-    return { ...state, partialText: event.text, error: '' }
-  }
-  if (event.type === 'final') {
-    return { ...state, finalText: event.text, partialText: '', status: 'idle', error: '' }
-  }
-  const denied = event.code === 'speech_denied' || event.message.includes('语音识别权限')
-  return {
-    ...state,
-    status: 'error',
-    error: event.message,
-    permissionHint: denied ? '请在系统设置中允许 AgentOS 使用语音识别，然后重新开始。' : state.permissionHint,
-  }
-}
-
-function statusLabel(status: SpeechRecognitionStatus, submittingId: string | null) {
-  if (submittingId) return '正在交给主窗口执行'
-  switch (status) {
-    case 'starting':
-      return '正在启动语音识别'
-    case 'requesting_permission':
-      return '正在请求语音权限'
-    case 'listening':
-      return '正在聆听'
-    case 'transcribing':
-      return '正在转写'
-    case 'unsupported':
-      return '当前环境不支持 Apple Speech'
-    case 'error':
-      return '语音识别遇到问题'
-    case 'idle':
-    default:
-      return '准备接收语音命令'
-  }
-}
-
-function composerStatusLabel(status: SpeechRecognitionStatus, submittingId: string | null) {
-  if (submittingId) return '执行中'
-  if (status === 'listening') return '正在听'
-  if (status === 'transcribing') return '转写中'
-  if (status === 'error') return '需处理'
-  if (status === 'unsupported') return '不可用'
-  return '就绪'
-}
-
-function voiceButtonClassName(status: SpeechRecognitionStatus) {
-  const active = ACTIVE_SPEECH_STATUSES.has(status)
-  return [
-    'composer-icon-button',
-    'composer-voice-button',
-    status === 'listening' ? 'composer-voice-button--listening' : '',
-    active ? 'is-active' : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
 }
 
 function handleSubmit(event: FormEvent<HTMLFormElement>, submitCommand: () => Promise<void>) {

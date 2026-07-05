@@ -69,28 +69,28 @@
 - WHEN 用户按全局快捷键唤起悬浮窗，点击开始说「新建对话」，点击停止后点击提交
 - THEN 悬浮窗依次展示 partial 实时文字、可编辑 final 文本；提交后主窗口创建新 thread，悬浮窗展示「已执行」状态
 
-> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-start"] / [data-testid="voice-window-partial"] / [data-testid="voice-window-submit"] / [data-testid="voice-window-result"]｜验证方式: npm run build + source audit 已覆盖独立入口/selector/IPC；真实语音链路未执行｜原因: 需真实 Electron GUI、全局快捷键、麦克风与语音识别授权｜用户本地验证步骤: 启动 Electron 应用，按 Option+Space 或托盘入口打开悬浮窗，点击开始说“新建对话”，停止后提交，确认主窗口新建 thread 且悬浮窗回显执行结果。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-start"] / [data-testid="voice-window-partial"] / [data-testid="voice-window-submit"] / [data-testid="voice-window-result"]｜验证方式: npm run typecheck + node --test electron/omni-intent-voice.test.mjs（17/17）覆盖独立入口/selector/IPC 与语音窗口状态机；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实语音链路未执行｜原因: 需真实 Electron GUI、全局快捷键、麦克风与语音识别授权｜用户本地验证步骤: 启动 Electron 应用，按 Option+Space 或托盘入口打开悬浮窗，点击开始说“新建对话”，停止后提交，确认主窗口新建 thread 且悬浮窗回显执行结果。｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：final 文本可编辑后再提交
 - GIVEN 悬浮窗已完成一次识别并显示 final 文本
 - WHEN 用户修改文本内容后点击提交
 - THEN 以编辑后的文本进入意图解析，不使用原始识别文本
 
-> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"]｜验证方式: npm run typecheck + npm run build + source audit（textarea 受控值进入 submitVoiceCommand）｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"]｜验证方式: npm run typecheck + node --test electron/omni-intent-voice.test.mjs（17/17，`selectVoiceCommandText` 证明编辑后的 final 文本优先进入 submitVoiceCommand）｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：语音权限拒绝
 - GIVEN 系统麦克风或语音识别权限被拒绝
 - WHEN 用户在悬浮窗点击开始
 - THEN 悬浮窗展示权限恢复提示（指向系统设置），状态落回可重试的 idle/error，不崩溃
 
-> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-permission-hint"]｜验证方式: source audit 已覆盖 error/permission hint；真实拒绝权限未执行｜原因: 需真实 macOS 麦克风/语音识别权限拒绝状态｜用户本地验证步骤: 在系统设置中拒绝 AgentOS 麦克风或语音识别权限，悬浮窗点击开始，确认出现权限恢复提示且窗口可重试。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-permission-hint"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（17/17）覆盖 `speech_denied` reducer、权限恢复提示与 error 可重试状态；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实拒绝权限未执行｜原因: 需真实 macOS 麦克风/语音识别权限拒绝状态｜用户本地验证步骤: 在系统设置中拒绝 AgentOS 麦克风或语音识别权限，悬浮窗点击开始，确认出现权限恢复提示且窗口可重试。｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：helper 进程异常退出可恢复
 - GIVEN 悬浮窗正在录音
 - WHEN Apple Speech helper 进程异常退出
 - THEN 悬浮窗展示错误状态并允许重新点击开始；再次开始可正常识别
 
-> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜验证方式: npm run test:electron 覆盖事件路由；人工 kill helper 进程未执行｜原因: 需真实 speech helper 运行进程与 Electron GUI 状态观察｜用户本地验证步骤: 悬浮窗录音中 kill `AgentOS Speech Helper`，确认悬浮窗显示错误且再次点击开始可恢复。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜验证方式: node --test electron/omni-intent-voice.test.mjs（17/17）覆盖 `helper_exited` reducer 错误状态与可重试 UI 状态，npm run test:electron 覆盖事件路由；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；人工 kill helper 进程未执行｜原因: 需真实 speech helper 运行进程与 Electron GUI 状态观察｜用户本地验证步骤: 悬浮窗录音中 kill `AgentOS Speech Helper`，确认悬浮窗显示错误且再次点击开始可恢复。｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：与 Composer 语音输入互斥
 - GIVEN 主窗口 Composer 语音输入正在进行
@@ -100,12 +100,12 @@
 > 实现状态：✅ 已通过（project-verify 2026-07-05）｜验证方式: npm run test:electron（Speech recognition routes events to the active consumer window only）+ source audit（activeConsumerWindowId / isAuthorizedConsumer）｜证据: TESTING_CHECKLIST.md｜
 
 ### 需求：语音/文本命令打开电脑应用
-系统 SHALL 支持通过语音或文本命令打开本机 macOS 应用；打开动作在主进程用参数化方式执行（`open -a <应用名>`），禁止拼接任意 shell 字符串。
+系统 SHALL 通过 Claude Agent SDK 解析语音或文本中的打开本机应用意图；打开动作在主进程用参数化方式执行（`open -a <应用名>`），禁止拼接任意 shell 字符串。
 
 #### 场景：打开常用应用
-- GIVEN 本机已安装 Safari，独立命令窗口可用
-- WHEN 用户提交「打开 Safari」
-- THEN 主进程以参数化 `open -a` 启动 Safari，应用置前，悬浮窗/命令入口回显「已打开 Safari」
+- GIVEN 已配置可用模型 Provider，本机已安装 Safari，独立命令窗口可用
+- WHEN 用户提交「打开 Safari 应用」
+- THEN 主进程通过 Claude Agent SDK 解析为 `system.openApp` + `params.appName = Safari`，再以参数化 `open -a` 启动 Safari，应用置前，悬浮窗/命令入口回显「已打开 Safari」
 
 > 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-result"]｜验证方式: npm run test:electron 覆盖参数化 open；人工打开 Safari 未执行｜原因: 会真实启动本机应用并依赖 Electron GUI 回显｜用户本地验证步骤: 提交“打开 Safari”，确认 Safari 置前且命令入口/悬浮窗回显“已打开 Safari”。｜证据: TESTING_CHECKLIST.md｜
 
@@ -124,21 +124,21 @@
 > 实现状态：✅ 已通过（project-verify 2026-07-05）｜验证方式: npm run test:electron（system.openApp uses argument-vector open without shell interpolation）+ 源码审计（禁止 `exec`）｜证据: TESTING_CHECKLIST.md｜
 
 ### 需求：语音/文本命令打开网页
-系统 SHALL 支持通过语音或文本命令在默认浏览器中打开明确网页，避免将「打开 Google 页面」误判为打开本机应用。
+系统 SHALL 优先用窄范围本地规则解析已知安全网页（如 Google/谷歌），并通过 Claude Agent SDK 解析其它开放网页意图；执行时在默认浏览器中打开明确网页，避免将「打开 Google 页面」误判为打开本机应用。
 
 #### 场景：打开 Google 页面
-- GIVEN 主窗口已打开且独立命令窗口可用
+- GIVEN 已配置可用模型 Provider，主窗口已打开且独立命令窗口可用
 - WHEN 用户提交「打开 Google 页面」或「打开谷歌页面」
-- THEN 系统通过默认浏览器打开 `https://www.google.com`，命令入口回显「已打开 Google 页面」
+- THEN 系统通过本地安全规则解析为 `system.openUrl`，再通过默认浏览器打开 `https://www.google.com`，命令入口回显「已打开 Google 页面」
 
-> 实现状态：⬜ 待正式验收 ｜ selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"]
+> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（17/17）覆盖 Google/谷歌本地安全规则、page action target normalizer 实执行、安全 executor 与语音窗口 final 文本提交状态机；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实默认浏览器打开未执行｜原因: 需要真实默认浏览器副作用与 Electron GUI 回显，本轮不启动外部浏览器｜用户本地验证步骤: 在独立命令窗口提交“打开 Google 页面”，确认默认浏览器打开 https://www.google.com 且命令入口回显“已打开 Google 页面”。｜证据: test-results/multimodal-voice-control-verification.md｜
 
 #### 场景：非法网页地址不执行
 - GIVEN 独立命令窗口可用
 - WHEN 用户提交无法规范化为 HTTP/HTTPS 网页的指令
 - THEN 系统不调用默认浏览器，回显「无法打开网页」
 
-> 实现状态：⬜ 待正式验收 ｜ selector: [data-testid="voice-window-result"]
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-result"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（17/17，invalid_url / HTTP(S) guard 断言）+ source audit（normalizeExternalUrl + Desktop Seam openExternal IPC）｜证据: test-results/multimodal-voice-control-verification.md｜
 
 ### 需求：命令执行安全与澄清
 系统 SHALL 按 action 风险分级执行：低风险直接执行，高风险需确认；解析出多候选时提供澄清选择。
@@ -164,12 +164,27 @@
 
 > 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: 复用 model/MCP 设置页既有 selector｜验证方式: npm run typecheck + source audit（model.switch / mcp.toggle / thread.archive / task-card.refresh executors）｜证据: TESTING_CHECKLIST.md｜
 
+#### 场景：命令窗口读取模型设置页安全摘要
+- GIVEN 主窗口打开设置 · 模型，页面已加载 1 个或多个模型厂商
+- WHEN 用户在独立命令窗口提交「现在设置了多少模型厂商」「现在模型设置页面有几个模型厂商」或「列出模型厂商」
+- THEN 系统通过 `settings.describe` 读取当前 omni-ui 快照，回显模型厂商数量、厂商名称、当前请求模型和 API Key 是否已设置的汇总；回显和模型输入快照不得包含 API Key / Token 明文
+
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"] + [data-testid="settings-model-provider-list"]｜验证方式: npm run audit:omni-answers（3/3，规则解析→摘要→悬浮窗答案且不泄露 Key）+ npm run audit:omni-rules（7/7，真实配置化规则解析命中 `settings.describe.models`）+ node --test electron/omni-intent-voice.test.mjs（17/17，摘要纯函数 + `mapSubmitResult` 回显映射 + 全 TSX 控件语义）+ npm run test:electron（96/96）+ TypeScript AST 控件审计（native 176/176，custom interactive 52/52，gap 0）｜证据: test-results/multimodal-voice-control-verification.md｜
+
+#### 场景：命令窗口读取 omni 控件接入统计
+- GIVEN 主窗口任意页面已挂载 omni-ui runtime，当前代码通过 TypeScript AST 控件审计
+- WHEN 用户在独立命令窗口提交「还有多少控件没有实现」「多少控件没接入 omni」或「omni 控件接入情况」
+- THEN 系统通过 `settings.describe` 的 `controls` topic 回显静态接入缺口、原生控件覆盖数、非原生交互控件覆盖数、当前页面可交互对象数，并明确剩余 manual-only 项不是控件接入缺口
+
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"]｜验证方式: npm run audit:omni-answers（3/3，规则解析→摘要→悬浮窗答案）+ npm run audit:omni-rules（7/7，真实配置化规则解析命中 `settings.describe.controls`）+ node --test electron/omni-intent-voice.test.mjs（17/17，`coverage-summary` 与 AST 审计对账 + `mapSubmitResult` 回显映射）+ npm run audit:omni-controls（missing 0）+ npm run test:electron（96/96）｜证据: test-results/multimodal-voice-control-verification.md｜
+
 ## 平台专项验证（Electron + React）
 
 - API Key、Token 不出现在 renderer bundle、悬浮窗窗口与任何日志中。
 - 悬浮窗为独立 BrowserWindow：置顶、无边框、不抢主窗口焦点；关闭悬浮窗不影响主窗口语音（Composer）能力。
 - omni-ui 只提议命令：所有 executor 由 AgentOS 页面注册，模型输出不直接触达 IPC/业务代码。
 - 意图识别 SDK query 不挂任何业务工具（无 MCP、无文件/Bash 工具），只能返回意图 JSON。
+- 打开应用/网页这类开放名词命令不配置泛化本地短语 rules；Google/谷歌等已知安全网页可以由窄范围本地规则解析为 allowlisted action，其它开放名词仍由 Claude Agent SDK resolver 解析，再由本地 executor 执行。
 - 打开电脑应用只允许参数化 `open -a`（spawn 参数数组），禁止任意 shell 命令执行。
 - 打开网页只允许 HTTP/HTTPS URL，经 `desktop.openExternal` 交给默认浏览器，不支持任意 shell 或非网页协议。
 - 大 DOM 快照性能：真实工作区连续输入 20 字符期间 Provider 重渲染次数符合 omni-ui benchmark 口径（无逐键全量重建）。

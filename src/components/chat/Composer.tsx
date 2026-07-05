@@ -23,6 +23,7 @@ import type {
 import type { SpeechRecognitionStatus } from '../../desktop-types'
 import { IconInline } from '../../icon-inline'
 import { useI18n } from '../../i18n/i18n'
+import { SemanticButton, semanticAliases, useSemanticNodeRef } from '../../multimodal/semantic-controls'
 import { ContextUsageView } from '../AppAgentStatusPopover'
 import { AttachmentThumb } from './AttachmentThumb'
 import { formatBytes } from './format'
@@ -176,6 +177,47 @@ export function Composer({
     .join(' ')
   const isDragActive = dragDepth > 0 && !isRunning
   const formClassName = `chat-composer${isDragActive ? ' is-drag-active' : ''}`
+  const chatInputSemanticRef = useSemanticNodeRef<HTMLTextAreaElement>(
+    {
+      id: 'agentos.control.composer.input',
+      role: 'textbox',
+      label: t('omni.controls.composerInput'),
+      actions: ['focus', 'setText', 'appendText', 'clear'],
+      state: {
+        hasText: hasSendText,
+        attachmentCount: pendingAttachments.length,
+        running: isRunning,
+      },
+      hint: { aliases: semanticAliases(t, 'omni.aliases.composerInput') },
+    },
+    chatInputRef,
+  )
+  const permissionModeButtonRef = useSemanticNodeRef<HTMLButtonElement>(
+    {
+      id: 'agentos.control.composer.permissionMode',
+      role: 'button',
+      label: t('chat.permissionModeAria'),
+      actions: ['press'],
+      state: { open: permissionModeOpen, mode: permissionMode, running: isRunning },
+      hint: { aliases: semanticAliases(t, 'omni.aliases.permissionMode') },
+    },
+    permissionModePopoverAnchorRef,
+  )
+  const modelButtonRef = useSemanticNodeRef<HTMLButtonElement>(
+    {
+      id: 'agentos.control.composer.modelPicker',
+      role: 'button',
+      label: t('chat.modelPickerAria'),
+      actions: ['press'],
+      state: {
+        open: modelPickerOpen,
+        model: displayModelName,
+        enabled: !isRunning && modelMenuRows.length > 0,
+      },
+      hint: { aliases: semanticAliases(t, 'omni.aliases.modelPicker') },
+    },
+    modelPopoverAnchorRef,
+  )
 
   const hasFileDrag = (event: DragEvent<HTMLFormElement>) => Array.from(event.dataTransfer.types).includes('Files')
 
@@ -222,13 +264,15 @@ export function Composer({
           </div>
         ) : null}
         <textarea
-          ref={chatInputRef}
+          ref={chatInputSemanticRef}
           className="chat-input"
           id="chat-input"
           rows={1}
           placeholder={t('chat.composerPlaceholder')}
           autoComplete="off"
           spellCheck={false}
+          data-mm-label={t('omni.controls.composerInput')}
+          data-mm-aliases={semanticAliases(t, 'omni.aliases.composerInput')}
           value={inputValue}
           onChange={(event) => onInputChange(event.target.value, event.target.selectionStart, event.target.selectionEnd)}
           onCompositionStart={onCompositionStart}
@@ -261,6 +305,8 @@ export function Composer({
                     role="option"
                     aria-selected={index === composerSuggestionIndex}
                     className={`composer-autocomplete-option${index === composerSuggestionIndex ? ' is-selected' : ''}`}
+                    data-mm-label={suggestion.title}
+                    data-mm-aliases={suggestion.subtitle}
                     onMouseEnter={() => setComposerSuggestionIndex(index)}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => onInsertComposerSuggestion(suggestion)}
@@ -288,19 +334,27 @@ export function Composer({
           : null}
         <div className="composer-footer">
           <div className="composer-actions">
-            <button
+            <SemanticButton
               type="button"
               className="composer-icon-button"
               title={activeModelSupportsImages ? t('chat.addAttachmentTitle') : t('chat.addTextAttachmentTitle')}
               aria-label={activeModelSupportsImages ? t('chat.addAttachmentAria') : t('chat.addTextAttachmentAria')}
               disabled={isRunning}
+              semantic={{
+                id: 'agentos.control.composer.addAttachment',
+                role: 'button',
+                label: activeModelSupportsImages ? t('chat.addAttachmentAria') : t('chat.addTextAttachmentAria'),
+                actions: ['press'],
+                state: { enabled: !isRunning, supportsImages: activeModelSupportsImages },
+                hint: { aliases: semanticAliases(t, 'omni.aliases.addAttachment') },
+              }}
               onClick={() => onAddComposerAttachments()}
             >
               <IconInline name="paperclip" />
-            </button>
+            </SemanticButton>
             <div className="composer-mode-picker" ref={permissionModePickerRef}>
               <button
-                ref={permissionModePopoverAnchorRef}
+                ref={permissionModeButtonRef}
                 type="button"
                 className={`composer-mode-button${permissionModeOpen ? ' is-open' : ''}`}
                 title={t('chat.permissionModeTitle')}
@@ -341,6 +395,8 @@ export function Composer({
                             role="menuitemradio"
                             className={`composer-mode-option${checked ? ' is-selected' : ''}`}
                             aria-checked={checked}
+                            data-mm-label={row.label}
+                            data-mm-aliases={row.description}
                             onClick={() => {
                               setPermissionMode(row.mode)
                               setPermissionModeOpen(false)
@@ -371,7 +427,7 @@ export function Composer({
             </span>
             <div className="composer-model-picker" ref={modelPickerRef}>
               <button
-                ref={modelPopoverAnchorRef}
+                ref={modelButtonRef}
                 type="button"
                 className={`composer-model-button${modelPickerOpen ? ' is-open' : ''}`}
                 id="composer-model-trigger"
@@ -413,6 +469,8 @@ export function Composer({
                             className={`composer-model-option${checked ? ' is-selected' : ''}`}
                             aria-checked={checked}
                             title={row.metaLine || undefined}
+                            data-mm-label={row.headline}
+                            data-mm-aliases={row.metaLine}
                             onClick={() => onPickChatMenuRow(row)}
                           >
                             <span className="composer-model-option__label">
@@ -437,30 +495,55 @@ export function Composer({
                 : null}
             </div>
             {speechRecognitionSupported ? (
-              <button
+              <SemanticButton
                 type="button"
                 className={speechRecognitionButtonClassName}
                 title={speechRecognitionButtonTitle}
                 aria-label={speechRecognitionButtonAriaLabel}
                 aria-pressed={speechRecognitionActive}
                 disabled={isRunning}
+                semantic={{
+                  id: 'agentos.control.composer.voice',
+                  role: 'button',
+                  label: speechRecognitionButtonAriaLabel,
+                  actions: ['press'],
+                  state: {
+                    active: speechRecognitionActive,
+                    status: speechRecognitionStatus,
+                    enabled: !isRunning,
+                  },
+                  hint: { aliases: semanticAliases(t, 'omni.aliases.voiceInput') },
+                }}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={onToggleSpeechRecognition}
               >
                 <IconInline name="mic" />
-              </button>
+              </SemanticButton>
             ) : null}
-            <button
+            <SemanticButton
               type="submit"
               className="composer-send-button"
               id="btn-send"
               title={isRunning ? t('chat.stop') : hasUnsupportedImageAttachment ? t('chat.imageInputDisabledTitle') : t('chat.send')}
               aria-label={isRunning ? t('chat.stop') : t('chat.send')}
               disabled={!isRunning && ((!hasSendText && !hasComposerAttachments) || hasUnsupportedImageAttachment)}
+              semantic={{
+                id: 'agentos.control.composer.send',
+                role: 'button',
+                label: isRunning ? t('chat.stop') : t('chat.send'),
+                actions: ['press'],
+                state: {
+                  running: isRunning,
+                  hasText: hasSendText,
+                  attachmentCount: pendingAttachments.length,
+                  hasUnsupportedImageAttachment,
+                },
+                hint: { aliases: semanticAliases(t, 'omni.aliases.send') },
+              }}
               onClick={onSendClick}
             >
               <IconInline name={isRunning ? 'stop' : 'send'} />
-            </button>
+            </SemanticButton>
           </div>
         </div>
       </form>
@@ -505,6 +588,21 @@ function ContextUsageMeter({
       : compactDisabledReason === 'unsupported'
         ? t('chat.contextCompactUnavailableAria', { percent: Math.round(percentage) })
         : t('chat.contextCompactAria', { percent: Math.round(percentage) })
+  const semanticAnchorRef = useSemanticNodeRef<HTMLButtonElement>(
+    {
+      id: 'agentos.control.composer.contextMeter',
+      role: 'button',
+      label: t('omni.controls.contextMeter'),
+      actions: ['press'],
+      state: {
+        open,
+        percent: Math.round(percentage),
+        compactDisabledReason: compactDisabledReason ?? '',
+      },
+      hint: { aliases: semanticAliases(t, 'omni.aliases.contextMeter') },
+    },
+    anchorRef,
+  )
 
   const clearCloseTimer = () => {
     if (closeTimerRef.current === null) return
@@ -575,13 +673,15 @@ function ContextUsageMeter({
   return (
     <>
       <button
-        ref={anchorRef}
+        ref={semanticAnchorRef}
         type="button"
         className={`composer-context-meter${open ? ' is-open' : ''}`}
         title={t('chat.contextUsageTitle')}
         aria-label={t('chat.contextUsageAria', { percent: Math.round(percentage) })}
         aria-expanded={open}
         aria-haspopup="dialog"
+        data-mm-label={t('chat.contextUsageAria', { percent: Math.round(percentage) })}
+        data-mm-aliases={t('chat.contextUsageTitle')}
         onMouseEnter={openPopover}
         onMouseLeave={scheduleClose}
         onFocus={openPopover}
@@ -631,6 +731,8 @@ function ContextUsageMeter({
                   title={compactTitle}
                   aria-label={compactAriaLabel}
                   aria-disabled={isCompactDisabled || undefined}
+                  data-mm-label={compactAriaLabel}
+                  data-mm-aliases={compactTitle}
                   onClick={runCompactAction}
                 >
                   {t('chat.contextCompactTitle')}
@@ -682,6 +784,8 @@ function ComposerAttachmentPreview({
         className="composer-attachment__remove"
         title={t('chat.removeAttachment')}
         aria-label={t('chat.removeAttachment')}
+        data-mm-label={t('chat.removeAttachment')}
+        data-mm-aliases={attachment.name}
         onClick={onRemove}
       >
         <IconInline name="x" />
