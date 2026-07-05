@@ -98,6 +98,12 @@ html[data-window-effects='mac-vibrancy'] body {
   min-height: 0;
 }
 
+#app > [data-mm-root] {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
 a {
   color: var(--blue-400);
   text-decoration: none;
@@ -5149,6 +5155,11 @@ button.app-file-tree-row {
   gap: calc(var(--spacing) * 3);
   width: 100%;
   margin-top: calc(var(--spacing) * 3);
+}
+
+.project-home-card-mm,
+.multimodal-page-root {
+  display: contents;
 }
 
 .project-home-card {

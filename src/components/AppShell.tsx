@@ -15,6 +15,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { flushSync } from 'react-dom'
+import { MultimodalPage } from '@xue160709/omni-ui-react'
 import {
   createEmptyChatState,
   createId,
@@ -62,6 +63,7 @@ import { AppShellSidebar } from './AppShellSidebar'
 import { AppShellWorkspace } from './AppShellWorkspace'
 import { type ChatPageHandle } from './chat/ChatPage'
 import { WorkspaceSession } from './workspace-session'
+import { AgentOsMultimodalRuntime } from '../multimodal/AgentOsMultimodal'
 
 const INITIAL_PROVIDER_SKIP_VALUE = '__skip'
 const INITIAL_PROVIDER_CUSTOM_VALUE = '__custom'
@@ -1699,89 +1701,132 @@ export function AppShell() {
   }
 
   // --- Primary layout once a project exists: sidebar rail + workspace stack / 存在项目后的主布局：侧栏轨道 + 工作区堆叠 ---
+  const multimodalPageId =
+    activeViewId === 'settings'
+      ? `agentos.page.settings.${settingsCategory}`
+      : activeViewId === 'docs'
+        ? 'agentos.page.docs'
+        : 'agentos.page.home'
+  const multimodalPageTitle =
+    activeViewId === 'settings'
+      ? t(settingsWorkspaceTitleKey(settingsCategory))
+      : activeViewId === 'docs'
+        ? t(VIEW_HEADING_KEYS.docs)
+        : '项目首页'
+  const multimodalPageRoute =
+    activeViewId === 'settings'
+      ? `#settings/${settingsCategory}`
+      : activeViewId === 'docs'
+        ? '#docs'
+        : '#home'
 
   return (
-    <div
-      className={`app-shell${isWindows ? ' is-platform-win32' : ''}${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}${activeViewId === 'settings' ? ' is-shell-settings' : ''}`}
-      id="app-shell"
-      ref={shellRef}
+    <MultimodalPage
+      className="multimodal-page-root"
+      style={{ display: 'contents' }}
+      id={multimodalPageId}
+      title={multimodalPageTitle}
+      route={multimodalPageRoute}
+      state={{
+        activeViewId,
+        settingsCategory,
+        activeProjectId: activeProject.id,
+        activeThreadId: activeThread?.id,
+      }}
     >
-      <div className="app-body" ref={appBodyRef}>
-        <AppShellSidebar
-          activeViewId={activeViewId}
-          settingsCategory={settingsCategory}
-          projects={chatWorkspace.projects}
-          projectOrderIds={chatWorkspace.sidebarPrefs.projectOrderIds}
-          threads={chatWorkspace.threads}
-          threadRunStates={threadRunStates}
-          threadCompletionStates={threadCompletionStates}
-          activeProjectId={chatWorkspace.activeProjectId}
-          activeThreadId={chatWorkspace.activeThreadId}
-          collapsedProjectIds={chatWorkspace.sidebarPrefs.collapsedProjectIds}
-          showProjectSkills={showProjectSkillsInSidebar}
-          projectSkillStates={projectSkillStates}
-          selectedProjectSkill={selectedProjectSkill}
-          hiddenSkillPathsByProject={hiddenSkillPathsByProject}
-          canBack={canBack}
-          canForward={canForward}
-          onCreateProject={createProject}
-          onOpenSearch={() => window.dispatchEvent(new CustomEvent('agentos:open-search', { detail: { scope: 'all' } }))}
-          onOpenSettingsCategory={openSettingsCategory}
-          onSelectProject={selectProject}
-          onSelectThread={selectThread}
-          onSelectProjectSkill={selectProjectSkill}
-          onRunProjectSkill={runProjectSkill}
-          onToggleThreadPinned={toggleThreadPinned}
-          onArchiveThread={archiveThread}
-          onToggleProjectPinned={toggleProjectPinned}
-          onReorderProject={reorderProject}
-          onToggleSidebarProjectCollapsed={toggleSidebarProjectCollapsed}
-          onRemoveProject={removeProject}
-          onRelocateProject={(projectId) => void relocateProject(projectId)}
-          onRevealProjectInFileManager={revealProjectInFileManager}
-          onHideProjectSkill={hideProjectSkill}
-          onToggleCollapsed={toggleSidebarCollapsed}
-          sidebarRef={appSidebarRef}
-          splitterRef={sidebarSplitterRef}
-          onSplitterPointerDown={handleSidebarPointerDown}
-        />
-        <AppShellWorkspace
-          workspaceTitle={workspaceTitle}
-          headerStatus={headerStatus}
-          activeViewId={activeViewId}
-          settingsCategory={settingsCategory}
-          activeProject={activeProject}
-          activeThread={activeThread}
-          projectDefaultModelPick={projectDefaultModelPick}
-          projectHomeModelPick={projectHomeModelPick}
-          threads={chatWorkspace.threads}
-          projects={chatWorkspace.projects}
-          projectOrderIds={chatWorkspace.sidebarPrefs.projectOrderIds}
-          threadRunStates={threadRunStates}
-          chatRef={chatRef}
-          onStatusChange={setHeaderStatus}
-          onNewThread={createThreadInProject}
-          onForkThread={forkThreadInProject}
-          onCreateProject={createProject}
-          onSelectProject={selectProject}
-          onSelectThread={selectThread}
-          onThreadChatStateChange={updateThreadChatState}
-          onThreadPromptSubmit={handleThreadPromptSubmit}
-          onThreadRunStateChange={updateThreadRunState}
-          onThreadCompletionStateChange={updateThreadCompletionState}
-          onProjectHomeModelPickChange={setProjectHomeDraftModelPick}
-          homeModeResetKey={homeModeResetKey}
-          onCreateHomePluginCardThread={createHomePluginCardThread}
-          onEditHomePluginCard={openHomePluginCardThread}
-          hiddenSkillPaths={hiddenSkillPathsByProject[activeProject.id] ?? []}
-          projectSkills={projectSkillStates[activeProject.id]?.skills ?? []}
-          onRunProjectSkill={runProjectSkill}
-          onStopProjectSkillRun={stopProjectSkillRun}
-          showProjectSkillsInSidebar={showProjectSkillsInSidebar}
-          onShowProjectSkillsInSidebarChange={updateShowProjectSkillsInSidebar}
-        />
+      <div
+        className={`app-shell${isWindows ? ' is-platform-win32' : ''}${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}${activeViewId === 'settings' ? ' is-shell-settings' : ''}`}
+        id="app-shell"
+        ref={shellRef}
+      >
+        <div className="app-body" ref={appBodyRef}>
+          <AppShellSidebar
+            activeViewId={activeViewId}
+            settingsCategory={settingsCategory}
+            projects={chatWorkspace.projects}
+            projectOrderIds={chatWorkspace.sidebarPrefs.projectOrderIds}
+            threads={chatWorkspace.threads}
+            threadRunStates={threadRunStates}
+            threadCompletionStates={threadCompletionStates}
+            activeProjectId={chatWorkspace.activeProjectId}
+            activeThreadId={chatWorkspace.activeThreadId}
+            collapsedProjectIds={chatWorkspace.sidebarPrefs.collapsedProjectIds}
+            showProjectSkills={showProjectSkillsInSidebar}
+            projectSkillStates={projectSkillStates}
+            selectedProjectSkill={selectedProjectSkill}
+            hiddenSkillPathsByProject={hiddenSkillPathsByProject}
+            canBack={canBack}
+            canForward={canForward}
+            onCreateProject={createProject}
+            onOpenSearch={() => window.dispatchEvent(new CustomEvent('agentos:open-search', { detail: { scope: 'all' } }))}
+            onOpenSettingsCategory={openSettingsCategory}
+            onSelectProject={selectProject}
+            onSelectThread={selectThread}
+            onSelectProjectSkill={selectProjectSkill}
+            onRunProjectSkill={runProjectSkill}
+            onToggleThreadPinned={toggleThreadPinned}
+            onArchiveThread={archiveThread}
+            onToggleProjectPinned={toggleProjectPinned}
+            onReorderProject={reorderProject}
+            onToggleSidebarProjectCollapsed={toggleSidebarProjectCollapsed}
+            onRemoveProject={removeProject}
+            onRelocateProject={(projectId) => void relocateProject(projectId)}
+            onRevealProjectInFileManager={revealProjectInFileManager}
+            onHideProjectSkill={hideProjectSkill}
+            onToggleCollapsed={toggleSidebarCollapsed}
+            sidebarRef={appSidebarRef}
+            splitterRef={sidebarSplitterRef}
+            onSplitterPointerDown={handleSidebarPointerDown}
+          />
+          <AppShellWorkspace
+            workspaceTitle={workspaceTitle}
+            headerStatus={headerStatus}
+            activeViewId={activeViewId}
+            settingsCategory={settingsCategory}
+            activeProject={activeProject}
+            activeThread={activeThread}
+            projectDefaultModelPick={projectDefaultModelPick}
+            projectHomeModelPick={projectHomeModelPick}
+            threads={chatWorkspace.threads}
+            projects={chatWorkspace.projects}
+            projectOrderIds={chatWorkspace.sidebarPrefs.projectOrderIds}
+            threadRunStates={threadRunStates}
+            chatRef={chatRef}
+            onStatusChange={setHeaderStatus}
+            onNewThread={createThreadInProject}
+            onForkThread={forkThreadInProject}
+            onCreateProject={createProject}
+            onSelectProject={selectProject}
+            onSelectThread={selectThread}
+            onThreadChatStateChange={updateThreadChatState}
+            onThreadPromptSubmit={handleThreadPromptSubmit}
+            onThreadRunStateChange={updateThreadRunState}
+            onThreadCompletionStateChange={updateThreadCompletionState}
+            onProjectHomeModelPickChange={setProjectHomeDraftModelPick}
+            homeModeResetKey={homeModeResetKey}
+            onCreateHomePluginCardThread={createHomePluginCardThread}
+            onEditHomePluginCard={openHomePluginCardThread}
+            hiddenSkillPaths={hiddenSkillPathsByProject[activeProject.id] ?? []}
+            projectSkills={projectSkillStates[activeProject.id]?.skills ?? []}
+            onRunProjectSkill={runProjectSkill}
+            onStopProjectSkillRun={stopProjectSkillRun}
+            showProjectSkillsInSidebar={showProjectSkillsInSidebar}
+            onShowProjectSkillsInSidebarChange={updateShowProjectSkillsInSidebar}
+          />
+          <AgentOsMultimodalRuntime
+            activeProject={activeProject}
+            activeThread={activeThread}
+            projects={chatWorkspace.projects}
+            threads={chatWorkspace.threads}
+            chatRef={chatRef}
+            onSelectProject={selectProject}
+            onNewThread={createThreadInProject}
+            onOpenSettingsCategory={openSettingsCategory}
+            onArchiveThread={archiveThread}
+          />
+        </div>
       </div>
-    </div>
+    </MultimodalPage>
   )
 }
 

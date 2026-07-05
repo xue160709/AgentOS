@@ -1,17 +1,17 @@
 # AgentOS 全量验收清单
 
-最后更新：2026-06-24
+最后更新：2026-07-05
 主框架：Electron + React + Vite
 验证类别：正式验收（project-verify）
-验证范围：`prd/*/acceptance.md` 全部 10 个模块、98 个场景；本轮复验剩余 3 个 manual-only 场景并同步当前静态/集成测试结果
+验证范围：正式验收快照覆盖当时 `prd/*/acceptance.md` 全部 11 个模块、116 个场景；后续新增的 `multimodal-voice-control` 网页打开 2 个场景尚未纳入本清单，待单独 `project-verify`
 
 ## 结论
 
 | 状态 | 数量 | 说明 |
 | --- | --- | --- |
-| ✅ 通过 | 95 | 可通过单元/集成测试、静态源代码审计、浏览器 smoke、打包 smoke 或专用验收 smoke 证明 |
+| ✅ 通过 | 108 | 可通过单元/集成测试、静态源代码审计、浏览器 smoke、打包 smoke 或专用验收 smoke 证明 |
 | ❌ 失败 | 0 | 无 |
-| ⚠️ 跳过 | 3 | 仅限真实 Electron GUI / macOS 系统权限场景，已写入人工验证步骤 |
+| ⚠️ 跳过 | 8 | 仅限真实 Electron GUI / macOS 系统权限 / live Provider / 本机应用置前场景，已写入人工验证步骤 |
 | 阻塞 | 0 | 无阻塞 |
 
 ## 命令证据
@@ -19,7 +19,7 @@
 | 命令 / smoke | 结果 | 摘要 |
 | --- | --- | --- |
 | `npm run typecheck` | ✅ | TypeScript 检查通过 |
-| `npm run test:electron` | ✅ | 79/79 通过；覆盖 workspace session、chat runtime、project content、desktop seam、window chrome、model pick、MCP、WebSearch API Key 池和 release-safe stdio MCP PATH 等 |
+| `npm run test:electron` | ✅ | 83/83 通过；新增覆盖 omni intent SDK 工具隔离、`system.openApp` 注入防护、语音窗口 IPC 与 speech 多窗口路由 |
 | `node --test electron/claude-agent-runner-web-search.test.mjs electron/agent-mode-settings-store.test.mjs` | ✅ | 19/19 通过；覆盖 Brave/Tavily Key 池 fallback、聚合失败脱敏、Provider Test fallback 元数据和旧单 Key 到单元素池迁移 |
 | WebSearch Key Pool selector/source audit | ✅ | 23 项源码核对通过；覆盖 `[data-testid="web-search-key-pool"]`、Key 池输入、保存按钮、Provider Test 状态、上移/下移/删除/添加控件和脱敏 fallback 代码路径 |
 | `npm run test:home-plugin` | ✅ | 命令执行成功；当前仓库无 `.agents/home-plugins/project-home`，脚本按预期跳过 |
@@ -29,6 +29,7 @@
 | `git diff --check` | ✅ | 无 whitespace 错误 |
 | `./node_modules/.bin/vite build` | ✅ | renderer、Electron main/preload build 通过 |
 | `npm run build:local` | ✅ | 本地 Electron 打包通过，生成 macOS app/dmg/zip blockmap；本地模式按预期跳过 notarization |
+| `npm run build` | ✅ | 生成 `dist/index.html` + `dist/voice.html`，Electron main/preload build 通过，生成 macOS app/dmg/zip；notarization 因未配置选项按预期跳过 |
 | `curl -I http://127.0.0.1:5181/` | ✅ | Preview server 返回 HTTP 200 |
 | Chrome headless preview smoke | ✅ | 空工作区页面非空渲染，存在 `初始化工作区`、`添加你的第一个项目`、`选择文件夹` 等关键 UI |
 | `npm run lint` | ⚠️ | `package.json` 未定义 `lint` script |
@@ -45,6 +46,7 @@
 | `prd/file-context/acceptance.md` | 6 | 6 ✅ | `test:electron` project-content coverage |
 | `prd/home-plugin/acceptance.md` | 6 | 6 ✅ | `full-acceptance-smoke` Home Plugin runner coverage |
 | `prd/model-settings/acceptance.md` | 10 | 10 ✅ | `full-acceptance-smoke`、`test:electron`、MCP selector audit |
+| `prd/multimodal-voice-control/acceptance.md` | 18 + 2 待验收 | 13 ✅ / 5 ⚠️ / 2 ⬜ | 首版证据：`typecheck`、`test:electron`、`npm run build`、source audit、manual-only notes；新增网页打开场景待 `project-verify` |
 | `prd/persistence/acceptance.md` | 6 | 6 ✅ | `test:electron` workspace-session coverage、source audit |
 | `prd/task-home-plugin/acceptance.md` | 8 | 8 ✅ | `full-acceptance-smoke` Task Home Plugin coverage |
 | `prd/workspace-session/acceptance.md` | 6 | 6 ✅ | `test:electron` workspace-session coverage、Chrome preview screenshot |
@@ -56,6 +58,11 @@
 | `desktop-shell-settings-release` / 启用 close-to-tray | 需真实 Electron 托盘与窗口关闭事件 | 打开 Electron 应用，开启“关闭到托盘”，点击窗口关闭按钮，确认主窗口隐藏且托盘图标可恢复窗口 |
 | `desktop-shell-settings-release` / 用户开始语音输入 | 需真实 macOS 语音/麦克风权限与 speech helper 事件 | 打开 Electron 应用，点击“语音输入”，授权麦克风/语音识别，确认输入框收到转写文本 |
 | `desktop-shell-settings-release` / 用户拒绝语音权限 | 需真实 macOS 权限拒绝状态 | 在系统设置中拒绝应用麦克风/语音识别权限，点击“语音输入”，确认页面显示权限恢复提示 |
+| `multimodal-voice-control` / 规则未命中时由 SDK 解析执行 | 需真实可用模型 Provider 与 live SDK 调用 | 配置 Provider，提交规则无法命中的口语命令，确认 `[omni-intent] start/done` 日志与主窗口 action 执行 |
+| `multimodal-voice-control` / 快捷键唤起悬浮窗并完成一次语音命令 | 需真实 Electron GUI、全局快捷键、麦克风与语音识别授权 | 按 Option+Space 或托盘入口打开悬浮窗，录音“新建对话”，停止并提交，确认主窗口新建 thread |
+| `multimodal-voice-control` / 语音权限拒绝 | 需真实 macOS 权限拒绝状态 | 在系统设置中拒绝麦克风或语音识别权限，悬浮窗点击开始，确认恢复提示与可重试状态 |
+| `multimodal-voice-control` / helper 进程异常退出可恢复 | 需真实 speech helper 进程与窗口状态观察 | 录音中 kill `AgentOS Speech Helper`，确认悬浮窗错误提示且再次开始可恢复 |
+| `multimodal-voice-control` / 打开常用应用 | 会真实启动本机应用并依赖 GUI 回显 | 提交“打开 Safari”，确认 Safari 置前且悬浮窗/命令入口回显“已打开 Safari” |
 
 ## 证据文件
 
@@ -65,6 +72,7 @@
 | `test-results/full-acceptance-smoke.mjs` | 全量补充 smoke 脚本 |
 | `test-results/full-acceptance-smoke-output.json` | smoke 输出 JSON |
 | `test-results/agentos-preview-empty-workspace.png` | Chrome headless 空工作区截图 |
+| `test-results/multimodal-voice-control-verification.md` | omni-ui 多模态融合与语音控制正式验收细证据 |
 
 ## 增量验收：WebSearch API Key 池（2026-06-24）
 
@@ -79,7 +87,7 @@
 ## 未覆盖项
 
 - 真实 Brave/Tavily 外网成功搜索不作为本轮通过条件；请求映射、缺凭据、HTTP 错误分类与脱敏通过本地测试和 Provider smoke 验证。
-- Electron 托盘和 macOS 语音/麦克风权限必须在用户本机 GUI 中人工确认，已在对应 acceptance 场景标记为 `⚠️`。
+- Electron 托盘、macOS 语音/麦克风权限、全局快捷键、live Provider 意图识别和真实打开本机应用必须在用户本机 GUI 中人工确认，已在对应 acceptance 场景标记为 `⚠️`。
 - 全页面点击式 Playwright E2E 尚未沉淀为仓库脚本；本轮以 Electron 单元/集成测试、selector audit、浏览器 smoke 和专用 Node smoke 组合验收。
 
 ## 剩余 manual-only 场景复验（2026-06-24）

@@ -4,11 +4,14 @@
  */
 
 import 'katex/dist/katex.min.css'
+import '@xue160709/omni-ui-react/styles.css'
 import './style.css'
+import { MultimodalProvider } from '@xue160709/omni-ui-react'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AppShell } from './components/AppShell'
 import { I18nProvider } from './i18n/i18n'
+import { agentOsLlmResolver, agentOsMultimodalConfig } from './multimodal/config'
 import { applySafeAreaToDocument, installWindowSafeAreaListeners } from './window-safe-area'
 
 const windowEffects = window.desktop?.windowEffects
@@ -27,7 +30,15 @@ if (!appRoot) throw new Error('Missing #app root element.')
 createRoot(appRoot).render(
   <StrictMode>
     <I18nProvider>
-      <AppShell />
+      <MultimodalProvider
+        config={agentOsMultimodalConfig}
+        resolvers={[agentOsLlmResolver]}
+        resolverMode="rule-first"
+        language="zh-CN"
+        device="desktop"
+      >
+        <AppShell />
+      </MultimodalProvider>
     </I18nProvider>
   </StrictMode>,
 )

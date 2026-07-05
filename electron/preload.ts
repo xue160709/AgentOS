@@ -13,6 +13,7 @@ import type {
   HomePluginTaskRunResult,
   HomePluginTaskSaveResult,
   HomePluginTaskStopResult,
+  OmniIntentResolveResult,
   ProjectContextAddMode,
   ProjectContextAddResult,
   ProjectContextResult,
@@ -21,7 +22,12 @@ import type {
   SpeechRecognitionCommandResult,
   SpeechRecognitionEvent,
   SpeechRecognitionSnapshot,
+  SystemOpenAppResult,
   TrayMenuAction,
+  VoiceCommandExecutionResult,
+  VoiceCommandResponseRequest,
+  VoiceCommandRequestEvent,
+  VoiceCommandSubmitResult,
 } from '../src/desktop-types'
 import type {
   ActiveChatPickPayload,
@@ -197,6 +203,12 @@ const desktopAdapter = {
   openExternal(url: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openExternal, url) as Promise<void>
   },
+  resolveOmniIntent(payload: { utterance: string; prompt: string }) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.resolveOmniIntent, payload) as Promise<OmniIntentResolveResult>
+  },
+  openApp(appName: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openApp, appName) as Promise<SystemOpenAppResult>
+  },
   getDesktopPreferences() {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getDesktopPreferences) as Promise<DesktopPreferences>
   },
@@ -215,7 +227,7 @@ const desktopAdapter = {
   getSpeechRecognitionStatus() {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getSpeechRecognitionStatus) as Promise<SpeechRecognitionSnapshot>
   },
-  startSpeechRecognition(options?: { locale?: string; requiresOnDevice?: boolean }) {
+  startSpeechRecognition(options?: { locale?: string; requiresOnDevice?: boolean; consumer?: 'composer' | 'voice-command' }) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startSpeechRecognition, options) as Promise<SpeechRecognitionCommandResult>
   },
   stopSpeechRecognition() {
@@ -228,6 +240,30 @@ const desktopAdapter = {
     const listener = (_event: IpcRendererEvent, event: SpeechRecognitionEvent) => handler(event)
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onSpeechRecognitionEvent, listener)
     return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onSpeechRecognitionEvent, listener)
+  },
+  submitVoiceCommand(utterance: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.submitVoiceCommand, utterance) as Promise<VoiceCommandSubmitResult>
+  },
+  respondVoiceCommand(response: VoiceCommandResponseRequest) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.respondVoiceCommand, response) as Promise<VoiceCommandSubmitResult>
+  },
+  sendVoiceCommandResult(result: VoiceCommandExecutionResult) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.sendVoiceCommandResult, result) as Promise<void>
+  },
+  onVoiceCommandRequest(handler: (event: VoiceCommandRequestEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: VoiceCommandRequestEvent) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onVoiceCommandRequest, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onVoiceCommandRequest, listener)
+  },
+  onVoiceCommandResponse(handler: (event: VoiceCommandResponseRequest) => void) {
+    const listener = (_event: IpcRendererEvent, event: VoiceCommandResponseRequest) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onVoiceCommandResponse, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onVoiceCommandResponse, listener)
+  },
+  onVoiceCommandResult(handler: (event: VoiceCommandExecutionResult) => void) {
+    const listener = (_event: IpcRendererEvent, event: VoiceCommandExecutionResult) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onVoiceCommandResult, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onVoiceCommandResult, listener)
   },
   onTrayMenuAction(handler: (action: TrayMenuAction) => void) {
     const listener = (_event: IpcRendererEvent, raw: unknown) => {

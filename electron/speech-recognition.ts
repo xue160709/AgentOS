@@ -3,7 +3,7 @@
  * Spawns the Swift helper and translates its NDJSON protocol into Electron IPC events.
  */
 
-import { app, type BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -11,6 +11,7 @@ import net, { type Server, type Socket } from 'node:net'
 import path from 'node:path'
 import { DESKTOP_EVENT_CHANNELS } from '../src/desktop-seam'
 import type {
+  SpeechRecognitionConsumer,
   SpeechRecognitionCommandResult,
   SpeechRecognitionEvent,
   SpeechRecognitionSnapshot,
@@ -20,6 +21,7 @@ import type {
 type SpeechStartOptions = {
   locale?: string
   requiresOnDevice?: boolean
+  consumer?: SpeechRecognitionConsumer
 }
 
 type HelperEvent = {
@@ -60,8 +62,10 @@ export class MacSpeechRecognitionService {
   private stdoutBuffer = ''
   private status: SpeechRecognitionStatus = process.platform === 'darwin' ? 'idle' : 'unsupported'
   private generation = 0
+  private activeConsumerWindowId: number | null = null
+  private activeConsumer: SpeechRecognitionConsumer | null = null
 
-  constructor(private readonly getWindow: () => BrowserWindow | null) {}
+  constructor(private readonly getDefaultWindow: () => BrowserWindow | null) {}
 
   getSnapshot(): SpeechRecognitionSnapshot {
     return {
@@ -71,13 +75,29 @@ export class MacSpeechRecognitionService {
     }
   }
 
-  async start(options: SpeechStartOptions = {}): Promise<SpeechRecognitionCommandResult> {
+  async start(targetWindow: BrowserWindow | null, options: SpeechStartOptions = {}): Promise<SpeechRecognitionCommandResult> {
     if (process.platform !== 'darwin') {
       return { ok: false, status: 'unsupported', message: 'Apple Speech recognition is only available on macOS.' }
+    }
+    const target = targetWindow && !targetWindow.isDestroyed() ? targetWindow : this.getDefaultWindow()
+    if (!target || target.isDestroyed()) {
+      return { ok: false, status: this.status, message: 'Speech recognition target window is unavailable.' }
+    }
+    if (this.activeConsumerWindowId && this.activeConsumerWindowId !== target.id && isActiveSpeechStatus(this.status)) {
+      return {
+        ok: false,
+        status: this.status,
+        message: this.activeConsumer === 'voice-command'
+          ? '语音命令窗口正在录音，请先停止后再使用 Composer 语音输入。'
+          : 'Composer 语音输入正在录音，请先停止后再使用语音命令窗口。',
+        generation: this.generation,
+      }
     }
 
     try {
       const helper = await this.ensureChild()
+      this.activeConsumerWindowId = target.id
+      this.activeConsumer = options.consumer ?? 'composer'
       this.emitStatus('starting')
       this.writeCommand(helper, {
         command: 'start',
@@ -92,9 +112,12 @@ export class MacSpeechRecognitionService {
     }
   }
 
-  async stop(): Promise<SpeechRecognitionCommandResult> {
+  async stop(targetWindow: BrowserWindow | null): Promise<SpeechRecognitionCommandResult> {
     if (process.platform !== 'darwin') {
       return { ok: false, status: 'unsupported', message: 'Apple Speech recognition is only available on macOS.' }
+    }
+    if (!this.isAuthorizedConsumer(targetWindow)) {
+      return { ok: false, status: this.status, message: 'Speech recognition is owned by another window.', generation: this.generation }
     }
     if (!this.helper) {
       this.emitStatus('idle')
@@ -106,7 +129,10 @@ export class MacSpeechRecognitionService {
     return { ok: true, status: this.status, generation: this.generation }
   }
 
-  async cancel(): Promise<SpeechRecognitionCommandResult> {
+  async cancel(targetWindow?: BrowserWindow | null): Promise<SpeechRecognitionCommandResult> {
+    if (!this.isAuthorizedConsumer(targetWindow ?? null)) {
+      return { ok: false, status: this.status, message: 'Speech recognition is owned by another window.', generation: this.generation }
+    }
     if (!this.helper) {
       this.emitStatus(process.platform === 'darwin' ? 'idle' : 'unsupported')
       return { ok: true, status: this.status, generation: this.generation }
@@ -128,6 +154,8 @@ export class MacSpeechRecognitionService {
     this.cleanupSocketPath(helper.socketPath)
     this.helper = null
     this.stdoutBuffer = ''
+    this.activeConsumerWindowId = null
+    this.activeConsumer = null
   }
 
   private async ensureChild(): Promise<HelperSession> {
@@ -255,6 +283,10 @@ export class MacSpeechRecognitionService {
       requiresOnDevice: typeof raw?.requiresOnDevice === 'boolean' ? raw.requiresOnDevice : undefined,
       generation: generation ?? this.generation,
     })
+    if (status === 'idle' || status === 'unsupported') {
+      this.activeConsumerWindowId = null
+      this.activeConsumer = null
+    }
   }
 
   private emitError(code: string, message: string, generation?: number) {
@@ -265,9 +297,22 @@ export class MacSpeechRecognitionService {
   }
 
   private emit(event: SpeechRecognitionEvent) {
-    const target = this.getWindow()
+    const target = this.resolveEventTarget()
     if (!target || target.isDestroyed()) return
     target.webContents.send(DESKTOP_EVENT_CHANNELS.onSpeechRecognitionEvent, event)
+  }
+
+  private resolveEventTarget(): BrowserWindow | null {
+    if (this.activeConsumerWindowId) {
+      const target = BrowserWindow.fromId(this.activeConsumerWindowId)
+      if (target && !target.isDestroyed()) return target
+    }
+    return this.getDefaultWindow()
+  }
+
+  private isAuthorizedConsumer(targetWindow: BrowserWindow | null): boolean {
+    if (!this.activeConsumerWindowId || !isActiveSpeechStatus(this.status)) return true
+    return Boolean(targetWindow && !targetWindow.isDestroyed() && targetWindow.id === this.activeConsumerWindowId)
   }
 
   private cleanupSocketPath(socketPath: string) {
@@ -389,4 +434,8 @@ function normalizeStatus(value: unknown): SpeechRecognitionStatus | null {
 
 function normalizeGeneration(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined
+}
+
+function isActiveSpeechStatus(status: SpeechRecognitionStatus): boolean {
+  return status === 'starting' || status === 'requesting_permission' || status === 'listening' || status === 'transcribing'
 }

@@ -209,6 +209,8 @@ export type ChatPageHandle = {
   startNewThread: () => Promise<void>
   focusComposer: () => void
   insertComposerText: (text: string) => void
+  setComposerText: (text: string) => void
+  submitComposerDraft: () => Promise<boolean>
   revealMessage: (messageId: string) => boolean
   submitPromptInNewThread: (projectId: string, prompt: string) => Promise<boolean>
   submitPromptInThread: (
@@ -443,6 +445,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const speechRestartAfterEditRef = useRef(false)
   const speechRecognitionStatusRef = useRef(speechRecognitionStatus)
   const speechSettleWaitersRef = useRef<Array<() => void>>([])
+  const submitComposerRef = useRef<(() => Promise<void>) | null>(null)
 
   const [composerAutocompleteBox, setComposerAutocompleteBox] = useState<{
     left: number
@@ -1633,6 +1636,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         setComposerDraftValue(nextValue, nextValue.length, nextValue.length)
         requestAnimationFrame(() => chatInputRef.current?.focus())
       },
+      setComposerText: (text: string) => {
+        const next = text.trim()
+        clearSpeechDraft()
+        setComposerDraftValue(next, next.length, next.length)
+        requestAnimationFrame(() => chatInputRef.current?.focus())
+      },
+      submitComposerDraft: async () => {
+        if (!inputValueRef.current.trim()) return false
+        const submit = submitComposerRef.current
+        if (!submit) return false
+        await submit()
+        return true
+      },
       revealMessage,
       submitPromptInNewThread: async (projectId: string, prompt: string) => {
         const projectForSubmit = projects.find((project) => project.id === projectId)
@@ -1999,6 +2015,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
     await submitPrompt(text, getActiveSubmitTarget(), pendingAttachmentsRef.current)
   }
+  submitComposerRef.current = submitComposer
 
   // --- Composer form + keyboard routing (autocomplete vs send) / 表单提交与键盘路由（联想优先于发送）---
 

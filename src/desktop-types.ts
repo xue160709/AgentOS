@@ -70,6 +70,8 @@ export type SpeechRecognitionSnapshot = {
   generation?: number
 }
 
+export type SpeechRecognitionConsumer = 'composer' | 'voice-command'
+
 /** Streaming events from the Apple Speech helper / Apple 语音 helper 事件流 */
 export type SpeechRecognitionEvent =
   | {
@@ -96,6 +98,67 @@ export type SpeechRecognitionEvent =
       message: string
       generation?: number
     }
+
+export type OmniIntentResolveResult =
+  | {
+      ok: true
+      content: string
+    }
+  | {
+      ok: false
+      code: 'provider_unconfigured' | 'intent_failed'
+      message: string
+    }
+
+export type SystemOpenAppResult =
+  | {
+      ok: true
+      appName: string
+      message: string
+    }
+  | {
+      ok: false
+      appName: string
+      message: string
+    }
+
+export type VoiceCommandRequestEvent = {
+  id: string
+  utterance: string
+  source: 'voice-window'
+}
+
+export type VoiceCommandResponseAction = 'confirm' | 'cancel' | 'choose'
+
+export type VoiceCommandResponseRequest = {
+  id: string
+  action: VoiceCommandResponseAction
+  candidateId?: string
+}
+
+export type VoiceCommandSubmitResult =
+  | {
+      ok: true
+      id: string
+    }
+  | {
+      ok: false
+      message: string
+    }
+
+export type VoiceCommandExecutionStatus =
+  | 'success'
+  | 'failed'
+  | 'unsupported'
+  | 'needs_confirmation'
+  | 'needs_clarification'
+
+export type VoiceCommandExecutionResult = {
+  id: string
+  status: VoiceCommandExecutionStatus
+  message: string
+  candidates?: Array<{ id: string; label: string }>
+}
 
 /** Agent Mode 文件写入状态 / Agent Mode scaffold file status */
 export type AgentModeFileStatus = 'created' | 'updated' | 'exists'

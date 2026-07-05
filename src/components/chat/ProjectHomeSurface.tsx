@@ -3,6 +3,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import { MultimodalGroup } from '@xue160709/omni-ui-react'
 import { A2uiSurface, basicCatalog, MarkdownContext, type ReactComponentImplementation } from '@a2ui/react/v0_9'
 import { MessageProcessor, type A2uiClientAction, type A2uiMessage, type SurfaceModel } from '@a2ui/web_core/v0_9'
 import type { AgentContextSlashItem, ChatModelPick, ClaudeAgentSettingsSnapshot, ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
@@ -1065,21 +1066,36 @@ export function ProjectHomeSurface({
               )
             }
             return (
-              <HomePluginCard
+              <MultimodalGroup
                 key={`${card.cardId}:${card.item.outputHash ?? ''}`}
-                item={card.item}
-                size={card.size}
-                projectPath={project.path}
-                onOpenProjectFile={onOpenProjectFile}
-                onEdit={() => {
-                  if (card.item.manifest.kind === 'task') {
-                    setEditingTaskSlug(card.item.slug)
-                    setTaskDialogOpen(true)
-                    return
-                  }
-                  onEditHomePluginCard(card.item)
+                className="project-home-card-mm"
+                id={`agentos.task-card.${card.item.slug}`}
+                role="card"
+                label={card.item.manifest.name}
+                aliases={[card.item.slug, card.item.manifest.kind]}
+                entity={{ type: 'task-card', id: card.item.slug }}
+                state={{
+                  projectId: project.id,
+                  slug: card.item.slug,
+                  kind: card.item.manifest.kind,
+                  size: card.size,
                 }}
-              />
+              >
+                <HomePluginCard
+                  item={card.item}
+                  size={card.size}
+                  projectPath={project.path}
+                  onOpenProjectFile={onOpenProjectFile}
+                  onEdit={() => {
+                    if (card.item.manifest.kind === 'task') {
+                      setEditingTaskSlug(card.item.slug)
+                      setTaskDialogOpen(true)
+                      return
+                    }
+                    onEditHomePluginCard(card.item)
+                  }}
+                />
+              </MultimodalGroup>
             )
           })}
         </div>

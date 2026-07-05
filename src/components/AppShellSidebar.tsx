@@ -15,6 +15,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from 'react'
+import { MultimodalGroup } from '@xue160709/omni-ui-react'
 import { IconInline } from '../icon-inline'
 import type { AppUpdaterState } from '../desktop-types'
 import type { AppLocale } from '../i18n/i18n'
@@ -605,8 +606,15 @@ export function AppShellSidebar({
                     const projectDropPosition =
                       projectDropTarget?.projectId === project.id ? projectDropTarget.position : null
                     return (
-                      <section
+                      <MultimodalGroup
                         key={project.id}
+                        id={`agentos.project.${project.id}`}
+                        role="list_item"
+                        label={project.name}
+                        aliases={[project.path]}
+                        entity={{ type: 'project', id: project.id }}
+                        state={{ index: sortedProjects.findIndex((item) => item.id === project.id) + 1, active: projectActive, pathMissing: Boolean(project.pathMissing) }}
+                        indexBy="visible_order"
                         className={`app-project-group${projectActive ? ' is-active' : ''}${project.pinnedAt ? ' is-pinned' : ''}${draggingProjectId === project.id ? ' is-dragging' : ''}${projectDropPosition ? ` is-drop-${projectDropPosition}` : ''}`}
                       >
                         <div
@@ -800,8 +808,20 @@ export function AppShellSidebar({
                                 const showCompletionDot = Boolean(threadCompletionStates[thread.id] && !isThreadActive && !runState)
                                 const timeLabel = formatThreadTime(thread.updatedAt, locale, t)
                                 return (
-                                  <div
+                                  <MultimodalGroup
                                     key={thread.id}
+                                    id={`agentos.thread.${thread.id}`}
+                                    role="list_item"
+                                    label={thread.title}
+                                    entity={{ type: 'thread', id: thread.id }}
+                                    state={{
+                                      index: projectThreads.findIndex((item) => item.id === thread.id) + 1,
+                                      active: isThreadActive,
+                                      projectId: thread.projectId,
+                                      archived: Boolean(thread.archivedAt),
+                                      running: isThreadRunning,
+                                    }}
+                                    indexBy="visible_order"
                                     className={`app-thread-row${isThreadActive ? ' is-active' : ''}${isPinned ? ' is-pinned' : ''}${isThreadRunning ? ' is-running' : ''}${isConfirming ? ' is-confirming-archive' : ''}`}
                                     onContextMenu={(event) => openThreadMenu(event, thread)}
                                   >
@@ -888,7 +908,7 @@ export function AppShellSidebar({
                                         {isConfirming ? <span>{t('sidebar.confirm')}</span> : <IconInline name="trash" />}
                                       </button>
                                     </div>
-                                  </div>
+                                  </MultimodalGroup>
                                 )
                               })}
                               {threadsListOverflow && !threadsListFullyExpanded ? (
@@ -920,7 +940,7 @@ export function AppShellSidebar({
                             </div>
                           </div>
                         ) : null}
-                      </section>
+                      </MultimodalGroup>
                     )
                   })}
                 </div>

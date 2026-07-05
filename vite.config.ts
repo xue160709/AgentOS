@@ -10,6 +10,14 @@ import electron from 'vite-plugin-electron/simple'
 
 // Vite 配置文件入口 / Vite config entry — https://vitejs.dev/config/
 export default defineConfig({
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        voice: path.resolve(__dirname, 'voice.html'),
+      },
+    },
+  },
   plugins: [
     react(),
     electron({

@@ -41,10 +41,17 @@ import type {
   ProjectContextResult,
   ProjectFilesChangedEvent,
   ProjectFileWatchResult,
+  OmniIntentResolveResult,
   SpeechRecognitionCommandResult,
+  SpeechRecognitionConsumer,
   SpeechRecognitionEvent,
   SpeechRecognitionSnapshot,
+  SystemOpenAppResult,
   TrayMenuAction,
+  VoiceCommandExecutionResult,
+  VoiceCommandResponseRequest,
+  VoiceCommandRequestEvent,
+  VoiceCommandSubmitResult,
 } from './desktop-types'
 
 export type DesktopAPI = {
@@ -151,16 +158,25 @@ export type DesktopAPI = {
   showItemInFolder?: (targetPath: string) => Promise<void>
   openPath?: (targetPath: string) => Promise<void>
   openExternal?: (url: string) => Promise<void>
+  resolveOmniIntent?: (payload: { utterance: string; prompt: string }) => Promise<OmniIntentResolveResult>
+  openApp?: (appName: string) => Promise<SystemOpenAppResult>
   copyPngToClipboard?: (dataUrl: string) => Promise<boolean>
   copySvgToClipboard?: (svg: string) => Promise<boolean>
   getSpeechRecognitionStatus?: () => Promise<SpeechRecognitionSnapshot>
   startSpeechRecognition?: (options?: {
     locale?: string
     requiresOnDevice?: boolean
+    consumer?: SpeechRecognitionConsumer
   }) => Promise<SpeechRecognitionCommandResult>
   stopSpeechRecognition?: () => Promise<SpeechRecognitionCommandResult>
   cancelSpeechRecognition?: () => Promise<SpeechRecognitionCommandResult>
   onSpeechRecognitionEvent?: (handler: (event: SpeechRecognitionEvent) => void) => () => void
+  submitVoiceCommand?: (utterance: string) => Promise<VoiceCommandSubmitResult>
+  respondVoiceCommand?: (response: VoiceCommandResponseRequest) => Promise<VoiceCommandSubmitResult>
+  sendVoiceCommandResult?: (result: VoiceCommandExecutionResult) => Promise<void>
+  onVoiceCommandRequest?: (handler: (event: VoiceCommandRequestEvent) => void) => () => void
+  onVoiceCommandResponse?: (handler: (event: VoiceCommandResponseRequest) => void) => () => void
+  onVoiceCommandResult?: (handler: (event: VoiceCommandExecutionResult) => void) => () => void
   getDesktopPreferences?: () => Promise<DesktopPreferences>
   setDesktopPreferences?: (partial: Partial<DesktopPreferences>) => Promise<DesktopPreferences>
   syncTrayLocale?: (locale: AppUiLocale) => Promise<void>

@@ -3,10 +3,13 @@
  * Electron main entry: window lifecycle, tray menu, IPC bridges, and Claude Agent runner.
  */
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron'
+import { createHash, randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import zh from '../src/locales/zh.json'
 import en from '../src/locales/en.json'
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
@@ -24,6 +27,10 @@ import type {
   ProjectContextSkippedEntry,
   ProjectContextResult,
   AgentWebSearchProviderTestResult,
+  SystemOpenAppResult,
+  VoiceCommandExecutionResult,
+  VoiceCommandResponseRequest,
+  VoiceCommandRequestEvent,
 } from '../src/desktop-types'
 import { ensureAgentModeFiles, getAgentModeStatus, setAgentModeState } from './agent-mode-files'
 import { AgentModeSettingsStore, getDefaultWebSearchSettings, normalizeAgentMcpServers, normalizeWebSearchSettings } from './agent-mode-settings-store'
@@ -36,7 +43,7 @@ import { ChatWorkspaceStore } from './chat-workspace-store'
 import { DesktopPreferencesStore } from './desktop-preferences-store'
 import { loadMainProcessEnv } from './env-loader'
 import { deleteProjectHomePlugin, runProjectHomePlugin, saveProjectHomePluginLayout, saveProjectHomePluginOrder } from './home-plugin-runner'
-import { installSafeStdStreamHandlers } from './safe-console'
+import { installSafeStdStreamHandlers, safeConsoleError, safeConsoleInfo, safeConsoleWarn } from './safe-console'
 import { TaskHomePluginManager } from './task-home-plugin-manager'
 import { normalizeUiLocale } from './ui-locale'
 import { appUpdaterService, registerAppUpdaterIpc } from './app-updater'
@@ -44,6 +51,8 @@ import { installAboutPanel } from './about-panel'
 import { installApplicationMenu } from './app-menu'
 import { MacSpeechRecognitionService } from './speech-recognition'
 import { formatProjectPathError, resolveProjectPath, validateProjectPaths } from './project-path'
+import { buildSdkEnv, summarizeErrorForLog, summarizeSdkEnvForLog } from './claude-agent-runner/config'
+import { resolveClaudeCodeExecutablePath } from './claude-agent-runner/executable'
 import {
   configureProjectContentEvents,
   disposeProjectFileWatchers,
@@ -102,6 +111,7 @@ const TRAY_LOCALE_BUNDLE = { zh, en } as const
 type TrayLocale = keyof typeof TRAY_LOCALE_BUNDLE
 
 let win: BrowserWindow | null
+let voiceCommandWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 let currentTrayLocale: TrayLocale = 'zh'
@@ -114,6 +124,7 @@ let taskHomePluginManager: TaskHomePluginManager | null = null
 let speechRecognitionService: MacSpeechRecognitionService | null = null
 let chatWorkspaceOperationChain: Promise<void> = Promise.resolve()
 let claudeSettingsOperationChain: Promise<void> = Promise.resolve()
+let voiceShortcutRegistered = false
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -129,6 +140,8 @@ const CHAT_ATTACHMENT_MAX_TOTAL_BYTES = 24 * 1024 * 1024
 const CLIPBOARD_PNG_MAX_DATA_URL_LENGTH = 25_000_000
 const CLIPBOARD_SVG_MAX_CHARS = 4_000_000
 const CLIPBOARD_SVG_MAX_DIMENSION = 4096
+const VOICE_COMMAND_SHORTCUT = 'Option+Space'
+const INTENT_RESOLVE_TIMEOUT_MS = 25_000
 const AGENT_PROJECT_DOCUMENT_NAMES = ['AGENTS.md', 'SOUL.md', 'GOAL.md'] as const
 const AGENT_PROJECT_DOCUMENT_MAX_CHARS = 512_000
 const PROJECT_CONTEXT_DIR_NAME = 'Context'
@@ -280,6 +293,87 @@ function createWindow() {
   }
 }
 
+function createVoiceCommandWindow(): BrowserWindow {
+  if (voiceCommandWindow && !voiceCommandWindow.isDestroyed()) return voiceCommandWindow
+
+  voiceCommandWindow = new BrowserWindow({
+    width: 480,
+    height: 372,
+    minWidth: 420,
+    minHeight: 320,
+    show: false,
+    frame: false,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    title: 'AgentOS Voice Command',
+    backgroundColor: getWindowBackgroundColor(),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.mjs'),
+      devTools: isDevRuntime,
+    },
+  })
+
+  attachExternalLinkHandlers(voiceCommandWindow.webContents)
+
+  voiceCommandWindow.on('closed', () => {
+    voiceCommandWindow = null
+  })
+
+  if (VITE_DEV_SERVER_URL) {
+    void voiceCommandWindow.loadURL(`${VITE_DEV_SERVER_URL.replace(/\/$/, '')}/voice.html`)
+  } else {
+    void voiceCommandWindow.loadFile(path.join(RENDERER_DIST, 'voice.html'))
+  }
+
+  voiceCommandWindow.webContents.once('did-finish-load', () => {
+    sendVoiceCommandWindowMeta()
+  })
+
+  return voiceCommandWindow
+}
+
+function toggleVoiceCommandWindow() {
+  const target = createVoiceCommandWindow()
+  if (target.isVisible()) {
+    target.hide()
+    return
+  }
+  const anchor = win && !win.isDestroyed() ? win.getBounds() : undefined
+  if (anchor) {
+    const bounds = target.getBounds()
+    target.setBounds({
+      x: Math.round(anchor.x + anchor.width / 2 - bounds.width / 2),
+      y: Math.round(anchor.y + 72),
+      width: bounds.width,
+      height: bounds.height,
+    })
+  }
+  target.show()
+}
+
+function registerVoiceCommandShortcut() {
+  if (voiceShortcutRegistered) return
+  voiceShortcutRegistered = globalShortcut.register(VOICE_COMMAND_SHORTCUT, toggleVoiceCommandWindow)
+  if (!voiceShortcutRegistered) {
+    safeConsoleWarn('[voice-command] shortcut registration failed', { shortcut: VOICE_COMMAND_SHORTCUT })
+  }
+}
+
+function sendVoiceCommandWindowMeta() {
+  if (!voiceCommandWindow || voiceCommandWindow.isDestroyed()) return
+  voiceCommandWindow.webContents.send(DESKTOP_EVENT_CHANNELS.onVoiceCommandResult, {
+    id: 'voice-window-meta',
+    status: voiceShortcutRegistered ? 'success' : 'failed',
+    message: voiceShortcutRegistered
+      ? `快捷键 ${VOICE_COMMAND_SHORTCUT} 已启用`
+      : `快捷键 ${VOICE_COMMAND_SHORTCUT} 注册失败，可从托盘菜单打开`,
+  } satisfies VoiceCommandExecutionResult)
+}
+
 function getClaudeAgentRunner() {
   if (!claudeAgentRunner) {
     throw new Error('Claude Agent runner is not ready.')
@@ -404,6 +498,10 @@ function trayMenuLabel(locale: TrayLocale, key: 'newThread' | 'openProject' | 'q
   return typeof value === 'string' ? value : key
 }
 
+function trayStaticLabel(locale: TrayLocale, fallbackZh: string, fallbackEn: string): string {
+  return locale === 'en' ? fallbackEn : fallbackZh
+}
+
 function getTrayImage() {
   const iconName = process.platform === 'darwin' ? 'trayTemplate.png' : 'tray-icon.png'
   const iconPath = path.join(process.env.VITE_PUBLIC, iconName)
@@ -462,6 +560,12 @@ function buildTrayContextMenu() {
         }
       },
     },
+    {
+      label: trayStaticLabel(locale, '语音命令', 'Voice Command'),
+      click: () => {
+        toggleVoiceCommandWindow()
+      },
+    },
     { type: 'separator' },
     {
       label: trayMenuLabel(locale, 'quit'),
@@ -490,6 +594,10 @@ function ensureTray() {
 function prepareForAppQuit() {
   isQuitting = true
   speechRecognitionService?.dispose()
+  globalShortcut.unregister(VOICE_COMMAND_SHORTCUT)
+  voiceShortcutRegistered = false
+  voiceCommandWindow?.destroy()
+  voiceCommandWindow = null
   disposeProjectFileWatchers()
   tray?.destroy()
   tray = null
@@ -600,20 +708,21 @@ if (gotSingleInstanceLock) {
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getSpeechRecognitionStatus, () => {
       return getSpeechRecognitionService().getSnapshot()
     })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startSpeechRecognition, (_event, rawOptions: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startSpeechRecognition, (event, rawOptions: unknown) => {
       const options = isRecord(rawOptions)
         ? {
             locale: typeof rawOptions.locale === 'string' ? rawOptions.locale : undefined,
             requiresOnDevice: rawOptions.requiresOnDevice === false ? false : true,
+            consumer: rawOptions.consumer === 'voice-command' ? 'voice-command' as const : 'composer' as const,
           }
         : undefined
-      return getSpeechRecognitionService().start(options)
+      return getSpeechRecognitionService().start(BrowserWindow.fromWebContents(event.sender), options)
     })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.stopSpeechRecognition, () => {
-      return getSpeechRecognitionService().stop()
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.stopSpeechRecognition, (event) => {
+      return getSpeechRecognitionService().stop(BrowserWindow.fromWebContents(event.sender))
     })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelSpeechRecognition, () => {
-      return getSpeechRecognitionService().cancel()
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelSpeechRecognition, (event) => {
+      return getSpeechRecognitionService().cancel(BrowserWindow.fromWebContents(event.sender))
     })
     ipcMain.handle('claude-chat:submit', (_event, payload: ClaudeChatSubmitPayload) => {
       return getClaudeAgentRunner().submit(payload)
@@ -884,12 +993,253 @@ if (gotSingleInstanceLock) {
       if (typeof rawUrl !== 'string' || !isExternalHttpUrl(rawUrl)) return
       await shell.openExternal(rawUrl)
     })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.resolveOmniIntent, async (_event, rawPayload: unknown) => {
+      const utterance = isRecord(rawPayload) && typeof rawPayload.utterance === 'string' ? rawPayload.utterance : ''
+      const prompt = isRecord(rawPayload) && typeof rawPayload.prompt === 'string' ? rawPayload.prompt : ''
+      return resolveOmniIntent(utterance, prompt)
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openApp, (_event, rawAppName: unknown) => {
+      return openMacApplication(typeof rawAppName === 'string' ? rawAppName : '')
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.submitVoiceCommand, (_event, rawUtterance: unknown) => {
+      return submitVoiceCommand(typeof rawUtterance === 'string' ? rawUtterance : '')
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.respondVoiceCommand, (_event, rawResponse: unknown) => {
+      return respondVoiceCommand(normalizeVoiceCommandResponse(rawResponse))
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.sendVoiceCommandResult, (_event, rawResult: unknown) => {
+      const result = normalizeVoiceCommandResult(rawResult)
+      if (result) sendVoiceCommandResult(result)
+    })
+    registerVoiceCommandShortcut()
     createWindow()
     ensureTray()
     appUpdaterService.scheduleUpdateChecks()
   })
 } else {
   app.quit()
+}
+
+async function resolveOmniIntent(utterance: string, prompt: string) {
+  const normalizedUtterance = utterance.trim()
+  const normalizedPrompt = prompt.trim()
+  const startedAt = Date.now()
+  const utteranceHash = hashForLog(normalizedUtterance)
+  const config = getClaudeAgentSettingsStore().resolve()
+
+  if (!normalizedUtterance || !normalizedPrompt) {
+    return { ok: false, code: 'intent_failed' as const, message: '缺少可解析的命令内容。' }
+  }
+  if (!config.apiKey && !config.authToken) {
+    safeConsoleInfo('[omni-intent] provider unavailable', {
+      provider: config.configSource,
+      model: config.model,
+      utteranceLength: normalizedUtterance.length,
+      utteranceHash,
+    })
+    return { ok: false, code: 'provider_unconfigured' as const, message: '无法识别，请在设置中配置模型。' }
+  }
+
+  const abortController = new AbortController()
+  const timeout = setTimeout(() => abortController.abort(), INTENT_RESOLVE_TIMEOUT_MS)
+  const sdkEnv = buildSdkEnv(config)
+
+  safeConsoleInfo('[omni-intent] start', {
+    provider: config.configSource,
+    model: config.model,
+    utteranceLength: normalizedUtterance.length,
+    utteranceHash,
+    sdkEnv: summarizeSdkEnvForLog(sdkEnv),
+  })
+
+  try {
+    const response = query({
+      prompt: [
+        'Return only one JSON object for the OmniUI resolver. Do not explain.',
+        normalizedPrompt,
+      ].join('\n\n'),
+      options: {
+        abortController,
+        allowedTools: [],
+        cwd: process.env.APP_ROOT,
+        disallowedTools: [
+          'Agent',
+          'Bash',
+          'Edit',
+          'Glob',
+          'Grep',
+          'MultiEdit',
+          'NotebookEdit',
+          'Read',
+          'TodoWrite',
+          'WebFetch',
+          'WebSearch',
+          'Write',
+        ],
+        env: sdkEnv,
+        extraArgs: { 'replay-user-messages': null },
+        maxTurns: 1,
+        mcpServers: {},
+        pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath({ appRoot: process.env.APP_ROOT }),
+        permissionMode: 'default',
+        settingSources: [],
+        skills: [],
+        systemPrompt:
+          'You are a side-effect-free intent resolver. You must not request tools. Return JSON only.',
+        tools: [],
+      },
+    })
+
+    let content = ''
+    for await (const message of response) {
+      content += readSdkMessageText(message)
+      if (message.type === 'result' && message.subtype === 'success' && !content.trim()) {
+        content += message.result
+      }
+    }
+
+    const trimmed = content.trim()
+    safeConsoleInfo('[omni-intent] done', {
+      provider: config.configSource,
+      model: config.model,
+      utteranceLength: normalizedUtterance.length,
+      utteranceHash,
+      resultStatus: trimmed ? 'ok' : 'empty',
+      ms: Date.now() - startedAt,
+    })
+    return trimmed
+      ? { ok: true as const, content: trimmed }
+      : { ok: false as const, code: 'intent_failed' as const, message: '模型未返回可解析的意图。' }
+  } catch (error) {
+    safeConsoleWarn('[omni-intent] fail', {
+      provider: config.configSource,
+      model: config.model,
+      utteranceLength: normalizedUtterance.length,
+      utteranceHash,
+      ms: Date.now() - startedAt,
+      error: summarizeErrorForLog(error),
+    })
+    return { ok: false, code: 'intent_failed' as const, message: '无法识别，请稍后重试。' }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function openMacApplication(rawAppName: string): Promise<SystemOpenAppResult> {
+  const appName = rawAppName.trim().replace(/\s+/g, ' ')
+  if (!appName) return Promise.resolve({ ok: false, appName: '', message: '缺少应用名称。' })
+  if (process.platform !== 'darwin') {
+    return Promise.resolve({ ok: false, appName, message: '打开电脑应用目前仅支持 macOS。' })
+  }
+
+  return new Promise((resolve) => {
+    safeConsoleInfo('[system.openApp] start', { appNameLength: appName.length, appNameHash: hashForLog(appName) })
+    const child = spawn('/usr/bin/open', ['-a', appName], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      shell: false,
+    })
+    let stderr = ''
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk)
+    })
+    child.on('error', (error) => {
+      safeConsoleError('[system.openApp] fail', { appNameHash: hashForLog(appName), error: error.message })
+      resolve({ ok: false, appName, message: `打开 ${appName} 失败：${error.message}` })
+    })
+    child.on('close', (code) => {
+      if (code === 0) {
+        safeConsoleInfo('[system.openApp] success', { appNameHash: hashForLog(appName) })
+        resolve({ ok: true, appName, message: `已打开 ${appName}` })
+        return
+      }
+      const detail = stderr.trim().split('\n')[0] ?? ''
+      safeConsoleWarn('[system.openApp] not found', { appNameHash: hashForLog(appName), code, detail })
+      resolve({ ok: false, appName, message: `未找到应用 ${appName}` })
+    })
+  })
+}
+
+function submitVoiceCommand(rawUtterance: string) {
+  const utterance = rawUtterance.trim()
+  if (!utterance) return { ok: false as const, message: '语音文本为空。' }
+  if (!win || win.isDestroyed()) return { ok: false as const, message: '主窗口不可用。' }
+  const event: VoiceCommandRequestEvent = {
+    id: randomUUID(),
+    utterance,
+    source: 'voice-window',
+  }
+  win.webContents.send(DESKTOP_EVENT_CHANNELS.onVoiceCommandRequest, event)
+  return { ok: true as const, id: event.id }
+}
+
+function respondVoiceCommand(response: VoiceCommandResponseRequest | null) {
+  if (!response) return { ok: false as const, message: '语音命令响应无效。' }
+  if (!win || win.isDestroyed()) return { ok: false as const, message: '主窗口不可用。' }
+  win.webContents.send(DESKTOP_EVENT_CHANNELS.onVoiceCommandResponse, response)
+  return { ok: true as const, id: response.id }
+}
+
+function sendVoiceCommandResult(result: VoiceCommandExecutionResult) {
+  if (!voiceCommandWindow || voiceCommandWindow.isDestroyed()) return
+  voiceCommandWindow.webContents.send(DESKTOP_EVENT_CHANNELS.onVoiceCommandResult, result)
+}
+
+function normalizeVoiceCommandResponse(value: unknown): VoiceCommandResponseRequest | null {
+  if (!isRecord(value)) return null
+  const id = typeof value.id === 'string' ? value.id.trim() : ''
+  const action = isVoiceCommandResponseAction(value.action) ? value.action : null
+  const candidateId = typeof value.candidateId === 'string' ? value.candidateId.trim() : undefined
+  if (!id || !action) return null
+  if (action === 'choose' && !candidateId) return null
+  return { id, action, candidateId }
+}
+
+function normalizeVoiceCommandResult(value: unknown): VoiceCommandExecutionResult | null {
+  if (!isRecord(value)) return null
+  const id = typeof value.id === 'string' ? value.id : ''
+  const message = typeof value.message === 'string' ? value.message : ''
+  const status = isVoiceCommandExecutionStatus(value.status) ? value.status : 'failed'
+  const candidates = Array.isArray(value.candidates)
+    ? value.candidates.flatMap((candidate): Array<{ id: string; label: string }> => {
+        if (!isRecord(candidate)) return []
+        const candidateId = typeof candidate.id === 'string' ? candidate.id : ''
+        const label = typeof candidate.label === 'string' ? candidate.label : candidateId
+        return candidateId ? [{ id: candidateId, label }] : []
+      })
+    : undefined
+  return id && message ? { id, status, message, candidates } : null
+}
+
+function isVoiceCommandResponseAction(value: unknown): value is VoiceCommandResponseRequest['action'] {
+  return value === 'confirm' || value === 'cancel' || value === 'choose'
+}
+
+function isVoiceCommandExecutionStatus(value: unknown): value is VoiceCommandExecutionResult['status'] {
+  return (
+    value === 'success' ||
+    value === 'failed' ||
+    value === 'unsupported' ||
+    value === 'needs_confirmation' ||
+    value === 'needs_clarification'
+  )
+}
+
+function readSdkMessageText(message: SDKMessage): string {
+  if (message.type !== 'assistant') return ''
+  const content = message.message.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((block) => {
+      if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') return block.text
+      return ''
+    })
+    .join('')
+}
+
+function hashForLog(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12)
 }
 
 // --- Attachment ingest & file tree / 附件读取与文件树 ---
