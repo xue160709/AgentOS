@@ -381,11 +381,11 @@ test('settings.describe executes model and control summaries from the interactio
   )
   assert.equal(controls.status, 'unchanged')
   assert.equal(controls.data.missingCount, 0)
-  assert.equal(controls.data.nativeControls.total, 176)
+  assert.equal(controls.data.nativeControls.total, 177)
   assert.equal(controls.data.customInteractiveControls.total, 52)
   assert.equal(controls.data.currentPageObjectCount, 2)
   assert.match(controls.reason, /静态接入缺口为 0 个/)
-  assert.match(controls.reason, /原生控件 176\/176/)
+  assert.match(controls.reason, /原生控件 177\/177/)
   const controlsVoiceResult = mapSubmitResult(
     createSubmitResultWithExecution(controls, '还有多少控件没有实现'),
     {
@@ -677,6 +677,11 @@ test('Voice command window has isolated route, shortcut, and request/result IPC'
   assert.match(voiceRenderer, /data-testid="voice-window-start"/)
   assert.match(voiceRenderer, /data-testid="voice-window-submit"/)
   assert.match(voiceRenderer, /data-testid="voice-window-final-input"/)
+  assert.match(voiceRenderer, /data-testid=\{`voice-window-mode-\$\{item\.mode\}`\}/)
+  assert.match(voiceRenderer, /mode:\s*'auto'/)
+  assert.match(voiceRenderer, /mode:\s*'command'/)
+  assert.match(voiceRenderer, /mode:\s*'chat'/)
+  assert.match(voiceRenderer, /submitVoiceCommand\?\.\(\{\s*utterance,\s*mode\s*\}\)/)
   assert.match(voiceRenderer, /data-testid="voice-window-confirm-card"/)
   assert.match(voiceRenderer, /data-testid="voice-window-clarify-list"/)
   assert.match(voiceRenderer, /selectVoiceCommandText\(state\)/)
@@ -685,11 +690,28 @@ test('Voice command window has isolated route, shortcut, and request/result IPC'
   assert.match(voiceState, /export function reduceSpeechEvent/)
   assert.match(voiceState, /export function reduceVoiceCommandResult/)
   assert.match(runtime, /return null/)
+  assert.match(runtime, /classifyVoiceAutoRoute\(normalized\)/)
+  assert.match(runtime, /submitPromptInThread\(activeProject\.id,\s*activeThread\.id,\s*text\)/)
+  assert.match(runtime, /submitPromptInNewThread\(activeProject\.id,\s*text\)/)
   assert.doesNotMatch(runtime, /omni-command-shell/)
   assert.match(appShell, /style=\{\{\s*display:\s*'contents'\s*\}\}/)
   assert.match(style, /#app\s*>\s*\[data-mm-root\]\s*\{[\s\S]*height:\s*100%;[\s\S]*min-height:\s*0;/)
   assert.match(style, /\.multimodal-page-root\s*\{[\s\S]*display:\s*contents;/)
   assert.match(viteConfig, /voice:\s*path\.resolve\(__dirname,\s*'voice\.html'\)/)
+})
+
+test('Voice command auto route separates commands, Agent tasks, and answers', async () => {
+  const { classifyVoiceAutoRoute } = await importTranspiledTs('src/multimodal/voice-routing.ts')
+
+  assert.equal(classifyVoiceAutoRoute('新建对话'), 'command')
+  assert.equal(classifyVoiceAutoRoute('打开 Google 页面'), 'command')
+  assert.equal(classifyVoiceAutoRoute('现在用的是哪个模型'), 'command')
+  assert.equal(classifyVoiceAutoRoute('打开蓝牙设置'), 'agent_task')
+  assert.equal(classifyVoiceAutoRoute('截屏并复制到剪贴板'), 'agent_task')
+  assert.equal(classifyVoiceAutoRoute('百度搜索 Electron 多窗口通信'), 'agent_task')
+  assert.equal(classifyVoiceAutoRoute('当前的业务逻辑是什么'), 'answer')
+  assert.equal(classifyVoiceAutoRoute('帮我解释当前报错'), 'answer')
+  assert.equal(classifyVoiceAutoRoute('asdfgh'), 'command')
 })
 
 test('Voice command window state handles final edits and recoverable speech failures', async () => {

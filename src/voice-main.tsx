@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
+import type { VoiceCommandMode } from './desktop-types'
 import { IconInline } from './icon-inline'
 import {
   composerStatusLabel,
@@ -16,6 +17,7 @@ import './voice.css'
 
 function VoiceCommandWindow() {
   const [state, setState] = useState(createInitialVoiceUiState)
+  const [mode, setMode] = useState<VoiceCommandMode>('auto')
 
   const recording = isSpeechRecordingStatus(state.status)
   const commandText = useMemo(() => selectVoiceCommandText(state), [state.finalText, state.partialText])
@@ -84,7 +86,7 @@ function VoiceCommandWindow() {
       setState((current) => ({ ...current, error: '先说出或输入一条命令。' }))
       return
     }
-    const result = await window.desktop?.submitVoiceCommand?.(utterance)
+    const result = await window.desktop?.submitVoiceCommand?.({ utterance, mode })
     if (!result?.ok) {
       setState((current) => ({ ...current, error: result?.message ?? '主窗口还没有准备好。' }))
       return
@@ -92,7 +94,7 @@ function VoiceCommandWindow() {
     setState((current) => ({
       ...current,
       submittingId: result.id,
-      result: { id: result.id, status: 'success', message: '已发送到主窗口，正在执行...' },
+      result: { id: result.id, status: 'success', message: mode === 'chat' ? '已发送到主窗口，正在进入聊天...' : '已发送到主窗口，正在执行...' },
       error: '',
     }))
   }
@@ -135,6 +137,24 @@ function VoiceCommandWindow() {
       <p className="voice-window__status" role="status">
         {statusLabel(state.status, state.submittingId)}
       </p>
+
+      <div className="voice-window__mode no-drag" role="group" aria-label="选择命令窗口模式" data-testid="voice-window-mode">
+        {VOICE_MODES.map((item) => (
+          <button
+            key={item.mode}
+            type="button"
+            className={mode === item.mode ? 'is-active' : ''}
+            aria-pressed={mode === item.mode}
+            title={item.title}
+            data-testid={`voice-window-mode-${item.mode}`}
+            data-mm-label={item.label}
+            data-mm-aliases={item.aliases}
+            onClick={() => setMode(item.mode)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
 
       <form className="chat-composer-wrap voice-window__composer no-drag" onSubmit={(event) => handleSubmit(event, submitCommand)}>
         <div className="chat-composer voice-command-composer">
@@ -242,6 +262,27 @@ function handleSubmit(event: FormEvent<HTMLFormElement>, submitCommand: () => Pr
   event.preventDefault()
   void submitCommand()
 }
+
+const VOICE_MODES: Array<{ mode: VoiceCommandMode; label: string; title: string; aliases: string }> = [
+  {
+    mode: 'auto',
+    label: '自动',
+    title: '自动判断命令、系统任务或聊天问题',
+    aliases: '自动模式|智能判断|命令聊天自动',
+  },
+  {
+    mode: 'command',
+    label: '命令',
+    title: '强制按 AgentOS 命令解析',
+    aliases: '命令模式|只执行命令|控制主窗口',
+  },
+  {
+    mode: 'chat',
+    label: '聊天',
+    title: '直接发送到当前对话',
+    aliases: '聊天模式|问问题|发送到对话',
+  },
+]
 
 const appRoot = document.querySelector<HTMLDivElement>('#voice-app')
 if (!appRoot) throw new Error('Missing #voice-app root element.')

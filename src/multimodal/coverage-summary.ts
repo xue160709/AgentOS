@@ -1,8 +1,8 @@
 export const OMNI_CONTROL_COVERAGE = {
   tsxFileCount: 35,
   nativeControls: {
-    total: 176,
-    covered: 176,
+    total: 177,
+    covered: 177,
     missing: 0,
   },
   customInteractiveControls: {

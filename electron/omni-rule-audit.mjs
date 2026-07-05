@@ -29,6 +29,15 @@ export const OMNI_RULE_AUDIT_CASES = [
     },
   },
   {
+    utterance: '现在用的是哪个模型',
+    expected: {
+      status: 'resolved',
+      actionId: 'settings.describe',
+      targetId: 'agentos.page.current',
+      params: { topic: 'models' },
+    },
+  },
+  {
     utterance: '还有多少控件没有实现',
     expected: {
       status: 'resolved',

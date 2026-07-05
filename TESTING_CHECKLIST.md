@@ -3,13 +3,13 @@
 最后更新：2026-07-05
 主框架：Electron + React + Vite
 验证类别：正式验收（project-verify）
-验证范围：正式验收快照覆盖 `prd/*/acceptance.md` 全部 11 个模块、120 个场景；`multimodal-voice-control` 增量场景已纳入本清单
+验证范围：正式验收快照覆盖 `prd/*/acceptance.md` 全部 11 个模块、124 个场景；`multimodal-voice-control` 命令窗口混合入口与 BDD 路由审计已纳入本清单
 
 ## 结论
 
 | 状态 | 数量 | 说明 |
 | --- | --- | --- |
-| ✅ 通过 | 111 | 可通过单元/集成测试、静态源代码审计、浏览器 smoke、打包 smoke 或专用验收 smoke 证明 |
+| ✅ 通过 | 115 | 可通过单元/集成测试、静态源代码审计、浏览器 smoke、打包 smoke 或专用验收 smoke 证明 |
 | ❌ 失败 | 0 | 无 |
 | ⚠️ 跳过 | 9 | 仅限真实 Electron GUI / macOS 系统权限 / live Provider / 本机应用置前 / 默认浏览器打开场景，已写入人工验证步骤 |
 | 阻塞 | 0 | 无阻塞 |
@@ -19,13 +19,14 @@
 | 命令 / smoke | 结果 | 摘要 |
 | --- | --- | --- |
 | `npm run typecheck` | ✅ | TypeScript 检查通过 |
-| `npm run test:electron` | ✅ | 96/96 通过；覆盖 omni intent SDK 工具隔离、`system.openApp` 注入防护、语音窗口 IPC、speech 多窗口路由、SDK system action normalizer、配置化规则解析审计、端到端问答审计、manual-only readiness 门禁、语音窗口状态机、settings.describe 纯函数与悬浮窗回显映射、omni 控件覆盖摘要、全 TSX 原生控件与非原生交互控件语义门禁 |
-| `node --test electron/omni-intent-voice.test.mjs` | ✅ | 17/17 通过；覆盖 `settings.describe` 真实规则解析、模型设置与 controls topic 摘要纯函数、端到端问答审计、manual-only readiness 门禁、悬浮窗结果映射、SDK system action normalizer、语音窗口状态机、`system.openUrl` 安全 executor、非法 URL guard、控件语义标签、全 `src/**/*.tsx` 原生控件 AST 门禁和非原生交互控件 AST 门禁 |
-| `npm run audit:omni-controls` | ✅ | 输出 35 个 TSX 文件、176/176 原生控件、52/52 非原生交互控件、missing 0；与 `settings.describe.controls` 运行时摘要共用审计口径 |
-| `npm run audit:omni-rules` | ✅ | 7/7 通过；直接调用 omni-ui `createConfiguredRuleResolver`，验证模型厂商统计、控件接入统计、搜索设置与 Google/谷歌安全网页问句命中预期 action，并确认 Safari 开放应用名不被本地规则误匹配 |
+| `npm run test:electron` | ✅ | 97/97 通过；覆盖 omni intent SDK 工具隔离、`system.openApp` 注入防护、语音窗口 IPC、speech 多窗口路由、SDK system action normalizer、配置化规则解析审计、端到端问答审计、manual-only readiness 门禁、语音窗口状态机、settings.describe 纯函数与悬浮窗回显映射、omni 控件覆盖摘要、BDD 自动路由、全 TSX 原生控件与非原生交互控件语义门禁 |
+| `node --test electron/omni-intent-voice.test.mjs` | ✅ | 18/18 通过；覆盖 `settings.describe` 真实规则解析、模型设置与 controls topic 摘要纯函数、端到端问答审计、manual-only readiness 门禁、悬浮窗结果映射、SDK system action normalizer、语音窗口状态机、命令窗口自动/命令/聊天模式、`system.openUrl` 安全 executor、非法 URL guard、控件语义标签、全 `src/**/*.tsx` 原生控件 AST 门禁和非原生交互控件 AST 门禁 |
+| `npm run audit:voice-command-bdd` | ✅ | 50/50 通过；直接解析 `voice-command-bdd.md` 命令清单，验证 18 条 AgentOS 直接命令为 `command`、30 条系统级任务为 `agent_task`、2 条问答为 `answer` |
+| `npm run audit:omni-controls` | ✅ | 输出 35 个 TSX 文件、177/177 原生控件、52/52 非原生交互控件、missing 0；与 `settings.describe.controls` 运行时摘要共用审计口径 |
+| `npm run audit:omni-rules` | ✅ | 8/8 通过；直接调用 omni-ui `createConfiguredRuleResolver`，验证模型厂商统计、控件接入统计、搜索设置与 Google/谷歌安全网页问句命中预期 action，并确认 Safari 开放应用名不被本地规则误匹配 |
 | `npm run audit:omni-answers` | ✅ | 3/3 通过；串联配置化规则解析、`settings.describe` 快照读取和 `voice-result` 回显映射，验证模型厂商、控件接入统计、当前页面摘要会产出安全的命令窗口答案 |
 | `npm run audit:omni-manual-readiness` | ✅ | 9/9 通过；检查剩余 manual-only 场景的 acceptance 跳过状态、人工验证步骤、全量清单行与源码支撑 |
-| TypeScript AST 控件审计 | ✅ | 35 个 TSX 文件中 176/176 个原生 `<button|input|select|textarea>` 控件具备 `data-mm-*` 或语义 ref 覆盖，gap 0 |
+| TypeScript AST 控件审计 | ✅ | 35 个 TSX 文件中 177/177 个原生 `<button|input|select|textarea>` 控件具备 `data-mm-*` 或语义 ref 覆盖，gap 0 |
 | TypeScript AST 非原生交互审计 | ✅ | 35 个 TSX 文件中 52/52 个自定义交互元素具备 `data-mm-*`、`semantic` prop 或语义 ref 覆盖，gap 0 |
 | `node --test electron/claude-agent-runner-web-search.test.mjs electron/agent-mode-settings-store.test.mjs` | ✅ | 19/19 通过；覆盖 Brave/Tavily Key 池 fallback、聚合失败脱敏、Provider Test fallback 元数据和旧单 Key 到单元素池迁移 |
 | WebSearch Key Pool selector/source audit | ✅ | 23 项源码核对通过；覆盖 `[data-testid="web-search-key-pool"]`、Key 池输入、保存按钮、Provider Test 状态、上移/下移/删除/添加控件和脱敏 fallback 代码路径 |
@@ -53,7 +54,7 @@
 | `prd/file-context/acceptance.md` | 6 | 6 ✅ | `test:electron` project-content coverage |
 | `prd/home-plugin/acceptance.md` | 6 | 6 ✅ | `full-acceptance-smoke` Home Plugin runner coverage |
 | `prd/model-settings/acceptance.md` | 10 | 10 ✅ | `full-acceptance-smoke`、`test:electron`、MCP selector audit |
-| `prd/multimodal-voice-control/acceptance.md` | 22 | 16 ✅ / 6 ⚠️ | `typecheck`、`test:electron`、`node --test electron/omni-intent-voice.test.mjs`、TypeScript AST 控件审计、source audit、manual-only notes、manual readiness audit |
+| `prd/multimodal-voice-control/acceptance.md` | 26 | 20 ✅ / 6 ⚠️ | `typecheck`、`test:electron`、`node --test electron/omni-intent-voice.test.mjs`、`audit:voice-command-bdd`、TypeScript AST 控件审计、source audit、manual-only notes、manual readiness audit |
 | `prd/persistence/acceptance.md` | 6 | 6 ✅ | `test:electron` workspace-session coverage、source audit |
 | `prd/task-home-plugin/acceptance.md` | 8 | 8 ✅ | `full-acceptance-smoke` Task Home Plugin coverage |
 | `prd/workspace-session/acceptance.md` | 6 | 6 ✅ | `test:electron` workspace-session coverage、Chrome preview screenshot |
@@ -82,13 +83,22 @@
 | `test-results/agentos-preview-empty-workspace.png` | Chrome headless 空工作区截图 |
 | `test-results/multimodal-voice-control-verification.md` | omni-ui 多模态融合与语音控制正式验收细证据 |
 
+## 增量验收：命令窗口命令 + 聊天混合入口（2026-07-05）
+
+| 模块/场景 | 验证步骤 | 预期结果 | 状态 | 证据类型 | 证据 | 可回归 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `multimodal-voice-control` / 自动模式下普通问题进入当前聊天 | 运行 `npm run audit:voice-command-bdd`、`node --test electron/omni-intent-voice.test.mjs` 与 `npm run test:electron` | 「当前的业务逻辑是什么」类问句在自动模式下分类为 `answer`，通过当前 Chat 的 `submitPromptInThread` / `submitPromptInNewThread` 提交，不进入 omni action 执行 | ✅ | unit/integration + static | BDD audit 50/50；targeted 18/18；electron 97/97 | 是 | 不启动真实 Electron GUI，回显 selector 已在 source audit 覆盖 |
+| `multimodal-voice-control` / 命令模式下仍强制执行 AgentOS 命令解析 | 运行同上，并检查命令窗口模式 UI 与 IPC payload | 命令模式发送 `{ utterance, mode: 'command' }`，主窗口沿用 omni-ui 命令链；BDD #13-#30 均保持 `command` | ✅ | unit/integration + static | BDD audit command 18；targeted 18/18 | 是 | 低风险应用内命令仍直接执行 |
+| `multimodal-voice-control` / 自动模式下系统级任务交给 Claude Agent SDK | 运行同上 | 「打开蓝牙设置」「关闭当前窗口」等 30 条系统级 BDD 均分类为 `agent_task`，提交到当前 Chat 的 Claude Agent SDK，而非新增本地 macOS 硬编码规则 | ✅ | unit/integration + static | BDD audit agent_task 30；targeted 18/18 | 是 | 本轮修正了「关闭当前窗口」被内部命令误判的问题 |
+| `multimodal-voice-control` / 聊天模式直接发送到当前对话 | 运行 `node --test electron/omni-intent-voice.test.mjs` 与 `npm run test:electron` | 聊天模式跳过 omni 解析，直接调用当前 Chat；无当前 thread 时创建新 thread 后提交 | ✅ | unit/integration + static | targeted 18/18；electron 97/97 | 是 | 覆盖 `voice-window-mode-chat` 和 ChatPage handle seam |
+
 ## 增量验收：omni 控件语义与 settings.describe（2026-07-05）
 
 | 模块/场景 | 验证步骤 | 预期结果 | 状态 | 证据类型 | 证据 | 可回归 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `multimodal-voice-control` / 命令窗口读取模型设置页安全摘要 | 运行 `npm run audit:omni-answers`、`npm run audit:omni-rules`、`node --test electron/omni-intent-voice.test.mjs`、`npm run test:electron` 和 TypeScript AST 控件审计 | 「现在设置了多少模型厂商」经真实配置化规则解析命中 `settings.describe`，回显 provider 数量/名称/当前模型/API Key 配置状态摘要，不泄露 Key 明文 | ✅ | unit/integration + static | 17/17 targeted；96/96 electron；answer audit 3/3；rule audit 7/7；176/176 native AST；52/52 custom AST | 是 | 真实 GUI 回显由独立命令窗口 selector 提供，本轮不启动 Electron 窗口 |
-| `multimodal-voice-control` / 命令窗口读取 omni 控件接入统计 | 运行 `npm run audit:omni-answers`、`npm run audit:omni-rules`、`node --test electron/omni-intent-voice.test.mjs` 与 `npm run audit:omni-controls`，校验 controls topic 真实规则解析、悬浮窗结果映射和 `coverage-summary` 与 AST 审计对账 | 「还有多少控件没有实现」命中 `settings.describe.controls`，回显静态缺口、原生/非原生覆盖数、当前页面对象数，并说明 manual-only 不等于控件缺口 | ✅ | unit/integration + static | 17/17 targeted；96/96 electron；answer audit 3/3；rule audit 7/7；audit missing 0 | 是 | 运行时可回答控件接入数量，真实 GUI 回显仍由独立命令窗口 selector 复验 |
-| AgentOS 全 TSX 原生控件 omni 显式语义 | TypeScript AST 遍历 `src/**/*.tsx` 中的 `<button>`、`<input>`、`<select>`、`<textarea>` | 每个控件具备 `data-mm-*` 或语义 ref；敏感字段只标记 sensitive | ✅ | static + unit/integration | 35 个 TSX 文件，176/176，gap 0 | 是 | 覆盖主窗口、设置页、项目首页、Composer、状态、文件面板、独立语音命令窗口与侧栏上下文菜单 |
+| `multimodal-voice-control` / 命令窗口读取模型设置页安全摘要 | 运行 `npm run audit:omni-answers`、`npm run audit:omni-rules`、`node --test electron/omni-intent-voice.test.mjs`、`npm run test:electron` 和 TypeScript AST 控件审计 | 「现在设置了多少模型厂商」经真实配置化规则解析命中 `settings.describe`，回显 provider 数量/名称/当前模型/API Key 配置状态摘要，不泄露 Key 明文 | ✅ | unit/integration + static | 18/18 targeted；97/97 electron；answer audit 3/3；rule audit 8/8；177/177 native AST；52/52 custom AST | 是 | 真实 GUI 回显由独立命令窗口 selector 提供，本轮不启动 Electron 窗口 |
+| `multimodal-voice-control` / 命令窗口读取 omni 控件接入统计 | 运行 `npm run audit:omni-answers`、`npm run audit:omni-rules`、`node --test electron/omni-intent-voice.test.mjs` 与 `npm run audit:omni-controls`，校验 controls topic 真实规则解析、悬浮窗结果映射和 `coverage-summary` 与 AST 审计对账 | 「还有多少控件没有实现」命中 `settings.describe.controls`，回显静态缺口、原生/非原生覆盖数、当前页面对象数，并说明 manual-only 不等于控件缺口 | ✅ | unit/integration + static | 18/18 targeted；97/97 electron；answer audit 3/3；rule audit 8/8；audit missing 0 | 是 | 运行时可回答控件接入数量，真实 GUI 回显仍由独立命令窗口 selector 复验 |
+| AgentOS 全 TSX 原生控件 omni 显式语义 | TypeScript AST 遍历 `src/**/*.tsx` 中的 `<button>`、`<input>`、`<select>`、`<textarea>` | 每个控件具备 `data-mm-*` 或语义 ref；敏感字段只标记 sensitive | ✅ | static + unit/integration | 35 个 TSX 文件，177/177，gap 0 | 是 | 覆盖主窗口、设置页、项目首页、Composer、状态、文件面板、独立语音命令窗口与侧栏上下文菜单 |
 | AgentOS 非原生交互元素 omni 显式语义 | TypeScript AST 遍历 `src/**/*.tsx` 中的链接、summary、role button/menuitem/option/separator 与自定义点击控件 | 每个自定义交互控件具备 `data-mm-*`、`semantic` prop 或语义 ref；纯 dialog/listbox 容器和 backdrop/panel 容器不计入控件 | ✅ | static + unit/integration | 35 个 TSX 文件，52/52，gap 0 | 是 | 覆盖 API Key 获取链接、关于页链接、侧栏分隔条、TODO 卡片、file diff/status summary 等 |
 | `multimodal-voice-control` / 语音悬浮窗状态机自动化部分 | 运行 `node --test electron/omni-intent-voice.test.mjs` 并导入 `src/voice-state.ts` 纯状态模块 | final 文本优先提交；`speech_denied` 产生权限恢复提示；`helper_exited` 进入错误但可重试状态；过期执行结果不污染当前命令 | ✅ | unit/integration | targeted state reducer test | 是 | 真实 macOS 权限、全局快捷键、speech helper 进程和 GUI 回显仍按上方 ⚠️ 人工项复验 |
 | `multimodal-voice-control` / 非法网页地址不执行 | 运行 `node --test electron/omni-intent-voice.test.mjs` 并审计 `normalizeExternalUrl` / `openExternal` IPC | 非 HTTP/HTTPS 或无有效 host 的 URL 被拒绝，返回 `invalid_url`，不调用默认浏览器 | ✅ | unit/integration + static | targeted test + source audit | 是 | 不依赖真实浏览器 |

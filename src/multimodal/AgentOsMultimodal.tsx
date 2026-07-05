@@ -42,6 +42,7 @@ import {
 } from './actions'
 import { describeSettingsSnapshot, type TranslateFn } from './settings-describe'
 import { executionMessage, mapSubmitResult } from './voice-result'
+import { classifyVoiceAutoRoute, type VoiceAutoRoute } from './voice-routing'
 
 type AgentOsMultimodalRuntimeProps = {
   activeViewId: AppViewId
@@ -266,11 +267,49 @@ export function AgentOsMultimodalRuntime({
     [api, clearPendingForRequest, t],
   )
 
+  const submitVoiceChat = useCallback(
+    async (text: string, voiceRequestId: string, route: VoiceAutoRoute | 'chat') => {
+      const chat = chatRef.current
+      if (!chat) {
+        await window.desktop?.sendVoiceCommandResult?.({ id: voiceRequestId, status: 'failed', message: t('multimodal.chatBridgeUnavailable') })
+        return
+      }
+
+      try {
+        const submitted = activeThread?.id
+          ? await chat.submitPromptInThread(activeProject.id, activeThread.id, text)
+          : await chat.submitPromptInNewThread(activeProject.id, text)
+
+        await window.desktop?.sendVoiceCommandResult?.({
+          id: voiceRequestId,
+          status: submitted ? 'success' : 'failed',
+          message: submitted
+            ? t(route === 'agent_task' ? 'multimodal.agentTaskSubmitted' : 'multimodal.chatSubmitted')
+            : t('multimodal.chatSubmitFailed'),
+        })
+      } catch {
+        await window.desktop?.sendVoiceCommandResult?.({ id: voiceRequestId, status: 'failed', message: t('multimodal.chatSubmitFailed') })
+      }
+    },
+    [activeProject.id, activeThread?.id, chatRef, t],
+  )
+
   const submitCommand = useCallback(
-    async (text: string, voiceRequestId?: string) => {
+    async (text: string, voiceRequestId?: string, mode: 'auto' | 'command' | 'chat' = 'auto') => {
       const normalized = text.trim()
       if (!normalized) return
       if (voiceRequestId) clearPendingForRequest(voiceRequestId)
+      if (voiceRequestId && mode === 'chat') {
+        await submitVoiceChat(normalized, voiceRequestId, 'chat')
+        return
+      }
+      if (voiceRequestId && mode === 'auto') {
+        const route = classifyVoiceAutoRoute(normalized)
+        if (route !== 'command') {
+          await submitVoiceChat(normalized, voiceRequestId, route)
+          return
+        }
+      }
       try {
         const result = await api.submitUtterance(normalized)
         if (voiceRequestId) {
@@ -284,12 +323,12 @@ export function AgentOsMultimodalRuntime({
         }
       }
     },
-    [api, clearPendingForRequest, deliverVoiceResult],
+    [api, clearPendingForRequest, deliverVoiceResult, submitVoiceChat],
   )
 
   useEffect(() => {
     const unsubscribe = window.desktop?.onVoiceCommandRequest?.((event) => {
-      void submitCommand(event.utterance, event.id)
+      void submitCommand(event.utterance, event.id, event.mode)
     })
     return () => unsubscribe?.()
   }, [submitCommand])

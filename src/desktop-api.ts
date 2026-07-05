@@ -51,6 +51,7 @@ import type {
   VoiceCommandExecutionResult,
   VoiceCommandResponseRequest,
   VoiceCommandRequestEvent,
+  VoiceCommandSubmitRequest,
   VoiceCommandSubmitResult,
 } from './desktop-types'
 
@@ -171,7 +172,7 @@ export type DesktopAPI = {
   stopSpeechRecognition?: () => Promise<SpeechRecognitionCommandResult>
   cancelSpeechRecognition?: () => Promise<SpeechRecognitionCommandResult>
   onSpeechRecognitionEvent?: (handler: (event: SpeechRecognitionEvent) => void) => () => void
-  submitVoiceCommand?: (utterance: string) => Promise<VoiceCommandSubmitResult>
+  submitVoiceCommand?: (request: VoiceCommandSubmitRequest | string) => Promise<VoiceCommandSubmitResult>
   respondVoiceCommand?: (response: VoiceCommandResponseRequest) => Promise<VoiceCommandSubmitResult>
   sendVoiceCommandResult?: (result: VoiceCommandExecutionResult) => Promise<void>
   onVoiceCommandRequest?: (handler: (event: VoiceCommandRequestEvent) => void) => () => void

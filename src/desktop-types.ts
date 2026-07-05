@@ -122,9 +122,17 @@ export type SystemOpenAppResult =
       message: string
     }
 
+export type VoiceCommandMode = 'auto' | 'command' | 'chat'
+
+export type VoiceCommandSubmitRequest = {
+  utterance: string
+  mode?: VoiceCommandMode
+}
+
 export type VoiceCommandRequestEvent = {
   id: string
   utterance: string
+  mode: VoiceCommandMode
   source: 'voice-window'
 }
 

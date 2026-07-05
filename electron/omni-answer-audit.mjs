@@ -35,7 +35,7 @@ export const OMNI_ANSWER_AUDIT_CASES = [
       actionId: 'settings.describe',
       params: { topic: 'controls' },
     },
-    messageIncludes: ['静态接入缺口为 0 个', '原生控件 176/176', '非原生交互控件 52/52', '不是控件接入缺口'],
+    messageIncludes: ['静态接入缺口为 0 个', '原生控件 177/177', '非原生交互控件 52/52', '不是控件接入缺口'],
   },
   {
     id: 'settings.describe.current.answer',

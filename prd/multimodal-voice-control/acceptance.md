@@ -1,7 +1,7 @@
 # omni-ui 多模态融合与语音控制 验收契约
 
 > 唯一验收事实源。先于代码编写；由 project-verify 逐条执行并回写实现状态。
-> 对应 TODO §2.1 omni-ui 多模态融合与语音控制主窗口。
+> 对应 TODO §2.1 omni-ui 多模态融合与语音控制主窗口、§2.2 命令窗口命令 + 聊天混合入口。
 > 依赖：npm 包 `@xue160709/omni-ui-core` / `@xue160709/omni-ui-react` / `@xue160709/omni-ui-shadcn`（0.1.0），不在本仓库重写运行时。
 
 ## 验收契约
@@ -69,28 +69,28 @@
 - WHEN 用户按全局快捷键唤起悬浮窗，点击开始说「新建对话」，点击停止后点击提交
 - THEN 悬浮窗依次展示 partial 实时文字、可编辑 final 文本；提交后主窗口创建新 thread，悬浮窗展示「已执行」状态
 
-> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-start"] / [data-testid="voice-window-partial"] / [data-testid="voice-window-submit"] / [data-testid="voice-window-result"]｜验证方式: npm run typecheck + node --test electron/omni-intent-voice.test.mjs（17/17）覆盖独立入口/selector/IPC 与语音窗口状态机；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实语音链路未执行｜原因: 需真实 Electron GUI、全局快捷键、麦克风与语音识别授权｜用户本地验证步骤: 启动 Electron 应用，按 Option+Space 或托盘入口打开悬浮窗，点击开始说“新建对话”，停止后提交，确认主窗口新建 thread 且悬浮窗回显执行结果。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-start"] / [data-testid="voice-window-partial"] / [data-testid="voice-window-submit"] / [data-testid="voice-window-result"]｜验证方式: npm run typecheck + node --test electron/omni-intent-voice.test.mjs（18/18）覆盖独立入口/selector/IPC 与语音窗口状态机；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实语音链路未执行｜原因: 需真实 Electron GUI、全局快捷键、麦克风与语音识别授权｜用户本地验证步骤: 启动 Electron 应用，按 Option+Space 或托盘入口打开悬浮窗，点击开始说“新建对话”，停止后提交，确认主窗口新建 thread 且悬浮窗回显执行结果。｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：final 文本可编辑后再提交
 - GIVEN 悬浮窗已完成一次识别并显示 final 文本
 - WHEN 用户修改文本内容后点击提交
 - THEN 以编辑后的文本进入意图解析，不使用原始识别文本
 
-> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"]｜验证方式: npm run typecheck + node --test electron/omni-intent-voice.test.mjs（17/17，`selectVoiceCommandText` 证明编辑后的 final 文本优先进入 submitVoiceCommand）｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"]｜验证方式: npm run typecheck + node --test electron/omni-intent-voice.test.mjs（18/18，`selectVoiceCommandText` 证明编辑后的 final 文本优先进入 submitVoiceCommand）｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：语音权限拒绝
 - GIVEN 系统麦克风或语音识别权限被拒绝
 - WHEN 用户在悬浮窗点击开始
 - THEN 悬浮窗展示权限恢复提示（指向系统设置），状态落回可重试的 idle/error，不崩溃
 
-> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-permission-hint"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（17/17）覆盖 `speech_denied` reducer、权限恢复提示与 error 可重试状态；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实拒绝权限未执行｜原因: 需真实 macOS 麦克风/语音识别权限拒绝状态｜用户本地验证步骤: 在系统设置中拒绝 AgentOS 麦克风或语音识别权限，悬浮窗点击开始，确认出现权限恢复提示且窗口可重试。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-permission-hint"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（18/18）覆盖 `speech_denied` reducer、权限恢复提示与 error 可重试状态；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实拒绝权限未执行｜原因: 需真实 macOS 麦克风/语音识别权限拒绝状态｜用户本地验证步骤: 在系统设置中拒绝 AgentOS 麦克风或语音识别权限，悬浮窗点击开始，确认出现权限恢复提示且窗口可重试。｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：helper 进程异常退出可恢复
 - GIVEN 悬浮窗正在录音
 - WHEN Apple Speech helper 进程异常退出
 - THEN 悬浮窗展示错误状态并允许重新点击开始；再次开始可正常识别
 
-> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜验证方式: node --test electron/omni-intent-voice.test.mjs（17/17）覆盖 `helper_exited` reducer 错误状态与可重试 UI 状态，npm run test:electron 覆盖事件路由；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；人工 kill helper 进程未执行｜原因: 需真实 speech helper 运行进程与 Electron GUI 状态观察｜用户本地验证步骤: 悬浮窗录音中 kill `AgentOS Speech Helper`，确认悬浮窗显示错误且再次点击开始可恢复。｜证据: TESTING_CHECKLIST.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜验证方式: node --test electron/omni-intent-voice.test.mjs（18/18）覆盖 `helper_exited` reducer 错误状态与可重试 UI 状态，npm run test:electron 覆盖事件路由；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；人工 kill helper 进程未执行｜原因: 需真实 speech helper 运行进程与 Electron GUI 状态观察｜用户本地验证步骤: 悬浮窗录音中 kill `AgentOS Speech Helper`，确认悬浮窗显示错误且再次点击开始可恢复。｜证据: TESTING_CHECKLIST.md｜
 
 #### 场景：与 Composer 语音输入互斥
 - GIVEN 主窗口 Composer 语音输入正在进行
@@ -98,6 +98,37 @@
 - THEN 系统拒绝或先终止前一会话，同一时刻只有一个语音消费者收到 partial/final 事件，事件不串窗
 
 > 实现状态：✅ 已通过（project-verify 2026-07-05）｜验证方式: npm run test:electron（Speech recognition routes events to the active consumer window only）+ source audit（activeConsumerWindowId / isAuthorizedConsumer）｜证据: TESTING_CHECKLIST.md｜
+
+### 需求：命令窗口混合命令与聊天
+系统 SHALL 让独立命令窗口同时支持 AgentOS 命令、Claude Agent SDK 系统任务和普通聊天问答，且三类请求共享当前项目、当前线程、模型选择与权限模式。
+
+#### 场景：自动模式下普通问题进入当前聊天
+- GIVEN 主窗口已打开某个项目与当前对话，独立命令窗口处于自动模式
+- WHEN 用户输入「当前的业务逻辑是什么」并提交
+- THEN 系统不尝试执行 omni action，而是把文本作为当前线程的一条用户消息提交给 Chat，悬浮窗回显「已发送到当前对话」，assistant 回复在主窗口对话流中展示
+
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-mode-auto"] + [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"]｜验证方式: npm run audit:voice-command-bdd（50/50，18 command / 30 agent_task / 2 answer）+ node --test electron/omni-intent-voice.test.mjs（18/18，自动路由 + Chat 提交 seam）+ npm run test:electron（97/97）+ npm run typecheck｜证据: test-results/multimodal-voice-control-verification.md｜
+
+#### 场景：命令模式下仍强制执行 AgentOS 命令解析
+- GIVEN 独立命令窗口处于命令模式
+- WHEN 用户输入「新建对话」并提交
+- THEN 系统沿用 omni-ui 命令链路创建新 thread，不把文本作为普通聊天消息发送
+
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-mode-command"] + [data-testid="voice-window-result"]｜验证方式: npm run audit:voice-command-bdd（#13-#30 均为 command）+ node --test electron/omni-intent-voice.test.mjs（18/18，命令模式 UI/IPC + omni 命令链 source audit）+ npm run test:electron（97/97）+ npm run typecheck｜证据: test-results/multimodal-voice-control-verification.md｜
+
+#### 场景：自动模式下系统级任务交给 Claude Agent SDK
+- GIVEN 主窗口当前对话可用，独立命令窗口处于自动模式
+- WHEN 用户输入「打开蓝牙设置」并提交
+- THEN 系统不新增本地 macOS 深链规则，而是把该请求发送到当前 Chat，由 Claude Agent SDK 在现有权限模式下执行或请求用户确认，悬浮窗回显该任务已交给 Claude Agent SDK
+
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-mode-auto"] + [data-testid="voice-window-result"]｜验证方式: npm run audit:voice-command-bdd（30 条系统级 BDD 均为 agent_task，含「打开蓝牙设置」）+ node --test electron/omni-intent-voice.test.mjs（18/18，agent_task 自动路由到当前 Chat 的 Claude Agent SDK）+ npm run test:electron（97/97）+ npm run typecheck｜证据: test-results/multimodal-voice-control-verification.md｜
+
+#### 场景：聊天模式直接发送到当前对话
+- GIVEN 独立命令窗口处于聊天模式
+- WHEN 用户输入任意非空文本并提交
+- THEN 系统跳过 omni-ui 命令解析，把文本发送到当前 Chat；若当前项目还没有对话，则创建新 thread 后提交
+
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-mode-chat"] + [data-testid="voice-window-result"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（18/18，聊天模式 UI/IPC + submitPromptInThread/submitPromptInNewThread source audit）+ npm run test:electron（97/97）+ npm run typecheck｜证据: test-results/multimodal-voice-control-verification.md｜
 
 ### 需求：语音/文本命令打开电脑应用
 系统 SHALL 通过 Claude Agent SDK 解析语音或文本中的打开本机应用意图；打开动作在主进程用参数化方式执行（`open -a <应用名>`），禁止拼接任意 shell 字符串。
@@ -131,14 +162,14 @@
 - WHEN 用户提交「打开 Google 页面」或「打开谷歌页面」
 - THEN 系统通过本地安全规则解析为 `system.openUrl`，再通过默认浏览器打开 `https://www.google.com`，命令入口回显「已打开 Google 页面」
 
-> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（17/17）覆盖 Google/谷歌本地安全规则、page action target normalizer 实执行、安全 executor 与语音窗口 final 文本提交状态机；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实默认浏览器打开未执行｜原因: 需要真实默认浏览器副作用与 Electron GUI 回显，本轮不启动外部浏览器｜用户本地验证步骤: 在独立命令窗口提交“打开 Google 页面”，确认默认浏览器打开 https://www.google.com 且命令入口回显“已打开 Google 页面”。｜证据: test-results/multimodal-voice-control-verification.md｜
+> 实现状态：⚠️ 跳过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（18/18）覆盖 Google/谷歌本地安全规则、page action target normalizer 实执行、安全 executor 与语音窗口 final 文本提交状态机；`npm run audit:omni-manual-readiness`（9/9）覆盖人工步骤与源码支撑；真实默认浏览器打开未执行｜原因: 需要真实默认浏览器副作用与 Electron GUI 回显，本轮不启动外部浏览器｜用户本地验证步骤: 在独立命令窗口提交“打开 Google 页面”，确认默认浏览器打开 https://www.google.com 且命令入口回显“已打开 Google 页面”。｜证据: test-results/multimodal-voice-control-verification.md｜
 
 #### 场景：非法网页地址不执行
 - GIVEN 独立命令窗口可用
 - WHEN 用户提交无法规范化为 HTTP/HTTPS 网页的指令
 - THEN 系统不调用默认浏览器，回显「无法打开网页」
 
-> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-result"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（17/17，invalid_url / HTTP(S) guard 断言）+ source audit（normalizeExternalUrl + Desktop Seam openExternal IPC）｜证据: test-results/multimodal-voice-control-verification.md｜
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-result"]｜验证方式: node --test electron/omni-intent-voice.test.mjs（18/18，invalid_url / HTTP(S) guard 断言）+ source audit（normalizeExternalUrl + Desktop Seam openExternal IPC）｜证据: test-results/multimodal-voice-control-verification.md｜
 
 ### 需求：命令执行安全与澄清
 系统 SHALL 按 action 风险分级执行：低风险直接执行，高风险需确认；解析出多候选时提供澄清选择。
@@ -169,14 +200,14 @@
 - WHEN 用户在独立命令窗口提交「现在设置了多少模型厂商」「现在模型设置页面有几个模型厂商」或「列出模型厂商」
 - THEN 系统通过 `settings.describe` 读取当前 omni-ui 快照，回显模型厂商数量、厂商名称、当前请求模型和 API Key 是否已设置的汇总；回显和模型输入快照不得包含 API Key / Token 明文
 
-> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"] + [data-testid="settings-model-provider-list"]｜验证方式: npm run audit:omni-answers（3/3，规则解析→摘要→悬浮窗答案且不泄露 Key）+ npm run audit:omni-rules（7/7，真实配置化规则解析命中 `settings.describe.models`）+ node --test electron/omni-intent-voice.test.mjs（17/17，摘要纯函数 + `mapSubmitResult` 回显映射 + 全 TSX 控件语义）+ npm run test:electron（96/96）+ TypeScript AST 控件审计（native 176/176，custom interactive 52/52，gap 0）｜证据: test-results/multimodal-voice-control-verification.md｜
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"] + [data-testid="settings-model-provider-list"]｜验证方式: npm run audit:omni-answers（3/3，规则解析→摘要→悬浮窗答案且不泄露 Key）+ npm run audit:omni-rules（8/8，真实配置化规则解析命中 `settings.describe.models`）+ node --test electron/omni-intent-voice.test.mjs（18/18，摘要纯函数 + `mapSubmitResult` 回显映射 + 全 TSX 控件语义）+ npm run test:electron（97/97）+ TypeScript AST 控件审计（native 177/177，custom interactive 52/52，gap 0）｜证据: test-results/multimodal-voice-control-verification.md｜
 
 #### 场景：命令窗口读取 omni 控件接入统计
 - GIVEN 主窗口任意页面已挂载 omni-ui runtime，当前代码通过 TypeScript AST 控件审计
 - WHEN 用户在独立命令窗口提交「还有多少控件没有实现」「多少控件没接入 omni」或「omni 控件接入情况」
 - THEN 系统通过 `settings.describe` 的 `controls` topic 回显静态接入缺口、原生控件覆盖数、非原生交互控件覆盖数、当前页面可交互对象数，并明确剩余 manual-only 项不是控件接入缺口
 
-> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"]｜验证方式: npm run audit:omni-answers（3/3，规则解析→摘要→悬浮窗答案）+ npm run audit:omni-rules（7/7，真实配置化规则解析命中 `settings.describe.controls`）+ node --test electron/omni-intent-voice.test.mjs（17/17，`coverage-summary` 与 AST 审计对账 + `mapSubmitResult` 回显映射）+ npm run audit:omni-controls（missing 0）+ npm run test:electron（96/96）｜证据: test-results/multimodal-voice-control-verification.md｜
+> 实现状态：✅ 已通过（project-verify 2026-07-05）｜selector: [data-testid="voice-window-final-input"] + [data-testid="voice-window-result"]｜验证方式: npm run audit:omni-answers（3/3，规则解析→摘要→悬浮窗答案）+ npm run audit:omni-rules（8/8，真实配置化规则解析命中 `settings.describe.controls`）+ node --test electron/omni-intent-voice.test.mjs（18/18，`coverage-summary` 与 AST 审计对账 + `mapSubmitResult` 回显映射）+ npm run audit:omni-controls（missing 0）+ npm run test:electron（97/97）｜证据: test-results/multimodal-voice-control-verification.md｜
 
 ## 平台专项验证（Electron + React）
 

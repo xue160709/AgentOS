@@ -27,6 +27,7 @@ import type {
   VoiceCommandExecutionResult,
   VoiceCommandResponseRequest,
   VoiceCommandRequestEvent,
+  VoiceCommandSubmitRequest,
   VoiceCommandSubmitResult,
 } from '../src/desktop-types'
 import type {
@@ -241,8 +242,8 @@ const desktopAdapter = {
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onSpeechRecognitionEvent, listener)
     return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onSpeechRecognitionEvent, listener)
   },
-  submitVoiceCommand(utterance: string) {
-    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.submitVoiceCommand, utterance) as Promise<VoiceCommandSubmitResult>
+  submitVoiceCommand(request: VoiceCommandSubmitRequest | string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.submitVoiceCommand, request) as Promise<VoiceCommandSubmitResult>
   },
   respondVoiceCommand(response: VoiceCommandResponseRequest) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.respondVoiceCommand, response) as Promise<VoiceCommandSubmitResult>

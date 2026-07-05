@@ -6,6 +6,7 @@
 
 ### Bug Fixes
 
+- 2026-07-05: 修复命令窗口自动模式下「关闭当前窗口」被误判为 AgentOS 内部对话/项目命令的问题。处理：收紧内部「关闭/归档/置顶」规则，只匹配对话、聊天或项目目标，让窗口控制类命令按 BDD 策略交给当前 Chat 的 Claude Agent SDK；验证：`npm run audit:voice-command-bdd`（50/50，含「关闭当前窗口」为 `agent_task`）、`node --test electron/omni-intent-voice.test.mjs`、`npm run test:electron`、`npm run typecheck`；范围：命令窗口自动路由、`src/multimodal/voice-routing.ts`。
 - 2026-07-05: 修复「打开 Google 页面」仍依赖 live Provider 解析、模型超时后无法执行的问题。处理：为 Google/谷歌等已知安全网页增加窄范围本地 `system.openUrl` 规则，直接映射到 `https://www.google.com/`；任意应用名与其它开放网页名仍不进泛化本地规则，继续交给 SDK allowlist 解析；验证：`npm run audit:omni-rules`、`node --test electron/omni-intent-voice.test.mjs`、`npm run typecheck`；范围：multimodal configured rules、system.openUrl 语音/文本命令。
 - 2026-07-05: 修复 speech helper 异常退出后可能沿用旧权限提示的问题。处理：`voice-state` 显式识别 `helper_exited`，将其归为可重试运行错误并清空权限恢复提示，避免误导用户去系统设置处理非权限类故障；验证：`node --test electron/omni-intent-voice.test.mjs`、`npm run typecheck`、`npm run test:electron`；范围：语音命令悬浮窗状态机。
 - 2026-07-05: 修复非原生交互元素未纳入 omni 语义门禁的问题。处理：为 API Key 获取链接、关于页邮箱/GitHub 链接、侧栏 resize separator、TODO 卡片、file diff summary 和 Agent 状态详情 summary 补 `data-mm-*`；新增自定义交互控件 AST 门禁，覆盖链接、summary、role button/menuitem/option/separator 与自定义点击控件；验证：非原生交互 AST 审计（35 个 TSX 文件，52/52，gap 0）、`node --test electron/omni-intent-voice.test.mjs`、`npm run typecheck`、`npm run test:electron`；范围：AboutSection、AppShell/AppShellSidebar、ClaudeAgentSettingsPage、ProjectHomeSurface、Transcript、AppAgentStatusPopover、omni intent voice tests。
@@ -28,6 +29,7 @@
 
 ### Process
 
+- 2026-07-05: 增强 `voice-command-bdd.md` 的可回归门禁。处理：新增 `electron/voice-command-bdd-audit.mjs` 与 `npm run audit:voice-command-bdd`，直接解析 50 条 BDD 命令清单并校验自动路由分级（18 command / 30 agent_task / 2 answer），防止文档策略与运行时分流漂移；验证：`npm run audit:voice-command-bdd`、`node --test electron/omni-intent-voice.test.mjs`。
 - 2026-07-05: 增强剩余 manual-only 场景的 readiness 门禁。处理：新增 `electron/omni-manual-readiness-audit.mjs` 与 `npm run audit:omni-manual-readiness`，检查 9 个仍需真实 Electron GUI、macOS 权限、live Provider、本机应用或默认浏览器副作用的场景是否保留 acceptance 跳过状态、人工步骤、`TESTING_CHECKLIST.md` 行与源码支撑；验证：`npm run audit:omni-manual-readiness`、`node --test electron/omni-intent-voice.test.mjs`、`npm run test:electron`。
 - 2026-07-05: 增强 omni 问答链路的端到端审计。处理：新增 `electron/omni-audit-utils.mjs` 与 `electron/omni-answer-audit.mjs`，并接入 `npm run audit:omni-answers`，串联配置化规则解析、`settings.describe` 快照读取和 `voice-result` 回显映射，覆盖模型厂商、控件接入统计和当前页面摘要三类问答；验证：`npm run audit:omni-answers`、`node --test electron/omni-intent-voice.test.mjs`、`npm run typecheck`。
 - 2026-07-05: 增强 settings.describe 到语音命令窗口回显的可回归证据。处理：抽出 `src/multimodal/voice-result.ts`，让 `InteractionSubmitResult` 到 `VoiceCommandExecutionResult` 的映射可单测，并验证模型厂商摘要与 omni 控件覆盖摘要会作为悬浮窗结果消息返回；验证：`node --test electron/omni-intent-voice.test.mjs`、`npm run typecheck`。

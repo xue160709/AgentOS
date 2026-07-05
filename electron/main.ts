@@ -31,6 +31,8 @@ import type {
   VoiceCommandExecutionResult,
   VoiceCommandResponseRequest,
   VoiceCommandRequestEvent,
+  VoiceCommandMode,
+  VoiceCommandSubmitRequest,
 } from '../src/desktop-types'
 import { ensureAgentModeFiles, getAgentModeStatus, setAgentModeState } from './agent-mode-files'
 import { AgentModeSettingsStore, getDefaultWebSearchSettings, normalizeAgentMcpServers, normalizeWebSearchSettings } from './agent-mode-settings-store'
@@ -1001,8 +1003,8 @@ if (gotSingleInstanceLock) {
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openApp, (_event, rawAppName: unknown) => {
       return openMacApplication(typeof rawAppName === 'string' ? rawAppName : '')
     })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.submitVoiceCommand, (_event, rawUtterance: unknown) => {
-      return submitVoiceCommand(typeof rawUtterance === 'string' ? rawUtterance : '')
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.submitVoiceCommand, (_event, rawRequest: unknown) => {
+      return submitVoiceCommand(normalizeVoiceCommandSubmitRequest(rawRequest))
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.respondVoiceCommand, (_event, rawResponse: unknown) => {
       return respondVoiceCommand(normalizeVoiceCommandResponse(rawResponse))
@@ -1160,17 +1162,28 @@ function openMacApplication(rawAppName: string): Promise<SystemOpenAppResult> {
   })
 }
 
-function submitVoiceCommand(rawUtterance: string) {
-  const utterance = rawUtterance.trim()
+function submitVoiceCommand(request: VoiceCommandSubmitRequest | null) {
+  const utterance = request?.utterance.trim() ?? ''
   if (!utterance) return { ok: false as const, message: '语音文本为空。' }
   if (!win || win.isDestroyed()) return { ok: false as const, message: '主窗口不可用。' }
   const event: VoiceCommandRequestEvent = {
     id: randomUUID(),
     utterance,
+    mode: request?.mode ?? 'auto',
     source: 'voice-window',
   }
   win.webContents.send(DESKTOP_EVENT_CHANNELS.onVoiceCommandRequest, event)
   return { ok: true as const, id: event.id }
+}
+
+function normalizeVoiceCommandSubmitRequest(value: unknown): VoiceCommandSubmitRequest | null {
+  if (typeof value === 'string') return { utterance: value, mode: 'auto' }
+  if (!isRecord(value)) return null
+  const utterance = typeof value.utterance === 'string' ? value.utterance : ''
+  return {
+    utterance,
+    mode: normalizeVoiceCommandMode(value.mode),
+  }
 }
 
 function respondVoiceCommand(response: VoiceCommandResponseRequest | null) {
@@ -1193,6 +1206,10 @@ function normalizeVoiceCommandResponse(value: unknown): VoiceCommandResponseRequ
   if (!id || !action) return null
   if (action === 'choose' && !candidateId) return null
   return { id, action, candidateId }
+}
+
+function normalizeVoiceCommandMode(value: unknown): VoiceCommandMode {
+  return value === 'command' || value === 'chat' || value === 'auto' ? value : 'auto'
 }
 
 function normalizeVoiceCommandResult(value: unknown): VoiceCommandExecutionResult | null {

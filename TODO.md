@@ -7,7 +7,7 @@
 
 - 工具形态：Electron 桌面应用（macOS 优先）+ Vite 5 + React 19 + TypeScript。
 - 产品名称：AgentOS —— 面向本地项目与长期任务的桌面 Agent 工作台。
-- 现状：11 个 prd 模块、120 个验收场景中 111 ✅ / 0 ❌ / 9 ⚠️ / 0 ⬜（`desktop-shell-settings-release` 的真实托盘/macOS 语音权限人工项；`multimodal-voice-control` 的 live Provider、真实语音悬浮窗、helper 异常恢复、真实打开应用与默认浏览器打开人工项）。
+- 现状：11 个 prd 模块、124 个验收场景中 115 ✅ / 0 ❌ / 9 ⚠️ / 0 ⬜（`desktop-shell-settings-release` 的真实托盘/macOS 语音权限人工项；`multimodal-voice-control` 的 live Provider、真实语音悬浮窗、helper 异常恢复、真实打开应用与默认浏览器打开人工项）。
 - 当前主线：**omni-ui 多模态组件融合 + 语音输入悬浮窗控制主窗口**（§2）。
 
 ## §2 开发任务
@@ -64,7 +64,14 @@
 - [x] 为剩余 9 个 manual-only 场景补 readiness 门禁：`npm run audit:omni-manual-readiness` 检查 acceptance 跳过状态、人工步骤、`TESTING_CHECKLIST.md` 行与源码支撑，防止人工项被误当成控件缺口。
 - [x] 正式验收：按 `project-verify` 回写状态戳，同步本节 checkbox（2026-07-05：22 个场景中 16 ✅ / 6 ⚠️，详见 `TESTING_CHECKLIST.md`）。
 
-### 2.2 遗留正式验收收口（沿自旧 §14）
+### 2.2 P0｜命令窗口命令 + 聊天混合入口
+
+> 验收契约 → `prd/multimodal-voice-control/acceptance.md`
+
+- [x] 接入独立命令窗口的「自动 / 命令 / 聊天」模式：自动模式中 AgentOS 内部命令直接走 omni action，系统级任务（如打开蓝牙设置、截屏、音量、窗口控制）交给当前 Chat 的 Claude Agent SDK，普通问题/总结/解释进入当前聊天并返回内容。
+  - 验收：2026-07-05，`project-verify` 已回写新增 4 个场景状态戳；`npm run audit:voice-command-bdd` 覆盖 50/50 条 BDD（18 command / 30 agent_task / 2 answer）。
+
+### 2.3 遗留正式验收收口（沿自旧 §14）
 
 - [ ] 人工确认 close-to-tray：真实 Electron 托盘与窗口关闭事件下，关闭主窗口应隐藏到托盘且可恢复窗口。
 - [ ] 人工确认 macOS 语音授权成功：真实授权后 Composer 语音输入把 partial/final 写入当前选区 draft range。
@@ -76,13 +83,16 @@
 ```text
 全局快捷键 / 托盘
   -> 语音命令悬浮窗（置顶、不抢焦点）
+  -> [模式] 自动 / 命令 / 聊天
   -> [点击开始] Apple Speech helper 录音
   -> partial 实时上屏（可随时点击停止）
   -> [点击停止] final 文本可编辑
-  -> [点击提交] IPC -> 主窗口 omni-ui runtime
-  -> 规则 resolver + LLM resolver（主进程 Claude Agent SDK 一次性 query）融合
+  -> [点击提交] IPC -> 主窗口混合路由
+  -> 自动模式：AgentOS 内部命令走 omni runtime；系统级任务走当前 Chat 的 Claude Agent SDK；问答/总结/解释走当前 Chat
+  -> 命令模式：强制走规则 resolver + LLM resolver（主进程 Claude Agent SDK 一次性 query）融合
+  -> 聊天模式：跳过命令解析，直接提交当前 Chat
   -> 低风险：直接执行主窗口 action，悬浮窗回显“已执行”
-  -> 系统级：打开电脑应用（主进程参数化 open -a）或默认浏览器网页
+  -> 系统级：除已知安全本地规则外，交给当前 Chat 的 Claude Agent SDK 并复用权限模式
   -> 多候选：悬浮窗列出候选点选
   -> 高风险：确认卡，确认后执行
   -> 失败/无法识别：悬浮窗提示原因与建议说法
@@ -95,6 +105,7 @@
 - LLM 意图识别走 Claude Agent SDK：主进程一次性 query、不挂任何业务工具（无 MCP/文件/Bash），复用模型设置 active Provider；renderer 经 Desktop Seam IPC 调用，Key 不外泄到 renderer。
 - 开放名词系统命令中，`Google/谷歌` 等已知安全网页可走窄范围本地 rules；任意应用名与其它开放网页名不配置泛化本地短语 rules，只保留 allowlisted `system.openApp` / `system.openUrl` executor 和安全校验，意图理解交给 Claude Agent SDK。
 - 系统级 action 目前仅覆盖打开本机应用与打开明确网页：`system.openApp` 在主进程参数化 `open -a`，禁止任意 shell 命令执行；`system.openUrl` 复用 `desktop.openExternal`，只允许 HTTP/HTTPS 网页。
+- 命令窗口的自动路由只直接执行 AgentOS 内部命令和已知安全网页规则；macOS 设置深链、窗口/音量/截图/文件夹/开放网页搜索等系统级长尾任务不在本地继续硬编码，发送到当前 Chat 的 Claude Agent SDK，由既有权限模式和工具审查兜底。
 - 语音识别复用现有 Swift Apple Speech helper（NDJSON/unix socket），不引入 Web Speech API。
 - 悬浮窗与主窗口通过主进程中转 utterance / 结果事件；主窗口是唯一的命令执行方。
 
@@ -106,7 +117,7 @@
 - 测试补齐：`agent-mode-files` fixture、真实 Home Plugin action 回归、`task-home-plugin-manager` 专项单测、真实 release/updater smoke、真实 MCP server 进程/网络连通。
 - golden fixtures 异常/边界场景扩充，并把「正常 + 异常路径」从文档规范升级为脚本门禁（沿自旧 §13）。
 - 独立命令窗口体验增强：若真实语音链路验证成功，继续评估是否增加可配置快捷键、窗口尺寸记忆和更接近 Composer 的附件/上下文提示。
-- 常用系统级语音命令补齐：基于 `prd/multimodal-voice-control/voice-command-bdd.md`，补 macOS 设置深链、用 Safari 打开/搜索百度、百度本地网页规则、常用 macOS 应用别名、截图/音量/专注模式/窗口/文件夹快捷入口。
+- 常用系统级语音命令复验：基于 `prd/multimodal-voice-control/voice-command-bdd.md`，对 macOS 设置深链、Safari/百度、常用 macOS 应用、截图/音量/专注模式/窗口/文件夹快捷入口做真实 GUI smoke；默认不再补成本地硬编码规则，除非后续确认某个高频命令值得进入 allowlist。
 
 ## 产品发现记录
 
@@ -117,6 +128,7 @@
 - 结论：进 §2.1，新建 `prd/multimodal-voice-control/` 模块与验收契约；融合设计写入 `docs/omni-ui-integration.md`。
 - 下步：`project-iterate` 按阶段 A 开始实现。
 - 增量（同日）：意图识别从直调 Messages API 改为走 Claude Agent SDK 一次性 query（不挂业务工具）；新增「打开电脑应用」usecase（参数化 `open -a` + 注入防护），契约已 sync 3 个场景。
+- 增量（同日）：确认命令窗口升级为「自动 / 命令 / 聊天」混合入口；AgentOS 内部命令直接执行，系统级长尾任务交给当前 Chat 的 Claude Agent SDK，普通问题与总结解释返回内容。`voice-command-bdd.md` 已按直接执行 / SDK 执行 / 返回内容分级。
 
 ## 验证记录
 
@@ -162,3 +174,7 @@
 - 验证类别：Codex 自检。`npm run audit:omni-manual-readiness` ✅（9/9）；`node --test electron/omni-intent-voice.test.mjs` ✅（17/17）；`npm run audit:omni-controls` ✅（missing 0）；`npm run audit:omni-rules` ✅（7/7）；`npm run audit:omni-answers` ✅（3/3）；`npm run typecheck` ✅；`npm run test:electron` ✅（96/96）。
 - 本轮修复：真实 dev 启动时观察到「打开 Google 页面」仍会进入 live SDK 解析并在 Provider 超时后失败；已给 Google/谷歌这类已知安全网页增加窄范围本地 `system.openUrl` 规则，避免典型网页命令依赖模型可用性，任意应用名与其它开放网页名仍走 SDK。
 - 验证类别：Codex 自检。`npm run audit:omni-rules` ✅（7/7，Google resolved、Safari not_found）；`node --test electron/omni-intent-voice.test.mjs` ✅（17/17）；`npm run audit:omni-answers` ✅（3/3）；`npm run audit:omni-manual-readiness` ✅（9/9）；`npm run typecheck` ✅。
+- 本轮接入：命令窗口升级为「自动 / 命令 / 聊天」混合入口；自动模式下 AgentOS 内部命令直接执行，macOS 设置/截图/音量/窗口/文件夹/开放网页搜索等系统级长尾任务提交到当前 Chat 的 Claude Agent SDK，普通问题/总结/解释提交到当前 Chat 返回内容；`voice-command-bdd.md` 已按直接执行 / SDK 执行 / 返回内容分级。
+- 验证类别：Codex 自检。`npm run typecheck` ✅；`npm run audit:omni-rules` ✅（8/8）；`npm run audit:omni-answers` ✅（3/3）；`npm run audit:omni-controls` ✅（native 177/177，custom 52/52，missing 0）；`node --test electron/omni-intent-voice.test.mjs` ✅（18/18）；`npm run test:electron` ✅（97/97）；`git diff --check` ✅。
+- 本轮正式验收：命令窗口命令 + 聊天混合入口新增 4 个场景 ✅；新增 `npm run audit:voice-command-bdd`，直接解析 `voice-command-bdd.md` 的 50 条命令并验证自动路由，修正「关闭当前窗口」误判为内部命令的问题。
+- 验证类别：正式验收（project-verify）。`npm run audit:voice-command-bdd` ✅（50/50，18 command / 30 agent_task / 2 answer）；`node --test electron/omni-intent-voice.test.mjs` ✅（18/18）；`npm run test:electron` ✅（97/97）；`npm run audit:omni-rules` ✅（8/8）；`npm run audit:omni-answers` ✅（3/3）；`npm run audit:omni-controls` ✅（native 177/177，custom 52/52，missing 0）；`npm run typecheck` ✅；`git diff --check` ✅。
