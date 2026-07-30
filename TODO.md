@@ -178,3 +178,5 @@
 - 验证类别：Codex 自检。`npm run typecheck` ✅；`npm run audit:omni-rules` ✅（8/8）；`npm run audit:omni-answers` ✅（3/3）；`npm run audit:omni-controls` ✅（native 177/177，custom 52/52，missing 0）；`node --test electron/omni-intent-voice.test.mjs` ✅（18/18）；`npm run test:electron` ✅（97/97）；`git diff --check` ✅。
 - 本轮正式验收：命令窗口命令 + 聊天混合入口新增 4 个场景 ✅；新增 `npm run audit:voice-command-bdd`，直接解析 `voice-command-bdd.md` 的 50 条命令并验证自动路由，修正「关闭当前窗口」误判为内部命令的问题。
 - 验证类别：正式验收（project-verify）。`npm run audit:voice-command-bdd` ✅（50/50，18 command / 30 agent_task / 2 answer）；`node --test electron/omni-intent-voice.test.mjs` ✅（18/18）；`npm run test:electron` ✅（97/97）；`npm run audit:omni-rules` ✅（8/8）；`npm run audit:omni-answers` ✅（3/3）；`npm run audit:omni-controls` ✅（native 177/177，custom 52/52，missing 0）；`npm run typecheck` ✅；`git diff --check` ✅。
+- 2026-07-07：本轮调整命令窗口视觉材质：独立命令窗口优先使用 macOS `vibrancy: 'hud'` 与 Windows `backgroundMaterial: 'acrylic'`，渲染层改为透明玻璃表面与半透明控件兜底；仅改变外观材质，不改 §2 功能完成状态。
+- 验证类别：Codex 自检。`npm run typecheck` ✅；`node --test electron/omni-intent-voice.test.mjs` ✅（18/18）；`git diff --check` ✅。

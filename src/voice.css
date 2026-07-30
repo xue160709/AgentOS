@@ -5,6 +5,14 @@
   font-family: var(--font-sans);
   background: transparent;
   color: var(--color-token-text-primary);
+  --voice-glass-window: color-mix(in oklab, var(--color-token-main-surface-primary) 56%, transparent);
+  --voice-glass-window-strong: color-mix(in oklab, var(--color-token-main-surface-primary) 72%, transparent);
+  --voice-glass-control: color-mix(in oklab, var(--color-token-input-background) 58%, transparent);
+  --voice-glass-control-hover: color-mix(in oklab, var(--color-token-foreground) 7%, transparent);
+  --voice-glass-line: color-mix(in oklab, var(--color-token-border-heavy) 74%, transparent);
+  --voice-glass-line-soft: color-mix(in oklab, var(--color-token-border) 58%, transparent);
+  --voice-glass-highlight: color-mix(in oklab, var(--color-token-foreground) 7%, transparent);
+  --voice-glass-shadow: color-mix(in oklab, var(--color-token-foreground) 24%, transparent);
 }
 
 * {
@@ -24,23 +32,50 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+#voice-app {
+  width: 100vw;
+  height: 100vh;
+}
+
 button,
 textarea {
   font: inherit;
 }
 
 .voice-window {
+  position: relative;
+  isolation: isolate;
   width: 100vw;
   height: 100vh;
   display: grid;
   grid-template-rows: auto auto auto minmax(128px, auto) auto auto auto auto;
   gap: calc(var(--spacing) * 2);
   padding: calc(var(--spacing) * 4);
-  border: 1px solid var(--color-token-border);
+  border: 1px solid var(--voice-glass-line);
   border-radius: var(--radius-2xl);
-  background: var(--color-token-main-surface-primary);
-  box-shadow: var(--shadow-2xl);
+  background:
+    linear-gradient(180deg, var(--voice-glass-highlight), transparent 36%),
+    linear-gradient(135deg, color-mix(in oklab, var(--color-token-focus-border) 8%, transparent), transparent 44%),
+    var(--voice-glass-window);
+  box-shadow:
+    0 26px 72px -34px var(--voice-glass-shadow),
+    inset 0 1px 0 color-mix(in oklab, var(--color-token-foreground) 13%, transparent);
+  overflow: hidden;
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
+  backdrop-filter: blur(30px) saturate(125%);
   -webkit-app-region: drag;
+}
+
+html[data-voice-window-effects='mac-vibrancy'] .voice-window {
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--color-token-foreground) 9%, transparent), transparent 42%),
+    color-mix(in oklab, var(--color-token-main-surface-primary) 34%, transparent);
+}
+
+html[data-voice-window-effects='windows-acrylic'] .voice-window {
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--color-token-foreground) 8%, transparent), transparent 40%),
+    color-mix(in oklab, var(--color-token-main-surface-primary) 46%, transparent);
 }
 
 .voice-window__header,
@@ -59,9 +94,10 @@ textarea {
   gap: calc(var(--spacing) * 1);
   min-height: 34px;
   padding: 3px;
-  border: 1px solid var(--color-token-border-light);
+  border: 1px solid var(--voice-glass-line-soft);
   border-radius: var(--radius-md);
-  background: var(--color-token-background-secondary);
+  background: var(--voice-glass-control);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--color-token-foreground) 6%, transparent);
 }
 
 .voice-window__mode button {
@@ -81,13 +117,15 @@ textarea {
 
 .voice-window__mode button:hover {
   color: var(--color-token-text-primary);
-  background: var(--color-token-list-hover-background);
+  background: var(--voice-glass-control-hover);
 }
 
 .voice-window__mode button.is-active {
   color: var(--color-token-text-primary);
-  background: var(--color-token-input-background);
-  box-shadow: var(--shadow-sm);
+  background: var(--voice-glass-window-strong);
+  box-shadow:
+    0 1px 2px color-mix(in oklab, var(--color-token-foreground) 8%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--color-token-foreground) 8%, transparent);
 }
 
 .voice-window__header {
@@ -130,7 +168,7 @@ textarea {
 
 .voice-window__ghost:hover {
   color: var(--color-token-text-primary);
-  background: var(--color-token-list-hover-background);
+  background: var(--voice-glass-control-hover);
 }
 
 .voice-window__status {
@@ -203,9 +241,10 @@ textarea {
 .voice-window__error:not(:empty),
 .voice-window__result:not(:empty) {
   padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2);
-  border: 1px solid var(--color-token-border-light);
+  border: 1px solid var(--voice-glass-line-soft);
   border-radius: var(--radius-md);
-  background: var(--color-token-background-secondary);
+  background: var(--voice-glass-control);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--color-token-foreground) 5%, transparent);
 }
 
 .voice-window__error:not(:empty) {
@@ -221,10 +260,10 @@ textarea {
   gap: calc(var(--spacing) * 2);
   min-height: 36px;
   padding: calc(var(--spacing) * 2);
-  border: 1px solid var(--color-token-border-light);
+  border: 1px solid var(--voice-glass-line-soft);
   border-radius: var(--radius-md);
   color: var(--color-token-text-primary);
-  background: var(--color-token-background-secondary);
+  background: var(--voice-glass-control);
   font-size: var(--text-xs);
 }
 
@@ -235,10 +274,10 @@ textarea {
 .voice-window__confirm button,
 .voice-window__clarify button {
   min-height: 36px;
-  border: 1px solid var(--color-token-border);
+  border: 1px solid var(--voice-glass-line-soft);
   border-radius: var(--radius-md);
   color: var(--color-token-text-primary);
-  background: var(--color-token-input-background);
+  background: var(--voice-glass-window-strong);
   cursor: pointer;
   transition:
     color var(--transition-duration-basic) var(--transition-ease-basic),
@@ -249,7 +288,29 @@ textarea {
 
 .voice-window__confirm button:hover:not(:disabled),
 .voice-window__clarify button:hover:not(:disabled) {
-  background: var(--color-token-list-hover-background);
+  background: var(--voice-glass-control-hover);
+}
+
+.voice-command-composer.chat-composer {
+  border-color: var(--voice-glass-line);
+  background: var(--voice-glass-control);
+  box-shadow:
+    0 12px 34px -28px var(--voice-glass-shadow),
+    inset 0 1px 0 color-mix(in oklab, var(--color-token-foreground) 8%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(118%);
+  backdrop-filter: blur(24px) saturate(118%);
+}
+
+.voice-command-composer.chat-composer:focus-within {
+  border-color: color-mix(in oklab, var(--color-token-focus-border) 58%, transparent);
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--color-token-focus-border) 15%, transparent),
+    0 16px 42px -30px var(--voice-glass-shadow),
+    inset 0 1px 0 color-mix(in oklab, var(--color-token-foreground) 10%, transparent);
+}
+
+.voice-command-composer .composer-icon-button:hover {
+  background: var(--voice-glass-control-hover);
 }
 
 .voice-window__confirm button:disabled,

@@ -60,6 +60,7 @@ export type DesktopAPI = {
   isDevRuntime?: boolean
   windowEffects?: {
     macVibrancy: boolean
+    windowsAcrylic: boolean
     windowsTitlebarOverlay: boolean
   }
   pickProjectDirectory?: () => Promise<string | null>

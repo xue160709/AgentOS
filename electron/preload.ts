@@ -59,6 +59,7 @@ const desktopAdapter = {
   isDevRuntime: process.env.AGENTOS_DEV_RUNTIME === '1' || Boolean(process.env.VITE_DEV_SERVER_URL),
   windowEffects: {
     macVibrancy: process.platform === 'darwin',
+    windowsAcrylic: process.platform === 'win32',
     windowsTitlebarOverlay: process.platform === 'win32',
   },
   pickProjectDirectory() {

@@ -3,7 +3,20 @@
  * Electron main entry: window lifecycle, tray menu, IPC bridges, and Claude Agent runner.
  */
 
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  globalShortcut,
+  ipcMain,
+  Menu,
+  nativeImage,
+  nativeTheme,
+  shell,
+  Tray,
+  type BrowserWindowConstructorOptions,
+} from 'electron'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -165,6 +178,33 @@ function getWindowBackgroundColor() {
   return getMainWindowBackgroundColor(nativeTheme.shouldUseDarkColors)
 }
 
+function getVoiceCommandWindowMaterialOptions(): Pick<
+  BrowserWindowConstructorOptions,
+  'backgroundColor' | 'backgroundMaterial' | 'transparent' | 'vibrancy' | 'visualEffectState'
+> {
+  if (process.platform === 'darwin') {
+    return {
+      backgroundColor: '#00000000',
+      transparent: true,
+      vibrancy: 'hud',
+      visualEffectState: 'active',
+    }
+  }
+
+  if (process.platform === 'win32') {
+    return {
+      backgroundColor: '#00000000',
+      backgroundMaterial: 'acrylic',
+      transparent: false,
+    }
+  }
+
+  return {
+    backgroundColor: '#00000000',
+    transparent: true,
+  }
+}
+
 function getAppIconPath() {
   return path.join(process.env.VITE_PUBLIC, 'app-icon.png')
 }
@@ -312,7 +352,7 @@ function createVoiceCommandWindow(): BrowserWindow {
     alwaysOnTop: true,
     skipTaskbar: true,
     title: 'AgentOS Voice Command',
-    backgroundColor: getWindowBackgroundColor(),
+    ...getVoiceCommandWindowMaterialOptions(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       devTools: isDevRuntime,

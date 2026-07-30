@@ -15,6 +15,16 @@ import {
 import './style.css'
 import './voice.css'
 
+const windowEffects = window.desktop?.windowEffects
+
+if (windowEffects?.macVibrancy) {
+  document.documentElement.dataset.voiceWindowEffects = 'mac-vibrancy'
+} else if (windowEffects?.windowsAcrylic) {
+  document.documentElement.dataset.voiceWindowEffects = 'windows-acrylic'
+} else {
+  document.documentElement.dataset.voiceWindowEffects = 'css-glass'
+}
+
 function VoiceCommandWindow() {
   const [state, setState] = useState(createInitialVoiceUiState)
   const [mode, setMode] = useState<VoiceCommandMode>('auto')
