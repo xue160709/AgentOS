@@ -1,0 +1,19 @@
+{
+  "design_revision": 27,
+  "design_sha256": "40ac35e6b499c10353e41eed4fe613a9943fbd6b6278161e8346af0541ea5e5b",
+  "user_panel_score": 70,
+  "independent_score": 18,
+  "final_score": 88,
+  "confidence": "MEDIUM",
+  "severity_counts": {
+    "P0": 0,
+    "P1": 0,
+    "P2": 4,
+    "P3": 1
+  },
+  "all_must_needs_resolved": false,
+  "unresolved_user_disagreement": false,
+  "profile_drift": false,
+  "evidence_blocked": false,
+  "verdict": "REVISE"
+}

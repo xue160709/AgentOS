@@ -1,0 +1,27 @@
+{
+  "round": 3,
+  "started_at": "2026-07-31T00:02:22+08:00",
+  "design_revision": 3,
+  "design_sha256": "48885a6dc815a001411c8e27d210c1b77ec45309e9ee176d2c52647fc38825bd",
+  "participants": [
+    "user-001",
+    "user-002",
+    "user-003"
+  ],
+  "participant_profile_sha256": {
+    "user-001": "dc65d5d4ab9cef8b1523adc1030177d6ca3b5f7788a78bc86cf9cf462a4562e3",
+    "user-002": "fa752d74a9b4c2273b58fa42d0d92698c7a479b6307f01df38ad1d3259bb18fe",
+    "user-003": "9f44b826f2554927bc5623c6711c854a3de66fa08c0248458f4d0c291ffc38a6"
+  },
+  "participant_feedback_sha256": {
+    "user-001": {
+      "feedback-001.md": "335d4b0ac0b4549d0171f390f4fe2d494307e665797dd6fb72567b48abe26fda"
+    },
+    "user-002": {
+      "feedback-001.md": "2eef78e8cf245964285762143d51000e1b8bd3c433a38607e88f7c967be15840"
+    },
+    "user-003": {
+      "feedback-001.md": "02d66a26bd3d1bdfee03b9b02651b76ad3f4a38c69482f7cf66b0c0c5f56d215"
+    }
+  }
+}

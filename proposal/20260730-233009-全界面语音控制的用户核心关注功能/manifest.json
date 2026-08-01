@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "proposal_id": "20260730-233009-全界面语音控制的用户核心关注功能",
+  "title": "全界面语音控制的用户核心关注功能",
+  "status": "REVISE",
+  "created_at": "2026-07-30T23:30:09+08:00",
+  "updated_at": "2026-07-31T07:33:12+08:00",
+  "design_revision": 27,
+  "current_round": 26,
+  "participants": [
+    "user-001",
+    "user-002",
+    "user-003"
+  ],
+  "feedback_count": 6,
+  "final_score": 88,
+  "accepted_design_sha256": null,
+  "executive_summary_status": "NOT_CREATED",
+  "needs_confirmed_at": "2026-07-30T23:37:39+08:00",
+  "needs_sha256": "cef0571260e21adecc1e0b37c150d2dc29dcc4ad57e16458515c7576f40bf44d",
+  "participant_profile_sha256": {
+    "user-001": "dc65d5d4ab9cef8b1523adc1030177d6ca3b5f7788a78bc86cf9cf462a4562e3",
+    "user-002": "fa752d74a9b4c2273b58fa42d0d92698c7a479b6307f01df38ad1d3259bb18fe",
+    "user-003": "9f44b826f2554927bc5623c6711c854a3de66fa08c0248458f4d0c291ffc38a6"
+  },
+  "stagnant": true
+}
