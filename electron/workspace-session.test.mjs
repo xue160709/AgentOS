@@ -354,3 +354,19 @@ test('Workspace Session interface merges background task threads by project path
   assert.equal(thread.purpose, 'task-run')
   assert.equal(thread.homePluginSlug, 'daily-report')
 })
+
+test('Workspace Session can add a background thread without changing the active selection', () => {
+  const harness = createHarness()
+  const state = harness.session.addThread(createState(), {
+    id: 'thread-background',
+    projectId: 'project-2',
+    title: '后台 Agent 任务',
+    chatState: { model: 'Claude Agent', items: [] },
+    activate: false,
+  })
+
+  assert.equal(state.activeProjectId, 'project-1')
+  assert.equal(state.activeThreadId, 'thread-1')
+  assert.equal(state.threads[0].id, 'thread-background')
+  assert.equal(state.threads[0].projectId, 'project-2')
+})

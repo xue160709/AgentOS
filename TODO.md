@@ -193,6 +193,14 @@
 - [x] Release stdio MCP 命令解析：打包环境为 `npx`/`node`/`uvx` 等命令补用户级 Node 管理器与 Homebrew 常见 PATH，并在连接测试失败时展示可恢复 ENOENT 提示。
   - 证据：`npm run typecheck` ✅、`node --test electron/claude-agent-runner-mcp.test.mjs` ✅、`npm run test:electron` ✅（79/79）、`git diff --check` ✅。
 
+## §16 P1｜全局 Agent 指令通道
+
+- [ ] 提供开发者配置的无 UI Agent 指令通道，让应用任意模块把完整指令发送到固定项目的新线程；支持 `stay` / `open` 导航策略，并复用 Chat Run 状态事件。
+  - 验收契约：`prd/chat-agent-runtime/acceptance.md` → “开发者通过全局通道启动独立 Agent 线程”。
+  - Change：`changes/active/chg-20260818-agent-command-channel/`。
+  - 同步目标：`/Volumes/macOS/Github/IntelligentOS-APP`；通道核心代码必须保持一致，下游只增加选题入口接线。
+  - 状态：实现与 Codex 自检已完成；任务暂不打勾，等待独立 `project-verify` 在 Acceptance 盖戳后关闭 Change。
+
 ## 验证记录
 
 ### 2026-06-17
@@ -360,6 +368,16 @@
   - `bash .codex/scripts/check-acceptance.sh --all` ✅
   - `python3 .codex/scripts/agentic_drift_check.py` ✅
   - `git diff --check` ✅
+- 本轮：新增全局无 UI Agent 指令通道；业务模块传入完整指令后，会在配置项目中创建普通新线程并立即提交既有 Claude Agent SDK Chat Run。支持留在当前页面或打开线程、返回 `threadId`、状态订阅，并把相同核心代码同步到 IntelligentOS-APP。
+- 验证类别：Codex 自检（未执行正式 `project-verify` 盖戳，§16 checkbox 保持未勾选）。
+- 验证命令：
+  - `npm run typecheck -- --pretty false` ✅
+  - `npm run test:electron` ✅（86/86）
+  - IntelligentOS-APP `npm run typecheck -- --pretty false` ✅
+  - IntelligentOS-APP `npm run test:electron` ✅（101/101）
+  - 双仓库核心文件 `cmp` ✅
+  - 双仓库 `git diff --check` ✅
+  - `.codex/scripts/check-acceptance.sh` ⚠️（两个仓库均无该历史脚本；未执行正式验收）
 - 本轮：修复全局 MCP 设置页进入后自动连接测试误显示“正在保存 MCP 设置”的交互问题；保存与测试事务状态已拆分，自动测试只展示测试中，保存按钮仅在真实保存时显示保存中。
 - 验证类别：Codex 自检（MCP 设置 UI 状态 + 回归测试）。
 - 验证命令：

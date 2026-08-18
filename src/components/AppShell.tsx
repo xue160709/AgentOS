@@ -45,10 +45,12 @@ import {
   type ProviderPreset,
 } from '../model-provider-presets'
 import { providerHasCredential, resolveEffectiveModelPick, sameModelPick, validateModelPick } from '../model-pick'
+import { agentCommandChannel } from '../agent-command-channel'
 import type {
   AppViewId,
   ChatState,
   ChatWorkspaceState,
+  CreateWorkspaceThreadOptions,
   TranscriptItem,
   ProjectSkillRunRequest,
   ProjectSkillListState,
@@ -613,33 +615,57 @@ export function AppShell() {
   )
 
   const createThreadInProject = useCallback(
-    (projectId?: string) => {
-      setSelectedProjectSkill(null)
+    (projectId?: string, options: CreateWorkspaceThreadOptions = {}) => {
+      const activate = options.activate !== false
+      if (activate) setSelectedProjectSkill(null)
       const threadId = createId('thread')
       const draftProjectId = projectId ?? activeProject?.id
-      const shouldClearHomeDraft = Boolean(draftProjectId && projectHomeDraftModelPicks[draftProjectId])
+      const shouldClearHomeDraft = activate && Boolean(draftProjectId && projectHomeDraftModelPicks[draftProjectId])
       updateChatWorkspace((prev) => {
         const targetProjectId = projectId ?? prev.activeProjectId
         const defaultModelPick = targetProjectId === activeProject?.id
-          ? projectHomeDraftModelPicks[targetProjectId] ?? projectDefaultModelPick
+          ? (activate ? projectHomeDraftModelPicks[targetProjectId] : undefined) ?? projectDefaultModelPick
           : projectHomeDraftModelPicks[targetProjectId]
         return workspaceSession.addThread(prev, {
           id: threadId,
           projectId: targetProjectId,
-          title: t('thread.newThreadTitle'),
+          title: options.title?.trim() || t('thread.newThreadTitle'),
           chatState: createEmptyChatState(defaultModelPick),
+          activate,
         })
       })
       if (shouldClearHomeDraft && draftProjectId) {
         setProjectHomeDraftModelPick(draftProjectId, undefined)
       }
       void window.claudeChat?.newThread(threadId)
-      goHome()
-      requestAnimationFrame(() => void chatRef.current?.focusComposer())
+      if (activate) {
+        goHome()
+        requestAnimationFrame(() => void chatRef.current?.focusComposer())
+      }
       return threadId
     },
     [activeProject?.id, goHome, projectDefaultModelPick, projectHomeDraftModelPicks, setProjectHomeDraftModelPick, updateChatWorkspace, t, workspaceSession],
   )
+
+  useEffect(() => {
+    if (!activeProject?.id) return
+    return agentCommandChannel.configure({
+      projectId: activeProject.id,
+      defaultNavigation: 'stay',
+      runtime: {
+        createThread: ({ projectId, threadTitle }) =>
+          createThreadInProject(projectId, { activate: false, title: threadTitle }),
+        submitPrompt: async ({ projectId, threadId, prompt }) => {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          return Boolean(await chatRef.current?.submitPromptInThread(projectId, threadId, prompt, {
+            activate: false,
+            preserveComposerDraft: true,
+          }))
+        },
+        openThread: (threadId) => selectThread(threadId),
+      },
+    })
+  }, [activeProject?.id, createThreadInProject, selectThread])
 
   const forkThreadInProject = useCallback(
     (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => {

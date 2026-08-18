@@ -1,0 +1,5 @@
+# Change Index
+
+| Change ID | 标题 | 状态 | 路径 |
+|---|---|---|---|
+| `chg-20260818-agent-command-channel` | 新增全局 Agent 指令通道 | active | `active/chg-20260818-agent-command-channel/` |
