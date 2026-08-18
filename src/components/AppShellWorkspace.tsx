@@ -14,6 +14,7 @@ import type {
   AppSearchScope,
   AppViewId,
   ChatState,
+  CreateWorkspaceThreadOptions,
   FileTreeNode,
   ProjectSkillRunRequest,
   SettingsCategoryId,
@@ -102,7 +103,7 @@ type AppShellWorkspaceProps = {
   threadRunStates: Record<string, ThreadRunState>
   chatRef: RefObject<ChatPageHandle | null>
   onStatusChange: (text: string) => void
-  onNewThread: (projectId?: string) => string | void
+  onNewThread: (projectId?: string, options?: CreateWorkspaceThreadOptions) => string | void
   onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void

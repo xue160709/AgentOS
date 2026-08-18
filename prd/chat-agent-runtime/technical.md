@@ -5,6 +5,7 @@
 | 路径 | 作用 |
 | --- | --- |
 | `src/claude-chat-types.ts` | 聊天提交、附件、权限、事件、模型和搜索相关共享类型。 |
+| `src/agent-command-channel.ts` | 无 UI 的全局 Agent 指令通道；配置阶段绑定项目，发送时创建独立线程并返回 `threadId`。 |
 | `src/components/chat/ChatPage.tsx` | Composer、模型/权限选择、Agent IPC 事件和线程状态同步。 |
 | `src/components/chat/chat-run.ts` | Chat Run 事件折叠、竞态处理和 transcript 更新。 |
 | `src/components/chat/Composer.tsx` | 输入框、命令、提及、附件和提交交互。 |
@@ -29,6 +30,23 @@
 - `AgentWebSearchSettings`：全局搜索模式、Provider、Brave/Tavily API Key 池或 `${ENV_NAME}` 引用；旧单 Key 字段会兼容迁移为单元素池。
 - `AgentWebSearchProviderTestResult`：Provider 测试结果、凭据状态、错误分类和恢复提示。
 - `WebSearchRequest` / `WebSearchResponse`：内部 `agentos-web` MCP 工具的请求和 JSON 输出结构。
+- `AgentCommandResult`：一次通道发送的 `commandId`、固定 `projectId` 与新建 `threadId`。
+- `AgentCommandEvent`：通道线程复用的 `creating`、`running`、`waiting`、`asking`、`succeeded`、`failed`、`cancelled` 状态。
+
+## 全局 Agent 指令通道
+
+`AppShell` 负责把 `agentCommandChannel` 配置到当前目标项目，并注入创建线程、提交 Chat Run 和打开线程的运行时能力。业务模块只传完整指令，不传项目 ID：
+
+```ts
+import { sendAgentCommand } from '../agent-command-channel'
+
+const { threadId } = await sendAgentCommand(fullPrompt, {
+  navigation: 'stay', // 改为 open 可立即打开新线程
+  threadTitle: '选题写作',
+})
+```
+
+需要观察长任务时，可通过 `agentCommandChannel.subscribeThread(threadId, listener)` 订阅状态，或用 `getThreadStatus(threadId)` 读取最新状态。`stay` 不会切换当前路由、活动线程或清空 Composer 草稿；新线程仍出现在普通线程列表中，用户可随时打开查看。
 
 ## 调用链路
 
@@ -44,6 +62,14 @@ Composer submit
   -> ChatRun.handleEvent 更新线程 chatState
 ```
 
+```text
+sendAgentCommand(fullPrompt)
+  -> Workspace Session 创建非激活普通线程
+  -> ChatPage.submitPromptInThread
+  -> 既有 Claude Agent SDK Chat Run
+  -> 通道按 threadId 转发运行态与终态
+```
+
 ## 日志与调试
 
 - `ClaudeAgentSettingsStore` 和 `ClaudeAgentRunner` 只记录配置摘要、模型名、endpoint host、工具/状态摘要，不记录密钥和用户隐私原文。
@@ -54,6 +80,7 @@ Composer submit
 ## 测试与验收
 
 - 自动测试：`electron/chat-run.test.mjs`、`electron/claude-sdk-message-router.test.mjs`、`electron/claude-agent-runner-executable.test.mjs`、`electron/claude-agent-runner-mcp.test.mjs`、`electron/claude-agent-runner-web-search.test.mjs`。
+- 指令通道测试：`electron/agent-command-channel.test.mjs`、`electron/workspace-session.test.mjs`。
 - 关键覆盖：流式文本、result-only、cancel、orphan event、thinking/tool/activity/task/prompt、context compaction、file diff、并发提交阻止。
 - WebSearch 覆盖：native 模式不注册 `agentos-web`；AgentOS 模式注册内部 MCP、alias `WebSearch`、禁用内置 `WebSearch`；Tavily POST 请求、DuckDuckGo 结果归一化、provider 状态、域名过滤、HTTP 错误分类、Brave/Tavily API Key 池顺序轮询、Provider Test 的 env-resolved/env-missing 分支。
 - 交互流程复查：`ChatRun` 维护 request/thread ownership 与 terminal cleanup；`ClaudeAgentRunner` 在取消、拒绝权限和异常退出时清理 pending request；`ChatPage` 的语音输入使用 generation guard、draft range 和 submit 前 finalize，降低 late event 污染当前输入的风险。

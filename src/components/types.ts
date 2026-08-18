@@ -217,6 +217,12 @@ export type WorkspaceThread = {
   chatState: ChatState
 }
 
+/** 新建线程时的瞬时行为；不进入持久化线程数据。 / Ephemeral behavior for creating a thread. */
+export type CreateWorkspaceThreadOptions = {
+  activate?: boolean
+  title?: string
+}
+
 /** 追踪单次 Agent 请求的运行状态 / Tracks one in-flight agent request */
 export type ThreadRunState = {
   requestId: string

@@ -163,6 +163,34 @@
 
 > 实现状态：✅ 已通过（project-verify 2026-06-24）｜验证方式: unit/integration: node --test electron/claude-agent-runner-web-search.test.mjs + npm run test:electron｜证据: test-results/verification-summary.md｜
 
+### 需求：开发者通过全局通道启动独立 Agent 线程
+
+系统 SHALL 提供无 UI 的全局 Agent 指令通道。开发者在配置阶段绑定一个项目；调用方只传完整指令和可选导航策略。每次调用 MUST 创建新的普通线程、立即提交指令，并返回该线程 ID。
+
+#### 场景：留在当前页面启动新线程
+
+- GIVEN 通道已绑定项目，当前页面或当前聊天中存在未提交草稿
+- WHEN 任意应用模块发送非空完整指令并选择 `stay`
+- THEN 系统在绑定项目中创建新的可见线程并立即启动 Chat Run，返回新 `threadId`，且当前路由、活动线程和 Composer 草稿保持不变
+
+#### 场景：创建后打开新线程
+
+- GIVEN 通道已绑定项目
+- WHEN 任意应用模块发送非空完整指令并选择 `open`
+- THEN 系统创建并提交新线程后选择该线程，用户可立即查看指令和运行过程
+
+#### 场景：通道发布线程运行终态
+
+- GIVEN 指令通道已经创建并提交一个线程
+- WHEN Chat Run 进入运行、等待权限、等待回答、成功、失败或取消状态
+- THEN 通道只向该线程对应的订阅者发布 `running`、`waiting`、`asking`、`succeeded`、`failed` 或 `cancelled`，且终态不被迟到的非终态事件覆盖
+
+#### 场景：空指令或提交失败
+
+- GIVEN 通道已配置
+- WHEN 调用方发送空白指令，或新线程无法提交到 Chat Run
+- THEN 空白指令不创建线程；提交失败保留已经创建的可见线程用于排查，并向调用方抛出可读错误及发布 `failed` 状态
+
 ## 平台专项验证（Electron + React）
 
 - 验证主进程事件只能影响归属线程。

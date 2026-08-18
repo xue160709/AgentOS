@@ -53,6 +53,7 @@ import type {
   ChatTaskItem,
   ChatTaskState,
   ChatState,
+  CreateWorkspaceThreadOptions,
   FileTreeNode,
   AgentSettingsPanelId,
   ProjectSkillRunRequest,
@@ -71,6 +72,7 @@ import { Composer } from './Composer'
 import { formatBytes } from './format'
 import type { BuiltInSlashCommand, ChatModelMenuRow, ComposerSuggestion, ComposerTrigger, PermissionModeRow } from './local-types'
 import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
+import { agentCommandChannel } from '../../agent-command-channel'
 
 const PROCESS_TRACE_TOGGLE_EVENT = 'chat-process-trace:toggle'
 const MAX_COMPOSER_SUGGESTIONS = 64
@@ -222,6 +224,8 @@ export type ChatPageHandle = {
 export type SubmitPromptOptions = {
   promptMode?: ClaudeChatSubmitPayload['promptMode']
   modelPick?: ChatModelPick
+  activate?: boolean
+  preserveComposerDraft?: boolean
 }
 
 type ChatPageProps = {
@@ -237,7 +241,7 @@ type ChatPageProps = {
   projectOrderIds: readonly string[]
   threadRunStates: Record<string, ThreadRunState>
   onStatusChange: (text: string) => void
-  onNewThread: (projectId?: string) => string | void
+  onNewThread: (projectId?: string, options?: CreateWorkspaceThreadOptions) => string | void
   onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
@@ -1316,6 +1320,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       }
       if (transition.runState !== undefined) {
         onThreadRunStateChange(transition.threadId, transition.runState)
+        if (transition.runState) {
+          agentCommandChannel.reportThreadStatus(transition.threadId, transition.runState.status)
+        }
       }
       if (transition.prompt) {
         setPendingUserInputPrompts((prev) =>
@@ -1346,6 +1353,15 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         scrollIntentRef.current = 'force-bottom'
       }
       if (!transition.terminal) return
+      agentCommandChannel.reportThreadStatus(
+        transition.threadId,
+        transition.terminal.kind === 'result'
+          ? 'succeeded'
+          : transition.terminal.kind === 'error'
+            ? 'failed'
+            : 'cancelled',
+        transition.terminal.kind === 'error' ? transition.terminal.code : undefined,
+      )
       if (!transition.threadId || activeThreadIdRef.current === transition.threadId) {
         if (transition.terminal.kind === 'result') {
           onStatusChange(compactModelName(globalDisplayModelRef.current, t))
@@ -1392,14 +1408,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     rawText: string,
     target?: SubmitPromptTarget,
     attachmentsForSubmit: ClaudeChatAttachment[] = [],
-  ) => {
+  ): Promise<boolean> => {
     const text = rawText.trim()
-    if (!text && attachmentsForSubmit.length === 0) return
+    if (!text && attachmentsForSubmit.length === 0) return false
     if (text.toLowerCase() === '/status' && attachmentsForSubmit.length === 0) {
       clearComposerDraft()
       window.dispatchEvent(new CustomEvent(OPEN_AGENT_STATUS_EVENT, { detail: { refresh: true } }))
       onStatusChange(t('chat.statusPanelOpened'))
-      return
+      return false
     }
     const isLocalCompactCommand = text.toLowerCase() === '/compact' && attachmentsForSubmit.length === 0
     const projectForSubmit =
@@ -1407,17 +1423,17 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
     if (projectForSubmit.pathMissing) {
       onStatusChange(t('shell.projectPathMissingSubmitBlocked'))
-      return
+      return false
     }
     if (attachmentsForSubmit.some((attachment) => attachment.kind === 'image') && !activeModelSupportsImages) {
       onStatusChange(t('chat.imageInputDisabledStatus'))
-      return
+      return false
     }
     let submittingThreadId = target?.threadId ?? activeThreadIdRef.current
     let createdThreadModelPick: ChatModelPick | undefined
     if (!submittingThreadId) {
       const createdThreadId = onNewThread(projectForSubmit.id)
-      if (!createdThreadId) return
+      if (!createdThreadId) return false
       submittingThreadId = createdThreadId
       createdThreadModelPick = newThreadModelPick
       activeThreadIdRef.current = createdThreadId
@@ -1465,7 +1481,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
             })
         : undefined,
     })
-    if (!submitAttempt) return
+    if (!submitAttempt) return false
 
     if (activeThreadIdRef.current === submittingThreadId) scrollIntentRef.current = 'force-bottom'
     if (!target?.suppressUserMessage && !isLocalCompactCommand) onThreadPromptSubmit(submittingThreadId, text)
@@ -1481,11 +1497,13 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     applyChatRunTransition(submitResult.transition)
     if (submitResult.status === 'bridge_unavailable') {
       onStatusChange(t('chat.bridgeUnavailableStatus'))
-      return
+      return false
     }
     if (submitResult.status === 'failed') {
       onStatusChange(t('chat.sendFailedStatus'))
+      return false
     }
+    return true
   }
 
   // --- Generative UI can dispatch follow-up user text / 生成式 UI 可派发后续用户文案 ---
@@ -1647,9 +1665,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         if (modelPick) {
           setThreadChatState(threadId, (prev) => ({ ...prev, model: modelPick.anthropicModel, modelPick }))
         }
-        await submitPrompt(prompt, { threadId, project: projectForSubmit, modelPick })
+        const submitted = await submitPrompt(prompt, { threadId, project: projectForSubmit, modelPick })
         requestAnimationFrame(() => chatInputRef.current?.focus())
-        return true
+        return submitted
       },
       submitPromptInThread: async (
         projectId: string,
@@ -1662,9 +1680,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
         const resolvedOptions: SubmitPromptOptions =
           typeof options === 'string' ? { promptMode: options } : options ?? {}
-        activeThreadIdRef.current = threadId
-        isFirstTranscriptLayoutRef.current = true
-        scrollIntentRef.current = 'force-bottom'
+        const { activate = true, preserveComposerDraft = !activate, ...submitOptions } = resolvedOptions
+        if (activate) {
+          activeThreadIdRef.current = threadId
+          isFirstTranscriptLayoutRef.current = true
+          scrollIntentRef.current = 'force-bottom'
+        }
         if (resolvedOptions.modelPick) {
           setThreadChatState(threadId, (prev) => ({
             ...prev,
@@ -1673,9 +1694,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
             sessionId: sameModelPick(prev.modelPick, resolvedOptions.modelPick) ? prev.sessionId : undefined,
           }))
         }
-        await submitPrompt(prompt, { threadId, project: projectForSubmit, ...resolvedOptions })
-        requestAnimationFrame(() => chatInputRef.current?.focus())
-        return true
+        const submitted = await submitPrompt(prompt, {
+          threadId,
+          project: projectForSubmit,
+          ...submitOptions,
+          preserveComposerDraft,
+        })
+        if (activate) requestAnimationFrame(() => chatInputRef.current?.focus())
+        return submitted
       },
     }),
     [

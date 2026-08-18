@@ -39,6 +39,7 @@ export type AddWorkspaceThreadInput = {
   skillCommand?: string
   skillTitle?: string
   createdAt?: number
+  activate?: boolean
 }
 
 export type AddWorkspaceProjectInput = {
@@ -250,8 +251,8 @@ export class WorkspaceSession {
     }
     return {
       ...state,
-      activeProjectId: input.projectId,
-      activeThreadId: input.id,
+      activeProjectId: input.activate === false ? state.activeProjectId : input.projectId,
+      activeThreadId: input.activate === false ? state.activeThreadId : input.id,
       projects: touchProject(state.projects, input.projectId, timestamp),
       threads: [thread, ...state.threads],
     }
