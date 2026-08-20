@@ -246,12 +246,11 @@ function createWindow() {
   void taskHomePluginManager.refreshFromWorkspace()
 
   win.on('close', (event) => {
+    // 关闭按钮只隐藏到菜单栏；Cmd+Q / 托盘右键退出才会真正退出 /
+    // Close hides to the menu bar; only Cmd+Q or tray Quit exits.
     if (isQuitting) return
-    const prefs = desktopPreferencesStore?.read() ?? { closeToTray: false, openAtLogin: false, locale: 'zh' }
-    if (prefs.closeToTray) {
-      event.preventDefault()
-      win?.hide()
-    }
+    event.preventDefault()
+    win?.hide()
   })
 
   if (!isMac) {
@@ -517,13 +516,7 @@ if (gotSingleInstanceLock) {
   })
 
   app.on('window-all-closed', () => {
-    if (isQuitting) {
-      app.quit()
-      win = null
-      return
-    }
-    const prefs = desktopPreferencesStore?.read() ?? { closeToTray: false, openAtLogin: false, locale: 'zh' }
-    if (prefs.closeToTray) return
+    if (!isQuitting) return
     app.quit()
     win = null
   })

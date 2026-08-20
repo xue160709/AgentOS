@@ -18,7 +18,6 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
   const [pickerLocale, setPickerLocale] = useState<AppLocale>(() => getInitialLocale())
   const [languageRestartDialogOpen, setLanguageRestartDialogOpen] = useState(false)
   const languageRestartDialogRef = useRef<HTMLDialogElement>(null)
-  const [closeToTray, setCloseToTray] = useState(false)
   const [openAtLogin, setOpenAtLogin] = useState(false)
   const [eyeComfortMode, setEyeComfortMode] = useState(false)
   const [desktopPrefsHydrated, setDesktopPrefsHydrated] = useState(false)
@@ -30,7 +29,6 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
     let cancelled = false
     void window.desktop?.getDesktopPreferences?.().then((prefs) => {
       if (cancelled) return
-      setCloseToTray(prefs.closeToTray)
       setOpenAtLogin(prefs.openAtLogin)
       setEyeComfortMode(prefs.eyeComfortMode)
       applyEyeComfortMode(prefs.eyeComfortMode)
@@ -53,11 +51,6 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
       return
     }
     window.close()
-  }, [])
-
-  const onCloseToTrayChange = useCallback((next: boolean) => {
-    setCloseToTray(next)
-    void window.desktop?.setDesktopPreferences?.({ closeToTray: next })
   }, [])
 
   const onOpenAtLoginChange = useCallback((next: boolean) => {
@@ -172,24 +165,6 @@ export function ProjectSkillsSettingsPage({ enabled, onEnabledChange }: ProjectS
               {t('settings.general.desktopHeading')}
             </h2>
             <div className="settings-group">
-              <label className="settings-switch-row">
-                <span className="settings-field-row__meta">
-                  <span className="settings-field-row__label">{t('settings.general.closeToTray')}</span>
-                  <span className="settings-field-row__hint">{t('settings.general.closeToTrayHint')}</span>
-                </span>
-                <span className="settings-switch-control">
-                  <input
-                    type="checkbox"
-                    className="settings-switch-input"
-                    checked={closeToTray}
-                    disabled={!desktopPrefsHydrated}
-                    onChange={(event) => onCloseToTrayChange(event.target.checked)}
-                  />
-                  <span className="settings-switch-track" aria-hidden="true">
-                    <span className="settings-switch-thumb" />
-                  </span>
-                </span>
-              </label>
               <label className="settings-switch-row">
                 <span className="settings-field-row__meta">
                   <span className="settings-field-row__label">{t('settings.general.openAtLogin')}</span>
