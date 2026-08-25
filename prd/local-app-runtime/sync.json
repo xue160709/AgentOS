@@ -1,0 +1,9 @@
+{
+  "module": "local-app-runtime",
+  "workflow": "accepted-change-plan",
+  "sourceChange": "chg-20260825-local-app-tabs-runtime",
+  "sourceRevision": 1,
+  "lastPrdSyncCommit": null,
+  "lastPrdSyncAt": "2026-08-25",
+  "notes": "仅同步已确认 Planned 方案；尚无 Local App Runtime 代码事实或正式验收证据。"
+}

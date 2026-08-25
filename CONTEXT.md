@@ -79,3 +79,15 @@ Desktop Seam 负责：
 - 阻止 renderer 任意发送或调用未声明的 IPC channel
 
 原始 `ipcRenderer` 不属于 Desktop Seam。
+
+## Local App
+
+用户明确绑定到 AgentOS 的一个本地 Web 项目。它由本地文件夹、自动启动配置和持久化 Tab 入口共同标识；CodeNow Wiki 是首个接入实例。
+
+_Avoid_: Home Plugin、A2UI 卡片、普通网页书签
+
+## Local App Runtime
+
+AgentOS 为 Local App 自动准备依赖、启动开发服务、探测就绪状态、承载预览并管理停止与恢复的项目级运行时。Tab 和项目首页是它的调用方，不各自拥有独立运行时。
+
+_Avoid_: 浏览器 Tab 本身、仅设置 `cwd` 的普通宿主子进程、Home Plugin Runtime
