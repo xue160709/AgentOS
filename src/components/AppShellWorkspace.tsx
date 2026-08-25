@@ -21,6 +21,9 @@ import type {
   ThreadRunState,
   WorkspaceProject,
   WorkspaceThread,
+  RuntimeDefinition,
+  RuntimeSnapshot,
+  WorkspaceTab,
 } from './types'
 import { AgentModeMenu } from './AgentModeMenu'
 import { AppAgentStatusPopover } from './AppAgentStatusPopover'
@@ -34,6 +37,7 @@ import { SettingsPage } from './setting/SettingsPage'
 import { useWorkspaceAgentMode } from './useWorkspaceAgentMode'
 import type { AgentModeSettingsResult, HomePluginRunItem } from '../desktop-types'
 import { projectContent } from '../project-content'
+import { RuntimeWorkspace } from './RuntimeWorkspace'
 
 /** 右侧辅助抽屉开关与当前标签 / Auxiliary side panel open flag and active tab */
 type SidePanelState = {
@@ -95,6 +99,14 @@ type AppShellWorkspaceProps = {
   settingsCategory: SettingsCategoryId
   activeProject: WorkspaceProject
   activeThread: WorkspaceThread | undefined
+  activeWorkspaceTab?: WorkspaceTab
+  activeRuntimeDefinition?: RuntimeDefinition
+  activeRuntime?: RuntimeSnapshot | null
+  onRetryRuntime?: () => void
+  onRestartRuntime?: () => void
+  onStopRuntime?: () => void
+  onReloadRuntime?: () => void
+  onRelocateRuntime?: () => void
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
   threads: WorkspaceThread[]
@@ -132,6 +144,14 @@ export function AppShellWorkspace({
   settingsCategory,
   activeProject,
   activeThread,
+  activeWorkspaceTab,
+  activeRuntimeDefinition,
+  activeRuntime,
+  onRetryRuntime,
+  onRestartRuntime,
+  onStopRuntime,
+  onReloadRuntime,
+  onRelocateRuntime,
   projectDefaultModelPick,
   projectHomeModelPick,
   threads,
@@ -173,6 +193,7 @@ export function AppShellWorkspace({
   const [agentStatusOpen, setAgentStatusOpen] = useState(false)
   const [agentStatusLoading, setAgentStatusLoading] = useState(false)
   const [agentStatusSnapshot, setAgentStatusSnapshot] = useState<ClaudeAgentStatusSnapshot | null>(null)
+  const [localAppLogsOpen, setLocalAppLogsOpen] = useState(false)
   const filePaneRef = useRef<AppFileTreePaneHandle>(null)
   const filePreviewRequestRef = useRef(0)
   const agentStatusRequestSeqRef = useRef(0)
@@ -200,6 +221,11 @@ export function AppShellWorkspace({
     activeThread?.purpose === 'skill-run'
   const showAgentModeToolbar = activeViewId === 'home' && !showConversationFlow
   const showAgentStatusToolbar = activeViewId !== 'home' || showConversationFlow
+  const isRuntimeActive = Boolean(activeWorkspaceTab && activeRuntimeDefinition && activeViewId === 'home')
+
+  useEffect(() => {
+    setLocalAppLogsOpen(false)
+  }, [activeWorkspaceTab?.id, activeRuntime?.generation])
 
   // --- Close auxiliary drawer when navigating into settings / 进入设置路由时收起辅助抽屉 ---
 
@@ -482,13 +508,13 @@ export function AppShellWorkspace({
         <div className="app-workspace-top-drag draggable" aria-hidden />
       ) : (
         <header className="app-workspace-header" role="banner">
-          <span className="app-workspace-title no-drag" id="workspace-title" title={workspaceTitle}>
+          <span className={`app-workspace-title no-drag${isRuntimeActive ? ' local-app-runtime-title' : ''}`} id="workspace-title" title={workspaceTitle}>
             {workspaceTitle}
           </span>
           <div className="app-workspace-drag-gap draggable" aria-hidden="true" />
-          <div className="app-workspace-actions no-drag">
-            {showAgentModeToolbar ? <AgentModeMenu agent={agentMode} onOpenSettings={() => openAgentSettings('project')} /> : null}
-            {showAgentStatusToolbar ? (
+          <div className={`app-workspace-actions no-drag${isRuntimeActive ? ' local-app-runtime-actions' : ''}`}>
+            {!isRuntimeActive && showAgentModeToolbar ? <AgentModeMenu agent={agentMode} onOpenSettings={() => openAgentSettings('project')} /> : null}
+            {!isRuntimeActive && showAgentStatusToolbar ? (
               <AppAgentStatusPopover
                 open={agentStatusOpen}
                 loading={agentStatusLoading}
@@ -502,7 +528,65 @@ export function AppShellWorkspace({
                 }}
               />
             ) : null}
-            <button
+            {isRuntimeActive ? <>
+              <span
+                className="local-app-runtime-compact-status"
+                data-testid="runtime-status"
+                role="status"
+                title={runtimeWorkspaceStatusLabel(t, activeRuntime?.status ?? 'stopped')}
+              >
+                {runtimeWorkspaceStatusLabel(t, activeRuntime?.status ?? 'stopped')}
+              </span>
+              <button
+                type="button"
+                className="btn btn-toolbar local-app-runtime-action"
+                data-testid="runtime-refresh"
+                onClick={onReloadRuntime}
+                disabled={!activeRuntime?.readyUrl}
+                aria-label={t('runtime.refresh')}
+                title={t('runtime.refresh')}
+              >
+                <IconInline name="refresh" />
+                <span className="local-app-runtime-action__label">{t('runtime.refresh')}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-toolbar local-app-runtime-action"
+                data-testid="runtime-logs"
+                onClick={() => setLocalAppLogsOpen((open) => !open)}
+                aria-label={t('runtime.logs')}
+                title={t('runtime.logs')}
+                aria-expanded={localAppLogsOpen}
+              >
+                <IconInline name="checklist" />
+                <span className="local-app-runtime-action__label">{t('runtime.logs')}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-toolbar local-app-runtime-action"
+                data-testid="runtime-restart"
+                onClick={onRestartRuntime}
+                disabled={!onRestartRuntime || !['running', 'degraded', 'failed', 'stopped'].includes(activeRuntime?.status ?? 'stopped')}
+                aria-label={t('runtime.restart')}
+                title={t('runtime.restart')}
+              >
+                <IconInline name="undo" />
+                <span className="local-app-runtime-action__label">{t('runtime.restart')}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost local-app-runtime-action"
+                data-testid="runtime-stop"
+                onClick={onStopRuntime}
+                disabled={!onStopRuntime || !['preparing', 'starting', 'running', 'degraded'].includes(activeRuntime?.status ?? 'stopped')}
+                aria-label={t('runtime.stop')}
+                title={t('runtime.stop')}
+              >
+                <IconInline name="stop" />
+                <span className="local-app-runtime-action__label">{t('runtime.stop')}</span>
+              </button>
+            </> : null}
+            {!isRuntimeActive ? <button
               type="button"
               className={`btn btn-toolbar${folderToolbarActive ? ' is-active' : ''}`}
               id="btn-toggle-file-panel"
@@ -513,14 +597,26 @@ export function AppShellWorkspace({
               onClick={() => toggleSidePanelTab('files')}
             >
               <IconInline name="folder" />
-            </button>
+            </button> : null}
           </div>
         </header>
       )}
       <div className="app-workspace-content">
         <main className="app-main" role="main">
           {/* 三视图互斥：`hidden` 保留挂载以维持 Chat 内存态 / Mutually exclusive routes; `hidden` keeps Chat mounted */}
-          <ChatPage
+          {isRuntimeActive && activeWorkspaceTab && activeRuntimeDefinition ? <RuntimeWorkspace
+            tab={activeWorkspaceTab}
+            definition={activeRuntimeDefinition}
+            runtime={activeRuntime ?? null}
+            onRetry={onRetryRuntime ?? (() => undefined)}
+            onRestart={onRestartRuntime ?? (() => undefined)}
+            onStop={onStopRuntime ?? (() => undefined)}
+            onReload={onReloadRuntime ?? (() => undefined)}
+            onRelocate={onRelocateRuntime ?? (() => undefined)}
+            logsOpen={localAppLogsOpen}
+            onLogsToggle={() => setLocalAppLogsOpen((open) => !open)}
+            showToolbar={false}
+          /> : <ChatPage
             ref={chatRef}
             hidden={activeViewId !== 'home'}
             activeProject={activeProject}
@@ -559,16 +655,16 @@ export function AppShellWorkspace({
             onOpenProjectFile={openProjectFilePreview}
             onRunProjectSkill={onRunProjectSkill}
             onStopProjectSkillRun={onStopProjectSkillRun}
-          />
-          <DocsPage hidden={activeViewId !== 'docs'} />
-          <SettingsPage
+          />}
+          {!isRuntimeActive ? <DocsPage hidden={activeViewId !== 'docs'} /> : null}
+          {!isRuntimeActive ? <SettingsPage
             hidden={activeViewId !== 'settings'}
             settingsCategory={settingsCategory}
             activeProject={activeProject}
             showProjectSkillsInSidebar={showProjectSkillsInSidebar}
             onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
             onOpenAgentSettings={openAgentSettings}
-          />
+          /> : null}
           {filePreview ? (
             <ProjectFilePreviewOverlay preview={filePreview} onClose={() => setFilePreview(null)} />
           ) : null}
@@ -609,4 +705,19 @@ export function AppShellWorkspace({
       ) : null}
     </div>
   )
+}
+
+function runtimeWorkspaceStatusLabel(
+  t: (path: string) => string,
+  status: RuntimeSnapshot['status'],
+): string {
+  return t(({
+    preparing: 'runtime.runtimePreparing',
+    starting: 'runtime.runtimeStarting',
+    running: 'runtime.runtimeRunning',
+    degraded: 'runtime.runtimeDegraded',
+    failed: 'runtime.runtimeFailed',
+    path_missing: 'runtime.runtimePathMissing',
+    stopped: 'runtime.runtimeStopped',
+  } as const)[status])
 }

@@ -2,6 +2,8 @@ import type { ChatModelPick } from '../claude-chat-types'
 import type {
   ChatState,
   ChatWorkspaceState,
+  RuntimeDefinition,
+  WorkspaceTab,
   TranscriptItem,
   WorkspaceProject,
   WorkspaceThread,
@@ -17,6 +19,7 @@ export type WorkspaceSessionOptions = {
   load: () => Promise<ChatWorkspaceState>
   save: (state: ChatWorkspaceState) => Promise<void>
   saveImmediately?: (state: ChatWorkspaceState) => void | Promise<void>
+  onSaveError?: (error: unknown, state: ChatWorkspaceState) => void
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => unknown
   cancelScheduled?: (handle: unknown) => void
@@ -26,6 +29,12 @@ export type WorkspaceSessionOptions = {
 export type WorkspaceSessionActive = {
   project?: WorkspaceProject
   thread?: WorkspaceThread
+  runtimeDefinition?: RuntimeDefinition
+  workspaceTab?: WorkspaceTab
+  /** @deprecated Use runtimeDefinition/workspaceTab. */
+  localAppDefinition?: RuntimeDefinition
+  /** @deprecated Use workspaceTab. */
+  localAppTab?: WorkspaceTab
 }
 
 export type AddWorkspaceThreadInput = {
@@ -47,6 +56,12 @@ export type AddWorkspaceProjectInput = {
   name: string
   path: string
   createdAt?: number
+}
+
+export type AddRuntimeInput = {
+  definition: RuntimeDefinition
+  tab?: WorkspaceTab
+  activate?: boolean
 }
 
 export type EnsureTaskRunThreadInput = {
@@ -91,17 +106,19 @@ export function restoreWorkspaceSessionState(state: ChatWorkspaceState): ChatWor
           !thread.archivedAt,
       ) ?? latestVisibleThread(state, project.id)
 
-  return {
+  const activeThreadId = requestedProjectHome ? '' : activeThread?.id ?? ''
+  return withActiveWorkspaceTab({
     ...state,
     activeProjectId: project.id,
-    activeThreadId: requestedProjectHome ? '' : activeThread?.id ?? '',
-  }
+    activeThreadId,
+  }, activeThreadId ? '' : state.activeWorkspaceTabId)
 }
 
 export class WorkspaceSession {
   private readonly loadState: WorkspaceSessionOptions['load']
   private readonly saveState: WorkspaceSessionOptions['save']
   private readonly saveImmediateState: NonNullable<WorkspaceSessionOptions['saveImmediately']>
+  private readonly onSaveError?: WorkspaceSessionOptions['onSaveError']
   private readonly now: () => number
   private readonly schedule: NonNullable<WorkspaceSessionOptions['schedule']>
   private readonly cancelScheduled: NonNullable<WorkspaceSessionOptions['cancelScheduled']>
@@ -112,12 +129,12 @@ export class WorkspaceSession {
   private lastDurableFingerprint = ''
   private revisionFloor = 0
   private cleared = false
-  private disposed = false
 
   constructor(options: WorkspaceSessionOptions) {
     this.loadState = options.load
     this.saveState = options.save
     this.saveImmediateState = options.saveImmediately ?? (() => {})
+    this.onSaveError = options.onSaveError
     this.now = options.now ?? Date.now
     this.schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs))
     this.cancelScheduled = options.cancelScheduled ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>))
@@ -137,7 +154,15 @@ export class WorkspaceSession {
   active(state: ChatWorkspaceState): WorkspaceSessionActive {
     const restored = this.restore(state)
     const project = restored.projects.find((item) => item.id === restored.activeProjectId)
-    if (!project) return {}
+    const workspaceTab = restored.workspaceTabs?.find((item) => item.id === restored.activeWorkspaceTabId)
+    const runtimeDefinition = workspaceTab
+      ? restored.runtimeDefinitions?.find((item) => item.id === workspaceTab.runtimeDefinitionId)
+      : undefined
+    if (!project) {
+      return runtimeDefinition || workspaceTab
+        ? { runtimeDefinition, workspaceTab, localAppDefinition: runtimeDefinition, localAppTab: workspaceTab }
+        : {}
+    }
 
     const thread = restored.activeThreadId
       ? restored.threads.find(
@@ -147,21 +172,26 @@ export class WorkspaceSession {
             !thread.archivedAt,
         )
       : undefined
-    return { project, thread }
+    return runtimeDefinition || workspaceTab
+      ? { project, thread, runtimeDefinition, workspaceTab, localAppDefinition: runtimeDefinition, localAppTab: workspaceTab }
+      : { project, thread }
   }
 
   stage(state: ChatWorkspaceState): void {
-    if (this.disposed) return
     if (this.cleared && isEmptyWorkspace(state)) return
     const durableState = this.prepareDurableSave(state)
     if (!durableState) return
     this.cleared = false
     this.pendingSave = durableState
-    void this.saveImmediateState(durableState)
+    void Promise.resolve(this.saveImmediateState(durableState)).catch((error) => {
+      this.onSaveError?.(error, durableState)
+    })
     this.cancelSaveTimer()
     this.saveHandle = this.schedule(() => {
       this.saveHandle = undefined
-      void this.flush()
+      void this.flush().catch((error) => {
+        this.onSaveError?.(error, this.pendingSave ?? durableState)
+      })
     }, this.saveDebounceMs)
   }
 
@@ -172,7 +202,6 @@ export class WorkspaceSession {
   }
 
   flush(): Promise<void> {
-    if (this.disposed) return Promise.resolve()
     this.cancelSaveTimer()
     if (this.flushPromise) return this.flushPromise
     this.flushPromise = this.drainPendingSaves().finally(() => {
@@ -182,11 +211,12 @@ export class WorkspaceSession {
   }
 
   async close(): Promise<void> {
-    if (this.disposed) return
+    // AppShell's effect cleanup also runs during React StrictMode's probe
+    // mount.  A WorkspaceSession is retained by the shell and may be reused
+    // immediately afterwards, so cleanup is deliberately a repeatable flush,
+    // not disposal of the session's write queue.
     this.cancelSaveTimer()
     await this.flush()
-    this.disposed = true
-    this.pendingSave = null
   }
 
   updateThreadChatState(
@@ -216,20 +246,20 @@ export class WorkspaceSession {
   selectThread(state: ChatWorkspaceState, threadId: string): ChatWorkspaceState {
     const thread = state.threads.find((item) => item.id === threadId && !item.archivedAt)
     if (!thread) return state
-    return {
+    return withActiveWorkspaceTab({
       ...state,
       activeProjectId: thread.projectId,
       activeThreadId: thread.id,
-    }
+    }, '')
   }
 
   selectProject(state: ChatWorkspaceState, projectId: string): ChatWorkspaceState {
     if (!state.projects.some((project) => project.id === projectId)) return state
-    return {
+    return withActiveWorkspaceTab({
       ...state,
       activeProjectId: projectId,
       activeThreadId: '',
-    }
+    }, '')
   }
 
   addThread(state: ChatWorkspaceState, input: AddWorkspaceThreadInput): ChatWorkspaceState {
@@ -249,13 +279,13 @@ export class WorkspaceSession {
       updatedAt: timestamp,
       chatState: input.chatState,
     }
-    return {
+    return withActiveWorkspaceTab({
       ...state,
       activeProjectId: input.activate === false ? state.activeProjectId : input.projectId,
       activeThreadId: input.activate === false ? state.activeThreadId : input.id,
       projects: touchProject(state.projects, input.projectId, timestamp),
       threads: [thread, ...state.threads],
-    }
+    }, input.activate === false ? state.activeWorkspaceTabId : '')
   }
 
   forkThread(
@@ -314,7 +344,7 @@ export class WorkspaceSession {
       createdAt: timestamp,
       updatedAt: timestamp,
     }
-    return {
+    return withActiveWorkspaceTab({
       ...state,
       activeProjectId: input.id,
       activeThreadId: '',
@@ -323,7 +353,95 @@ export class WorkspaceSession {
         ...state.sidebarPrefs,
         projectOrderIds: [input.id, ...orderedProjectIds(state.projects, state.sidebarPrefs.projectOrderIds)],
       },
+    }, '')
+  }
+
+  /** Add a trusted definition and its first view atomically after user confirmation. */
+  addRuntime(state: ChatWorkspaceState, input: AddRuntimeInput): ChatWorkspaceState {
+    if (state.runtimeDefinitions.some((item) => item.id === input.definition.id)) return state
+    const timestamp = input.definition.createdAt || this.now()
+    const definition = {
+      ...input.definition,
+      createdAt: timestamp,
+      updatedAt: input.definition.updatedAt || timestamp,
+      packageManager: 'npm' as const,
+      devCommand: { executable: 'npm' as const, args: ['run', 'dev'] as ['run', 'dev'] },
     }
+    const tab = input.tab ?? {
+      id: `${definition.id}-tab`,
+      runtimeDefinitionId: definition.id,
+      title: definition.name,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    if (state.workspaceTabs.some((item) => item.id === tab.id)) return state
+    return withActiveWorkspaceTab({
+      ...state,
+      runtimeDefinitions: [definition, ...state.runtimeDefinitions],
+      workspaceTabs: [tab, ...state.workspaceTabs],
+    }, input.activate === false ? state.activeWorkspaceTabId : tab.id)
+  }
+
+  addWorkspaceTab(state: ChatWorkspaceState, tab: WorkspaceTab, activate = true): ChatWorkspaceState {
+    if (!state.runtimeDefinitions.some((item) => item.id === tab.runtimeDefinitionId)) return state
+    if (state.workspaceTabs.some((item) => item.id === tab.id)) return state
+    return withActiveWorkspaceTab({
+      ...state,
+      workspaceTabs: [tab, ...state.workspaceTabs],
+    }, activate ? tab.id : state.activeWorkspaceTabId)
+  }
+
+  selectWorkspaceTab(state: ChatWorkspaceState, tabId: string): ChatWorkspaceState {
+    if (!state.workspaceTabs.some((item) => item.id === tabId)) return state
+    return withActiveWorkspaceTab(state, tabId)
+  }
+
+  closeWorkspaceTab(state: ChatWorkspaceState, tabId: string): ChatWorkspaceState {
+    const index = state.workspaceTabs.findIndex((item) => item.id === tabId)
+    if (index < 0) return state
+    const tabs = state.workspaceTabs.filter((item) => item.id !== tabId)
+    if (state.activeWorkspaceTabId !== tabId) return { ...state, workspaceTabs: tabs }
+    const fallback = tabs[Math.min(index, tabs.length - 1)]
+    return withActiveWorkspaceTab({ ...state, workspaceTabs: tabs }, fallback?.id ?? '')
+  }
+
+  removeRuntime(state: ChatWorkspaceState, runtimeDefinitionId: string): ChatWorkspaceState {
+    if (!state.runtimeDefinitions.some((item) => item.id === runtimeDefinitionId)) return state
+    const removedTabIds = new Set(state.workspaceTabs.filter((item) => item.runtimeDefinitionId === runtimeDefinitionId).map((item) => item.id))
+    const tabs = state.workspaceTabs.filter((item) => item.runtimeDefinitionId !== runtimeDefinitionId)
+    const activeTabId = removedTabIds.has(state.activeWorkspaceTabId)
+      ? tabs[0]?.id ?? ''
+      : state.activeWorkspaceTabId
+    return withActiveWorkspaceTab({
+      ...state,
+      runtimeDefinitions: state.runtimeDefinitions.filter((item) => item.id !== runtimeDefinitionId),
+      workspaceTabs: tabs,
+    }, activeTabId)
+  }
+
+  renameWorkspaceTab(state: ChatWorkspaceState, tabId: string, title: string): ChatWorkspaceState {
+    const nextTitle = title.trim()
+    if (nextTitle.length < 1 || nextTitle.length > 64) return state
+    if (!state.workspaceTabs.some((item) => item.id === tabId)) return state
+    return {
+      ...state,
+      workspaceTabs: state.workspaceTabs.map((tab) => tab.id === tabId ? { ...tab, title: nextTitle, updatedAt: this.now() } : tab),
+    }
+  }
+
+  setProjectHomeViewMode(state: ChatWorkspaceState, projectId: string, mode: 'overview' | 'runtime'): ChatWorkspaceState {
+    if (!state.projects.some((project) => project.id === projectId)) return state
+    return { ...state, projectHomeViewModes: { ...state.projectHomeViewModes, [projectId]: mode } }
+  }
+
+  /** @deprecated Compatibility wrappers for the Revision 1 renderer. */
+  selectLocalAppTab(state: ChatWorkspaceState, tabId: string): ChatWorkspaceState {
+    return this.selectWorkspaceTab(state, tabId)
+  }
+
+  /** @deprecated Compatibility wrappers for the Revision 1 renderer. */
+  removeLocalApp(state: ChatWorkspaceState, runtimeDefinitionId: string): ChatWorkspaceState {
+    return this.removeRuntime(state, runtimeDefinitionId)
   }
 
   removeProject(state: ChatWorkspaceState, projectId: string): ChatWorkspaceState {
@@ -526,10 +644,19 @@ export class WorkspaceSession {
   }
 
   private async drainPendingSaves(): Promise<void> {
-    while (this.pendingSave && !this.disposed) {
+    while (this.pendingSave) {
       const pending = this.pendingSave
       this.pendingSave = null
-      await this.saveState(pending)
+      try {
+        await this.saveState(pending)
+      } catch (error) {
+        // Keep the exact failed snapshot available for an explicit retry. A
+        // failed save must not make flush() report success or silently lose
+        // the Local App definition/tab that was waiting to be persisted.
+        if (!this.pendingSave) this.pendingSave = pending
+        this.lastDurableFingerprint = ''
+        throw error
+      }
     }
   }
 
@@ -544,6 +671,10 @@ export class WorkspaceSession {
     this.lastDurableFingerprint = fingerprint
     return durableState
   }
+}
+
+function withActiveWorkspaceTab(state: ChatWorkspaceState, activeWorkspaceTabId: string): ChatWorkspaceState {
+  return { ...state, activeWorkspaceTabId, activeLocalAppTabId: activeWorkspaceTabId }
 }
 
 function latestVisibleThread(state: ChatWorkspaceState, projectId: string): WorkspaceThread | undefined {
@@ -588,5 +719,7 @@ function isEmptyWorkspace(state: ChatWorkspaceState): boolean {
     state.activeThreadId === '' &&
     state.projects.length === 0 &&
     state.threads.length === 0
+    && (state.runtimeDefinitions?.length ?? 0) === 0
+    && (state.workspaceTabs?.length ?? 0) === 0
   )
 }

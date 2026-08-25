@@ -4,12 +4,19 @@
 
 ## 1. 活跃变更
 
-### 1.1 Local App New Tab 与 CodeNow Wiki 自动运行
+### 1.1 Workspace Tab 与可复用 Runtime（Revision 2）
 
 - **Change**：[`chg-20260825-local-app-tabs-runtime`](changes/active/chg-20260825-local-app-tabs-runtime/proposal.md)
 - **PRD**：[`prd/local-app-runtime/README.md`](prd/local-app-runtime/README.md)
 - **验收契约**：[`prd/local-app-runtime/acceptance.md`](prd/local-app-runtime/acceptance.md)
-- **当前状态**：已完成规划同步；业务代码与正式验收尚未开始。
+- **当前状态**：Revision 2 已实现并通过独立 Development Check；正式 `project-verify` 尚未执行。Revision 1 正式 Acceptance 历史仍为 10/16 通过、6/16 待补证据、0 失败。
+
+#### Revision 2 当前开发
+
+- [x] `DEV-P0-04`｜将 Local App 用户概念迁移为 Workspace Tab/Runtime；实现自定义命名与重命名、右键/键盘菜单关闭、Tabs 位于新对话/搜索上方、schema v3 迁移、项目首页 `Overview / Runtime` 双系统、Runtime 多 host 与独立 PreviewSession。来源：`C-006`–`C-009`。
+- [x] `CHECK-P0-02`｜独立检查迁移安全、Main 权威写入、Tab 交互、首页两套系统隔离、consumer/release 和 late event；第三轮 Development Check 为 PASS，不修改正式 Acceptance 状态。
+
+> 下列开发项的实现已经落盘并通过自动化检查；根据本文件门禁，在 6 个真实 Electron 端到端证据补齐、Acceptance 全部通过前暂不勾选或归档。
 
 #### P0：用户可见闭环
 
@@ -30,11 +37,11 @@
 
 ## 2. 后续范围
 
-- [ ] `LATER-01`｜项目首页复用 Local App Runtime，形成左侧预览、右侧 Claude Agent SDK 的开发工作台。
+- [ ] `LATER-01`｜已被 Revision 2 的“项目首页独立 Runtime 页”取代；不再采用左预览/右 Claude 分栏，也不改卡片系统。
 - [ ] `LATER-02`｜Claude Agent SDK 通过通用 SandboxBroker 在项目运行时中读写、安装依赖和控制进程。
 - [ ] `LATER-03`｜确定并实现生产级跨平台 Sandbox Provider；完成项目外文件、网络、环境变量和子进程逃逸验证后再声明强隔离。
 
 ## 3. 验证与文档状态
 
-- [ ] 业务实现完成后进入 `project-verify`，由独立 `quality_verifier` 逐条验证 `prd/local-app-runtime/acceptance.md`。
+- [x] 业务实现完成后进入 `project-verify`，由独立 `quality_verifier` 逐条验证 `prd/local-app-runtime/acceptance.md`（2026-08-25 首轮：10/16 通过、6/16 待补证据、0 失败）。
 - [ ] 正式验收通过后，才能回写 Acceptance 与本 TODO 的完成状态，并将 Planned 同步为 as-built Current。

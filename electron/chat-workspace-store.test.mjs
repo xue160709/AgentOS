@@ -156,6 +156,81 @@ test('Chat Workspace Store uses workspace revision before savedAt when both snap
   })
 })
 
+test('Chat Workspace Store readback preserves neutral Workspace Tab create, open, close, and rename', { skip: !hasSqlite() }, async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    const definition = {
+      id: 'runtime-1',
+      name: 'Demo',
+      rootPath: '/demo',
+      canonicalRoot: '/demo',
+      packageManager: 'npm',
+      devCommand: { executable: 'npm', args: ['run', 'dev'] },
+      trustStatus: 'trusted',
+      autoStart: true,
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const first = {
+      ...createWorkspaceState(),
+      workspaceRevision: 10,
+      workspaceSchemaVersion: 3,
+      runtimeDefinitions: [definition],
+      workspaceTabs: [
+        { id: 'tab-a', runtimeDefinitionId: definition.id, title: 'A', createdAt: 1, updatedAt: 1 },
+        { id: 'tab-b', runtimeDefinitionId: definition.id, title: 'B', createdAt: 2, updatedAt: 2 },
+      ],
+      activeWorkspaceTabId: 'tab-a',
+      // Compatibility aliases must never override the neutral fields on a new write.
+      localAppDefinitions: [],
+      localAppTabs: [],
+      activeLocalAppTabId: '',
+    }
+    await store.save(first)
+
+    const created = store.read()
+    assert.ok(created)
+    assert.deepEqual(created.runtimeDefinitions.map((item) => item.id), [definition.id])
+    assert.deepEqual(created.workspaceTabs.map((tab) => tab.id), ['tab-a', 'tab-b'])
+    assert.equal(created.activeWorkspaceTabId, 'tab-a')
+
+    await store.save({
+      ...first,
+      workspaceRevision: 11,
+      activeWorkspaceTabId: 'tab-b',
+    })
+    const opened = store.read()
+    assert.ok(opened)
+    assert.equal(opened.activeWorkspaceTabId, 'tab-b')
+
+    await store.save({
+      ...first,
+      workspaceRevision: 12,
+      workspaceTabs: [first.workspaceTabs[1]],
+      activeWorkspaceTabId: 'tab-b',
+    })
+
+    const closed = store.read()
+    assert.ok(closed)
+    assert.deepEqual(closed.workspaceTabs.map((tab) => tab.id), ['tab-b'])
+    assert.equal(closed.activeWorkspaceTabId, 'tab-b')
+
+    await store.save({
+      ...first,
+      workspaceRevision: 13,
+      workspaceTabs: [{ ...first.workspaceTabs[1], title: 'Renamed' }],
+      activeWorkspaceTabId: 'tab-b',
+    })
+    const renamed = store.read()
+    assert.ok(renamed)
+    assert.equal(renamed.workspaceTabs[0].title, 'Renamed')
+    assert.equal(renamed.activeWorkspaceTabId, 'tab-b')
+    assert.equal(renamed.workspaceRevision, 13)
+  })
+})
+
 test('Chat Workspace Store does not resurrect stale SQLite rows after an empty workspace save', { skip: !hasSqlite() }, async () => {
   const { ChatWorkspaceStore } = loadChatWorkspaceStore()
 
@@ -196,5 +271,70 @@ test('Chat Workspace Store history search index remains substitutable for chat s
     const result = store.searchChatHistory('', 'survive restart', { limit: 8 })
     assert.equal(result.ok, true)
     assert.equal(result.items[0]?.threadId, 'thread-new')
+  })
+})
+
+test('Chat Workspace Store round-trips a local-app-only snapshot through JSON and SQLite metadata', { skip: !hasSqlite() }, async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    const state = {
+      workspaceRevision: 3,
+      activeProjectId: '',
+      activeThreadId: '',
+      projects: [],
+      threads: [],
+      sidebarPrefs: { collapsed: false, collapsedProjectIds: [], projectOrderIds: [] },
+      localAppDefinitions: [{
+        id: 'local-only', name: 'Fixture', rootPath: '/fixture', canonicalRoot: '/fixture',
+        packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] },
+        trustStatus: 'trusted', autoStart: true, createdAt: 10, updatedAt: 20,
+      }],
+      localAppTabs: [{ id: 'local-tab', localAppId: 'local-only', title: 'Fixture', createdAt: 10, updatedAt: 20 }],
+      activeLocalAppTabId: 'local-tab',
+      workspaceSchemaVersion: 2,
+      snapshotComplete: true,
+    }
+    await store.save(state)
+    const restored = store.read()
+    assert.ok(restored)
+    assert.equal(restored.projects.length, 0)
+    assert.equal(restored.localAppDefinitions[0].id, 'local-only')
+    assert.equal(restored.localAppTabs[0].id, 'local-tab')
+    assert.equal(restored.activeLocalAppTabId, 'local-tab')
+  })
+})
+
+test('Chat Workspace Store falls back to JSON when SQLite save fails', async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    store.saveDatabaseIndex = () => false
+    const saved = await store.save(createWorkspaceState())
+    assert.equal(store.read().activeThreadId, saved.activeThreadId)
+  })
+})
+
+test('Chat Workspace Store falls back to SQLite when JSON atomic replace fails', { skip: !hasSqlite() }, async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    store.saveJsonSnapshot = async () => false
+    const saved = await store.save(createWorkspaceState())
+    assert.equal(store.read().activeThreadId, saved.activeThreadId)
+  })
+})
+
+test('Chat Workspace Store rejects only when both snapshot media fail', async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    store.saveDatabaseIndex = () => false
+    store.saveJsonSnapshot = async () => false
+    await assert.rejects(() => store.save(createWorkspaceState()), /workspace-save-failed/)
   })
 })

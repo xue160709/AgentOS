@@ -5,7 +5,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   normalizeChatWorkspaceState,
@@ -68,8 +68,18 @@ type ThreadRow = {
 type WorkspaceMetaRow = {
   activeProjectId: string
   activeThreadId: string
+  activeWorkspaceTabId: string | null
+  activeLocalAppTabId: string | null
   sidebarPrefsJson: string
+  runtimeDefinitionsJson: string | null
+  workspaceTabsJson: string | null
+  projectHomeViewModesJson: string | null
+  localAppDefinitionsJson: string | null
+  localAppTabsJson: string | null
   workspaceRevision: number | null
+  workspaceSchemaVersion: number | null
+  snapshotComplete: number | null
+  savedAt: number | null
 }
 
 type SearchDocument = {
@@ -131,7 +141,10 @@ export class ChatWorkspaceStore {
     const fromDb = this.readFromDatabase()
     const fromJson = this.readJsonSnapshot()
     const selected = resolveChatWorkspaceSnapshot([
-      fromDb ? { state: fromDb, savedAt: this.fileModifiedAt(this.dbPath), source: 'sqlite-index' } : null,
+      // SQLite carries the same logical savedAt as the JSON mirror. File mtime
+      // is deliberately not used for snapshot freshness: WAL/checkpoint and
+      // unrelated index writes can change it without changing the workspace.
+      fromDb,
       fromJson,
     ])
     return selected ? migrateLegacySeedProjects(selected.state) : null
@@ -144,8 +157,23 @@ export class ChatWorkspaceStore {
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await mkdir(this.sessionsDir, { recursive: true })
     await this.saveRolloutFiles(toSave)
-    this.saveDatabaseIndex(toSave)
-    await writeFile(this.filePath, `${JSON.stringify({ ...toSave, savedAt }, null, 2)}\n`, 'utf8')
+    // SQLite 与 JSON 是两个独立恢复源：各自尝试，至少一个介质成功即可
+    // 完成保存；只有两边都失败才向显式调用方报告失败。
+    let databaseSaved = false
+    let jsonSaved = false
+    try {
+      databaseSaved = this.saveDatabaseIndex(toSave, savedAt)
+    } catch {
+      databaseSaved = false
+    }
+    try {
+      jsonSaved = await this.saveJsonSnapshot(toSave, savedAt)
+    } catch {
+      jsonSaved = false
+    }
+    if (!databaseSaved && !jsonSaved) {
+      throw new Error('workspace-save-failed')
+    }
     return toSave
   }
 
@@ -153,7 +181,7 @@ export class ChatWorkspaceStore {
     return this.historySearchIndex.search(projectId, query, options)
   }
 
-  private readFromDatabase(): ChatWorkspaceState | null {
+  private readFromDatabase(): ChatWorkspaceSnapshot | null {
     if (!existsSync(this.dbPath) || !this.canUseSqlite()) return null
 
     try {
@@ -167,8 +195,6 @@ export class ChatWorkspaceStore {
           'ORDER BY pinned_at DESC NULLS LAST, created_at DESC',
         ].join(' '),
       )
-      if (projects.length === 0) return null
-
       const threads = this.selectJson<ThreadRow>(
         [
           'SELECT',
@@ -186,13 +212,31 @@ export class ChatWorkspaceStore {
           'SELECT',
           'active_project_id AS activeProjectId,',
           'active_thread_id AS activeThreadId,',
+          'active_workspace_tab_id AS activeWorkspaceTabId,',
+          'active_local_app_tab_id AS activeLocalAppTabId,',
           'sidebar_prefs_json AS sidebarPrefsJson,',
-          'workspace_revision AS workspaceRevision',
+          'runtime_definitions_json AS runtimeDefinitionsJson,',
+          'workspace_tabs_json AS workspaceTabsJson,',
+          'project_home_view_modes_json AS projectHomeViewModesJson,',
+          'local_app_definitions_json AS localAppDefinitionsJson,',
+          'local_app_tabs_json AS localAppTabsJson,',
+          'workspace_schema_version AS workspaceSchemaVersion,',
+          'snapshot_complete AS snapshotComplete,',
+          'workspace_revision AS workspaceRevision,',
+          'saved_at AS savedAt',
           'FROM workspace_meta WHERE id = 1',
         ].join(' '),
       )[0]
 
-      return normalizeChatWorkspaceState({
+      const legacySchema = (meta?.workspaceSchemaVersion ?? 1) < 3
+      const legacyDefinitions = safeJsonParse(meta?.localAppDefinitionsJson ?? undefined, [])
+      const legacyTabs = safeJsonParse(meta?.localAppTabsJson ?? undefined, [])
+      const runtimeDefinitions = legacySchema ? legacyDefinitions : safeJsonParse(meta?.runtimeDefinitionsJson ?? undefined, [])
+      const workspaceTabs = legacySchema ? legacyTabs : safeJsonParse(meta?.workspaceTabsJson ?? undefined, [])
+      if (projects.length === 0 && (!Array.isArray(runtimeDefinitions) || runtimeDefinitions.length === 0)) return null
+
+      return {
+        state: normalizeChatWorkspaceState({
         workspaceRevision: meta?.workspaceRevision ?? 0,
         activeProjectId: meta?.activeProjectId ?? projects[0]?.id ?? '',
         activeThreadId: meta?.activeThreadId ?? '',
@@ -220,7 +264,17 @@ export class ChatWorkspaceStore {
           chatState: this.readRolloutChatState(thread),
         })),
         sidebarPrefs: safeJsonParse(meta?.sidebarPrefsJson, undefined),
-      })
+        activeWorkspaceTabId: legacySchema ? meta?.activeLocalAppTabId ?? '' : meta?.activeWorkspaceTabId ?? '',
+        runtimeDefinitions,
+        workspaceTabs,
+        projectHomeViewModes: safeJsonParse(meta?.projectHomeViewModesJson ?? undefined, {}),
+        workspaceSchemaVersion: meta?.workspaceSchemaVersion ?? 1,
+        snapshotComplete: meta?.snapshotComplete !== 0,
+        }),
+        savedAt: meta?.savedAt ?? undefined,
+        revision: meta?.workspaceRevision ?? undefined,
+        source: 'sqlite-index',
+      }
     } catch {
       return null
     }
@@ -249,8 +303,8 @@ export class ChatWorkspaceStore {
     }
   }
 
-  private saveDatabaseIndex(state: ChatWorkspaceState): void {
-    if (!this.canUseSqlite()) return
+  private saveDatabaseIndex(state: ChatWorkspaceState, savedAt: number): boolean {
+    if (!this.canUseSqlite()) return false
 
     try {
       this.ensureWorkspaceSchemaColumns()
@@ -261,9 +315,19 @@ export class ChatWorkspaceStore {
           id INTEGER PRIMARY KEY CHECK (id = 1),
           active_project_id TEXT NOT NULL,
           active_thread_id TEXT NOT NULL,
+          active_workspace_tab_id TEXT NOT NULL DEFAULT '',
+          active_local_app_tab_id TEXT NOT NULL DEFAULT '',
           sidebar_prefs_json TEXT NOT NULL,
+          runtime_definitions_json TEXT NOT NULL DEFAULT '[]',
+          workspace_tabs_json TEXT NOT NULL DEFAULT '[]',
+          project_home_view_modes_json TEXT NOT NULL DEFAULT '{}',
+          local_app_definitions_json TEXT NOT NULL DEFAULT '[]',
+          local_app_tabs_json TEXT NOT NULL DEFAULT '[]',
           updated_at INTEGER NOT NULL,
-          workspace_revision INTEGER NOT NULL DEFAULT 0
+          workspace_revision INTEGER NOT NULL DEFAULT 0,
+          workspace_schema_version INTEGER NOT NULL DEFAULT 1,
+          snapshot_complete INTEGER NOT NULL DEFAULT 1,
+          saved_at INTEGER NOT NULL DEFAULT 0
         );`,
         `CREATE TABLE IF NOT EXISTS projects (
           id TEXT PRIMARY KEY,
@@ -314,16 +378,23 @@ export class ChatWorkspaceStore {
       }
 
       statements.push(
-        `INSERT INTO workspace_meta (id, active_project_id, active_thread_id, sidebar_prefs_json, updated_at, workspace_revision)
-         VALUES (1, ${sqlValue(state.activeProjectId)}, ${sqlValue(state.activeThreadId)}, ${sqlValue(
+        `INSERT INTO workspace_meta (id, active_project_id, active_thread_id, active_workspace_tab_id, sidebar_prefs_json, runtime_definitions_json, workspace_tabs_json, project_home_view_modes_json, updated_at, workspace_revision, workspace_schema_version, snapshot_complete, saved_at)
+         VALUES (1, ${sqlValue(state.activeProjectId)}, ${sqlValue(state.activeThreadId)}, ${sqlValue(state.activeWorkspaceTabId)}, ${sqlValue(
            JSON.stringify(state.sidebarPrefs),
-         )}, ${Date.now()}, ${sqlValue(workspaceRevisionOf(state))})
+         )}, ${sqlValue(JSON.stringify(state.runtimeDefinitions))}, ${sqlValue(JSON.stringify(state.workspaceTabs))}, ${sqlValue(JSON.stringify(state.projectHomeViewModes))}, ${Date.now()}, ${sqlValue(workspaceRevisionOf(state))}, ${sqlValue(Math.max(3, state.workspaceSchemaVersion ?? 3))}, ${state.snapshotComplete === false ? 0 : 1}, ${sqlValue(savedAt)})
          ON CONFLICT(id) DO UPDATE SET
            active_project_id = excluded.active_project_id,
            active_thread_id = excluded.active_thread_id,
+           active_workspace_tab_id = excluded.active_workspace_tab_id,
            sidebar_prefs_json = excluded.sidebar_prefs_json,
+           runtime_definitions_json = excluded.runtime_definitions_json,
+           workspace_tabs_json = excluded.workspace_tabs_json,
+           project_home_view_modes_json = excluded.project_home_view_modes_json,
            updated_at = excluded.updated_at,
-           workspace_revision = excluded.workspace_revision;`,
+           workspace_revision = excluded.workspace_revision,
+           workspace_schema_version = excluded.workspace_schema_version,
+           snapshot_complete = excluded.snapshot_complete,
+           saved_at = excluded.saved_at;`,
       )
 
       for (const project of state.projects) {
@@ -384,9 +455,25 @@ export class ChatWorkspaceStore {
 
       statements.push('COMMIT;')
       this.runSql(statements.join('\n'))
-      this.historySearchIndex.save(state)
+      // 搜索索引是可重建的附属数据；不让它的失败掩盖已提交的工作区事务。
+      try { this.historySearchIndex.save(state) } catch { /* rebuild on next save */ }
+      return true
     } catch {
       /* Keep the compatibility JSON snapshot as the durable fallback. */
+      return false
+    }
+  }
+
+  private async saveJsonSnapshot(state: ChatWorkspaceState, savedAt: number): Promise<boolean> {
+    const temporaryPath = `${this.filePath}.tmp-${process.pid}-${Date.now().toString(36)}`
+    try {
+      const { localAppDefinitions: _legacyDefinitions, localAppTabs: _legacyTabs, activeLocalAppTabId: _legacyActive, ...neutralState } = state
+      await writeFile(temporaryPath, `${JSON.stringify({ ...neutralState, savedAt }, null, 2)}\n`, 'utf8')
+      await rename(temporaryPath, this.filePath)
+      return true
+    } catch {
+      await unlink(temporaryPath).catch(() => undefined)
+      return false
     }
   }
 
@@ -464,6 +551,36 @@ export class ChatWorkspaceStore {
       const metaColumns = this.selectJson<{ name: string }>('PRAGMA table_info(workspace_meta)')
       if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'workspace_revision')) {
         this.runSql('ALTER TABLE workspace_meta ADD COLUMN workspace_revision INTEGER NOT NULL DEFAULT 0;')
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'active_workspace_tab_id')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN active_workspace_tab_id TEXT NOT NULL DEFAULT '';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'runtime_definitions_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN runtime_definitions_json TEXT NOT NULL DEFAULT '[]';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'workspace_tabs_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN workspace_tabs_json TEXT NOT NULL DEFAULT '[]';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'project_home_view_modes_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN project_home_view_modes_json TEXT NOT NULL DEFAULT '{}';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'active_local_app_tab_id')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN active_local_app_tab_id TEXT NOT NULL DEFAULT '';" )
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'local_app_definitions_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN local_app_definitions_json TEXT NOT NULL DEFAULT '[]';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'local_app_tabs_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN local_app_tabs_json TEXT NOT NULL DEFAULT '[]';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'workspace_schema_version')) {
+        this.runSql('ALTER TABLE workspace_meta ADD COLUMN workspace_schema_version INTEGER NOT NULL DEFAULT 1;')
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'snapshot_complete')) {
+        this.runSql('ALTER TABLE workspace_meta ADD COLUMN snapshot_complete INTEGER NOT NULL DEFAULT 1;')
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'saved_at')) {
+        this.runSql('ALTER TABLE workspace_meta ADD COLUMN saved_at INTEGER NOT NULL DEFAULT 0;')
       }
 
       const columns = this.selectJson<{ name: string }>('PRAGMA table_info(threads)')

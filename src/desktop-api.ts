@@ -8,7 +8,18 @@ import type {
   ClaudeChatAttachmentPickerResult,
   ProjectFileSearchResult,
 } from './claude-chat-types'
-import type { ChatWorkspaceState, FileTreeResult, ProjectFilePreviewResult } from './components/types'
+import type {
+  ChatWorkspaceState,
+  FileTreeResult,
+  LocalAppDefinition,
+  LocalAppRuntimeEvent,
+  LocalAppRuntimeSnapshot,
+  RuntimeDefinition,
+  RuntimeEvent,
+  RuntimeSnapshot,
+  WorkspaceTab,
+  ProjectFilePreviewResult,
+} from './components/types'
 import type {
   AgentModeFilesResult,
   AgentMcpGlobalSettings,
@@ -22,6 +33,7 @@ import type {
   AgentModeSettingsResult,
   AgentModeStatusResult,
   AgentProjectDocumentsResult,
+  LocalAppInspectResult,
   AppUpdaterState,
   AppUiLocale,
   DesktopPreferences,
@@ -46,6 +58,74 @@ import type {
   SpeechRecognitionSnapshot,
   TrayMenuAction,
 } from './desktop-types'
+
+export type LocalAppDefinitionResult =
+  | { ok: true; definition: LocalAppDefinition }
+  | { ok: false; message: string; code?: string }
+
+export type LocalAppRelocationResult =
+  | {
+      ok: true
+      workspace: ChatWorkspaceState
+      definition: LocalAppDefinition
+      runtime: LocalAppRuntimeSnapshot | null
+      warning?: string
+    }
+  | { ok: false; message: string; code?: string }
+
+export type LocalAppCreationResult =
+  | {
+      ok: true
+      workspace: ChatWorkspaceState
+      definition: LocalAppDefinition
+      tab: import('./components/types').LocalAppTab
+    }
+  | { ok: false; message: string; code?: string }
+
+export type LocalAppOpenTabResult =
+  | {
+      ok: true
+      workspace: ChatWorkspaceState
+      definition: LocalAppDefinition
+      tab: import('./components/types').LocalAppTab
+    }
+  | { ok: false; message: string; code?: string }
+
+export type LocalAppCloseTabResult =
+  | {
+      ok: true
+      workspace: ChatWorkspaceState
+      tabId: string
+      localAppId: string
+      runtimeDefinitionId?: string
+      runtime: LocalAppRuntimeSnapshot | null
+      warning?: string
+    }
+  | { ok: false; message: string; code?: string }
+
+export type LocalAppPreviewResult =
+  | { ok: true; previewId: string; status: 'creating' | 'loading' | 'ready' | 'failed' | 'closed' | 'degraded'; detail?: string }
+  | { ok: false; message: string }
+
+export type RuntimeInspectResult = LocalAppInspectResult
+export type RuntimeDefinitionResult =
+  | { ok: true; definition: RuntimeDefinition }
+  | { ok: false; message: string; code?: string }
+export type RuntimeCreationResult =
+  | { ok: true; workspace: ChatWorkspaceState; definition: RuntimeDefinition; tab: WorkspaceTab }
+  | { ok: false; message: string; code?: string }
+export type WorkspaceTabResult = RuntimeCreationResult
+export type RuntimeRelocationResult = LocalAppRelocationResult
+export type WorkspaceTabCloseResult =
+  | { ok: true; workspace: ChatWorkspaceState; tabId: string; runtimeDefinitionId: string; runtime: RuntimeSnapshot | null; warning?: string }
+  | { ok: false; message: string; code?: string }
+export type RuntimePreviewHost =
+  | { kind: 'workspace-tab'; workspaceTabId: string; runtimeDefinitionId: string }
+  | { kind: 'project-home'; projectId: string; mountId: string; runtimeDefinitionId: string }
+export type RuntimePreviewResult = LocalAppPreviewResult
+export type ProjectRuntimeResult =
+  | { ok: true; status: 'ready' | 'trust_required'; projectId: string; mountId: string; definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null }
+  | { ok: false; message: string; code?: string }
 
 export type DesktopAPI = {
   platform: NodeJS.Platform
@@ -145,6 +225,45 @@ export type DesktopAPI = {
   ) => Promise<ProjectContextResult>
   getChatWorkspace?: () => Promise<ChatWorkspaceState | null>
   saveChatWorkspace?: (state: ChatWorkspaceState) => Promise<ChatWorkspaceState>
+  inspectLocalAppDirectory?: (rootPath: string) => Promise<LocalAppInspectResult>
+  trustLocalAppDirectory?: (rootPath: string) => Promise<LocalAppDefinitionResult>
+  createLocalApp?: (rootPath: string, expectedRevision?: number, title?: string) => Promise<LocalAppCreationResult>
+  openLocalAppTab?: (localAppId: string, expectedRevision?: number) => Promise<LocalAppOpenTabResult>
+  closeLocalAppTab?: (tabId: string, expectedRevision?: number) => Promise<LocalAppCloseTabResult>
+  relocateLocalApp?: (localAppId: string, rootPath: string, expectedRevision?: number) => Promise<LocalAppRelocationResult>
+  revokeLocalAppTrust?: (canonicalRoot: string) => Promise<void>
+  getLocalAppRuntime?: (localAppId: string) => Promise<LocalAppRuntimeSnapshot | null>
+  startLocalAppRuntime?: (localAppId: string, cause?: 'user' | 'restore', consumerId?: string) => Promise<LocalAppRuntimeSnapshot>
+  stopLocalAppRuntime?: (localAppId: string, reason?: 'user' | 'last-consumer' | 'app-quit') => Promise<LocalAppRuntimeSnapshot | null>
+  releaseLocalAppRuntime?: (localAppId: string, consumerId: string) => Promise<LocalAppRuntimeSnapshot | null>
+  restartLocalAppRuntime?: (localAppId: string) => Promise<LocalAppRuntimeSnapshot>
+  createLocalAppPreview?: (tabId: string, localAppId: string) => Promise<LocalAppPreviewResult>
+  setLocalAppPreviewBounds?: (previewId: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>
+  setLocalAppPreviewVisible?: (previewId: string, visible: boolean) => Promise<boolean>
+  reloadLocalAppPreview?: (previewId: string) => Promise<boolean>
+  closeLocalAppPreview?: (previewId: string) => Promise<boolean>
+  onLocalAppRuntimeEvent?: (handler: (event: LocalAppRuntimeEvent) => void) => () => void
+  inspectRuntimeDirectory?: (rootPath: string) => Promise<RuntimeInspectResult>
+  trustRuntimeDirectory?: (rootPath: string) => Promise<RuntimeDefinitionResult>
+  createWorkspaceTab?: (rootPath: string, expectedRevision?: number, title?: string) => Promise<RuntimeCreationResult>
+  openWorkspaceTab?: (runtimeDefinitionId: string, expectedRevision?: number) => Promise<WorkspaceTabResult>
+  closeWorkspaceTab?: (tabId: string, expectedRevision?: number) => Promise<WorkspaceTabCloseResult>
+  renameWorkspaceTab?: (tabId: string, title: string, expectedRevision?: number) => Promise<WorkspaceTabResult>
+  relocateRuntime?: (runtimeDefinitionId: string, rootPath: string, expectedRevision?: number) => Promise<LocalAppRelocationResult>
+  revokeRuntimeTrust?: (canonicalRoot: string) => Promise<void>
+  getRuntime?: (runtimeDefinitionId: string) => Promise<RuntimeSnapshot | null>
+  startRuntime?: (runtimeDefinitionId: string, cause?: 'user' | 'restore', consumerId?: string) => Promise<RuntimeSnapshot>
+  stopRuntime?: (runtimeDefinitionId: string, reason?: 'user' | 'last-consumer' | 'app-quit') => Promise<RuntimeSnapshot | null>
+  releaseRuntime?: (runtimeDefinitionId: string, consumerId: string) => Promise<RuntimeSnapshot | null>
+  restartRuntime?: (runtimeDefinitionId: string) => Promise<RuntimeSnapshot>
+  createRuntimePreview?: (host: RuntimePreviewHost) => Promise<RuntimePreviewResult>
+  setRuntimePreviewBounds?: (previewId: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>
+  setRuntimePreviewVisible?: (previewId: string, visible: boolean) => Promise<boolean>
+  reloadRuntimePreview?: (previewId: string) => Promise<boolean>
+  closeRuntimePreview?: (previewId: string) => Promise<boolean>
+  onRuntimeEvent?: (handler: (event: RuntimeEvent) => void) => () => void
+  ensureProjectRuntime?: (projectId: string, mountId: string) => Promise<ProjectRuntimeResult>
+  trustProjectRuntime?: (projectId: string, mountId: string) => Promise<ProjectRuntimeResult>
   clearChatWorkspaceData?: () => Promise<void>
   clearClaudeAgentSettings?: () => Promise<void>
   quitApp?: () => Promise<void>

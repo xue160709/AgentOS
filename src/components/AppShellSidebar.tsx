@@ -29,6 +29,8 @@ import type {
   ThreadRunState,
   WorkspaceProject,
   WorkspaceThread,
+  RuntimeSnapshot,
+  WorkspaceTab,
 } from './types'
 import { getSettingsSidebarNav } from './app-shell-constants.ts'
 import { sortProjectsForSidebar } from './project-order'
@@ -68,6 +70,13 @@ type AppShellSidebarProps = {
   canBack: boolean
   canForward: boolean
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
+  workspaceTabs: WorkspaceTab[]
+  activeWorkspaceTabId: string
+  runtimeStates: Record<string, RuntimeSnapshot>
+  onNewRuntime: (event?: ReactMouseEvent<HTMLElement>) => void | Promise<void>
+  onSelectWorkspaceTab: (tabId: string) => void
+  onCloseWorkspaceTab: (tabId: string) => void
+  onRenameWorkspaceTab?: (tabId: string, title: string) => void | Promise<boolean>
   onOpenSearch: () => void
   onOpenSettingsCategory: (category: SettingsCategoryId) => void
   onSelectProject: (projectId: string) => void
@@ -108,6 +117,13 @@ export function AppShellSidebar({
   canBack,
   canForward,
   onCreateProject,
+  workspaceTabs,
+  activeWorkspaceTabId,
+  runtimeStates,
+  onNewRuntime,
+  onSelectWorkspaceTab,
+  onCloseWorkspaceTab,
+  onRenameWorkspaceTab,
   onOpenSearch,
   onOpenSettingsCategory,
   onSelectProject,
@@ -134,6 +150,9 @@ export function AppShellSidebar({
   const isSettingsSidebar = activeViewId === 'settings'
   const [confirmingArchiveThreadId, setConfirmingArchiveThreadId] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [editingRuntimeTabId, setEditingRuntimeTabId] = useState<string | null>(null)
+  const [editingRuntimeTabTitle, setEditingRuntimeTabTitle] = useState('')
+  const [runtimeTabRenameError, setRuntimeTabRenameError] = useState('')
   const collapsedProjectIdSet = useMemo(() => new Set(collapsedProjectIds), [collapsedProjectIds])
   const [skillTip, setSkillTip] = useState<{
     text: string
@@ -148,6 +167,7 @@ export function AppShellSidebar({
     position: 'before' | 'after'
   } | null>(null)
   const menuPanelRef = useRef<HTMLDivElement>(null)
+  const contextMenuReturnRef = useRef<HTMLElement | null>(null)
   const skillTipPanelRef = useRef<HTMLDivElement>(null)
   const isDarwin = typeof window !== 'undefined' && window.desktop?.platform === 'darwin'
   const [appUpdaterState, setAppUpdaterState] = useState<AppUpdaterState | null>(null)
@@ -165,6 +185,51 @@ export function AppShellSidebar({
   // --- Project row HTML5 DnD: set dataTransfer + compute drop “before/after” / 项目行原生拖拽：写入 dataTransfer 并计算插入前后 ---
 
   const closeContextMenu = () => setContextMenu(null)
+
+  const openRuntimeMenu = (target: HTMLElement, next: ContextMenuState) => {
+    contextMenuReturnRef.current = target
+    setContextMenu(next)
+  }
+
+  const beginRuntimeTabRename = (tab: WorkspaceTab) => {
+    closeContextMenu()
+    setRuntimeTabRenameError('')
+    setEditingRuntimeTabId(tab.id)
+    setEditingRuntimeTabTitle(tab.title)
+  }
+
+  const commitRuntimeTabRename = async (tab: WorkspaceTab) => {
+    const title = editingRuntimeTabTitle.trim()
+    if (title.length < 1 || title.length > 64) {
+      setRuntimeTabRenameError(t('runtime.invalidTitle'))
+      return
+    }
+    if (!onRenameWorkspaceTab) {
+      setEditingRuntimeTabId(null)
+      return
+    }
+    const result = await onRenameWorkspaceTab(tab.id, title)
+    if (result === false) {
+      setRuntimeTabRenameError(t('runtime.renameFailed'))
+      return
+    }
+    setEditingRuntimeTabId(null)
+    setRuntimeTabRenameError('')
+  }
+
+  const openRuntimeTabMenu = (event: ReactMouseEvent, tab: WorkspaceTab) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    openRuntimeMenu(event.currentTarget as HTMLElement, {
+      x: event.clientX || rect.left,
+      y: event.clientY || rect.bottom,
+      items: [
+        { id: 'runtime-tab-rename', label: t('runtime.rename'), onSelect: () => beginRuntimeTabRename(tab) },
+        { id: 'runtime-tab-close', label: t('runtime.close'), danger: true, onSelect: () => { closeContextMenu(); onCloseWorkspaceTab(tab.id) } },
+      ],
+    })
+  }
 
   const clearProjectDragState = () => {
     setDraggingProjectId(null)
@@ -261,7 +326,23 @@ export function AppShellSidebar({
       closeContextMenu()
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeContextMenu()
+      const panel = menuPanelRef.current
+      const items = panel ? [...panel.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')] : []
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeContextMenu()
+        requestAnimationFrame(() => contextMenuReturnRef.current?.focus())
+        return
+      }
+      if (!items.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+      event.preventDefault()
+      const currentIndex = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement))
+      const nextIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? items.length - 1
+          : (currentIndex + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length
+      items[nextIndex]?.focus()
     }
     document.addEventListener('mousedown', onDocMouseDown)
     document.addEventListener('keydown', onKeyDown)
@@ -283,6 +364,12 @@ export function AppShellSidebar({
     if (top + rect.height > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - pad - rect.height)
     panel.style.left = `${left}px`
     panel.style.top = `${top}px`
+  }, [contextMenu])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const frame = requestAnimationFrame(() => menuPanelRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus())
+    return () => cancelAnimationFrame(frame)
   }, [contextMenu])
 
   const goLeaveSettings = () => {
@@ -549,6 +636,58 @@ export function AppShellSidebar({
               </>
             ) : (
               <>
+                <div className="app-sidebar-section runtime-tabs-section" data-testid="runtime-tabs-section">
+                  <div className="app-sidebar-section-heading">
+                    <div className="app-sidebar-section-label">{t('runtime.section')}</div>
+                    <button type="button" className="app-sidebar-section-action" data-testid="runtime-new-tab" aria-label={t('runtime.newTab')} title={t('runtime.newTab')} onClick={onNewRuntime}>
+                      <IconInline name="plus" />
+                    </button>
+                  </div>
+                  {workspaceTabs.length > 0 ? (
+                    <div className="local-app-sidebar-list runtime-tabs-list" aria-label={t('runtime.section')}>
+                      {workspaceTabs.map((tab) => {
+                        const runtime = runtimeStates[tab.runtimeDefinitionId]
+                        const editing = editingRuntimeTabId === tab.id
+                        return <div className={`local-app-sidebar-row runtime-tab-row${activeWorkspaceTabId === tab.id ? ' is-active' : ''}`} key={tab.id} data-testid="runtime-tab">
+                          {editing ? <input
+                            autoFocus
+                            className="runtime-tab-title-input"
+                            data-testid="runtime-tab-title-input"
+                            value={editingRuntimeTabTitle}
+                            maxLength={64}
+                            onChange={(event) => setEditingRuntimeTabTitle(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') { event.preventDefault(); void commitRuntimeTabRename(tab) }
+                              if (event.key === 'Escape') { event.preventDefault(); setEditingRuntimeTabId(null); setRuntimeTabRenameError('') }
+                            }}
+                            aria-label={t('runtime.rename')}
+                          /> : <button
+                            type="button"
+                            className="local-app-sidebar-select runtime-tab-select"
+                            data-runtime-tab-id={tab.id}
+                            aria-current={activeWorkspaceTabId === tab.id ? 'page' : undefined}
+                            onClick={() => onSelectWorkspaceTab(tab.id)}
+                            onContextMenu={(event) => openRuntimeTabMenu(event, tab)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+                                event.preventDefault()
+                                const rect = event.currentTarget.getBoundingClientRect()
+                                openRuntimeMenu(event.currentTarget, { x: rect.left, y: rect.bottom, items: [
+                                  { id: 'runtime-tab-rename', label: t('runtime.rename'), onSelect: () => beginRuntimeTabRename(tab) },
+                                  { id: 'runtime-tab-close', label: t('runtime.close'), danger: true, onSelect: () => { closeContextMenu(); onCloseWorkspaceTab(tab.id) } },
+                                ] })
+                              }
+                            }}
+                          >
+                            <IconInline name="folder" />
+                            <span><strong>{tab.title}</strong><small>{localAppStatusLabel(t, runtime?.status ?? 'stopped')}</small></span>
+                          </button>}
+                          {editing && runtimeTabRenameError ? <small className="runtime-tab-rename-error">{runtimeTabRenameError}</small> : null}
+                        </div>
+                      })}
+                    </div>
+                  ) : <p className="local-app-sidebar-empty">{t('runtime.empty')}</p>}
+                </div>
                 <button
                   type="button"
                   className="app-sidebar-new-thread"
@@ -970,6 +1109,7 @@ export function AppShellSidebar({
         <div
           ref={menuPanelRef}
           className="app-sidebar-context-menu"
+          data-testid={contextMenu.items.some((item) => item.id.startsWith('runtime-tab-')) ? 'runtime-tab-menu' : undefined}
           role="menu"
           aria-label={t('sidebar.contextMenuAria')}
           style={{ left: contextMenu.x, top: contextMenu.y }}
@@ -981,6 +1121,7 @@ export function AppShellSidebar({
               role="menuitem"
               disabled={item.disabled}
               className={`app-sidebar-context-menu__item${item.danger ? ' is-danger' : ''}`}
+              data-testid={item.id === 'runtime-tab-rename' ? 'runtime-tab-menu-rename' : item.id === 'runtime-tab-close' ? 'runtime-tab-menu-close' : undefined}
               onClick={(event) => {
                 event.stopPropagation()
                 if (item.disabled) return
@@ -1016,4 +1157,8 @@ function formatThreadTime(timestamp: number, locale: AppLocale, t: (path: string
   if (diff < 3_600_000) return t('sidebar.minutesShort', { n: Math.max(1, Math.floor(diff / 60_000)) })
   if (diff < 86_400_000) return t('sidebar.hoursShort', { n: Math.floor(diff / 3_600_000) })
   return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric' }).format(timestamp)
+}
+
+function localAppStatusLabel(t: (path: string) => string, status: RuntimeSnapshot['status']): string {
+  return t(({ preparing: 'runtime.runtimePreparing', starting: 'runtime.runtimeStarting', running: 'runtime.runtimeRunning', degraded: 'runtime.runtimeDegraded', failed: 'runtime.runtimeFailed', path_missing: 'runtime.runtimePathMissing', stopped: 'runtime.runtimeStopped' })[status])
 }

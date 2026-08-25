@@ -4,6 +4,23 @@
  */
 
 import type { ChatModelPick } from './claude-chat-types'
+export type LocalAppInspectResult =
+  | {
+      ok: true
+      rootPath: string
+      canonicalRoot: string
+      name: string
+      hasLockfile: boolean
+      lockfilePath?: string
+      lockDigest?: string
+      nodeModulesPresent: boolean
+    }
+  | {
+      ok: false
+      rootPath: string
+      code: 'invalid-root' | 'path-missing' | 'package-json-missing' | 'package-json-invalid' | 'dev-script-missing'
+      message: string
+    }
 
 /** UI 文本语言；与会话偏好一致并由主进程写入模板 / UI text locale; matches session prefs and main-process templates */
 export type AppUiLocale = 'zh' | 'en'

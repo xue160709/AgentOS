@@ -1,20 +1,43 @@
-# Local App Runtime 产品设计
+# Workspace Runtime 产品设计
 
-> 状态：仅记录已确认的 Planned Delta。本轮没有 Local App 的实现，也不把规划内容写成 Current。
+> Revision 2 Current/as-built（Development Check PASS）：侧栏对象已改为用户命名的 `Workspace Tab`，Tabs 区位于新对话与搜索上方，关闭使用右键/键盘菜单；项目首页以页级 `Overview / Runtime` Tab 在既有卡片系统和独立 Runtime 页面之间切换。`ProjectHomeSurface` 卡片区域保持原样，项目首页 Runtime host 不创建隐藏 Tab，同一 Runtime 可被两类 host 共享。正式 Acceptance 尚未执行。
+
+## Revision 2 信息架构与交互合同
+
+```text
+侧栏                         项目首页
+Tabs                         [ Overview ] [ Runtime ]
+├─ 用户命名的 Tab             ├─ Overview：既有卡片系统（不改）
+└─ + New Tab                 └─ Runtime：独立预览与运行控制
+新对话
+搜索
+Projects
+```
+
+- `RuntimeDefinition` 是已信任目录和启动配置；`WorkspaceTab` 是用户创建、命名、激活和关闭的持久视图；`RuntimeInstance` 是共享进程；`RuntimeHost` 是 `workspace-tab` 或 `project-home` 两类承载者。
+- 新建时标题输入可编辑，trim 后 1–64 字符，同名允许；重命名使用行内编辑，`Enter` 提交、`Escape` 取消，失焦不隐式提交。标题持久化失败时保留编辑态并显示错误，不制造乐观成功。
+- Tab 行不显示关闭按钮。鼠标右键或键盘上下文菜单提供“重命名 / 关闭”；关闭仍由 Main 权威快照提交成功后更新 UI。
+- 首页 Overview 为默认页；切到 Runtime 不改变卡片内部状态。每个项目可恢复上次页签选择，错误或启动中也停留在 Runtime 页，不强制跳回 Overview。
+- 未信任项目只展示说明与“启动预览”，不得因进入首页自动执行脚本。显式确认后才建立 `project-home:<projectId>:<mountId>` consumer。
+- 项目首页离开 Runtime 页时只释放该 host；若仍有 `tab:<workspaceTabId>` consumer，受管进程继续运行。异步结果必须同时校验 project、mount、definition 与 generation，旧结果不得覆盖新页面。
+
+以下章节保留 Revision 1 Current/as-built 基线，供迁移与回归对照。
+
+> 状态：Current/as-built（基于当前代码与受控测试事实）。未实现的项目首页复用、Agent 沙箱代理和生产级 Sandbox Provider 保留在文末 Later；本轮不修改 `acceptance.md` 的正式状态。
 
 ## 1. 当前基线与本轮边界
 
-当前 AgentOS 的工作区事实只有项目、聊天线程、活动项目/线程和侧栏偏好；现有侧栏提供新建线程、搜索、项目及线程历史，`WorkspaceSession` 负责这些对象的持久化与恢复。当前不存在 Local App 定义、Local App Tab、Local App Runtime 或本地站点预览。
+当前 AgentOS 已支持项目、聊天线程和 Local App 并存。侧栏提供独立的 Local Apps 区与 `New Tab` 入口；`WorkspaceSession`、JSON/SQLite 工作区快照负责 Definition、Tab 和活动 Tab 的持久化与恢复；Main 进程负责 Runtime 和原生 Preview 的生命周期。
 
-代码依据：`src/components/AppShellSidebar.tsx` 当前渲染新建线程、项目和线程入口；`src/components/AppShellWorkspace.tsx` 当前只分发 Chat、Docs、Settings 等内容；`src/components/workspace-session.ts` 当前只维护项目/线程活动选择与 durable snapshot 恢复。
+代码依据：`src/components/AppShellSidebar.tsx` 渲染独立 Local Apps 区、状态和 Tab 关闭入口；`src/components/AppShellWorkspace.tsx` 在 Local App 激活时切换到全屏 Preview 与顶部工具栏；`src/components/workspace-session.ts`、`src/chat-workspace-persistence.ts` 维护 Definition/Tab 与活动选择的 durable snapshot 恢复。
 
-本轮计划新增从左侧 `New Tab` 接入本地 Web 项目的主旅程。用户第一次选择文件夹并明确确认信任后，AgentOS 自动准备依赖、执行 `npm run dev`、探测就绪地址并在预览中呈现站点；之后恢复工作区时，对已信任的 Local App 自动重启运行时。CodeNow Wiki（`/Volumes/macOS/Github/codenow.wiki`）是首个接入实例，产品模型不能因此硬编码为专用页面。
+当前从左侧 `New Tab` 接入本地 Web 项目的主旅程已经实现：用户可在 chooser 中打开已接入应用，或绑定新的本地文件夹；确认信任并由 Main 持久化成功后，AgentOS 自动准备依赖、执行 `npm run dev`、探测 loopback 就绪地址并在原生 Preview 中呈现站点。工作区恢复时，已信任且设置为自动启动的 Local App 会重新创建 Runtime。CodeNow Wiki（`/Volumes/macOS/Github/codenow.wiki`）已完成真实 Electron GUI live smoke：首次动态地址为 `http://localhost:50041/`，退出后旧受管 PID 清理；正常重启以新的 `npm PID 94225 / next PID 94253` 和动态地址 `http://localhost:50941/` 恢复同一 Tab 及退出前路由。产品模型不硬编码端口或专用页面。
 
-本轮不改造项目首页为左右 Claude 工作台，不接入 Claude Agent SDK 的沙箱文件/命令代理，不把 Home Plugin/A2UI 卡片当作 Local App，也不承诺尚未由真实 Provider 验证的生产级 OS 文件系统或网络强沙箱。项目首页复用同一运行时、通用 Sandbox Provider 和更强的 Agent 控制能力属于 Later。
+当前不改造项目首页为左右 Claude 工作台，不接入 Claude Agent SDK 的沙箱文件/命令代理，不把 Home Plugin/A2UI 卡片当作 Local App，也不承诺尚未由真实 Provider 验证的生产级 OS 文件系统或网络强沙箱。项目首页复用同一运行时、通用 Sandbox Provider 和更强的 Agent 控制能力属于 Later。
 
 ## 2. 设计目标与体验原则
 
-### 2.1 目标
+### 2.1 Current 目标
 
 - 用户只需绑定本地项目，不需要打开终端或自行运行 `npm run dev`。
 - Local App Tab 是可发现、可切换、可关闭和可恢复的工作区入口；它与聊天线程有清晰的对象边界。
@@ -22,7 +45,7 @@
 - 同一 Local App 的多个视图复用一个 Runtime，不因切换或开新视图重复启动开发服务器。
 - 第一次信任是明确且可解释的承诺；后续恢复不重复打扰，但仍以目录可达性和运行时真实探测为准。
 
-### 2.2 原则
+### 2.2 已实现的体验不变量
 
 1. **先建立信任，再自动执行。** 确认前不运行目录中的脚本；确认内容说明目录、命令和自动恢复行为。
 2. **入口、定义、运行时和预览分离。** Tab 只表示用户要看的视图，Runtime 才拥有进程生命周期，Preview 只承载它的输出。
@@ -56,7 +79,7 @@ LocalAppDefinition 1 ───── 0..1 RuntimeInstance
 
 - 同一 canonical root 与同一启动配置只对应一个可复用的 `RuntimeInstance`；新视图引用已有 Runtime，不再执行第二次 `npm run dev`。
 - 选择同一已绑定 Local App 时，创建新的 Tab 视图；选择新目录时进入首次接入。Local App 定义与 Tab 的数量关系不因首个 CodeNow Wiki 实例而收窄。
-- 关闭最后一个调用方后，Runtime 按已确认的生命周期策略回收；具体等待时长属于运行时实现未知项，不改变“没有调用方才允许回收”的产品语义。
+- 关闭最后一个调用方后，Runtime 立即进入停止/回收；关闭非最后一个 Tab 只释放该 Tab 的 consumer，不停止共享 Runtime。用户显式停止后不会被后台自动重新拉起；应用正常重启时，已信任且 `autoStart` 的定义按恢复流程启动。
 - 用户移除 Local App 时只删除 AgentOS 中的定义和 Tab，不删除本地文件夹；若 Runtime 仍有其它调用方，不能因单个视图移除而误杀它。
 
 ## 4. 信息架构与入口
@@ -77,10 +100,10 @@ LocalAppDefinition 1 ───── 0..1 RuntimeInstance
    └─ <Local App Tab> · 同一应用可有多个视图
 ```
 
-`New Tab` 是明确的动作入口，而不是把用户直接丢进空白预览。触发后先说明要创建的是 Local App Tab，再提供：
+`New Tab` 是明确的动作入口，而不是把用户直接丢进空白预览。打开 chooser 前，当前原生 Preview 先被隐藏但不关闭 Runtime；chooser 提供两个入口：
 
 1. 选择一个已有的 Local App（用于打开新视图）；或
-2. 选择一个本地文件夹（用于首次接入）。
+2. 选择一个本地文件夹（用于绑定新应用）。进入原生 picker 时继续保持 Preview 隐藏；取消或关闭流程后恢复当前活动 Preview。
 
 项目列表、聊天线程、Home、Docs、Settings 的既有入口和选择规则保持不变。主内容区按活动对象切换：现有 Chat/Docs/Settings 继续由原路由承载；Local App Tab 新增隔离 Preview 分支。项目首页的 Claude 分栏不进入本轮信息架构。
 
@@ -96,7 +119,7 @@ LocalAppDefinition 1 ───── 0..1 RuntimeInstance
 
 ## 5. 主旅程与任务流
 
-### 5.1 首次接入 CodeNow Wiki
+### 5.1 首次绑定本地应用
 
 ```text
 点击 New Tab
@@ -107,21 +130,24 @@ LocalAppDefinition 1 ───── 0..1 RuntimeInstance
   ├─ 取消 → 关闭流程，不创建定义/Tab，不留下脏记录
   └─ 信任并继续
        ↓
-创建并激活 LocalAppDefinition + LocalAppTab
+Main 检查信任并持久化 Definition + Tab，读回成功
+       ├─ 失败 → 保持对话框，显示错误，不显示 Tab，不启动 Runtime
+       └─ 成功 → Renderer 显示并激活 Tab
        ↓
 准备依赖（如需要）
        ↓
 执行 npm run dev → 捕获状态/日志 → 探测真实就绪地址
        ↓
-建立 PreviewSession，显示 CodeNow Wiki
+建立 PreviewSession，显示本地应用页面（CodeNow Wiki 为目标接入实例）
 ```
 
 关键交互规则：
 
 - 文件夹选择结果先作为未提交草稿；没有用户确认信任前，AgentOS 不启动脚本、不创建持久定义或 Tab。
 - 信任确认明确展示：将运行的项目目录、由 AgentOS 管理的 `npm run dev`、首次确认后可在应用恢复时自动运行。不得写成“项目外访问已被强制阻断”。
+- 创建流程先 flush Renderer 尚未落盘的工作区变更，再读取 Main authoritative revision。Main 先检查目录/脚本、记录 trust、保存并读回包含 Definition/Tab 的 JSON/SQLite 快照；Renderer 只有收到成功快照后才显示 Tab，随后才调用 Runtime start。保存失败时不显示 Tab、不启动进程，接入对话框保持打开并提供可读错误。
 - AgentOS 负责启动命令、依赖准备和端口/就绪探测；用户不需要从界面选择或手动执行 `npm run dev`。
-- CodeNow Wiki 的接入验证使用真实目录和 `dev: next dev`，但页面内容、端口和启动结果均来自运行时探测，不在体验层写死端口或专用页面。
+- CodeNow Wiki 的接入验证已覆盖真实目录和 `dev: next dev`：真实 GUI smoke 显示页面、动态端口和启动结果均来自运行时探测；首次与重启后的端口不同，证明恢复不会盲信旧端口或旧 PID。体验层仍不写死端口或专用页面。
 - 信任成功后先创建并激活 Tab，再让用户看到准备/启动反馈；这样用户知道等待的是哪一个应用，失败也能从该 Tab 恢复。
 
 ### 5.2 已信任应用的自动恢复
@@ -149,11 +175,11 @@ AgentOS 启动/工作区恢复
 
 ### 5.3 多视图、切换与关闭
 
-1. 从 Local Apps 区选择一个已绑定应用时，新建并激活一个 Tab，PreviewSession 连接到该应用已有 Runtime（若尚未运行则触发一次启动）。
+1. 从 chooser 的已接入列表或 Local Apps 区选择一个已绑定应用时，Main 新建并持久化一个唯一 Tab，Renderer 收到成功快照后激活它；PreviewSession 连接到该应用已有 Runtime（若尚未运行则触发一次启动）。
 2. 切换 Tab 只切换 PreviewSession 和活动选择，不重启 Runtime，不丢失其它视图状态。
 3. 关闭非活动 Tab 只移除该视图；共享 Runtime 与其它视图继续可用。
 4. 关闭活动 Tab 后，焦点和活动选择落到相邻可用 Local App Tab；没有其它 Local App Tab 时回到安全的现有项目视图，并保留 Local App 定义供以后从 `New Tab` 打开。
-5. 关闭最后一个调用方后，Runtime 进入停止/回收流程；若在回收完成前重新打开同一应用，运行时必须通过 generation 规则决定是复用当前实例还是创建新实例，不能产生双进程。
+5. 关闭最后一个调用方后，Runtime 进入停止/回收流程；若在回收完成前重新打开同一应用，RuntimeManager 通过 generation 与去重键决定复用/重建，不能产生双进程。
 
 ### 5.4 停止、重启与重试
 
@@ -162,6 +188,7 @@ AgentOS 启动/工作区恢复
 - 失败状态的 `重试`沿用已信任定义，重新进入准备/启动；不再次要求信任。若失败原因是目录或配置本身不可用，应优先提供“重新选择目录”而不是无效重试。
 - `停止`是用户可见的明确动作；停止后显示启动入口，不能在后台无提示地反复拉起。
 - 准备或启动中取消会使旧任务、计时器、监听器和事件失效。首次接入的取消清理未提交草稿；已存在的 Tab 保留定义但回到 stopped，不允许 late event 把它改回 running。
+- 切换聊天或其它工作区 Tab 只隐藏当前 Preview；`LocalAppPreview` 的卸载清理调用 `setLocalAppPreviewVisible(false)`，不调用 release/stop。Runtime consumer 仍绑定 Local App Tab，回到该 Tab 时复用当前 generation 和 PreviewSession，不重复 spawn。
 
 ## 6. 页面与状态设计
 
@@ -182,30 +209,35 @@ AgentOS 启动/工作区恢复
 | --- | --- | --- | --- | --- |
 | `preparing` | 信任成功、恢复或重试 | 正在检查项目/准备依赖，可查看最近日志 | 查看日志、取消 | 依赖准备完成进入 `starting`；失败进入 `failed` |
 | `starting` | 准备完成并启动 `npm run dev` | 正在启动开发服务并等待就绪 | 查看日志、停止 | readiness 成功进入 `running`；超时/退出进入 `failed` |
-| `running` | 真实探测到就绪地址且 Preview 可加载 | 站点预览、运行中状态、刷新/重启/关闭动作 | 刷新预览、重启运行时、停止、关闭 Tab | Preview 断开进入 `degraded`；进程退出进入 `failed` |
-| `degraded` | HMR 断线、Preview 崩溃或部分进程异常 | 区分“服务器仍在运行”和“预览暂时不可用”，保留可见错误/最近页面（若有） | 重新连接/刷新、查看日志、重启 | 恢复 Preview 回 `running`；确认进程失败回 `failed` |
-| `failed` | 依赖失败、命令缺失、端口/readiness 超时、进程崩溃或预览加载失败 | 失败原因的用户可读摘要、最近日志入口和影响范围 | 重试、重新选择目录、移除 Local App | 重试回 `preparing`；重新定位后重新检查；移除清理定义/Tab |
+| `running` | 真实探测到就绪地址且 Runtime 进程存活 | 站点预览、运行中状态、刷新/重启/关闭动作 | 刷新预览、重启运行时、停止、关闭 Tab | Preview 断开只更新 Preview 状态为 `degraded`/`failed`；进程退出进入 Runtime `failed` |
+| `degraded` | 运行态快照的降级状态（Preview 事件不直接改写 Runtime 状态） | 区分“服务器仍在运行”和“预览暂时不可用”，保留可见错误/最近页面（若有） | 重新连接/刷新、查看日志、重启 | Preview 恢复为 `ready`；确认进程失败回 `failed` |
+| `failed` | 依赖失败、命令缺失、端口/readiness 超时或进程崩溃；Preview 加载失败单独记录在 Preview 状态 | 失败阶段、稳定错误码、用户可读摘要、最近日志入口和影响范围 | 重试、重新选择目录、移除 Local App | 重试回 `preparing`；重新定位后重新检查；移除清理定义/Tab |
 | `path_missing` | 恢复或运行前目录不可达 | 原路径不可用，绑定仍保留 | 重新定位、移除 | 重新定位后重新检查；不自动运行未知新目录 |
 | `stopped` | 用户停止、关闭最后 Tab 后回收或退出清理完成 | 已停止，不显示陈旧预览为可用 | 启动/重启、关闭/移除 Tab | 启动回 `preparing` 或 `starting` |
 
 状态不变量：
 
-- `RuntimeInstance` 的状态与 `PreviewSession` 的状态分开表达。Runtime `running` 不代表 Preview 一定 `ready`；Preview `degraded` 时不能把整条 Tab 标成无故障运行。
+- `RuntimeInstance` 的状态与 `PreviewSession` 的状态分开表达。Runtime `running` 不代表 Preview 一定 `ready`；Preview `degraded`/`failed` 时仍保留进程运行事实和预览恢复动作，不能把预览故障误报成 Runtime 已停止，也不能把整条 Tab 标成无故障运行。
 - `failed` 必须说明失败发生在哪一阶段：依赖、命令、进程、readiness 或预览，而不是只显示“启动失败”。日志可以更详细，但不以日志替代首屏可读原因和动作。
 - `path_missing` 不删除历史定义；重新定位到不同目录时必须重新检查，并在信任范围发生变化时重新请求信任。
 - 状态事件携带 Local App、Runtime 和 generation 作用域；切换 Tab、取消、重试或关闭后的 late event 不能污染新视图、新 Runtime 或已卸载内容。
 - 自动重试采用有限次数/退避；达到上限后停在 `failed`，由用户明确重试，避免失败时不断运行本地脚本。
 
-### 6.3 HMR 与预览行为
+### 6.3 全屏 Preview、顶部工具栏与日志
+
+- Local App 激活时，主内容区使用全屏 Preview stage；顶部工作区工具栏承载紧凑 Runtime 状态、预览刷新、日志、重启和停止。Local App 不重复显示聊天/项目首页工具条，也不在预览区域内占用一块运行时 summary。
+- 日志默认收起；点击顶部 `Logs` 后才展开最近的有界日志。切换 Tab 或 Runtime generation 时日志展开状态重置为收起，Running 与最近日志默认不挤占 Preview 面积。
+- `刷新预览`只 reload 当前 PreviewSession；`重启运行时`是应用级动作，会使旧 generation 失效并重建进程；按钮与状态文案保持二者可区分。
+
+### 6.4 HMR 与预览行为
 
 - 首次就绪后，预览显示站点本身，并在其宿主状态区域保持可读的运行/预览状态；“页面出现”与“Runtime ready”都可被用户验证。
 - HMR 正常更新时不切换 Tab、不清空用户当前视图；发生短暂断线时以 `degraded`/重新连接状态告知用户，避免把旧页面误认为最新结果。
-- 预览刷新是视图级操作；Runtime 重启是应用级操作，按钮文案和确认反馈必须区分二者。
-- 预览容器不得获得 Electron/Node 直连能力；未允许的导航、窗口创建和权限请求进入受控阻止状态，并给出返回或刷新动作。这里描述的是预览承载规则，不是尚未验证的 OS 强沙箱承诺。
+- 预览容器不得获得 Electron/Node 直连能力；实现提供对未允许导航、窗口创建和权限请求的受控阻止路径，并给出返回或刷新动作。真实 Preview 页面对 Node/Electron bridge、外部导航、`window.open` 和权限请求的安全负例仍待正式补证；这里不是尚未验证的 OS 强沙箱承诺。
 
 ## 7. 亮点出现、理解与验证
 
-本轮没有单独的亮点策略文件；以下只把 active change 已确认的真实能力安排到用户能验证价值的时机：
+本轮没有单独的亮点策略文件；以下只把 active change 已确认、且当前代码已承载的真实能力安排到用户能验证价值的时机：
 
 | 时机 | 用户应发现/理解什么 | 产品内证明 |
 | --- | --- | --- |
@@ -251,15 +283,24 @@ AgentOS 启动/工作区恢复
 - **生产级 Sandbox Provider 未定。** 体验验证阶段只能描述“用户显式信任的本地项目”和受控预览；不能把普通 `cwd`、renderer sandbox 或 `utilityProcess` 写成完整文件系统沙箱。项目外文件、网络、环境变量和子进程逃逸验证完成前，不得开放强隔离承诺。
 - **任意项目脚本风险。** 首期仅对显式信任目录自动运行；信任提示必须准确说明命令与目录。是否允许后续修改信任、网络或环境变量范围，需要安全/技术决策后再扩展。
 - **依赖准备规则未产品化。** 包管理器识别、lockfile 变化、安装命令、超时和日志脱敏由技术合同确定；产品层只承诺可观察的准备状态、原因和恢复入口。
-- **readiness 方式未定。** 日志解析、HTTP 探测或其它探测器由 Runtime 决定；产品层不得硬编码端口，只依赖真实就绪结果。
-- **无人调用方的停止时机未定。** 本文固定“最后调用方关闭后才回收”，等待时长、退出清理和崩溃退避由运行时合同确定。
-- **路径身份与重新定位未定。** 需要技术层确定 canonical root、路径变化检测和旧授权是否失效；体验默认不同新目录重新检查并必要时重新信任。
-- **CodeNow Wiki live smoke 未在本轮执行。** 后续实现/验证启动外部项目进程前需要相应明确授权；本轮不以 fixture 或文档替代真实接入证据。
+- **readiness 的边界仍需验证。** 当前实现使用启动日志解析与 loopback HTTP 探测共同确认就绪；产品层不硬编码端口，只依赖真实就绪结果，跨平台项目和异常响应的覆盖仍待验证。
+- **无人调用方的停止时机已实现为立即回收。** 最后 consumer 释放后 Runtime 进入停止，退出清理与崩溃退避仍由运行时常量控制。
+- **路径迁移的边界仍需验证。** 当前以 canonical root 复用 Definition/Runtime，并在重新定位到不同目录时重新检查、必要时重新信任；跨平台路径规范化、符号链接和旧授权失效策略仍需进一步验证。
+- **真实 GUI 已完成，安全负例仍待补证。** CodeNow Wiki live smoke 已于 2026-08-25 完成；仍缺少真实失败目录/脚本、Preview Node/Electron bridge、外部导航、`window.open` 和权限请求等正式负例证据，不能把正向页面显示推论为安全边界或全部验收通过。
 - **用户研究证据边界。** 本轮未发现独立的 `docs/research/users/` 用户研究材料或独立亮点策略文件；设计依据仅为用户已确认语义、active change 的 `proposal.md`/`design.md`/`evidence.md`/`tasks.md` 与现有代码事实。若出现真实用户反馈，应回到产品/研究流程更新，而不是把本设计的推断当成研究结论。
 
-## 12. 交付引用与后续接口
+## 12. as-built 依据与后续接口
 
-- 本 Planned Delta 对应 active change `chg-20260825-local-app-tabs-runtime` 的产品设计与任务分解；Acceptance/TODO 的正式契约和状态由主 Agent 按相应流程维护，本文件不复制其 GWT 或任务清单。
+- 本 Current/as-built 同步依据 active change `chg-20260825-local-app-tabs-runtime`、当前实现和受控测试；Acceptance/TODO 的正式契约和状态由主 Agent 按相应流程维护，本文件不复制其 GWT 或任务清单。
+- 关键实现路径：`src/components/types.ts`、`src/components/workspace-session.ts`、`src/chat-workspace-persistence.ts`、`src/workspace-snapshot-resolution.ts`、`src/components/AppShell.tsx`、`src/components/AppShellSidebar.tsx`、`src/components/AppShellWorkspace.tsx`、`src/components/LocalAppOnboardingDialog.tsx`、`src/components/LocalAppWorkspace.tsx`、`src/components/LocalAppPreview.tsx`、`electron/main.ts`、`electron/local-app-runtime/index.ts`、`electron/local-app-runtime/preview.ts`。
+- 开发与构建验证：`npm run typecheck` PASS；`npm run test:electron` PASS（`117/117`，含受控 loopback、动态 readiness、失败分支、generation、consumer 生命周期和退出清理）；`npm run build` PASS（仅保留既有 chunk size warning）；`git diff --check` PASS。这些开发检查不等同于正式 Acceptance 全通过。
+- 真实 GUI 证据：已执行真实 Electron 窗口与 `/Volumes/macOS/Github/codenow.wiki` live smoke；首次动态地址为 `http://localhost:50041/`，退出后旧 PID 全清；正常重启创建新的 `npm PID 94225 / next PID 94253`，动态地址为 `http://localhost:50941/`，并恢复同一 Tab 与退出前路由。chooser/picker、聊天切换 PID 不变、同 root 多 Tab 共享 Runtime、刷新不重启也已实测。
+- 正式 Acceptance 状态仍为 `10/16 PASS`、`6/16 待补`，总体 `BLOCKED`，未发现 FAIL；待补包含取消/Escape 不落盘、失败/停止恢复、真实 `path_missing` 恢复，以及 Preview Node/Electron bridge、外部导航、弹窗和权限请求负例。本文件不把开发检查或 GUI smoke 写成全部通过，也不回写 `acceptance.md` 状态。
 - 视觉界面设计师消费第 4、6、8、9、10 节，补充现有设计系统下的层级与状态呈现。
 - 技术架构消费第 3、5、6、11 节，确定 Runtime、Preview、Desktop Seam、generation、SandboxAdapter、持久化和 readiness 合同。
-- 实现与正式验收完成前，`Current` 仍保持“只有项目/线程，无 Local App”的基线；代码写入或局部自检不能自动把 Planned Delta 改写为 Current。
+
+## 13. Planned / Later（未实现）
+
+- `LATER-01`：项目首页复用同一 Local App Runtime，形成左预览、右 Claude Agent SDK 的开发工作台。
+- `LATER-02`：Claude Agent SDK 通过通用 SandboxBroker 在项目运行时中读写、安装依赖和控制进程。
+- `LATER-03`：确定并实现生产级跨平台 Sandbox Provider；完成项目外文件、网络、环境变量和子进程逃逸验证后再声明强隔离。

@@ -23,9 +23,9 @@
 
 - 主 Agent 是唯一用户责任人和 orchestrator，负责意图、确认、任务包、派工、冲突裁决、共享状态和最终承诺。
 - sub-agent 只向主 Agent 返回专业结果，不直接向用户承诺，也不创建或管理下一级 Agent。
-- 只调用 `.codex/config.toml` 已配置的角色；专业判断、边界明确的实现和独立审查/验收由相应角色承担，串行只改变顺序，不取消职责。
+- 只调用 `.codex/config.toml` 已配置的角色；lifecycle 判定的 Light 任务由主 Agent 直接实现，Medium/Heavy 的专业缺口、实现和独立审查/验收由相应角色承担，串行只改变顺序，不取消 required 职责。
 - 任务互相独立且写入路径不重叠时，研究、探索、审查和测试优先并行；存在依赖或路径重叠时按同一专业职责串行。
-- 任务等级、专业缺口、`required/not_needed`、质量触发和确认策略以 `.codex/rules/lifecycle.md` 为准；Skill 命中、主 Agent 更快或并发不足都不能代替 required 角色。
+- 任务等级、专业缺口、执行方式、`required/not_needed`、质量触发和确认策略以 `.codex/rules/lifecycle.md` 为准；文件数量、受影响专业面、Skill 命中、主 Agent 更快或并发不足都不能代替该判断。
 - 写入者、精确路径、失败恢复和降级以 `.codex/rules/ownership.md` 为准；实现自检不等于开发质量检查或正式验收。
 
 ## 强路由入口
@@ -46,7 +46,7 @@
 
 ## 上下文与信息层
 
-- 首次实质工作前检查并读取根 `USER_PROFILE.md`、`GUARDRAILS.md`、`COLLABORATOR.md`（存在时）；这些文件只能由对应产品或画像流程创建和修改。
+- 首次实质工作前检查根 `USER_PROFILE.md`、`GUARDRAILS.md`、`COLLABORATOR.md` 是否存在；只有本轮会受用户画像、产品边界或协作表达影响，或对应强路由入口命中时才读取。它们只能由对应产品或画像流程创建和修改。
 - 派发 sub-agent 前必须读取 `knowledge/shared/context-sharing.md`，提供自包含的精简任务包和精确路径；仅当未落盘的最近语义会改变结果时继承最少必要对话。
 - `knowledge/shared/README.md` 是共享 Knowledge 路由；任务包或 Skill 未列全共享材料时，读取该索引及全部命中分支。
 

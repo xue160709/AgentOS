@@ -1,9 +1,16 @@
 {
   "module": "local-app-runtime",
-  "workflow": "accepted-change-plan",
+  "workflow": "as-built-working-tree-sync",
   "sourceChange": "chg-20260825-local-app-tabs-runtime",
   "sourceRevision": 1,
   "lastPrdSyncCommit": null,
+  "implementationBaselineCommit": "a940b9bff60e19315e3fcce982589315c1d93c2b",
   "lastPrdSyncAt": "2026-08-25",
-  "notes": "仅同步已确认 Planned 方案；尚无 Local App Runtime 代码事实或正式验收证据。"
+  "acceptance": {
+    "status": "blocked",
+    "passed": 10,
+    "pendingEvidence": 6,
+    "failed": 0
+  },
+  "notes": "README/design/technical 已同步为当前未提交 working tree 的 as-built；自动化 117/117、typecheck/build 与真实 CodeNow Wiki GUI smoke 已完成。因 6 个真实 Electron 端到端场景待补证据，正式 Acceptance 仍为 blocked。未把当前 HEAD 冒充包含本轮实现的同步 commit。"
 }

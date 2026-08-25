@@ -7,6 +7,8 @@ import type { ChatWorkspaceState, TranscriptItem } from './components/types'
 
 export const CHAT_WORKSPACE_SAVED_AT_FIELD = 'savedAt'
 export const CHAT_WORKSPACE_REVISION_FIELD = 'workspaceRevision'
+export const CHAT_WORKSPACE_SCHEMA_VERSION_FIELD = 'workspaceSchemaVersion'
+export const CHAT_WORKSPACE_SNAPSHOT_COMPLETE_FIELD = 'snapshotComplete'
 
 export type ChatWorkspaceSnapshot = {
   state: ChatWorkspaceState
@@ -83,7 +85,7 @@ export function withNextWorkspaceRevision(state: ChatWorkspaceState, floor = 0):
 }
 
 export function workspaceDurableFingerprint(state: ChatWorkspaceState): string {
-  const { workspaceRevision: _workspaceRevision, ...withoutRevision } = state
+  const { workspaceRevision: _workspaceRevision, localAppDefinitions: _legacyDefinitions, localAppTabs: _legacyTabs, activeLocalAppTabId: _legacyActive, ...withoutRevision } = state
   return JSON.stringify(withoutRevision)
 }
 
@@ -117,6 +119,12 @@ function chatWorkspaceStateMaxUpdatedAt(state: ChatWorkspaceState): number {
     }
     max = Math.max(max, thread.chatState.tasks?.updatedAt ?? 0)
   }
+  for (const definition of state.runtimeDefinitions ?? []) {
+    max = Math.max(max, definition.createdAt, definition.updatedAt)
+  }
+  for (const tab of state.workspaceTabs ?? []) {
+    max = Math.max(max, tab.createdAt, tab.updatedAt)
+  }
   return max
 }
 
@@ -132,11 +140,23 @@ function transcriptItemTimestamp(item: TranscriptItem): number {
 
 function chatWorkspaceSnapshotCompleteness(state: ChatWorkspaceState): number {
   const transcriptItems = state.threads.reduce((sum, thread) => sum + thread.chatState.items.length, 0)
-  return state.projects.length * 10_000 + state.threads.length * 100 + transcriptItems
+  const runtimeCompleteness =
+    (state.runtimeDefinitions?.length ?? 0) * 1_000 +
+    (state.workspaceTabs?.length ?? 0) * 100 +
+    (state.activeWorkspaceTabId ? 1 : 0)
+  const schema = Math.max(0, Math.floor(state.workspaceSchemaVersion ?? 0))
+  const complete = state.snapshotComplete === false ? 0 : 1
+  return schema * 1_000_000_000 + complete * 100_000_000 +
+    state.projects.length * 10_000 + state.threads.length * 100 + transcriptItems + runtimeCompleteness
 }
 
 function isEmptyWorkspaceSnapshot(state: ChatWorkspaceState): boolean {
-  return state.projects.length === 0 && state.threads.length === 0
+  return (
+    state.projects.length === 0 &&
+    state.threads.length === 0 &&
+    (state.runtimeDefinitions?.length ?? 0) === 0 &&
+    (state.workspaceTabs?.length ?? 0) === 0
+  )
 }
 
 function toOptionalFiniteNumber(value: unknown): number | undefined {

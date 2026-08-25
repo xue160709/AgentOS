@@ -17,6 +17,108 @@ import type {
 /** 顶部主导航视图 / Primary shell view id */
 export type AppViewId = 'home' | 'docs' | 'settings'
 
+/** Runtime directory trust state / Runtime 目录信任状态 */
+export type RuntimeTrustStatus = 'trusted' | 'revoked'
+
+/** Durable Runtime definition / Runtime 持久化定义 */
+export type RuntimeDefinition = {
+  id: string
+  name: string
+  rootPath: string
+  canonicalRoot?: string
+  packageManager: 'npm'
+  devCommand: { executable: 'npm'; args: ['run', 'dev'] }
+  trustStatus: RuntimeTrustStatus
+  autoStart: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/** User-facing Workspace Tab; independent from chat threads / 用户侧 Workspace Tab 视图入口 */
+export type WorkspaceTab = {
+  id: string
+  runtimeDefinitionId: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  /** @deprecated Read-only compatibility for Revision 1 snapshots/components. */
+  localAppId?: string
+}
+
+export type RuntimeStatus =
+  | 'preparing'
+  | 'starting'
+  | 'running'
+  | 'degraded'
+  | 'failed'
+  | 'path_missing'
+  | 'stopped'
+
+export type PreviewStatus = 'idle' | 'loading' | 'ready' | 'degraded' | 'failed' | 'closed'
+
+export type RuntimeSnapshot = {
+  runtimeDefinitionId: string
+  runtimeId: string
+  generation: number
+  status: RuntimeStatus
+  readyUrl?: string
+  port?: number
+  restartAttempt: number
+  startedAt?: number
+  updatedAt: number
+  stopReason?: 'user' | 'last-consumer' | 'app-quit' | 'crash' | 'error'
+  phase?: 'inspect' | 'prepare' | 'start' | 'readiness' | 'preview' | 'stop'
+  errorCode?: string
+  detail?: string
+  logs?: string[]
+  /** Preview state is kept separate from the managed process state. */
+  previewStatus?: PreviewStatus
+  /** @deprecated Read-only compatibility for Revision 1 event payloads. */
+  localAppId?: string
+}
+
+export type RuntimeEvent = {
+  type: 'snapshot' | 'status' | 'log' | 'ready' | 'exit'
+  runtimeDefinitionId: string
+  runtimeId: string
+  generation: number
+  status: RuntimeStatus
+  readyUrl?: string
+  port?: number
+  stream?: 'stdout' | 'stderr'
+  line?: string
+  code?: number | null
+  signal?: string | null
+  detail?: string
+  phase?: RuntimeSnapshot['phase']
+  errorCode?: string
+  previewStatus?: PreviewStatus
+  timestamp: number
+  /** @deprecated Read-only compatibility for Revision 1 event payloads. */
+  localAppId?: string
+}
+
+/**
+ * Compatibility aliases are intentionally kept type-only while the physical
+ * electron/local-app-runtime implementation is migrated.  Durable writes
+ * are normalized to the neutral fields above.
+ */
+/** @deprecated Use RuntimeDefinition. */
+export type LocalAppDefinition = RuntimeDefinition
+/** @deprecated Use WorkspaceTab. */
+export type LocalAppTab = WorkspaceTab
+/** @deprecated Use RuntimeSnapshot. */
+export type LocalAppRuntimeSnapshot = RuntimeSnapshot
+/** @deprecated Use RuntimeEvent. */
+export type LocalAppRuntimeEvent = RuntimeEvent
+/** @deprecated Use RuntimeStatus. */
+export type LocalAppRuntimeStatus = RuntimeStatus
+/** @deprecated Use PreviewStatus. */
+export type LocalAppPreviewStatus = PreviewStatus
+
+/** Project-home page preference; deliberately not part of Runtime state. */
+export type ProjectHomeViewMode = 'overview' | 'runtime'
+
 /** 设置页侧栏路由 `#settings/<id>` / Settings sidebar route fragment `#settings/<id>` */
 export type SettingsCategoryId = 'general' | 'search' | 'mcp' | 'skills' | 'updates' | 'agent' | 'developer'
 
@@ -294,6 +396,21 @@ export type ChatWorkspaceState = {
   projects: WorkspaceProject[]
   threads: WorkspaceThread[]
   sidebarPrefs: WorkspaceSidebarPrefs
+  /** Runtime definitions/tabs are durable UX state; process facts stay in Main memory. */
+  runtimeDefinitions: RuntimeDefinition[]
+  workspaceTabs: WorkspaceTab[]
+  activeWorkspaceTabId: string
+  /** Last page-level view selected for each project home. */
+  projectHomeViewModes: Record<string, ProjectHomeViewMode>
+  /** @deprecated Compatibility view over the neutral fields; not persisted by new snapshots. */
+  localAppDefinitions: LocalAppDefinition[]
+  /** @deprecated Compatibility view over the neutral fields; not persisted by new snapshots. */
+  localAppTabs: LocalAppTab[]
+  /** @deprecated Compatibility view over the neutral fields; not persisted by new snapshots. */
+  activeLocalAppTabId: string
+  /** Snapshot metadata shared by JSON and SQLite adapters. */
+  workspaceSchemaVersion?: number
+  snapshotComplete?: boolean
 }
 
 /** 某项目的技能列表加载状态 / Loaded slash skills for one project */

@@ -3,13 +3,35 @@
  * Empty-state starter grid feeding canned prompts into the composer.
  */
 
-import type { ReactNode } from 'react'
+import { useSyncExternalStore, type ReactNode } from 'react'
 import type { ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
 import { useI18n } from '../../i18n/i18n'
 import type { HomePluginRunItem } from '../../desktop-types'
 import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
 import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { ProjectHomeProjectSelector, ProjectHomeSurface } from './ProjectHomeSurface'
+import { ProjectHomeRuntimeView, type ProjectHomeRuntimeController } from './ProjectHomeRuntimeView'
+
+export type ProjectHomeRuntimeContext = ProjectHomeRuntimeController & {
+  viewMode: 'overview' | 'runtime'
+  onViewModeChange: (mode: 'overview' | 'runtime') => void
+}
+let projectHomeRuntimeContext: ProjectHomeRuntimeContext | null = null
+const projectHomeRuntimeListeners = new Set<() => void>()
+
+/** AppShell configures the project-home-only Runtime host without changing the existing overview surface. */
+export function configureProjectHomeRuntime(context: ProjectHomeRuntimeContext | null) {
+  projectHomeRuntimeContext = context
+  projectHomeRuntimeListeners.forEach((listener) => listener())
+}
+
+function useProjectHomeRuntimeContext() {
+  return useSyncExternalStore(
+    (listener) => { projectHomeRuntimeListeners.add(listener); return () => projectHomeRuntimeListeners.delete(listener) },
+    () => projectHomeRuntimeContext,
+    () => null,
+  )
+}
 
 type ChatStartViewProps = {
   project: WorkspaceProject
@@ -70,56 +92,64 @@ export function ChatStartView({
   onRefreshAgentStatus,
 }: ChatStartViewProps) {
   const { t } = useI18n()
+  const runtimeContext = useProjectHomeRuntimeContext()
+  const projectHomeViewMode = runtimeContext?.viewMode ?? 'overview'
 
   return (
     <div className="chat-start-view">
-      {project.pathMissing ? (
-        <div className="project-path-missing-banner" role="status">
-          <strong>{t('shell.projectPathMissing')}</strong>
-          <p>{t('shell.projectPathMissingHint')}</p>
+      <div className="project-home-view-tabs" data-testid="project-home-view-tabs" role="tablist" aria-label={t('runtime.projectRuntime')}>
+        <button type="button" role="tab" aria-selected={projectHomeViewMode === 'overview'} data-testid="project-home-view-tab-overview" onClick={() => runtimeContext?.onViewModeChange('overview')}>{t('runtime.overview')}</button>
+        <button type="button" role="tab" aria-selected={projectHomeViewMode === 'runtime'} data-testid="project-home-view-tab-runtime" onClick={() => runtimeContext?.onViewModeChange('runtime')}>{t('runtime.runtimeTab')}</button>
+      </div>
+      {projectHomeViewMode === 'runtime' && runtimeContext ? <div className="project-home-runtime-panel" data-testid="project-home-runtime-panel"><ProjectHomeRuntimeView controller={runtimeContext} /></div> : <div className="project-home-overview-panel" data-testid="project-home-overview-panel">
+        {project.pathMissing ? (
+          <div className="project-path-missing-banner" role="status">
+            <strong>{t('shell.projectPathMissing')}</strong>
+            <p>{t('shell.projectPathMissingHint')}</p>
+          </div>
+        ) : null}
+        <div className="chat-start-view__hero" id="chat-project-home">
+          <h1>{heading ?? t('chat.emptyHeading')}</h1>
         </div>
-      ) : null}
-      <div className="chat-start-view__hero" id="chat-project-home">
-        <h1>{heading ?? t('chat.emptyHeading')}</h1>
-      </div>
-      {composer}
-      <div className="chat-start-view__below-composer">
-        {agentModeEnabled ? (
-          <ProjectHomeSurface
-            project={project}
-            projects={projects}
-            projectOrderIds={projectOrderIds}
-            agent={agentMode}
-            todoEnabled={todoEnabled}
-            loading={agentModeLoading}
-            agentStatusSnapshot={agentStatusSnapshot}
-            agentSettingsOpen={agentSettingsOpen}
-            agentSettingsPanel={agentSettingsPanel}
-            onOpenAgentSettings={onOpenAgentSettings}
-            onAgentSettingsPanelChange={onAgentSettingsPanelChange}
-            onCloseAgentSettings={onCloseAgentSettings}
-            threads={threads}
-            threadRunStates={threadRunStates}
-            hiddenSkillPaths={hiddenSkillPaths}
-            onStartDataCardDraft={onStartDataCardDraft}
-            onCreateProject={onCreateProject}
-            onSelectProject={onSelectProject}
-            onEditHomePluginCard={onEditHomePluginCard}
-            onOpenProjectFile={onOpenProjectFile}
-            onRunProjectSkill={onRunProjectSkill}
-            onStopProjectSkillRun={onStopProjectSkillRun}
-            onRefreshAgentStatus={onRefreshAgentStatus}
-          />
-        ) : (
-          <ProjectHomeProjectSelector
-            project={project}
-            projects={projects}
-            projectOrderIds={projectOrderIds}
-            onCreateProject={onCreateProject}
-            onSelectProject={onSelectProject}
-          />
-        )}
-      </div>
+        {composer}
+        <div className="chat-start-view__below-composer">
+          {agentModeEnabled ? (
+            <ProjectHomeSurface
+              project={project}
+              projects={projects}
+              projectOrderIds={projectOrderIds}
+              agent={agentMode}
+              todoEnabled={todoEnabled}
+              loading={agentModeLoading}
+              agentStatusSnapshot={agentStatusSnapshot}
+              agentSettingsOpen={agentSettingsOpen}
+              agentSettingsPanel={agentSettingsPanel}
+              onOpenAgentSettings={onOpenAgentSettings}
+              onAgentSettingsPanelChange={onAgentSettingsPanelChange}
+              onCloseAgentSettings={onCloseAgentSettings}
+              threads={threads}
+              threadRunStates={threadRunStates}
+              hiddenSkillPaths={hiddenSkillPaths}
+              onStartDataCardDraft={onStartDataCardDraft}
+              onCreateProject={onCreateProject}
+              onSelectProject={onSelectProject}
+              onEditHomePluginCard={onEditHomePluginCard}
+              onOpenProjectFile={onOpenProjectFile}
+              onRunProjectSkill={onRunProjectSkill}
+              onStopProjectSkillRun={onStopProjectSkillRun}
+              onRefreshAgentStatus={onRefreshAgentStatus}
+            />
+          ) : (
+            <ProjectHomeProjectSelector
+              project={project}
+              projects={projects}
+              projectOrderIds={projectOrderIds}
+              onCreateProject={onCreateProject}
+              onSelectProject={onSelectProject}
+            />
+          )}
+        </div>
+      </div>}
     </div>
   )
 }

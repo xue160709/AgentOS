@@ -1,50 +1,52 @@
 ---
 change_id: chg-20260825-local-app-tabs-runtime
-revision: 1
+revision: 2
 decision: accepted
-delivery: not_started
+delivery: implemented
 owner: main_agent
 ---
 
-# 左侧 Local App New Tab 与 CodeNow Wiki 自动运行
+# 通用 Workspace Tab 与可复用 Runtime
 
 ## 原因
 
-AgentOS 当前侧栏只组织项目和聊天线程，项目首页则由 Home Plugin/A2UI 卡片承载。用户希望新增一种浏览器式 Local App Tab：绑定本地 Web 项目后，AgentOS 自动执行开发命令并在 Tab 内渲染站点，无需用户打开终端或手动运行 `npm run dev`。`/Volumes/macOS/Github/codenow.wiki` 是首个端到端接入实例。
+Revision 1 已实现从本地目录自动运行 `npm run dev`、受控 Preview、持久化 Tab、恢复和进程回收，但把用户入口建模成独立的“Local App”。用户已明确否定这一产品概念：它就是侧栏中的普通 Tab；Runtime 是可同时被侧栏 Tab 和项目首页承载的共享能力。
+
+项目首页现有 A2UI/Home Plugin 卡片系统继续保留。本 revision 新增独立 Runtime 页面，由首页顶部 `Overview / Runtime` Tab 在两套系统间切换，不把 Runtime 塞进卡片网格，也不复制一套运行进程。
 
 ## 范围
 
-- 在左侧侧栏提供 `New Tab` 入口，创建并激活 Local App Tab。
-- 首次接入允许用户选择并确认信任一个本地文件夹；首个实例绑定 `/Volumes/macOS/Github/codenow.wiki`。
-- AgentOS 持久化 Local App 定义、Tab 与活动选择，并在应用恢复时自动启动已信任应用。
-- AgentOS 在 Local App 根目录自动执行 `npm run dev`；依赖缺失或 lockfile 变化时进入可观察的依赖准备流程。
-- 启动成功后在隔离预览容器中加载本地 React/Next.js 网站，并支持 HMR、刷新、重启、关闭和错误恢复。
-- Tab、运行时和预览三者分离：多个视图可复用同一 Local App Runtime，关闭最后一个调用方后按生命周期策略停止进程。
-- 建立可复用的 Local App Runtime seam，供后续项目首页开发模式复用。
-- 明确首期安全状态：只有用户已确认信任的本地目录才可自动运行；生产级“项目外不可访问”声明必须等待真实 OS 沙箱 Provider 验证。
+- 取消所有用户可见的“Local App / 本地应用”栏目、文案、ARIA 和交互概念，侧栏改为通用 `Tabs` 区。
+- `Tabs` 区位于“新对话”和搜索上方，视觉严格复用现有项目/对话行样式。
+- Tab 名称由用户决定；package/目录名只作为首次建议。支持右键菜单重命名与关闭，行内不显示关闭按钮。
+- 将领域类型、持久化字段、Desktop API/IPC 与 Runtime 事件迁移为 `RuntimeDefinition`、`WorkspaceTab` 和中性 `Runtime*` 合同；旧字段只用于一次性安全读取迁移。
+- 抽取通用 `RuntimeWorkspace` / `RuntimePreview` 宿主 seam。侧栏 Tab 和项目首页各有独立 consumer 与 PreviewSession，共享同一 RuntimeInstance。
+- 项目首页新增独立 `Overview / Runtime` 页面级切换；`ProjectHomeSurface` 和 A2UI 卡片内部不改。
+- 项目首页按当前项目路径查找或显式信任 RuntimeDefinition，不创建隐藏 WorkspaceTab；切换宿主时按精确 consumer 释放，仍有其它 consumer 时不停止进程。
+- 保留 revision gate、显式信任、动态 readiness、日志、失败恢复、generation 隔离、Preview 安全与进程树回收。
 
 ## 非目标
 
-- 本轮不改造项目首页为左右 Claude 开发工作台。
-- 本轮不接入 Claude Agent SDK 的沙箱文件/命令工具代理。
-- 本轮不实现 A2UI/Home Plugin 定制，也不把 CodeNow Wiki 写成专用页面组件。
-- 本轮不支持远程 URL 书签、云端部署、多用户共享或公开预览。
-- 本轮不承诺未经验证的跨平台强沙箱；普通 `cwd`、路径校验、Electron renderer sandbox 或 `utilityProcess` 不能被描述为 OS 文件系统沙箱。
+- 不重构 A2UI/Home Plugin 卡片、排序、插件消息或 Agent 设置。
+- 不把 Runtime 做成 A2UI 卡片，也不让两套首页系统共享内部状态。
+- 不实现 Claude Agent SDK 文件/命令代理、远程 URL、云端部署、多用户共享或公开预览。
+- 不新增生产级 OS 沙箱承诺；当前仍是显式信任的本地进程加受控 Preview。
+- 不为尚未确认的未来内容种类设计通用 Tab union；本轮 WorkspaceTab 只承载 Runtime。
 
 ## 验收
 
-- 用户可从侧栏创建 Local App Tab，选择并确认信任 CodeNow Wiki 文件夹。
-- AgentOS 自动执行 CodeNow Wiki 的 `npm run dev`，探测真实就绪地址并在 Tab 中显示站点。
-- 退出并重新启动 AgentOS 后，Tab 与绑定仍存在，运行时自动恢复，无需用户再次运行命令。
-- 启动中、依赖准备、运行中、失败、重试、目录缺失和停止均有可观察状态。
-- 同一 Local App 的多个视图不重复启动开发服务器；关闭最后一个调用方后进程树可回收。
-- 预览内容不能直接访问 Electron/Node 能力，不能创建未受控窗口或导航到未授权目标。
-- 完整契约同步到 `prd/local-app-runtime/acceptance.md`，状态初始为 `⬜ 未实现`。
+- 侧栏首段为 `Tabs`，DOM 顺序早于新对话与搜索，且没有用户可见的 Local App 文案或行内关闭按钮。
+- 用户可在创建时决定 Tab 名称，并通过右键或键盘上下文菜单重命名、关闭；名称持久化且重命名不重启 Runtime。
+- 旧快照可安全迁移到新字段并保留 ID、标题、信任和活动选择；新保存只写新合同。
+- 项目首页可在 `Overview / Runtime` 间切换，现有卡片系统不受 Runtime 启停或失败影响。
+- 项目首页 Runtime 不创建隐藏 Tab；同 root/command 的首页与侧栏 Tab 共享一个 Runtime，任一宿主离开不误停另一个宿主。
+- Preview 创建、隐藏、关闭与 late event 都按 host + runtimeId + generation 校验；外部导航、窗口和权限边界不回退。
+- 类型检查、Workspace/IPC/Runtime/Preview 目标测试和风险定向质量检查达到可交付状态；正式产品验收仍由 `project-verify` 完成。
 
 ## 决策与风险
 
-- `New Tab` 是入口，`Local App Runtime` 是底层能力；项目首页后续只复用，不另建运行时。
-- 启动命令由 AgentOS 管理。Local App 接入完成后，用户不需要选择或手动执行 `npm run dev`。
-- CodeNow Wiki 当前已核实存在 `package.json`，`dev` 脚本为 `next dev`；端口不得硬编码，应由运行时探测。
-- 自动运行任意项目脚本等价于执行不可信代码。首期只能对显式信任目录自动启动；强隔离 Provider 是正式对外开放前的阻断项。
-- 真正的跨平台 OS 沙箱方案仍需 PoC 裁决。架构必须先抽象 `SandboxAdapter`，避免把临时本机子进程实现冒充安全边界或写死进 UI。
+- 正式用户对象为 `WorkspaceTab` 与 `Runtime`；`Local App` 只允许出现在旧数据迁移和历史证据中。
+- 项目首页切换放在 `ProjectHomeSurface` 上层，默认 `Overview`；Runtime 页未信任时只检查并显示 CTA，不因页面加载自动运行脚本。
+- consumer 采用 `tab:<tabId>` 与 `project-home:<projectId>:<mountId>`；项目首页 mountId 每次挂载唯一，防止旧 release/late event 污染新宿主。
+- 工作区 schema 迁移是最高风险：必须双读、原子写、不删除旧快照；非法信任值保守降级为 revoked。
+- 当前 dirty tree 是 Revision 1 的既有实现，所有实现任务必须以该状态为 baseline，禁止回退或覆盖无关用户改动。

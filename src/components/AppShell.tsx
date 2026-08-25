@@ -23,6 +23,7 @@ import {
   persistChatWorkspaceStateToLocalStorage,
   createDefaultChatWorkspaceState,
 } from '../chat-workspace-persistence'
+import { workspaceRevisionOf } from '../workspace-snapshot-resolution'
 import {
   SIDEBAR_HIDDEN_SKILLS_STORAGE_KEY,
   SIDEBAR_PROJECT_SKILLS_STORAGE_KEY,
@@ -37,6 +38,7 @@ import { CHAT_WORKSPACE_CLEARED_EVENT, CLAUDE_AGENT_SETTINGS_CHANGED_EVENT } fro
 import { defaultThreadTitleSet, getInitialLocale, translate, useI18n } from '../i18n/i18n'
 import { IconInline } from '../icon-inline'
 import type { DesktopPreferences, HomePluginRunItem, HomePluginTaskEvent } from '../desktop-types'
+import type { RuntimeCreationResult, RuntimeInspectResult, WorkspaceTabResult, RuntimeRelocationResult } from '../desktop-api'
 import type { ChatModelPick, ClaudeAgentModelProvider, ClaudeAgentProviderAuthMode, ClaudeAgentSettingsSnapshot } from '../claude-chat-types'
 import {
   LOCAL_PROVIDER_PRESET_CATALOG,
@@ -59,14 +61,149 @@ import type {
   ThreadCompletionState,
   ThreadRunState,
   WorkspaceProject,
+  RuntimeSnapshot,
+  WorkspaceTab,
+  RuntimeDefinition,
+  RuntimeEvent,
 } from './types'
 import { AppShellSidebar } from './AppShellSidebar'
 import { AppShellWorkspace } from './AppShellWorkspace'
 import { type ChatPageHandle } from './chat/ChatPage'
+import { configureProjectHomeRuntime, type ProjectHomeRuntimeContext } from './chat/ChatStartView'
 import { WorkspaceSession } from './workspace-session'
+import { RuntimeOnboardingDialog } from './RuntimeOnboardingDialog'
+import { RuntimeWorkspace } from './RuntimeWorkspace'
 
 const INITIAL_PROVIDER_SKIP_VALUE = '__skip'
 const INITIAL_PROVIDER_CUSTOM_VALUE = '__custom'
+
+function mergeAcceptedRuntime(
+  current: Record<string, RuntimeSnapshot>,
+  incoming: RuntimeSnapshot,
+): Record<string, RuntimeSnapshot> {
+  const runtimeDefinitionId = incoming.runtimeDefinitionId
+  if (!runtimeDefinitionId) return current
+  const previous = current[runtimeDefinitionId]
+  if (previous && incoming.generation < previous.generation) return current
+  if (previous && incoming.runtimeId !== previous.runtimeId && incoming.generation === previous.generation) return current
+  const neutralSnapshot: RuntimeSnapshot = {
+    runtimeDefinitionId,
+    runtimeId: incoming.runtimeId,
+    generation: incoming.generation,
+    status: incoming.status,
+    readyUrl: incoming.readyUrl,
+    port: incoming.port,
+    restartAttempt: incoming.restartAttempt,
+    startedAt: incoming.startedAt,
+    updatedAt: incoming.updatedAt,
+    stopReason: incoming.stopReason,
+    phase: incoming.phase,
+    errorCode: incoming.errorCode,
+    detail: incoming.detail,
+    logs: incoming.logs,
+    previewStatus: incoming.previewStatus,
+  }
+  return { ...current, [runtimeDefinitionId]: neutralSnapshot }
+}
+
+function WorkspaceSaveErrorNotice({
+  error,
+  retrying,
+  onRetry,
+  retryLabel,
+}: {
+  error: string
+  retrying: boolean
+  onRetry: () => void
+  retryLabel: string
+}) {
+  if (!error) return null
+  return (
+    <div className="workspace-save-error" data-testid="workspace-save-error" role="alert">
+      <span>{error}</span>
+      <button type="button" data-testid="workspace-save-retry" onClick={onRetry} disabled={retrying}>
+        {retrying ? '…' : retryLabel}
+      </button>
+    </div>
+  )
+}
+
+function RuntimeOnlySidebar({
+  tabs,
+  activeTabId,
+  onNew,
+  onSelect,
+  onClose,
+  onRename,
+}: {
+  tabs: WorkspaceTab[]
+  activeTabId: string
+  onNew: () => void
+  onSelect: (tabId: string) => void
+  onClose: (tabId: string) => void
+  onRename: (tabId: string, title: string) => void | Promise<boolean>
+}) {
+  const { t } = useI18n()
+  const [menu, setMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingTitle, setEditingTitle] = useState('')
+  const menuRef = useRef<HTMLDivElement>(null)
+  const returnFocusRef = useRef<HTMLElement | null>(null)
+  const openMenu = (event: ReactMouseEvent<HTMLElement>, tab: WorkspaceTab) => {
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    returnFocusRef.current = event.currentTarget
+    setMenu({ tabId: tab.id, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
+  }
+  useEffect(() => {
+    if (!menu) return
+    const closeOnOutside = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenu(null)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      const items = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])]
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMenu(null)
+        requestAnimationFrame(() => returnFocusRef.current?.focus())
+      } else if (items.length && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault()
+        const index = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement))
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length
+        items[next]?.focus()
+      }
+    }
+    document.addEventListener('mousedown', closeOnOutside)
+    document.addEventListener('keydown', onKeyDown)
+    const frame = requestAnimationFrame(() => menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus())
+    return () => {
+      cancelAnimationFrame(frame)
+      document.removeEventListener('mousedown', closeOnOutside)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menu])
+  const tab = menu ? tabs.find((item) => item.id === menu.tabId) : undefined
+  const submitRename = async () => {
+    if (!tab) return
+    const title = editingTitle.trim()
+    if (title.length < 1 || title.length > 64) return
+    if (await onRename(tab.id, title) !== false) setEditingId(null)
+  }
+  return <aside className="app-sidebar local-app-only-sidebar" aria-label={t('runtime.section')}>
+    <div className="app-sidebar-inner">
+      <button type="button" className="app-sidebar-new-thread" data-testid="runtime-new-tab" onClick={onNew}><IconInline name="plus" /><span>{t('runtime.newTab')}</span></button>
+      <div className="local-app-sidebar-list runtime-tabs-list">
+        {tabs.map((item) => <div key={item.id} className={`local-app-sidebar-row runtime-tab-row${item.id === activeTabId ? ' is-active' : ''}`} data-testid="runtime-tab">
+          {editingId === item.id ? <input autoFocus data-testid="runtime-tab-title-input" className="runtime-tab-title-input" value={editingTitle} maxLength={64} onChange={(event) => setEditingTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void submitRename() } if (event.key === 'Escape') { event.preventDefault(); setEditingId(null) } }} /> : <button type="button" className="local-app-sidebar-select runtime-tab-select" data-runtime-tab-id={item.id} aria-current={item.id === activeTabId ? 'page' : undefined} onClick={() => onSelect(item.id)} onContextMenu={(event) => openMenu(event, item)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); returnFocusRef.current = event.currentTarget; setMenu({ tabId: item.id, x: rect.left, y: rect.bottom }) } }}><IconInline name="folder" /><span><strong>{item.title}</strong></span></button>}
+        </div>)}
+      </div>
+    </div>
+    {menu && tab ? <div ref={menuRef} className="app-sidebar-context-menu" data-testid="runtime-tab-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+      <button type="button" role="menuitem" data-testid="runtime-tab-menu-rename" className="app-sidebar-context-menu__item" onClick={() => { setEditingId(tab.id); setEditingTitle(tab.title); setMenu(null) }}>{t('runtime.rename')}</button>
+      <button type="button" role="menuitem" data-testid="runtime-tab-menu-close" className="app-sidebar-context-menu__item is-danger" onClick={() => { setMenu(null); onClose(tab.id) }}>{t('runtime.close')}</button>
+    </div> : null}
+  </aside>
+}
 const EYE_COMFORT_CLASS = 'is-eye-comfort'
 
 type InitialModelFormState = {
@@ -107,6 +244,20 @@ export function AppShell() {
   const [canForward, setCanForward] = useState(false)
   const [headerStatus, setHeaderStatus] = useState(() => translate(getInitialLocale(), 'shell.headerDefault'))
   const [chatWorkspace, setChatWorkspace] = useState<ChatWorkspaceState | null>(null)
+  const [localAppInspect, setLocalAppInspect] = useState<RuntimeInspectResult | null>(null)
+  const [localAppChooserOpen, setLocalAppChooserOpen] = useState(false)
+  const [localAppDialogBusy, setLocalAppDialogBusy] = useState(false)
+  const [localAppDialogError, setLocalAppDialogError] = useState('')
+  const [workspaceSaveError, setWorkspaceSaveError] = useState('')
+  const [workspaceSaveRetrying, setWorkspaceSaveRetrying] = useState(false)
+  const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeSnapshot>>({})
+  const [projectRuntimeState, setProjectRuntimeState] = useState<{ definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null; trustRequired: boolean; mountId: string; logsOpen: boolean }>({ runtime: null, trustRequired: true, mountId: '', logsOpen: false })
+  const restoredLocalAppsRef = useRef<Set<string>>(new Set())
+  const localAppDialogOpenRef = useRef(false)
+  const localAppEntryRef = useRef<HTMLElement | null>(null)
+  const localAppFocusTabIdRef = useRef<string | null>(null)
+  const localAppVisibilitySeqRef = useRef(0)
+  const projectRuntimeRequestRef = useRef(0)
   const [showProjectSkillsInSidebar, setShowProjectSkillsInSidebar] = useState(() =>
     readStoredBoolean(SIDEBAR_PROJECT_SKILLS_STORAGE_KEY, true),
   )
@@ -135,9 +286,23 @@ export function AppShell() {
       load: loadChatWorkspaceState,
       save: persistChatWorkspaceState,
       saveImmediately: persistChatWorkspaceStateToLocalStorage,
+      onSaveError: (error) => {
+        setWorkspaceSaveError(error instanceof Error && error.message ? error.message : t('runtime.workspaceSaveFailed'))
+      },
     })
   }
   const workspaceSession = workspaceSessionRef.current
+  const retryWorkspaceSave = useCallback(async () => {
+    setWorkspaceSaveRetrying(true)
+    try {
+      await workspaceSession.flush()
+      setWorkspaceSaveError('')
+    } catch (error) {
+      setWorkspaceSaveError(error instanceof Error && error.message ? error.message : t('runtime.workspaceSaveFailed'))
+    } finally {
+      setWorkspaceSaveRetrying(false)
+    }
+  }, [t, workspaceSession])
   const projectSkillStatesRef = useRef(projectSkillStates)
   const shellRef = useRef<HTMLDivElement>(null)
   const appBodyRef = useRef<HTMLDivElement>(null)
@@ -217,9 +382,263 @@ export function AppShell() {
   const activeWorkspace = chatWorkspace ? workspaceSession.active(chatWorkspace) : {}
   const activeProject = activeWorkspace.project
   const activeThread = activeWorkspace.thread
+  const activeWorkspaceTab = activeWorkspace.workspaceTab
+  const activeRuntimeDefinition = activeWorkspace.runtimeDefinition
   const projectHomeModelPick = activeProject
     ? projectHomeDraftModelPicks[activeProject.id] ?? projectDefaultModelPick
     : undefined
+  const projectHomeViewMode = activeProject ? chatWorkspace?.projectHomeViewModes[activeProject.id] ?? 'overview' : 'overview'
+  const projectRuntimeMountId = useMemo(
+    () => activeProject ? createId('project-mount') : '',
+    [activeProject?.id, activeProject?.path],
+  )
+
+  useEffect(() => {
+    const project = activeProject
+    const request = ++projectRuntimeRequestRef.current
+    if (!project || !projectRuntimeMountId || !window.desktop?.ensureProjectRuntime) {
+      setProjectRuntimeState({ runtime: null, trustRequired: true, mountId: projectRuntimeMountId, logsOpen: false })
+      return
+    }
+    let cancelled = false
+    void window.desktop.ensureProjectRuntime(project.id, projectRuntimeMountId).then((result) => {
+      const stale = cancelled || request !== projectRuntimeRequestRef.current || !result.ok || result.projectId !== project.id || result.mountId !== projectRuntimeMountId
+      if (stale) {
+        if (result.ok && result.definition) {
+          void window.desktop?.releaseRuntime?.(result.definition.id, `project-home:${result.projectId}:${result.mountId}`)
+        }
+        return
+      }
+      setProjectRuntimeState((current) => ({ ...current, definition: result.definition, runtime: result.runtime, trustRequired: result.status === 'trust_required', mountId: result.mountId }))
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [activeProject?.id, projectRuntimeMountId])
+
+  useEffect(() => {
+    const definition = projectRuntimeState.definition
+    if (!definition) return
+    const runtime = runtimeStates[definition.id]
+    if (!runtime || runtime === projectRuntimeState.runtime) return
+    setProjectRuntimeState((current) => current.runtime === runtime ? current : { ...current, runtime })
+  }, [runtimeStates, projectRuntimeState.definition?.id, projectRuntimeState.runtime])
+
+  const setProjectHomeViewMode = useCallback((mode: 'overview' | 'runtime') => {
+    if (!activeProject) return
+    updateChatWorkspace((prev) => workspaceSession.setProjectHomeViewMode(prev, activeProject.id, mode))
+  }, [activeProject, updateChatWorkspace, workspaceSession])
+
+  const ensureTrustedProjectRuntime = useCallback(async (): Promise<RuntimeDefinition | null> => {
+    const project = activeProject
+    const mountId = projectRuntimeMountId
+    if (!project || !mountId || !window.desktop?.trustProjectRuntime) return null
+    const request = ++projectRuntimeRequestRef.current
+    let result
+    try {
+      result = await window.desktop.trustProjectRuntime(project.id, mountId)
+    } catch (error) {
+      setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.workspaceSaveFailed'))
+      return null
+    }
+    const stale = request !== projectRuntimeRequestRef.current || !result.ok || result.projectId !== project.id || result.mountId !== mountId
+    if (!result.ok) {
+      if (!stale) setWorkspaceSaveError(result.message)
+      return null
+    }
+    if (stale) {
+      if (result.definition) void window.desktop?.releaseRuntime?.(result.definition.id, `project-home:${result.projectId}:${result.mountId}`)
+      return null
+    }
+    if (!result.definition) return null
+    try {
+      const authoritative = await window.desktop?.getChatWorkspace?.()
+      if (request !== projectRuntimeRequestRef.current || !authoritative) {
+        void window.desktop?.releaseRuntime?.(result.definition.id, `project-home:${result.projectId}:${result.mountId}`)
+        return null
+      }
+      flushSync(() => setChatWorkspace(authoritative))
+      persistChatWorkspaceStateToLocalStorage(authoritative)
+    } catch (error) {
+      setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.workspaceSaveFailed'))
+      return null
+    }
+    setProjectRuntimeState((current) => ({ ...current, definition: result.definition, runtime: result.runtime, trustRequired: false, mountId }))
+    return result.definition
+  }, [activeProject, projectRuntimeMountId, setChatWorkspace, t])
+
+  const startProjectRuntime = useCallback(async () => {
+    const project = activeProject
+    if (!project) return
+    let request = projectRuntimeRequestRef.current
+    const mountId = projectRuntimeState.mountId
+    if (!mountId || mountId !== projectRuntimeMountId) return
+    let definition = projectRuntimeState.definition
+    if (projectRuntimeState.trustRequired || !definition) {
+      const trustedDefinition = await ensureTrustedProjectRuntime()
+      request = projectRuntimeRequestRef.current
+      if (!trustedDefinition) return
+      definition = trustedDefinition
+    }
+    const consumerId = `project-home:${project.id}:${mountId}`
+    try {
+      const runtime = await window.desktop?.startRuntime?.(definition.id, 'user', consumerId)
+      const stale = request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id
+      if (stale) {
+        await window.desktop?.releaseRuntime?.(definition.id, consumerId)
+        return
+      }
+      if (runtime) setProjectRuntimeState((current) => ({ ...current, definition, runtime, trustRequired: false }))
+    } catch (error) {
+      if (request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id) {
+        await window.desktop?.releaseRuntime?.(definition.id, consumerId)
+        return
+      }
+      setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.runtimeFailed'))
+    }
+  }, [activeProject, ensureTrustedProjectRuntime, projectRuntimeMountId, projectRuntimeState, t])
+
+  useEffect(() => {
+    const project = activeProject
+    const definition = projectRuntimeState.definition
+    const mountId = projectRuntimeState.mountId
+    if (!project || activeThread?.id || projectHomeViewMode !== 'runtime' || !definition || projectRuntimeState.trustRequired || !mountId || mountId !== projectRuntimeMountId || !window.desktop?.startRuntime || !window.desktop?.ensureProjectRuntime) return
+    const request = projectRuntimeRequestRef.current
+    let cancelled = false
+    let consumerId = `project-home:${project.id}:${mountId}`
+    void window.desktop.ensureProjectRuntime(project.id, mountId).then((ensured) => {
+      const stale = cancelled || request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id || !ensured.ok || ensured.projectId !== project.id || ensured.mountId !== mountId
+      if (stale) {
+        if (ensured.ok && ensured.definition) void window.desktop?.releaseRuntime?.(ensured.definition.id, consumerId)
+        return null
+      }
+      if (ensured.status === 'trust_required' || !ensured.definition) return null
+      consumerId = `project-home:${ensured.projectId}:${ensured.mountId}`
+      const startRuntime = window.desktop?.startRuntime
+      if (!startRuntime) return null
+      return startRuntime(ensured.definition.id, 'restore', consumerId).then((runtime) => ({ runtime, runtimeDefinitionId: ensured.definition?.id ?? definition.id }))
+    }).then((started) => {
+      if (!started) return
+      const stale = cancelled || request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id
+      if (stale) {
+        void window.desktop?.releaseRuntime?.(started.runtimeDefinitionId, consumerId)
+        return
+      }
+      setProjectRuntimeState((current) => ({ ...current, runtime: started.runtime }))
+    }).catch(() => {
+      if (cancelled || request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id) {
+        void window.desktop?.releaseRuntime?.(definition.id, consumerId)
+      }
+    })
+    return () => {
+      cancelled = true
+      void window.desktop?.releaseRuntime?.(definition.id, consumerId)
+    }
+  }, [activeProject?.id, activeThread?.id, projectHomeViewMode, projectRuntimeMountId, projectRuntimeState.definition?.id, projectRuntimeState.mountId, projectRuntimeState.trustRequired])
+
+  const openProjectRuntimeTab = useCallback(async () => {
+    const project = activeProject
+    if (!project || projectRuntimeState.mountId !== projectRuntimeMountId || !window.desktop?.openWorkspaceTab || !window.desktop.getChatWorkspace) return
+    const definition = await ensureTrustedProjectRuntime()
+    const request = projectRuntimeRequestRef.current
+    if (!definition || request !== projectRuntimeRequestRef.current) return
+    const authoritative = await window.desktop.getChatWorkspace()
+    if (!authoritative) return
+    if (request !== projectRuntimeRequestRef.current || activeProject?.id !== project.id || projectRuntimeMountId !== projectRuntimeState.mountId) return
+    const result = await window.desktop.openWorkspaceTab(definition.id, workspaceRevisionOf(authoritative))
+    if (!result.ok) { setWorkspaceSaveError(result.message); return }
+    if (request !== projectRuntimeRequestRef.current || activeProject?.id !== project.id || projectRuntimeMountId !== projectRuntimeState.mountId) {
+      await window.desktop.closeWorkspaceTab?.(result.tab.id)
+      return
+    }
+    flushSync(() => setChatWorkspace(result.workspace))
+    persistChatWorkspaceStateToLocalStorage(result.workspace)
+    if (window.desktop.startRuntime) {
+      try {
+        const runtime = await window.desktop.startRuntime(definition.id, 'user', `tab:${result.tab.id}`)
+        if (request !== projectRuntimeRequestRef.current || activeProject?.id !== project.id || projectRuntimeMountId !== projectRuntimeState.mountId) {
+          await window.desktop.releaseRuntime?.(definition.id, `tab:${result.tab.id}`)
+          await window.desktop.closeWorkspaceTab?.(result.tab.id)
+          return
+        }
+        setProjectRuntimeState((current) => ({ ...current, runtime }))
+      } catch {
+        if (request !== projectRuntimeRequestRef.current || activeProject?.id !== project.id || projectRuntimeMountId !== projectRuntimeState.mountId) {
+          await window.desktop.releaseRuntime?.(definition.id, `tab:${result.tab.id}`)
+          await window.desktop.closeWorkspaceTab?.(result.tab.id)
+        }
+        // The durable tab remains visible; its Runtime can be started from the tab surface.
+      }
+    }
+  }, [activeProject, ensureTrustedProjectRuntime, projectRuntimeMountId, projectRuntimeState.mountId, setChatWorkspace])
+
+  const projectRuntimePreviewId = projectRuntimeState.runtime ? `preview-project-home:${activeProject?.id ?? ''}:${projectRuntimeState.mountId}-${projectRuntimeState.runtime.generation}` : ''
+  const projectRuntimeContext = useMemo<ProjectHomeRuntimeContext | null>(() => {
+    if (!activeProject) return null
+    return {
+      project: activeProject,
+      mountId: projectRuntimeState.mountId,
+      definition: projectRuntimeState.definition,
+      runtime: projectRuntimeState.runtime,
+      trustRequired: projectRuntimeState.trustRequired,
+      logsOpen: projectRuntimeState.logsOpen,
+      viewMode: projectHomeViewMode,
+      onViewModeChange: setProjectHomeViewMode,
+      onStart: () => { void startProjectRuntime() },
+      onOpenTab: () => { void openProjectRuntimeTab() },
+      onRefresh: () => { if (projectRuntimePreviewId) void window.desktop?.reloadRuntimePreview?.(projectRuntimePreviewId) },
+      onToggleLogs: () => setProjectRuntimeState((current) => ({ ...current, logsOpen: !current.logsOpen })),
+      onRestart: () => { if (projectRuntimeState.definition) void window.desktop?.restartRuntime?.(projectRuntimeState.definition.id).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
+      onStop: () => { if (projectRuntimeState.definition) void window.desktop?.stopRuntime?.(projectRuntimeState.definition.id, 'user').then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
+    }
+  }, [activeProject, openProjectRuntimeTab, projectHomeViewMode, projectRuntimePreviewId, projectRuntimeState, setProjectHomeViewMode, startProjectRuntime])
+
+  useEffect(() => {
+    configureProjectHomeRuntime(projectRuntimeContext)
+    return () => configureProjectHomeRuntime(null)
+  }, [projectRuntimeContext])
+
+  const setActiveLocalAppPreviewVisible = useCallback(async (visible: boolean) => {
+    const request = ++localAppVisibilitySeqRef.current
+    const tab = activeWorkspaceTab
+    const definition = activeRuntimeDefinition
+    const runtime = definition ? runtimeStates[definition.id] : undefined
+    if (!tab || !definition || !runtime) return true
+    const previewId = `preview-${tab.id}-${runtime.generation}`
+    let applied: boolean | undefined
+    try {
+      applied = await window.desktop?.setRuntimePreviewVisible?.(previewId, visible)
+    } catch {
+      applied = false
+    }
+    if (localAppVisibilitySeqRef.current !== request) return false
+    if (applied === false && !visible) {
+      // A native view may have gone away while a chooser was opening. Close
+      // only that Preview session as a fallback; the Runtime consumer remains.
+      try { await window.desktop?.closeRuntimePreview?.(previewId) } catch { /* preview already gone */ }
+    }
+    return applied !== false
+  }, [activeRuntimeDefinition, activeWorkspaceTab, runtimeStates])
+
+  useEffect(() => {
+    if (activeViewId !== 'home') void setActiveLocalAppPreviewVisible(false)
+  }, [activeViewId, setActiveLocalAppPreviewVisible])
+
+  useEffect(() => {
+    const open = Boolean(localAppInspect || localAppChooserOpen)
+    const wasOpen = localAppDialogOpenRef.current
+    localAppDialogOpenRef.current = open
+    if (wasOpen && !open) {
+      void setActiveLocalAppPreviewVisible(true)
+      requestAnimationFrame(() => {
+        const focusTabId = localAppFocusTabIdRef.current
+        localAppFocusTabIdRef.current = null
+        const tab = focusTabId
+          ? [...document.querySelectorAll<HTMLElement>('[data-runtime-tab-id]')]
+              .find((element) => element.dataset.runtimeTabId === focusTabId)
+          : null
+        ;(tab ?? (localAppEntryRef.current?.isConnected ? localAppEntryRef.current : null) ?? document.querySelector<HTMLElement>('[data-testid="runtime-new-tab"]'))?.focus()
+      })
+    }
+  }, [localAppChooserOpen, localAppInspect, setActiveLocalAppPreviewVisible])
 
   const loadProjectDefaultModelPick = useCallback(async (project = activeProject) => {
     if (!project) {
@@ -354,6 +773,40 @@ export function AppShell() {
       cancelled = true
     }
   }, [workspaceSession])
+
+  // Runtime event scope is checked by runtimeDefinitionId/runtimeId/generation; old generations are discarded.
+  useEffect(() => {
+    const unsubscribe = window.desktop?.onRuntimeEvent?.((event: RuntimeEvent) => {
+      setRuntimeStates((current) => {
+        const runtimeDefinitionId = event.runtimeDefinitionId
+        if (!runtimeDefinitionId) return current
+        const previous = current[runtimeDefinitionId]
+        if (previous && event.generation < previous.generation) return current
+        if (previous && event.runtimeId !== previous.runtimeId && event.generation === previous.generation) return current
+        const next: RuntimeSnapshot = {
+          runtimeDefinitionId,
+          runtimeId: event.runtimeId,
+          generation: event.generation,
+          // Preview failures are view-level health and must not turn a live
+          // managed process into a runtime failure. Main marks these events
+          // with phase=preview and carries previewStatus separately.
+          status: event.phase === 'preview' ? previous?.status ?? 'running' : event.status,
+          readyUrl: event.readyUrl ?? previous?.readyUrl,
+          port: event.port ?? previous?.port,
+          restartAttempt: previous?.restartAttempt ?? 0,
+          startedAt: previous?.startedAt,
+          updatedAt: event.timestamp,
+          phase: event.phase ?? previous?.phase,
+          errorCode: event.errorCode ?? previous?.errorCode,
+          detail: event.detail ?? previous?.detail,
+          previewStatus: event.phase === 'preview' ? event.previewStatus : previous?.previewStatus,
+          logs: event.line ? [...(previous?.logs ?? []).slice(-159), `[${event.stream ?? 'runtime'}] ${event.line}`] : previous?.logs,
+        }
+        return { ...current, [runtimeDefinitionId]: next }
+      })
+    })
+    return () => unsubscribe?.()
+  }, [])
 
   const applyInitialModelSnapshot = useCallback(
     (snapshot: ClaudeAgentSettingsSnapshot) => {
@@ -574,7 +1027,11 @@ export function AppShell() {
 
   useEffect(() => {
     return () => {
-      void workspaceSession.close()
+      // React StrictMode probes mount effects by cleaning them up and then
+      // immediately mounting again.  The session is retained in a ref, so a
+      // cleanup must flush pending work without permanently disposing its
+      // queue; otherwise the next stage() would be silently ignored.
+      void workspaceSession.flush().catch(() => undefined)
     }
   }, [workspaceSession])
 
@@ -606,12 +1063,13 @@ export function AppShell() {
 
   const selectThread = useCallback(
     (threadId: string) => {
+      void setActiveLocalAppPreviewVisible(false)
       setSelectedProjectSkill(null)
       updateThreadCompletionState(threadId, null)
       updateChatWorkspace((prev) => workspaceSession.selectThread(prev, threadId))
       goHome()
     },
-    [goHome, updateChatWorkspace, updateThreadCompletionState, workspaceSession],
+    [goHome, setActiveLocalAppPreviewVisible, updateChatWorkspace, updateThreadCompletionState, workspaceSession],
   )
 
   const createThreadInProject = useCallback(
@@ -853,12 +1311,13 @@ export function AppShell() {
 
   const selectProject = useCallback(
     (projectId: string) => {
+      void setActiveLocalAppPreviewVisible(false)
       setSelectedProjectSkill(null)
       setHomeModeResetKey((value) => value + 1)
       updateChatWorkspace((prev) => workspaceSession.selectProject(prev, projectId))
       goHome()
     },
-    [goHome, updateChatWorkspace, workspaceSession],
+    [goHome, setActiveLocalAppPreviewVisible, updateChatWorkspace, workspaceSession],
   )
 
   const createProjectFromExistingPath = useCallback(
@@ -914,6 +1373,335 @@ export function AppShell() {
     },
     [createProjectFromExistingPath, goHome, updateChatWorkspace, t, workspaceSession],
   )
+
+  const selectWorkspaceTab = useCallback((tabId: string) => {
+    if (activeWorkspaceTab?.id !== tabId) void setActiveLocalAppPreviewVisible(false)
+    setSelectedProjectSkill(null)
+    updateChatWorkspace((prev) => workspaceSession.selectWorkspaceTab(prev, tabId))
+    goHome()
+  }, [activeWorkspaceTab?.id, goHome, setActiveLocalAppPreviewVisible, updateChatWorkspace, workspaceSession])
+
+  const inspectLocalApp = useCallback(async () => {
+    setLocalAppDialogError('')
+    const picked = await window.desktop?.pickProjectDirectory?.()
+    if (!picked?.trim()) return
+    if (!window.desktop?.inspectRuntimeDirectory) return
+    try {
+      setLocalAppInspect(await window.desktop.inspectRuntimeDirectory(picked.trim()))
+    } catch (error) {
+      setLocalAppInspect({ ok: false, rootPath: picked, code: 'invalid-root', message: error instanceof Error ? error.message : '目录检查失败' })
+    }
+  }, [])
+
+  const openLocalAppEntry = useCallback(async (event?: ReactMouseEvent<HTMLElement>) => {
+    localAppEntryRef.current = event?.currentTarget ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
+    setLocalAppDialogError('')
+    await setActiveLocalAppPreviewVisible(false)
+    setLocalAppChooserOpen(true)
+  }, [setActiveLocalAppPreviewVisible])
+
+  const trustAndCreateLocalApp = useCallback(async (draft: RuntimeDefinition) => {
+    setLocalAppDialogBusy(true)
+    setLocalAppDialogError('')
+    try {
+      if (!chatWorkspace || !window.desktop?.createWorkspaceTab || !window.desktop?.getChatWorkspace) {
+        setLocalAppDialogError('Runtime 服务暂不可用，请重试')
+        return
+      }
+      // Flush renderer-pending chat/project changes before taking the Main
+      // revision gate. A rejected flush keeps the dialog open and prevents
+      // both create and runtime start.
+      try {
+        await workspaceSession.flush()
+        setWorkspaceSaveError('')
+      } catch (error) {
+        const message = error instanceof Error && error.message ? error.message : t('runtime.workspaceSaveFailed')
+        setWorkspaceSaveError(message)
+        setLocalAppDialogError(message)
+        return
+      }
+      let authoritative: ChatWorkspaceState | null
+      try {
+        authoritative = await window.desktop.getChatWorkspace()
+      } catch (error) {
+        const message = error instanceof Error && error.message ? error.message : t('runtime.workspaceSaveFailed')
+        setLocalAppDialogError(message)
+        return
+      }
+      if (!authoritative) {
+        setLocalAppDialogError(t('runtime.workspaceSaveFailed'))
+        return
+      }
+      let result: RuntimeCreationResult
+      try {
+        result = await window.desktop.createWorkspaceTab(draft.rootPath, workspaceRevisionOf(authoritative), draft.name)
+      } catch (error) {
+        setLocalAppDialogError(error instanceof Error ? error.message : 'Runtime 工作区保存失败，请重试')
+        return
+      }
+      if (!result.ok) {
+        setLocalAppDialogError(result.message)
+        return
+      }
+      setWorkspaceSaveError('')
+      // Main has verified JSON/SQLite persistence and registered the trusted
+      // definition. Publish the tab before asking Main to start its process.
+      localAppFocusTabIdRef.current = result.tab.id
+      flushSync(() => {
+        setChatWorkspace(result.workspace)
+        setLocalAppInspect(null)
+        setLocalAppChooserOpen(false)
+      })
+      persistChatWorkspaceStateToLocalStorage(result.workspace)
+      if (window.desktop.startRuntime) {
+        try {
+          const runtime = await window.desktop.startRuntime(result.definition.id, 'user', `tab:${result.tab.id}`)
+          setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
+        } catch (error) {
+          setRuntimeStates((current) => mergeAcceptedRuntime(current, {
+            runtimeDefinitionId: result.definition.id,
+            runtimeId: 'none',
+            generation: 0,
+            status: 'failed',
+            restartAttempt: 0,
+            updatedAt: Date.now(),
+            phase: 'start',
+            errorCode: 'start-failed',
+            detail: error instanceof Error ? error.message : '运行时启动失败',
+            logs: [],
+          }))
+        }
+      }
+    } finally {
+      setLocalAppDialogBusy(false)
+    }
+  }, [chatWorkspace, setChatWorkspace, t, workspaceSession])
+
+  const startLocalApp = useCallback(async (localAppId: string, cause: 'user' | 'restore' = 'user', consumerId?: string) => {
+    try {
+      const consumer = consumerId ?? chatWorkspace?.workspaceTabs.find((tab) => tab.id === chatWorkspace.activeWorkspaceTabId && tab.runtimeDefinitionId === localAppId)?.id
+      const normalizedConsumer = consumer ? (consumer.startsWith('tab:') ? consumer : `tab:${consumer}`) : undefined
+      const runtime = await window.desktop?.startRuntime?.(localAppId, cause, normalizedConsumer)
+      if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
+    } catch (error) {
+      const pathMissing = error instanceof Error && error.message === 'local-app-path-missing'
+      setRuntimeStates((current) => mergeAcceptedRuntime(current, {
+          runtimeDefinitionId: localAppId,
+          runtimeId: 'none', generation: 0, status: pathMissing ? 'path_missing' : 'failed', restartAttempt: 0,
+          updatedAt: Date.now(), phase: pathMissing ? 'inspect' : 'start', errorCode: pathMissing ? 'path-missing' : 'start-failed',
+          detail: pathMissing ? 'Runtime 目录不存在' : error instanceof Error ? error.message : '运行时启动失败', logs: [],
+        }))
+    }
+  }, [chatWorkspace])
+
+  const openExistingLocalApp = useCallback(async (definition: RuntimeDefinition) => {
+    if (!chatWorkspace) return
+    if (!window.desktop?.openWorkspaceTab || !window.desktop?.getChatWorkspace) {
+      setLocalAppDialogError(t('runtime.workspaceSaveFailed'))
+      return
+    }
+    setLocalAppDialogBusy(true)
+    setLocalAppDialogError('')
+    try {
+      try {
+        await workspaceSession.flush()
+      } catch (error) {
+        const message = error instanceof Error && error.message ? error.message : t('runtime.workspaceSaveFailed')
+        setWorkspaceSaveError(message)
+        setLocalAppDialogError(message)
+        return
+      }
+      const authoritative = await window.desktop.getChatWorkspace()
+      if (!authoritative) {
+        setLocalAppDialogError(t('runtime.workspaceSaveFailed'))
+        return
+      }
+      let result: WorkspaceTabResult
+      try {
+        result = await window.desktop.openWorkspaceTab(definition.id, workspaceRevisionOf(authoritative))
+      } catch (error) {
+        setLocalAppDialogError(error instanceof Error ? error.message : t('runtime.workspaceSaveFailed'))
+        return
+      }
+      if (!result.ok) {
+        setLocalAppDialogError(result.message)
+        return
+      }
+      localAppFocusTabIdRef.current = result.tab.id
+      flushSync(() => {
+        setChatWorkspace(result.workspace)
+        setLocalAppChooserOpen(false)
+        setLocalAppInspect(null)
+      })
+      persistChatWorkspaceStateToLocalStorage(result.workspace)
+      await startLocalApp(result.definition.id, 'user', `tab:${result.tab.id}`)
+    } catch (error) {
+      setLocalAppDialogError(error instanceof Error ? error.message : t('runtime.workspaceSaveFailed'))
+    } finally {
+      setLocalAppDialogBusy(false)
+    }
+  }, [chatWorkspace, setChatWorkspace, startLocalApp, t, workspaceSession])
+
+  const stopLocalApp = useCallback((localAppId: string) => {
+    const request = window.desktop?.stopRuntime?.(localAppId, 'user')
+    void request?.then((runtime) => {
+      if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
+    })
+  }, [])
+
+  const restartLocalApp = useCallback((localAppId: string) => {
+    const request = window.desktop?.restartRuntime?.(localAppId)
+    void request?.then((runtime) => {
+      if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
+    }).catch(() => undefined)
+  }, [])
+
+  const closeLocalAppTab = useCallback(async (tabId: string) => {
+    const current = chatWorkspace
+    const tab = current?.workspaceTabs.find((item) => item.id === tabId)
+    if (!tab || !window.desktop?.closeWorkspaceTab || !window.desktop?.getChatWorkspace) return
+
+    try {
+      // Renderer state may include a pending chat/project update.  Flush it
+      // first, then ask Main for its authoritative revision so a close cannot
+      // overwrite a concurrent durable workspace change.
+      await workspaceSession.flush()
+      const authoritative = await window.desktop.getChatWorkspace()
+      if (!authoritative) throw new Error(t('runtime.workspaceSaveFailed'))
+      const result = await window.desktop.closeWorkspaceTab(tabId, workspaceRevisionOf(authoritative))
+      if (!result.ok) {
+        setWorkspaceSaveError(result.message)
+        return
+      }
+
+      // Only publish the authoritative post-commit snapshot.  Main closes the
+      // Preview and releases the Runtime consumer after this durable commit;
+      // there is intentionally no optimistic renderer deletion/release path.
+      flushSync(() => setChatWorkspace(result.workspace))
+      persistChatWorkspaceStateToLocalStorage(result.workspace)
+      setWorkspaceSaveError(result.warning ?? '')
+      setRuntimeStates((current) => {
+        if (result.runtime) return mergeAcceptedRuntime(current, result.runtime)
+        const next = { ...current }
+        delete next[result.runtimeDefinitionId]
+        return next
+      })
+      requestAnimationFrame(() => {
+        const activeTabId = result.workspace.activeWorkspaceTabId
+        const runtimeTabButtons = [...document.querySelectorAll<HTMLElement>('[data-runtime-tab-id]')]
+        const active = runtimeTabButtons.find((element) => element.dataset.runtimeTabId === activeTabId)
+        ;(active ?? document.querySelector<HTMLElement>('[data-testid="runtime-new-tab"]'))?.focus()
+      })
+    } catch (error) {
+      setWorkspaceSaveError(error instanceof Error && error.message ? error.message : t('runtime.workspaceSaveFailed'))
+    }
+  }, [chatWorkspace, setChatWorkspace, t, workspaceSession])
+
+  const renameLocalAppTab = useCallback(async (tabId: string, title: string): Promise<boolean> => {
+    if (!window.desktop?.renameWorkspaceTab || !window.desktop.getChatWorkspace) return false
+    try {
+      const authoritative = await window.desktop.getChatWorkspace()
+      if (!authoritative) return false
+      const result = await window.desktop.renameWorkspaceTab(tabId, title, workspaceRevisionOf(authoritative))
+      if (!result.ok) {
+        setWorkspaceSaveError(result.message)
+        return false
+      }
+      flushSync(() => setChatWorkspace(result.workspace))
+      persistChatWorkspaceStateToLocalStorage(result.workspace)
+      return true
+    } catch (error) {
+      setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.renameFailed'))
+      return false
+    }
+  }, [setChatWorkspace, t])
+
+  const reloadLocalAppPreview = useCallback((tabId: string, localAppId: string) => {
+    const runtime = runtimeStates[localAppId]
+    if (runtime) void window.desktop?.reloadRuntimePreview?.(`preview-${tabId}-${runtime.generation}`)
+  }, [runtimeStates])
+
+  const relocateLocalApp = useCallback(async (localAppId: string) => {
+    const picked = await window.desktop?.pickProjectDirectory?.()
+    if (!picked?.trim() || !window.desktop?.inspectRuntimeDirectory) return
+    if (window.desktop.relocateRuntime && chatWorkspace && window.desktop.getChatWorkspace) {
+      let result: RuntimeRelocationResult
+      try {
+        await workspaceSession.flush()
+        setWorkspaceSaveError('')
+        const authoritative = await window.desktop.getChatWorkspace()
+        if (!authoritative) {
+          setLocalAppDialogError(t('runtime.workspaceSaveFailed'))
+          return
+        }
+        result = await window.desktop.relocateRuntime(localAppId, picked.trim(), workspaceRevisionOf(authoritative))
+      } catch (error) {
+        const message = error instanceof Error && error.message ? error.message : 'Runtime relocation failed'
+        setWorkspaceSaveError(message)
+        setLocalAppInspect({ ok: false, rootPath: picked, code: 'invalid-root', message })
+        return
+      }
+      if (!result.ok) {
+        setLocalAppDialogError(result.message)
+        setLocalAppInspect({ ok: false, rootPath: picked, code: result.code === 'path-missing' ? 'path-missing' : 'invalid-root', message: result.message })
+        return
+      }
+      // Main returned the authoritative committed snapshot. Publishing it
+      // avoids overwriting concurrent chat/project changes with stale React state.
+      flushSync(() => setChatWorkspace(result.workspace))
+      persistChatWorkspaceStateToLocalStorage(result.workspace)
+      setLocalAppInspect(null)
+      if (result.warning) {
+        setLocalAppDialogError(result.warning)
+        setWorkspaceSaveError(result.warning)
+      }
+      if (result.runtime) {
+        setRuntimeStates((current) => mergeAcceptedRuntime(current, result.runtime!))
+      }
+      return
+    }
+    const inspected = await window.desktop.inspectRuntimeDirectory(picked.trim())
+    if (!inspected.ok) {
+      setLocalAppInspect(inspected)
+      return
+    }
+    const definition = chatWorkspace?.runtimeDefinitions.find((item) => item.id === localAppId)
+    if (!definition) return
+    const nextDefinition: RuntimeDefinition = { ...definition, rootPath: inspected.rootPath, canonicalRoot: inspected.canonicalRoot, name: inspected.name, updatedAt: Date.now(), trustStatus: 'trusted' }
+    const trusted = window.desktop.trustRuntimeDirectory ? await window.desktop.trustRuntimeDirectory(nextDefinition.rootPath) : null
+    if (trusted?.ok) {
+      const nextWorkspace = chatWorkspace
+        ? {
+            ...chatWorkspace,
+            runtimeDefinitions: chatWorkspace.runtimeDefinitions.map((item) =>
+              item.id === localAppId ? { ...nextDefinition, id: localAppId } : item,
+            ),
+          }
+        : null
+      if (!nextWorkspace) return
+      setChatWorkspace(nextWorkspace)
+      workspaceSession.stage(nextWorkspace)
+      try {
+        await workspaceSession.flush()
+      } catch (error) {
+        setWorkspaceSaveError(error instanceof Error && error.message ? error.message : t('runtime.workspaceSaveFailed'))
+        return
+      }
+      void startLocalApp(localAppId)
+    }
+  }, [chatWorkspace, setChatWorkspace, startLocalApp, t, workspaceSession])
+
+  useEffect(() => {
+    if (!chatWorkspace || !window.desktop?.startRuntime) return
+    for (const definition of chatWorkspace.runtimeDefinitions) {
+      if (!definition.autoStart || definition.trustStatus !== 'trusted') continue
+      for (const tab of chatWorkspace.workspaceTabs.filter((item) => item.runtimeDefinitionId === definition.id)) {
+        if (restoredLocalAppsRef.current.has(tab.id)) continue
+        restoredLocalAppsRef.current.add(tab.id)
+        void startLocalApp(definition.id, 'restore', tab.id)
+      }
+    }
+  }, [chatWorkspace, startLocalApp])
 
   const updateInitialModelField = useCallback(
     <K extends keyof InitialModelFormState>(field: K, value: InitialModelFormState[K]) => {
@@ -1295,6 +2083,7 @@ export function AppShell() {
 
   const openSettingsCategory = useCallback(
     (category: SettingsCategoryId) => {
+      void setActiveLocalAppPreviewVisible(false)
       flushSync(() => {
         setActiveViewId('settings')
         setSettingsCategory(category)
@@ -1308,7 +2097,7 @@ export function AppShell() {
         syncHistoryButtons()
       }
     },
-    [syncHistoryButtons],
+    [setActiveLocalAppPreviewVisible, syncHistoryButtons],
   )
 
   // --- `hashchange` → settings view; keep back/forward mirrors in sync / hash 变化映射到设置视图；同步前进后退按钮态 ---
@@ -1384,6 +2173,7 @@ export function AppShell() {
   // --- Title region: settings category vs “project · thread” on home / 标题区：设置分类与首页「项目 · 线程」---
 
   const workspaceTitle = useMemo(() => {
+    if (activeRuntimeDefinition && activeWorkspaceTab) return activeWorkspaceTab.title || activeRuntimeDefinition.name
     if (activeViewId === 'settings') return t(settingsWorkspaceTitleKey(settingsCategory))
     if (activeViewId === 'home') {
       const projectName = activeProject?.name.trim()
@@ -1392,7 +2182,7 @@ export function AppShell() {
       if (projectName) return projectName
     }
     return t(VIEW_HEADING_KEYS[activeViewId])
-  }, [activeProject?.name, activeThread?.title, activeViewId, settingsCategory, t])
+  }, [activeRuntimeDefinition, activeWorkspaceTab, activeProject?.name, activeThread?.title, activeViewId, settingsCategory, t])
 
   // --- Render gates: wait for data; empty workspace CTA; guard missing project / 渲染门控：等待数据；空工作区引导；缺少项目则短路 ---
 
@@ -1461,7 +2251,7 @@ export function AppShell() {
     },
   ]
 
-  if (chatWorkspace.projects.length === 0) {
+  if (chatWorkspace.projects.length === 0 && chatWorkspace.workspaceTabs.length === 0) {
     return (
       <div className="app-shell app-shell-empty" id="app-shell">
         <form className="app-shell-empty__panel no-drag" onSubmit={(event) => void startInitialSetup(event)}>
@@ -1691,10 +2481,52 @@ export function AppShell() {
   }
 
   if (!activeProject) {
+    if (activeWorkspaceTab && activeRuntimeDefinition && activeViewId === 'home') {
+      const localTabs = chatWorkspace.workspaceTabs
+      return (
+        <div className={`app-shell${isWindows ? ' is-platform-win32' : ''}`} id="app-shell">
+          <div className="app-body">
+            <WorkspaceSaveErrorNotice error={workspaceSaveError} retrying={workspaceSaveRetrying} onRetry={() => void retryWorkspaceSave()} retryLabel={t('runtime.retryWorkspaceSave')} />
+            <RuntimeOnlySidebar
+              tabs={localTabs}
+              activeTabId={activeWorkspaceTab.id}
+              onNew={() => { void openLocalAppEntry() }}
+              onSelect={selectWorkspaceTab}
+              onClose={(tabId) => { void closeLocalAppTab(tabId) }}
+              onRename={renameLocalAppTab}
+            />
+            <main className="app-main local-app-only-main" role="main">
+              <RuntimeWorkspace
+                tab={activeWorkspaceTab}
+                definition={activeRuntimeDefinition}
+                runtime={runtimeStates[activeRuntimeDefinition.id] ?? null}
+                onRetry={() => void startLocalApp(activeRuntimeDefinition.id)}
+                onRestart={() => restartLocalApp(activeRuntimeDefinition.id)}
+                onStop={() => stopLocalApp(activeRuntimeDefinition.id)}
+                onReload={() => reloadLocalAppPreview(activeWorkspaceTab.id, activeRuntimeDefinition.id)}
+                onRelocate={() => void relocateLocalApp(activeRuntimeDefinition.id)}
+              />
+            </main>
+          </div>
+          <RuntimeOnboardingDialog
+            inspect={localAppInspect}
+            chooserOpen={localAppChooserOpen}
+            existingDefinitions={chatWorkspace.runtimeDefinitions}
+            busy={localAppDialogBusy}
+            error={localAppDialogError}
+            onCancel={() => { setLocalAppInspect(null); setLocalAppChooserOpen(false); setLocalAppDialogError('') }}
+            onChooseNew={() => { void inspectLocalApp() }}
+            onOpenExisting={(definition) => void openExistingLocalApp(definition)}
+            onTrust={(definition) => void trustAndCreateLocalApp(definition)}
+          />
+        </div>
+      )
+    }
     if (activeViewId === 'settings' && settingsCategory === 'mcp') {
       return (
         <div className={`app-shell${isWindows ? ' is-platform-win32' : ''} is-shell-settings`} id="app-shell">
           <div className="app-body">
+            <WorkspaceSaveErrorNotice error={workspaceSaveError} retrying={workspaceSaveRetrying} onRetry={() => void retryWorkspaceSave()} retryLabel={t('runtime.retryWorkspaceSave')} />
             <div className="app-workspace">
               <div className="app-workspace-top-drag draggable" aria-hidden />
               <div className="app-workspace-content">
@@ -1733,6 +2565,7 @@ export function AppShell() {
       ref={shellRef}
     >
       <div className="app-body" ref={appBodyRef}>
+        <WorkspaceSaveErrorNotice error={workspaceSaveError} retrying={workspaceSaveRetrying} onRetry={() => void retryWorkspaceSave()} retryLabel={t('runtime.retryWorkspaceSave')} />
         <AppShellSidebar
           activeViewId={activeViewId}
           settingsCategory={settingsCategory}
@@ -1751,6 +2584,13 @@ export function AppShell() {
           canBack={canBack}
           canForward={canForward}
           onCreateProject={createProject}
+          workspaceTabs={chatWorkspace.workspaceTabs}
+          activeWorkspaceTabId={chatWorkspace.activeWorkspaceTabId}
+          runtimeStates={runtimeStates}
+          onNewRuntime={openLocalAppEntry}
+          onSelectWorkspaceTab={selectWorkspaceTab}
+          onCloseWorkspaceTab={closeLocalAppTab}
+          onRenameWorkspaceTab={renameLocalAppTab}
           onOpenSearch={() => window.dispatchEvent(new CustomEvent('agentos:open-search', { detail: { scope: 'all' } }))}
           onOpenSettingsCategory={openSettingsCategory}
           onSelectProject={selectProject}
@@ -1778,6 +2618,14 @@ export function AppShell() {
           settingsCategory={settingsCategory}
           activeProject={activeProject}
           activeThread={activeThread}
+          activeWorkspaceTab={activeWorkspaceTab}
+          activeRuntimeDefinition={activeRuntimeDefinition}
+          activeRuntime={activeRuntimeDefinition ? runtimeStates[activeRuntimeDefinition.id] ?? null : null}
+          onRetryRuntime={activeRuntimeDefinition ? () => void startLocalApp(activeRuntimeDefinition.id) : undefined}
+          onRestartRuntime={activeRuntimeDefinition ? () => restartLocalApp(activeRuntimeDefinition.id) : undefined}
+          onStopRuntime={activeRuntimeDefinition ? () => stopLocalApp(activeRuntimeDefinition.id) : undefined}
+          onReloadRuntime={activeWorkspaceTab && activeRuntimeDefinition ? () => reloadLocalAppPreview(activeWorkspaceTab.id, activeRuntimeDefinition.id) : undefined}
+          onRelocateRuntime={activeRuntimeDefinition ? () => void relocateLocalApp(activeRuntimeDefinition.id) : undefined}
           projectDefaultModelPick={projectDefaultModelPick}
           projectHomeModelPick={projectHomeModelPick}
           threads={chatWorkspace.threads}
@@ -1805,6 +2653,17 @@ export function AppShell() {
           onStopProjectSkillRun={stopProjectSkillRun}
           showProjectSkillsInSidebar={showProjectSkillsInSidebar}
           onShowProjectSkillsInSidebarChange={updateShowProjectSkillsInSidebar}
+        />
+        <RuntimeOnboardingDialog
+          inspect={localAppInspect}
+          chooserOpen={localAppChooserOpen}
+          existingDefinitions={chatWorkspace.runtimeDefinitions}
+          busy={localAppDialogBusy}
+          error={localAppDialogError}
+          onCancel={() => { setLocalAppInspect(null); setLocalAppChooserOpen(false); setLocalAppDialogError('') }}
+          onChooseNew={() => { void inspectLocalApp() }}
+          onOpenExisting={(definition) => void openExistingLocalApp(definition)}
+          onTrust={(definition) => void trustAndCreateLocalApp(definition)}
         />
       </div>
     </div>

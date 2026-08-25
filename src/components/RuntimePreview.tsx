@@ -1,0 +1,60 @@
+import { useEffect, useRef, useState } from 'react'
+import { useI18n } from '../i18n/i18n'
+import type { RuntimePreviewHost } from '../desktop-api'
+import type { PreviewStatus, RuntimeSnapshot } from './types'
+
+export type RuntimePreviewProps = { host: RuntimePreviewHost; runtime: RuntimeSnapshot | null; active: boolean; testId?: string }
+
+export function runtimePreviewBoundsFromRect(rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>) {
+  return { x: Math.max(0, Number.isFinite(rect.left) ? rect.left : 0), y: Math.max(0, Number.isFinite(rect.top) ? rect.top : 0), width: Math.max(0, Number.isFinite(rect.width) ? rect.width : 0), height: Math.max(0, Number.isFinite(rect.height) ? rect.height : 0) }
+}
+
+export function RuntimePreview({ host, runtime, active, testId = 'runtime-preview' }: RuntimePreviewProps) {
+  const { t } = useI18n()
+  const hostRef = useRef<HTMLDivElement>(null)
+  const previewIdRef = useRef<string | null>(null)
+  const requestRef = useRef(0)
+  const [previewStatus, setPreviewStatus] = useState<PreviewStatus>('idle')
+  useEffect(() => {
+    const request = ++requestRef.current
+    let cancelled = false
+    const previous = previewIdRef.current
+    if (previous) void window.desktop?.setRuntimePreviewVisible?.(previous, false)
+    previewIdRef.current = null
+    if (!active || runtime?.status !== 'running' || !runtime.readyUrl || !window.desktop?.createRuntimePreview) {
+      setPreviewStatus(runtime?.status === 'degraded' ? 'degraded' : 'idle')
+      return () => { cancelled = true; requestRef.current += 1 }
+    }
+    setPreviewStatus('loading')
+    void window.desktop.createRuntimePreview(host).then((result) => {
+      if (cancelled || requestRef.current !== request) return
+      if (!result.ok) { setPreviewStatus('failed'); return }
+      previewIdRef.current = result.previewId
+      setPreviewStatus(result.status === 'ready' ? 'ready' : 'loading')
+    }).catch(() => { if (!cancelled && requestRef.current === request) setPreviewStatus('failed') })
+    return () => {
+      cancelled = true
+      requestRef.current += 1
+      const previewId = previewIdRef.current
+      previewIdRef.current = null
+      if (previewId) {
+        void window.desktop?.setRuntimePreviewVisible?.(previewId, false)
+        void window.desktop?.closeRuntimePreview?.(previewId)
+      }
+    }
+  }, [active, host.kind, host.kind === 'project-home' ? host.projectId : host.workspaceTabId, host.kind === 'project-home' ? host.mountId : host.runtimeDefinitionId, host.runtimeDefinitionId, runtime?.generation, runtime?.readyUrl, runtime?.status])
+  useEffect(() => {
+    const element = hostRef.current
+    const previewId = previewIdRef.current
+    if (!element || !previewId || !window.desktop?.setRuntimePreviewBounds || !window.desktop.setRuntimePreviewVisible) return
+    const sync = () => { void window.desktop?.setRuntimePreviewBounds?.(previewId, runtimePreviewBoundsFromRect(element.getBoundingClientRect())); void window.desktop?.setRuntimePreviewVisible?.(previewId, active) }
+    sync()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null
+    observer?.observe(element)
+    window.addEventListener('resize', sync)
+    window.addEventListener('scroll', sync, true)
+    return () => { observer?.disconnect(); window.removeEventListener('resize', sync); window.removeEventListener('scroll', sync, true); void window.desktop?.setRuntimePreviewVisible?.(previewId, false) }
+  }, [active, previewStatus])
+  const status = runtime?.status === 'preparing' ? t('runtime.runtimePreparing') : runtime?.status === 'starting' ? t('runtime.runtimeStarting') : runtime?.status === 'running' && previewStatus === 'ready' ? t('runtime.preview') : runtime?.status === 'failed' ? t('runtime.runtimeFailed') : runtime?.status === 'path_missing' ? t('runtime.runtimePathMissing') : t('runtime.runtimeStopped')
+  return <div ref={hostRef} className={`runtime-preview-host is-${previewStatus}`} data-testid={testId} role="region" aria-label={status}>{previewStatus !== 'ready' ? <div className="local-app-preview-placeholder" role="status"><strong>{status}</strong><span>{runtime?.detail ?? t('runtime.preview')}</span></div> : null}</div>
+}

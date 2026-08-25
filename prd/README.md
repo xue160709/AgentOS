@@ -20,12 +20,12 @@ AgentOS 是面向本地项目与长期任务的 Electron 桌面 Agent 工作台�
 | Home Plugin 数据卡片 | 已实现，正式验收通过 | `home-plugin/README.md` | `home-plugin/technical.md` |
 | Task Home Plugin | 已实现，正式验收通过 | `task-home-plugin/README.md` | `task-home-plugin/technical.md` |
 | 桌面外壳、设置与发布 | 已实现，18/21 通过，3 项人工确认 | `desktop-shell-settings-release/README.md` | `desktop-shell-settings-release/technical.md` |
-| Local App Runtime | 规划中，尚未实现 | `local-app-runtime/README.md` | `local-app-runtime/technical.md` |
+| Workspace Runtime | Revision 2 已实现并通过 Development Check；尚待正式验收；Revision 1 历史正式验收 10/16 通过、6 项待补证据 | `local-app-runtime/README.md` | `local-app-runtime/technical.md` |
 
 ## 当前重点
 
-- 已确认 `chg-20260825-local-app-tabs-runtime`：先实现左侧 `New Tab`、Local App 自动运行与 CodeNow Wiki 首个接入；正式计划见 `local-app-runtime/`，开发入口见根 `TODO.md`。
-- 根 `TODO.md` 当前以 Local App Runtime 的 P0/P1 实施与安全门禁为活跃入口；既有模块的正式验收事实继续以各自 `acceptance.md` 为准。
+- `chg-20260825-local-app-tabs-runtime` Revision 2 已实现并通过第三轮独立 Development Check：用户层已收敛为 Workspace Tab/Runtime，并新增项目首页独立 Runtime 页；正式 `project-verify` 尚未执行。
+- 根 `TODO.md` 当前以后续正式 Acceptance 与真实 Electron 证据为入口；既有模块的正式验收事实继续以各自 `acceptance.md` 为准。
 - 全量正式验收已执行并回写 `acceptance.md`：当前仅剩 `desktop-shell-settings-release` 的 close-to-tray、macOS 语音授权成功、macOS 语音权限拒绝 3 项人工确认。
 - 交互流程复查未发现新的阻断级状态机缺陷；剩余工作是把 Composer 语音/提交、权限弹窗、Generative UI、状态面板跳转、项目首页任务卡等全页面点击路径沉淀成可重复 E2E 脚本证据。
 - Workspace 持久化已完成本轮架构加固：Snapshot Resolution、Workspace Session durability timing、History Search Index internal seam 和 workspace revision clock 已落地并通过正式验收状态同步。

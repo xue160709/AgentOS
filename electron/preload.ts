@@ -40,7 +40,8 @@ import type {
   AgentKnowledgeSearchResult,
   ClaudeChatAttachmentPickerResult,
 } from '../src/claude-chat-types'
-import type { DesktopAPI } from '../src/desktop-api'
+import type { DesktopAPI, LocalAppCloseTabResult, LocalAppCreationResult, LocalAppDefinitionResult, LocalAppOpenTabResult, LocalAppPreviewResult, LocalAppRelocationResult, ProjectRuntimeResult, RuntimeCreationResult, RuntimeDefinitionResult, RuntimeInspectResult, RuntimePreviewHost, RuntimePreviewResult, WorkspaceTabCloseResult, WorkspaceTabResult } from '../src/desktop-api'
+import type { LocalAppRuntimeEvent, LocalAppRuntimeSnapshot, RuntimeEvent, RuntimeSnapshot } from '../src/components/types'
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
 
 const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
@@ -178,6 +179,127 @@ const desktopAdapter = {
   },
   saveChatWorkspace(state: unknown) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveChatWorkspace, state)
+  },
+  inspectLocalAppDirectory(rootPath: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.inspectLocalAppDirectory, rootPath)
+  },
+  trustLocalAppDirectory(rootPath: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.trustLocalAppDirectory, rootPath) as Promise<LocalAppDefinitionResult>
+  },
+  createLocalApp(rootPath: string, expectedRevision?: number, title?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createLocalApp, rootPath, expectedRevision, title) as Promise<LocalAppCreationResult>
+  },
+  openLocalAppTab(localAppId: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openLocalAppTab, localAppId, expectedRevision) as Promise<LocalAppOpenTabResult>
+  },
+  closeLocalAppTab(tabId: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeLocalAppTab, tabId, expectedRevision) as Promise<LocalAppCloseTabResult>
+  },
+  relocateLocalApp(localAppId: string, rootPath: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.relocateLocalApp, localAppId, rootPath, expectedRevision) as Promise<LocalAppRelocationResult>
+  },
+  revokeLocalAppTrust(canonicalRoot: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.revokeLocalAppTrust, canonicalRoot) as Promise<void>
+  },
+  getLocalAppRuntime(localAppId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getLocalAppRuntime, localAppId) as Promise<LocalAppRuntimeSnapshot | null>
+  },
+  startLocalAppRuntime(localAppId: string, cause?: 'user' | 'restore', consumerId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startLocalAppRuntime, localAppId, cause, consumerId) as Promise<LocalAppRuntimeSnapshot>
+  },
+  stopLocalAppRuntime(localAppId: string, reason?: 'user' | 'last-consumer' | 'app-quit') {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.stopLocalAppRuntime, localAppId, reason) as Promise<LocalAppRuntimeSnapshot | null>
+  },
+  releaseLocalAppRuntime(localAppId: string, consumerId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.releaseLocalAppRuntime, localAppId, consumerId) as Promise<LocalAppRuntimeSnapshot | null>
+  },
+  restartLocalAppRuntime(localAppId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.restartLocalAppRuntime, localAppId) as Promise<LocalAppRuntimeSnapshot>
+  },
+  createLocalAppPreview(tabId: string, localAppId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createLocalAppPreview, tabId, localAppId) as Promise<LocalAppPreviewResult>
+  },
+  setLocalAppPreviewBounds(previewId: string, bounds: { x: number; y: number; width: number; height: number }) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setLocalAppPreviewBounds, previewId, bounds) as Promise<boolean>
+  },
+  setLocalAppPreviewVisible(previewId: string, visible: boolean) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setLocalAppPreviewVisible, previewId, visible) as Promise<boolean>
+  },
+  reloadLocalAppPreview(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.reloadLocalAppPreview, previewId) as Promise<boolean>
+  },
+  closeLocalAppPreview(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeLocalAppPreview, previewId) as Promise<boolean>
+  },
+  onLocalAppRuntimeEvent(handler: (event: LocalAppRuntimeEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: LocalAppRuntimeEvent) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onLocalAppRuntimeEvent, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onLocalAppRuntimeEvent, listener)
+  },
+  inspectRuntimeDirectory(rootPath: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.inspectRuntimeDirectory, rootPath) as Promise<RuntimeInspectResult>
+  },
+  trustRuntimeDirectory(rootPath: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.trustRuntimeDirectory, rootPath) as Promise<RuntimeDefinitionResult>
+  },
+  createWorkspaceTab(rootPath: string, expectedRevision?: number, title?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createWorkspaceTab, rootPath, expectedRevision, title) as Promise<RuntimeCreationResult>
+  },
+  openWorkspaceTab(runtimeDefinitionId: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openWorkspaceTab, runtimeDefinitionId, expectedRevision) as Promise<WorkspaceTabResult>
+  },
+  closeWorkspaceTab(tabId: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeWorkspaceTab, tabId, expectedRevision) as Promise<WorkspaceTabCloseResult>
+  },
+  renameWorkspaceTab(tabId: string, title: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.renameWorkspaceTab, tabId, title, expectedRevision) as Promise<WorkspaceTabResult>
+  },
+  relocateRuntime(runtimeDefinitionId: string, rootPath: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.relocateRuntime, runtimeDefinitionId, rootPath, expectedRevision) as Promise<LocalAppRelocationResult>
+  },
+  revokeRuntimeTrust(canonicalRoot: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.revokeRuntimeTrust, canonicalRoot) as Promise<void>
+  },
+  getRuntime(runtimeDefinitionId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntime, runtimeDefinitionId) as Promise<RuntimeSnapshot | null>
+  },
+  startRuntime(runtimeDefinitionId: string, cause?: 'user' | 'restore', consumerId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startRuntime, runtimeDefinitionId, cause, consumerId) as Promise<RuntimeSnapshot>
+  },
+  stopRuntime(runtimeDefinitionId: string, reason?: 'user' | 'last-consumer' | 'app-quit') {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.stopRuntime, runtimeDefinitionId, reason) as Promise<RuntimeSnapshot | null>
+  },
+  releaseRuntime(runtimeDefinitionId: string, consumerId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.releaseRuntime, runtimeDefinitionId, consumerId) as Promise<RuntimeSnapshot | null>
+  },
+  restartRuntime(runtimeDefinitionId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.restartRuntime, runtimeDefinitionId) as Promise<RuntimeSnapshot>
+  },
+  createRuntimePreview(host: RuntimePreviewHost) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createRuntimePreview, host) as Promise<RuntimePreviewResult>
+  },
+  setRuntimePreviewBounds(previewId: string, bounds: { x: number; y: number; width: number; height: number }) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewBounds, previewId, bounds) as Promise<boolean>
+  },
+  setRuntimePreviewVisible(previewId: string, visible: boolean) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewVisible, previewId, visible) as Promise<boolean>
+  },
+  reloadRuntimePreview(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.reloadRuntimePreview, previewId) as Promise<boolean>
+  },
+  closeRuntimePreview(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeRuntimePreview, previewId) as Promise<boolean>
+  },
+  onRuntimeEvent(handler: (event: RuntimeEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: RuntimeEvent) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onRuntimeEvent, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onRuntimeEvent, listener)
+  },
+  ensureProjectRuntime(projectId: string, mountId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.ensureProjectRuntime, projectId, mountId) as Promise<ProjectRuntimeResult>
+  },
+  trustProjectRuntime(projectId: string, mountId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.trustProjectRuntime, projectId, mountId) as Promise<ProjectRuntimeResult>
   },
   clearChatWorkspaceData() {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.clearChatWorkspaceData) as Promise<void>
