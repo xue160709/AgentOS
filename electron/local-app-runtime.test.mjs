@@ -44,6 +44,50 @@ function definition(rootPath) {
   }
 }
 
+async function waitForPath(path, { present = true, timeoutMs = 5_000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (existsSync(path) === present) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  assert.equal(existsSync(path), present, `${present ? 'expected' : 'expected no'} path: ${path}`)
+}
+
+function writeOwnedProcessFixture(root) {
+  mkdirSync(resolve(root, 'node_modules'))
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({
+    name: 'runtime-bridge-fixture',
+    scripts: { dev: 'node server.mjs owned' },
+  }))
+  writeFileSync(resolve(root, 'server.mjs'), `
+import fs from 'node:fs'
+import path from 'node:path'
+
+const role = process.argv[2] || 'owned'
+const pidPath = path.join(process.cwd(), '.' + role + '-pid')
+const lockPath = path.join(process.cwd(), '.' + role + '-lock')
+let stopping = false
+function stop() {
+  if (stopping) return
+  stopping = true
+  try { fs.unlinkSync(lockPath) } catch {}
+  try { fs.unlinkSync(pidPath) } catch {}
+  process.exit(0)
+}
+process.once('SIGTERM', stop)
+process.once('SIGINT', stop)
+fs.writeFileSync(pidPath, String(process.pid) + '\\n')
+fs.writeFileSync(lockPath, 'held\\n')
+setInterval(() => {}, 1000)
+`)
+}
+
+async function cleanupChild(child) {
+  if (!child || child.exitCode !== null) return
+  child.kill('SIGTERM')
+  await once(child, 'exit').catch(() => undefined)
+}
+
 test('Local App runtime accepts only loopback readiness URLs and filters env', () => {
   assert.equal(runtime.normalizeLoopbackUrl('http://127.0.0.1:5173/'), 'http://127.0.0.1:5173/')
   assert.equal(runtime.normalizeLoopbackUrl('http://0.0.0.0:5173/'), null)
@@ -93,8 +137,10 @@ test('Runtime supervisor starts with dynamic port, emits scoped events, and stop
   const first = await supervisor.start(definition(root))
   assert.equal(first.status, 'running')
   assert.equal(first.port, 43217)
-  assert.equal(children.at(-1).args.join(' '), 'run dev')
+  assert.equal(children.at(-1).args[0], '-e')
+  assert.match(children.at(-1).args[1], /npmExecutable.*run.*dev/s)
   assert.equal(children.at(-1).options.shell, false)
+  assert.deepEqual(children.at(-1).options.stdio, ['ignore', 'pipe', 'pipe', 'ipc'])
   assert.ok(events.every((event) => event.localAppId && event.runtimeId && Number.isInteger(event.generation) && event.timestamp))
   const stopped = await supervisor.stop('local-app-test', 'user')
   assert.equal(stopped.status, 'stopped')
@@ -122,6 +168,120 @@ test('Runtime supervisor fails bounded readiness without treating a live process
   assert.equal(failed.status, 'failed')
   assert.notEqual(failed.status, 'running')
   assert.ok(ports <= 3)
+})
+
+test('Early bridge/child exit keeps process-exited at start phase and never signals an exited PID', async () => {
+  const root = mkdtempSync(`${tmpdir()}/local-app-runtime-exit-`)
+  mkdirSync(resolve(root, 'node_modules'))
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
+  const children = []
+  const supervisor = new runtime.LocalAppRuntimeSupervisor({
+    allocatePort: async () => 45090,
+    fetch: async () => ({ status: 503 }),
+    defaults: { readinessTimeoutMs: 500, probeIntervalMs: 1, probeTimeoutMs: 2, maxPortAttempts: 1, crashRetryCount: 0 },
+    spawn: (executable, args, options) => {
+      const child = new EventEmitter()
+      child.pid = 999991
+      child.exitCode = null
+      child.signalCode = null
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+      child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {}
+      children.push({ executable, args, options, child })
+      queueMicrotask(() => {
+        child.stderr.emit('data', 'EADDRINUSE: existing dev lock held by another process\n')
+        child.exitCode = 42
+        child.emit('exit', 42, null)
+      })
+      return child
+    },
+  })
+  const originalKill = process.kill
+  let signalCalls = 0
+  process.kill = (...args) => {
+    signalCalls += 1
+    return originalKill(...args)
+  }
+  try {
+    const failed = await supervisor.start(definition(root))
+    assert.equal(failed.status, 'failed')
+    assert.equal(failed.errorCode, 'process-exited')
+    assert.equal(failed.phase, 'start')
+    assert.match(failed.detail, /42|EADDRINUSE|lock/i)
+    assert.equal(signalCalls, 0)
+    assert.equal(children[0].args[0], '-e')
+  } finally {
+    process.kill = originalKill
+  }
+})
+
+test('IPC disconnect only cleans the bridge-owned npm subtree and leaves an external same-directory process alive', async () => {
+  const root = mkdtempSync(`${tmpdir()}/local-app-runtime-bridge-`)
+  writeOwnedProcessFixture(root)
+  const external = spawn(process.execPath, ['server.mjs', 'external'], { cwd: root, stdio: 'ignore' })
+  const bridgeChildren = []
+  const supervisor = new runtime.LocalAppRuntimeSupervisor({
+    allocatePort: async () => 45120,
+    fetch: async () => ({ status: 503 }),
+    defaults: { readinessTimeoutMs: 5_000, probeIntervalMs: 5, probeTimeoutMs: 2, maxPortAttempts: 1, crashRetryCount: 0, termTimeoutMs: 3_000, killTimeoutMs: 1_000 },
+    spawn: (executable, args, options) => {
+      const child = spawn(executable, args, options)
+      bridgeChildren.push(child)
+      return child
+    },
+  })
+  const ownedPidPath = resolve(root, '.owned-pid')
+  const ownedLockPath = resolve(root, '.owned-lock')
+  const externalPidPath = resolve(root, '.external-pid')
+  const externalLockPath = resolve(root, '.external-lock')
+  try {
+    await waitForPath(externalPidPath)
+    const startPromise = supervisor.start(definition(root))
+    await waitForPath(ownedPidPath)
+    assert.equal(bridgeChildren.length, 1)
+    assert.equal(bridgeChildren[0].connected, true)
+    bridgeChildren[0].disconnect()
+    const failed = await startPromise
+    assert.equal(failed.errorCode, 'process-exited')
+    assert.equal(failed.phase, 'start')
+    await waitForPath(ownedLockPath, { present: false })
+    assert.equal(existsSync(externalLockPath), true)
+    assert.doesNotThrow(() => process.kill(external.pid, 0))
+  } finally {
+    await cleanupChild(external)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Normal stop, stopAll, and repeated stop release the bridge-owned subtree', async () => {
+  const root = mkdtempSync(`${tmpdir()}/local-app-runtime-stop-`)
+  writeOwnedProcessFixture(root)
+  const bridgeChildren = []
+  const supervisor = new runtime.LocalAppRuntimeSupervisor({
+    allocatePort: async () => 45130,
+    fetch: async () => ({ status: 503 }),
+    defaults: { readinessTimeoutMs: 5_000, probeIntervalMs: 5, probeTimeoutMs: 2, maxPortAttempts: 1, crashRetryCount: 0, termTimeoutMs: 3_000, killTimeoutMs: 1_000 },
+    spawn: (executable, args, options) => {
+      const child = spawn(executable, args, options)
+      bridgeChildren.push(child)
+      return child
+    },
+  })
+  const app = definition(root)
+  const ownedPidPath = resolve(root, '.owned-pid')
+  const ownedLockPath = resolve(root, '.owned-lock')
+  try {
+    const startPromise = supervisor.start(app)
+    await waitForPath(ownedPidPath)
+    const stopped = await supervisor.stop(app.id, 'user')
+    assert.equal(stopped.status, 'stopped')
+    assert.equal((await supervisor.stop(app.id, 'user')).status, 'stopped')
+    await startPromise
+    await waitForPath(ownedLockPath, { present: false })
+    await supervisor.stopAll('app-quit')
+    await supervisor.stopAll('app-quit')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('Runtime manager restart preserves every consumer until the last release', async () => {
@@ -227,7 +387,7 @@ test('Runtime preparation digest persists across supervisor instances and reruns
   const second = await secondSupervisor.start(app)
   assert.equal(second.status, 'running')
   await secondSupervisor.stop(app.id)
-  assert.deepEqual(calls.map((call) => call.args[0]), ['ci', 'run', 'run'])
+  assert.deepEqual(calls.map((call) => call.args[0]), ['ci', '-e', '-e'])
   writeFileSync(resolve(root, 'package-lock.json'), '{"lockfileVersion":3,"changed":true}')
   const thirdSupervisor = makeSupervisor()
   const third = await thirdSupervisor.start(app)

@@ -187,3 +187,21 @@ coverage_gate: pass
   - 写入（主 Agent）：根 `TODO.md`、`prd/local-app-runtime/acceptance.md`、`prd/README.md`、必要索引/指针与 change 共享状态；专业角色分别写模块 README/design/technical。
   - 边界：不改业务代码，不执行正式验收，不伪造证据或状态戳。
   - 已同步：`prd/local-app-runtime/README.md`、`design.md`、`technical.md`、`acceptance.md`、`sync.json`、根 `TODO.md`、`prd/README.md`、`CONTEXT.md`。
+
+## 2026-08-25 回归修复
+
+- [ ] `REG-UI-01`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：用户 2026-08-25 明确纠正的首页切换合同
+  - 结果：Workspace Runtime Preview 重新铺满主内容区；项目首页恢复 Revision 2 前的 hero/Composer/留白/宽度/滚动布局，只在既有 below-composer 卡片容器内切换卡片区与 Runtime 面板；Runtime 面板自身不重叠。
+  - 编排：ownership 指针 `.codex/rules/ownership.md`；`deadline=30m`；`attempt=1`；`instance_id=/root/runtime_layout_impl`；`exact_write_allowlist=src/components/chat/ChatStartView.tsx,src/style.css`；`diff_baseline=HEAD c5aed82 + unrelated dirty baseline (.agents deletions, AGENTS.md, .agent/)`。
+  - 验证：`npm run typecheck`；稳定 Electron GUI 中分别检查项目 Overview、项目 Runtime 与 Workspace Runtime 的可视高度、窄宽度换行和无重叠。
+  - Rework：attempt 1 错把 hero + Composer 一并放入 Overview 条件分支；attempt 2 又为固定 Composer 重写了首页 flex/overflow 并把 Tab 放成页面顶栏。用户均明确否定。attempt 3 必须以 `c5aed82^` 的原首页 DOM/CSS 为布局基线，只在原 `chat-start-view__below-composer` 内加入局部切换。
+  - 编排：`deadline=30m`；`attempt=3`；`instance_id=/root/runtime_layout_rework2`；`exact_write_allowlist=src/components/chat/ChatStartView.tsx,src/style.css`；`diff_baseline=HEAD c5aed82 + attempt2 diff dd894b22 + runtime writer disjoint diff + unrelated dirty baseline`。
+
+- [ ] `REG-RUNTIME-01`｜owner=`technical_architect → implementation_engineer`｜write_mode=`response_only → writer`｜依赖：现有进程树回收与安全合同
+  - 结果：AgentOS/Electron 异常或开发热重启后，不遗留 app-owned `npm run dev` 进程阻塞下一次启动；不得误杀同目录的外部进程；撞锁/提前退出显示真实失败阶段。
+  - 证据基线：旧 `/Volumes/macOS/Github/homepage` Runtime PID 17509/17534/17535 于 15:57 启动后成为 PID 1 子进程，持有 `.next/dev/lock` 与 54233；当前 Electron PID 53900 于 20:10 启动，未拥有该进程，首页 Runtime 显示 readiness 失败。
+  - 编排：技术架构实例 `/root/runtime_orphan_arch` 已冻结最小 ownership/cleanup 合同；`deadline=45m`；`attempt=1`；`instance_id=/root/runtime_orphan_impl`；`exact_write_allowlist=electron/local-app-runtime/index.ts,electron/local-app-runtime.test.mjs,test-fixtures/local-app-runtime/server.mjs`；`diff_baseline=HEAD c5aed82 + REG-UI-01 diff + unrelated dirty baseline`。
+  - 验证：目标 Runtime 测试覆盖 app-owned 归属、异常 parent exit、PID 复用/外部进程负例、重复启动与可读错误；稳定集成后再做一次开发质量检查。
+
+- [ ] `CHECK-REG-01`｜owner=`quality_verifier`｜write_mode=`readonly`｜依赖：`REG-UI-01`,`REG-RUNTIME-01`
+  - 目标：对冻结集成 diff 做一次 full Development Check，重点检查 Runtime 进程所有权、误杀负例、异常恢复、Preview bounds、首页两视图隔离与响应式重叠；不回写正式 Acceptance/TODO 状态。

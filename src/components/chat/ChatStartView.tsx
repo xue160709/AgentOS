@@ -97,59 +97,65 @@ export function ChatStartView({
 
   return (
     <div className="chat-start-view">
-      <div className="project-home-view-tabs" data-testid="project-home-view-tabs" role="tablist" aria-label={t('runtime.projectRuntime')}>
-        <button type="button" role="tab" aria-selected={projectHomeViewMode === 'overview'} data-testid="project-home-view-tab-overview" onClick={() => runtimeContext?.onViewModeChange('overview')}>{t('runtime.overview')}</button>
-        <button type="button" role="tab" aria-selected={projectHomeViewMode === 'runtime'} data-testid="project-home-view-tab-runtime" onClick={() => runtimeContext?.onViewModeChange('runtime')}>{t('runtime.runtimeTab')}</button>
+      {project.pathMissing ? (
+        <div className="project-path-missing-banner" role="status">
+          <strong>{t('shell.projectPathMissing')}</strong>
+          <p>{t('shell.projectPathMissingHint')}</p>
+        </div>
+      ) : null}
+      <div className="chat-start-view__hero" id="chat-project-home">
+        <h1>{heading ?? t('chat.emptyHeading')}</h1>
       </div>
-      {projectHomeViewMode === 'runtime' && runtimeContext ? <div className="project-home-runtime-panel" data-testid="project-home-runtime-panel"><ProjectHomeRuntimeView controller={runtimeContext} /></div> : <div className="project-home-overview-panel" data-testid="project-home-overview-panel">
-        {project.pathMissing ? (
-          <div className="project-path-missing-banner" role="status">
-            <strong>{t('shell.projectPathMissing')}</strong>
-            <p>{t('shell.projectPathMissingHint')}</p>
+      {composer}
+      <div className="chat-start-view__below-composer">
+        <div className="project-home-view-tabs" data-testid="project-home-view-tabs" role="tablist" aria-label={t('runtime.projectRuntime')}>
+          <button type="button" role="tab" aria-selected={projectHomeViewMode === 'overview'} data-testid="project-home-view-tab-overview" onClick={() => runtimeContext?.onViewModeChange('overview')}>{t('runtime.overview')}</button>
+          <button type="button" role="tab" aria-selected={projectHomeViewMode === 'runtime'} data-testid="project-home-view-tab-runtime" onClick={() => runtimeContext?.onViewModeChange('runtime')}>{t('runtime.runtimeTab')}</button>
+        </div>
+        {projectHomeViewMode === 'runtime' && runtimeContext ? (
+          <div className="project-home-runtime-panel" data-testid="project-home-runtime-panel">
+            <ProjectHomeRuntimeView controller={runtimeContext} />
           </div>
-        ) : null}
-        <div className="chat-start-view__hero" id="chat-project-home">
-          <h1>{heading ?? t('chat.emptyHeading')}</h1>
-        </div>
-        {composer}
-        <div className="chat-start-view__below-composer">
-          {agentModeEnabled ? (
-            <ProjectHomeSurface
-              project={project}
-              projects={projects}
-              projectOrderIds={projectOrderIds}
-              agent={agentMode}
-              todoEnabled={todoEnabled}
-              loading={agentModeLoading}
-              agentStatusSnapshot={agentStatusSnapshot}
-              agentSettingsOpen={agentSettingsOpen}
-              agentSettingsPanel={agentSettingsPanel}
-              onOpenAgentSettings={onOpenAgentSettings}
-              onAgentSettingsPanelChange={onAgentSettingsPanelChange}
-              onCloseAgentSettings={onCloseAgentSettings}
-              threads={threads}
-              threadRunStates={threadRunStates}
-              hiddenSkillPaths={hiddenSkillPaths}
-              onStartDataCardDraft={onStartDataCardDraft}
-              onCreateProject={onCreateProject}
-              onSelectProject={onSelectProject}
-              onEditHomePluginCard={onEditHomePluginCard}
-              onOpenProjectFile={onOpenProjectFile}
-              onRunProjectSkill={onRunProjectSkill}
-              onStopProjectSkillRun={onStopProjectSkillRun}
-              onRefreshAgentStatus={onRefreshAgentStatus}
-            />
-          ) : (
-            <ProjectHomeProjectSelector
-              project={project}
-              projects={projects}
-              projectOrderIds={projectOrderIds}
-              onCreateProject={onCreateProject}
-              onSelectProject={onSelectProject}
-            />
-          )}
-        </div>
-      </div>}
+        ) : (
+          <div className="project-home-overview-panel" data-testid="project-home-overview-panel">
+            {agentModeEnabled ? (
+              <ProjectHomeSurface
+                project={project}
+                projects={projects}
+                projectOrderIds={projectOrderIds}
+                agent={agentMode}
+                todoEnabled={todoEnabled}
+                loading={agentModeLoading}
+                agentStatusSnapshot={agentStatusSnapshot}
+                agentSettingsOpen={agentSettingsOpen}
+                agentSettingsPanel={agentSettingsPanel}
+                onOpenAgentSettings={onOpenAgentSettings}
+                onAgentSettingsPanelChange={onAgentSettingsPanelChange}
+                onCloseAgentSettings={onCloseAgentSettings}
+                threads={threads}
+                threadRunStates={threadRunStates}
+                hiddenSkillPaths={hiddenSkillPaths}
+                onStartDataCardDraft={onStartDataCardDraft}
+                onCreateProject={onCreateProject}
+                onSelectProject={onSelectProject}
+                onEditHomePluginCard={onEditHomePluginCard}
+                onOpenProjectFile={onOpenProjectFile}
+                onRunProjectSkill={onRunProjectSkill}
+                onStopProjectSkillRun={onStopProjectSkillRun}
+                onRefreshAgentStatus={onRefreshAgentStatus}
+              />
+            ) : (
+              <ProjectHomeProjectSelector
+                project={project}
+                projects={projects}
+                projectOrderIds={projectOrderIds}
+                onCreateProject={onCreateProject}
+                onSelectProject={onSelectProject}
+              />
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

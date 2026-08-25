@@ -4,7 +4,7 @@
 
 - 状态：`accepted / planned`。
 - 用户确认：取消“Local App”产品概念；它就是可命名 Tab；侧栏 Tab 位于新对话/搜索上方；关闭走右键；Runtime 同时可在 Tab 与项目首页显示。
-- 用户补充：项目首页现有卡片区先不改，独立做 Runtime 系统，用页面级 Tab 切换两套系统。
+- 用户最终校准：原项目首页的 hero、Composer、留白、宽度与滚动节奏不能被 Runtime 功能重排；`Overview / Runtime` 只放进既有 `chat-start-view__below-composer` 卡片容器，切换该容器里的卡片区与 Runtime 面板。
 - Current：Revision 1 已实现 LocalAppDefinition/Tab、Runtime Manager、受控 Preview、显式信任、持久化与恢复。
 
 ## 2. 对象与不变量
@@ -60,23 +60,24 @@ Tabs                                      [+]
 
 ```text
 Project Home
-  [Overview] [Runtime]
-
-Overview panel
-  现有 hero + composer + ProjectHomeSurface / A2UI cards
-
-Runtime panel
-  项目名称 · 状态
-  [在侧栏打开 Tab] [刷新] [日志] [重启] [停止]
-  Runtime Preview
+  现有 hero
+  现有 composer
+  现有 below-composer 容器
+    [Overview] [Runtime]
+    Overview content            Runtime content
+    ProjectHomeSurface /        项目名称 · 状态
+    A2UI cards                  [在侧栏打开 Tab] [刷新] [日志] [重启] [停止]
+                                Runtime Preview
 ```
 
-- `Overview` 默认并保留现有行为；`ProjectHomeSurface.tsx` 不修改。
-- `Runtime` 是独立页面，只消费当前 WorkspaceProject 和通用 Runtime host，不渲染卡片或修改卡片状态。
+- hero、Composer 与首页外层 CSS 保持 Revision 2 之前的原有布局；不得因 `Overview / Runtime` 切换而卸载、移动、清空输入或改变大留白。
+- `Overview / Runtime` Tab 是原 below-composer 卡片容器的局部控制，不占页面顶栏或单独消费整页高度。
+- `Overview` 默认并保留现有卡片行为；`ProjectHomeSurface.tsx` 不修改。
+- `Runtime` 是 Composer 下方的独立内容面板，只消费当前 WorkspaceProject 和通用 Runtime host，不渲染卡片或修改卡片状态。
 - 同一项目本次/后续进入可恢复最后视图模式；缺失/非法值回退 `Overview`。
 - 进入 Runtime 页只检查配置。未信任时显示 `启动预览` 并复用信任确认；不能因页面加载自动执行项目代码。
 - 已有同 root Runtime 时 attach，不重复 spawn。从首页“在侧栏打开 Tab”创建真实 WorkspaceTab 并复用 Runtime。
-- Overview/Runtime 内部切换只 hide/show 首页 Preview；离开整个项目首页、进入对话或切项目时关闭该 host Preview 并 release 首页 consumer。
+- Overview/Runtime 内部切换只替换 Composer 下方内容并 hide/show 首页 Preview；离开整个项目首页、进入对话或切项目时关闭该 host Preview 并 release 首页 consumer。
 
 ## 6. Runtime 与 Preview 状态
 

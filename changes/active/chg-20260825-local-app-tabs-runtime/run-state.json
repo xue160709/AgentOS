@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "changeId": "chg-20260825-local-app-tabs-runtime",
+  "revision": 2,
+  "qualityRequired": true,
+  "slices": [
+    {
+      "id": "REG-UI-01",
+      "outcome": "Workspace Runtime Preview 铺满主内容区；项目首页恢复原 hero/Composer/留白/宽度/滚动布局，仅在原 below-composer 卡片容器内切换卡片与 Runtime",
+      "dependsOn": [],
+      "contracts": [
+        "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
+        "changes/active/chg-20260825-local-app-tabs-runtime/design.md",
+        "prd/local-app-runtime/design.md"
+      ],
+      "riskContractIds": ["R-UI-HEIGHT-01", "R-UI-FLOW-01"],
+      "parallelGroup": "regression-fix",
+      "writeAllowlist": [
+        "src/components/chat/ChatStartView.tsx",
+        "src/style.css"
+      ],
+      "testAllowlist": [],
+      "testCommands": [
+        "npm run typecheck",
+        "Electron GUI smoke: project overview/runtime and workspace runtime"
+      ],
+      "integrationOwner": "main_agent",
+      "developmentStatus": "REWORK",
+      "reviewStatus": "NOT_READY",
+      "reviewImpact": "NONE",
+      "verificationIds": [],
+      "reviewEvidenceIds": []
+    },
+    {
+      "id": "REG-RUNTIME-01",
+      "outcome": "异常父进程退出后 app-owned dev server 不阻塞下一次 Runtime 启动，且不误杀外部进程",
+      "dependsOn": [],
+      "contracts": [
+        "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
+        "prd/local-app-runtime/technical.md",
+        "electron/local-app-runtime/index.ts"
+      ],
+      "riskContractIds": ["R-PROC-OWNERSHIP-01", "R-PROC-RECOVERY-01", "R-PROC-ERROR-01"],
+      "parallelGroup": "regression-fix",
+      "writeAllowlist": [
+        "electron/local-app-runtime/index.ts"
+      ],
+      "testAllowlist": [
+        "electron/local-app-runtime.test.mjs",
+        "test-fixtures/local-app-runtime/server.mjs"
+      ],
+      "testCommands": [
+        "node --test electron/local-app-runtime.test.mjs"
+      ],
+      "integrationOwner": "main_agent",
+      "developmentStatus": "RUNNING",
+      "reviewStatus": "NOT_READY",
+      "reviewImpact": "NONE",
+      "verificationIds": [],
+      "reviewEvidenceIds": []
+    }
+  ],
+  "riskContracts": [
+    {
+      "id": "R-UI-HEIGHT-01",
+      "invariant": "Workspace Runtime Preview 的宿主边界占满 app-main 的可用高度，不回退为 320px 内容高度",
+      "severity": "P1",
+      "sliceId": "REG-UI-01",
+      "testPath": "src/style.css",
+      "testCommand": "Electron GUI smoke: workspace runtime full-height preview",
+      "status": "PLANNED"
+    },
+    {
+      "id": "R-UI-FLOW-01",
+      "invariant": "项目首页 hero、Composer、留白、宽度和滚动保持原布局且不丢输入；Overview/Runtime 只在原 below-composer 卡片容器内切换卡片与 Runtime，标题、操作和 Preview 在正常与窄窗口中均不重叠",
+      "severity": "P1",
+      "sliceId": "REG-UI-01",
+      "testPath": "src/components/chat/ChatStartView.tsx; src/style.css",
+      "testCommand": "Electron GUI smoke: overview/runtime normal and narrow layouts",
+      "status": "PLANNED"
+    },
+    {
+      "id": "R-PROC-OWNERSHIP-01",
+      "invariant": "清理逻辑只能终止能证明由当前/先前 AgentOS Runtime 创建的进程树，绝不按目录或端口误杀外部进程",
+      "severity": "P0",
+      "sliceId": "REG-RUNTIME-01",
+      "testPath": "electron/local-app-runtime.test.mjs",
+      "testCommand": "node --test electron/local-app-runtime.test.mjs",
+      "status": "PLANNED"
+    },
+    {
+      "id": "R-PROC-RECOVERY-01",
+      "invariant": "AgentOS/Electron 异常退出或开发热重启后，app-owned dev server 会被有界回收，下一实例可正常启动",
+      "severity": "P0",
+      "sliceId": "REG-RUNTIME-01",
+      "testPath": "electron/local-app-runtime.test.mjs",
+      "testCommand": "node --test electron/local-app-runtime.test.mjs",
+      "status": "PLANNED"
+    },
+    {
+      "id": "R-PROC-ERROR-01",
+      "invariant": "子进程提前退出或锁冲突不会被最终泛化为纯 readiness timeout，用户可看到真实失败阶段和最近日志入口",
+      "severity": "P1",
+      "sliceId": "REG-RUNTIME-01",
+      "testPath": "electron/local-app-runtime.test.mjs",
+      "testCommand": "node --test electron/local-app-runtime.test.mjs",
+      "status": "PLANNED"
+    }
+  ],
+  "verifications": [
+    {
+      "id": "VER-REG-UI-01-TYPECHECK-72bf1fb9",
+      "scope": "REG-UI-01",
+      "diffHash": "72bf1fb9d464d16b7ecdde6a9407e47b01b96b20d108f4768cab5dff460e9cba",
+      "environmentHash": "b37507d9d50c568f422ec2d780423ca4f2b7bc1169936dd10695b4f709f09720",
+      "command": "npm run typecheck",
+      "durationMs": 3220,
+      "exitCode": 0,
+      "summary": "TypeScript typecheck passed on the frozen REG-UI-01 diff.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-REG-UI-01-DIFFCHECK-72bf1fb9",
+      "scope": "REG-UI-01",
+      "diffHash": "72bf1fb9d464d16b7ecdde6a9407e47b01b96b20d108f4768cab5dff460e9cba",
+      "environmentHash": "b37507d9d50c568f422ec2d780423ca4f2b7bc1169936dd10695b4f709f09720",
+      "command": "git diff --check -- src/style.css",
+      "durationMs": 10,
+      "exitCode": 0,
+      "summary": "Whitespace and conflict-marker check passed on the frozen REG-UI-01 diff.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-REG-UI-01-WORKSPACE-GUI-72bf1fb9",
+      "scope": "REG-UI-01",
+      "diffHash": "72bf1fb9d464d16b7ecdde6a9407e47b01b96b20d108f4768cab5dff460e9cba",
+      "environmentHash": "b37507d9d50c568f422ec2d780423ca4f2b7bc1169936dd10695b4f709f09720",
+      "command": "Computer Use: inspect my-v0-project Workspace Runtime at 1400x768",
+      "durationMs": 100,
+      "exitCode": 0,
+      "summary": "Runtime toolbar stayed at the top and the stopped Preview host filled the remaining main-workspace height.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-REG-UI-01-PROJECT-RUNTIME-GUI-72bf1fb9",
+      "scope": "REG-UI-01",
+      "diffHash": "72bf1fb9d464d16b7ecdde6a9407e47b01b96b20d108f4768cab5dff460e9cba",
+      "environmentHash": "b37507d9d50c568f422ec2d780423ca4f2b7bc1169936dd10695b4f709f09720",
+      "command": "Computer Use: inspect agent-init Project Runtime at 1400x768",
+      "durationMs": 100,
+      "exitCode": 0,
+      "summary": "Page-level tabs, project identity, trust/status actions, secondary actions, and Preview occupied separate non-overlapping rows.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-REG-UI-01-PROJECT-OVERVIEW-GUI-72bf1fb9",
+      "scope": "REG-UI-01",
+      "diffHash": "72bf1fb9d464d16b7ecdde6a9407e47b01b96b20d108f4768cab5dff460e9cba",
+      "environmentHash": "b37507d9d50c568f422ec2d780423ca4f2b7bc1169936dd10695b4f709f09720",
+      "command": "Computer Use: switch agent-init Project Home to Overview at 1400x768",
+      "durationMs": 700,
+      "exitCode": 0,
+      "summary": "Overview contained the existing heading, composer, project controls, and cards only; Runtime content was absent and tabs remained page-level.",
+      "logPath": "evidence.md"
+    }
+  ],
+  "agents": [
+    {
+      "instanceId": "/root/runtime_orphan_arch",
+      "taskId": "REG-RUNTIME-01",
+      "role": "technical_architect",
+      "status": "DONE",
+      "startedAt": "2026-08-25T21:04:53+08:00",
+      "completedAt": "2026-08-25T21:12:47+08:00",
+      "wallDurationMs": 474000,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
+    },
+    {
+      "instanceId": "/root/runtime_layout_impl",
+      "taskId": "REG-UI-01",
+      "role": "implementation_engineer",
+      "status": "DONE",
+      "startedAt": "2026-08-25T21:04:53+08:00",
+      "completedAt": "2026-08-25T21:15:02+08:00",
+      "wallDurationMs": 609000,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
+    },
+    {
+      "instanceId": "/root/runtime_orphan_impl",
+      "taskId": "REG-RUNTIME-01",
+      "role": "implementation_engineer",
+      "status": "RUNNING",
+      "startedAt": "2026-08-25T21:17:12+08:00",
+      "completedAt": null,
+      "wallDurationMs": null,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": false
+    },
+    {
+      "instanceId": "/root/runtime_layout_rework",
+      "taskId": "REG-UI-01",
+      "role": "implementation_engineer",
+      "status": "DONE",
+      "startedAt": "2026-08-25T21:23:50+08:00",
+      "completedAt": "2026-08-25T21:31:56+08:00",
+      "wallDurationMs": 486000,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
+    }
+  ],
+  "fullDevelopmentCheckHashes": [],
+  "openFindingIds": []
+}

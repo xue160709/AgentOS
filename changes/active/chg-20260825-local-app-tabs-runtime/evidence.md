@@ -183,3 +183,32 @@
 - 已具备正式证据的场景：确认信任后创建、关闭 Tab 保留 Definition、旧快照兼容、fixture 自动启动、CodeNow Wiki live smoke、同应用多视图复用、generation/late event 隔离、退出清理、Preview 正常加载与刷新；主 Agent 随后补充了正常退出后自动恢复的真实 GUI/PID/动态端口证据。
 - 仍待补证据的场景：信任确认取消/Escape 不落盘；失败态 UI 与重试/停止；真实目录或脚本不可用时的可恢复 UI；Preview 页面真实执行 Node/Electron bridge、外部导航、`window.open` 与权限请求负例。
 - 因上述缺口，模块不得宣称正式 Acceptance 全部通过，根 TODO 不得整体完成或归档。
+### ORCH-010｜2026-08-25 回归诊断
+
+- skill: `project-debug`
+- execution_model: `hybrid`
+- actual_execution: `mixed`
+- triggered_roles:
+  - `technical_architect`：trigger=`当前 Electron 与受管 dev server 跨进程；异常 parent exit 后 app-owned 进程成为 PID 1 子进程并持有 Next lock，单侧 UI 日志不能安全决定进程归属与回收`；task=`REG-RUNTIME-01`；instance=`/root/runtime_orphan_arch`；status=`DONE`
+  - `implementation_engineer`：trigger=`Medium/Heavy 回归实现必须由工程角色写入`；task=`REG-UI-01`；instance=`/root/runtime_layout_impl`；status=`DONE`
+  - `implementation_engineer`：trigger=`跨进程 Runtime ownership/cleanup 实现与目标测试`；task=`REG-RUNTIME-01`；instance=`/root/runtime_orphan_impl`；status=`RUNNING`
+  - `implementation_engineer`：trigger=`用户纠正首页切换边界，attempt 1 需 rework`；task=`REG-UI-01`；instance=`/root/runtime_layout_rework`；status=`RUNNING`
+- not_needed:
+  - `product_manager`：`existing_contract_sufficient`
+  - `experience_designer`：`existing_contract_sufficient`
+  - `visual_interface_designer`：`strict_reuse_of_existing_pattern`
+  - `independent_reviewer`：`no_independent_review_trigger`
+- degradation: `none`
+- coverage_gate: `in_progress`
+- runtime: `started_at=2026-08-25T21:04:53+08:00; completed_at=2026-08-25T21:15:02+08:00; wall_ms=609000; model=gpt-5.6-luna; input_tokens=null; output_tokens=null; result_path=; result_hash=72bf1fb9d464d16b7ecdde6a9407e47b01b96b20d108f4768cab5dff460e9cba; consumed=true`
+- evidence: `截图 + c5aed82 diff + 当前进程/lock/端口只读证据；UI 高度根因已定位为新 Runtime 根节点未继承全高 flex 布局，以及项目页级 Tab 仍消费旧 ChatStartView 大顶距。REG-UI-01 diff 72bf1fb9 已通过 npm run typecheck 与目标 diff-check。架构结论采用 app-owned IPC liveness bridge：只回收桥接器自身创建的子进程树；不得扫描目录/端口、不得删除 Next lock、不得误杀外部进程；process-exited 需保留真实失败原因。`
+
+### REG-UI-01｜2026-08-25 GUI 回归
+
+- `VER-REG-UI-01-WORKSPACE-GUI-72bf1fb9`：1400×768 的 `my-v0-project` Workspace Runtime 中，toolbar 固定于顶部，停止态 Preview 铺满剩余主内容高度，不再停在约 320px。
+- `VER-REG-UI-01-PROJECT-RUNTIME-GUI-72bf1fb9`：`agent-init` 项目 Runtime 中，页面级 Tabs、项目身份/信任操作、次级操作与 Preview 各占独立布局行，无按钮或文本重叠。
+- `VER-REG-UI-01-PROJECT-OVERVIEW-GUI-72bf1fb9`：切回 Overview 后只出现既有标题、Composer、项目控制与卡片，Runtime 内容未混入，Tabs 保持在页面顶部。
+
+> 用户于随后截图明确纠正：hero 与 Composer 不属于切换内容，必须始终保留；`Overview / Runtime` 只切换 Composer 下方的卡片区与 Runtime 面板。因此 attempt 1 的两个项目首页 GUI 结论仅作为失败诊断历史，不再进入当前 slice 的有效 `verificationIds`；Workspace Runtime 全高结论也将在 attempt 2 新 diff 上重跑后再消费。
+
+> 用户第二次截图确认 attempt 2 仍然错误：虽然 Composer 已固定，但首页整体 flex/overflow/留白被重写、Tab 被放成页面顶栏，破坏了原项目首页。attempt 3 以 `c5aed82^` 的原 `ChatStartView` DOM/CSS 为布局基线，仅在原 `chat-start-view__below-composer` 内包住 cards/runtime 局部切换；attempt 2 的 dd894b22 自检不作为当前有效验证。

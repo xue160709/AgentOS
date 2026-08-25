@@ -37,6 +37,7 @@
 | 修改文件、写代码、运行验收、同步 PRD/TODO 或进入多步骤流程 | `.codex/rules/lifecycle.md` |
 | 创建、推进、恢复或归档持久、跨角色、跨模块或跨会话变更 | `.codex/skills/change-package/SKILL.md` |
 | 分配写入路径、并行修改、判断负责人、处理 writer 失败或写入 `docs/` | `.codex/rules/ownership.md` |
+| Medium/Heavy 开发包含多个可独立验证结果、并行开发、增量 review、验证复用或 Agent 结果消费 | `.codex/rules/execution-pipeline.md` |
 | 读取、创建、重命名或澄清产品术语，或涉及 `CONTEXT.md` / `CONTEXT-MAP.md` | `.codex/rules/context.md` |
 | 创建、修改或消费 `COLLABORATOR.md`，或按画像调整最终表达 | `.codex/rules/collaborator-profile.md` |
 | 创建、修改或消费 `GUARDRAILS.md`，或判断边界对规划、实现和验收的影响 | `.codex/rules/product-guardrails.md` |

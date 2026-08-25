@@ -78,6 +78,172 @@ export type RuntimeSupervisorOptions = {
 
 type RuntimeProcess = ChildProcess & { pid: number }
 
+/**
+ * The runtime child must have a liveness edge back to Electron.  A detached
+ * `npm run dev` process otherwise survives an Electron crash and can retain a
+ * framework lock file indefinitely.  Keep the bridge inline so packaged builds
+ * do not need to discover a helper file next to the app bundle.
+ *
+ * The bridge only ever signals the npm process it spawned (and that process's
+ * own POSIX process group).  It deliberately does not inspect cwd, ports,
+ * locks, or the system process table.
+ */
+const RUNTIME_LIVENESS_BRIDGE_SOURCE = String.raw`
+'use strict'
+
+const { spawn } = require('node:child_process')
+
+const TERM_TIMEOUT_MS = __TERM_TIMEOUT_MS__
+const KILL_TIMEOUT_MS = __KILL_TIMEOUT_MS__
+const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+
+let child
+let closing = false
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function childIsAlive(value) {
+  return Boolean(value && value.exitCode === null && value.signalCode === null)
+}
+
+async function waitForExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return true
+    }
+    await delay(25)
+  }
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch {
+    return true
+  }
+}
+
+async function terminateOwnedChild(value) {
+  const pid = value && value.pid
+  // exitCode/signalCode are the ownership guard.  Once Node has observed the
+  // child exit, never send a signal to its old PID (it may have been reused).
+  if (!pid || pid <= 0 || !childIsAlive(value)) return
+
+  if (process.platform === 'win32') {
+    const graceful = spawn('taskkill', ['/pid', String(pid), '/T'], { shell: false, stdio: 'ignore' })
+    await waitForChild(graceful, TERM_TIMEOUT_MS)
+    if (!childIsAlive(value)) return
+    const force = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { shell: false, stdio: 'ignore' })
+    await waitForChild(force, KILL_TIMEOUT_MS)
+    return
+  }
+
+  let groupSignalSent = false
+  if (childIsAlive(value)) {
+    try {
+      process.kill(-pid, 'SIGTERM')
+      groupSignalSent = true
+    } catch {
+      // A detached child should have its own group.  The direct-PID fallback
+      // is still scoped by the live ChildProcess ownership proof.
+      if (childIsAlive(value)) {
+        try { process.kill(pid, 'SIGTERM') } catch { /* already stopped */ }
+      }
+    }
+  }
+  if (await waitForExit(pid, TERM_TIMEOUT_MS)) return
+  if (!childIsAlive(value)) return
+  if (groupSignalSent) {
+    try { process.kill(-pid, 'SIGKILL') } catch {
+      if (childIsAlive(value)) {
+        try { process.kill(pid, 'SIGKILL') } catch { /* already stopped */ }
+      }
+    }
+  } else if (childIsAlive(value)) {
+    try { process.kill(pid, 'SIGKILL') } catch { /* already stopped */ }
+  }
+  await waitForExit(pid, KILL_TIMEOUT_MS)
+}
+
+function waitForChild(value, timeoutMs) {
+  if (!value || value.exitCode !== null || value.signalCode !== null) return Promise.resolve()
+  return Promise.race([
+    new Promise((resolve) => value.once('exit', resolve)),
+    delay(timeoutMs),
+  ]).then(() => undefined)
+}
+
+function disconnectParent() {
+  if (!process.connected) return
+  try { process.disconnect() } catch { /* parent is already gone */ }
+}
+
+function finish(code) {
+  if (!closing) closing = true
+  process.exitCode = typeof code === 'number' ? code : 1
+  disconnectParent()
+}
+
+async function closeAndExit(code) {
+  if (closing) return
+  closing = true
+  await terminateOwnedChild(child)
+  finish(code)
+}
+
+process.once('disconnect', () => { void closeAndExit(0) })
+process.once('message', (message) => {
+  if (message && message.type === 'runtime-shutdown') void closeAndExit(0)
+})
+process.once('SIGTERM', () => { void closeAndExit(0) })
+process.once('SIGINT', () => { void closeAndExit(0) })
+process.once('uncaughtException', (error) => {
+  try { process.stderr.write('Runtime bridge error: ' + (error && error.stack ? error.stack : String(error)) + '\\n') } catch { /* best effort */ }
+  void closeAndExit(1)
+})
+process.once('unhandledRejection', (reason) => {
+  try { process.stderr.write('Runtime bridge rejection: ' + String(reason) + '\\n') } catch { /* best effort */ }
+  void closeAndExit(1)
+})
+
+try {
+  child = spawn(npmExecutable, ['run', 'dev'], {
+    cwd: process.cwd(),
+    shell: false,
+    detached: process.platform !== 'win32',
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (child.stdout) child.stdout.pipe(process.stdout)
+  if (child.stderr) child.stderr.pipe(process.stderr)
+  child.once('error', (error) => {
+    try { process.stderr.write('Runtime bridge child error: ' + (error && error.message ? error.message : String(error)) + '\\n') } catch { /* best effort */ }
+    void closeAndExit(1)
+  })
+  child.once('close', (code, signal) => {
+    if (closing) {
+      finish(typeof code === 'number' ? code : 0)
+      return
+    }
+    finish(typeof code === 'number' ? code : (signal ? 1 : 0))
+  })
+} catch (error) {
+  try { process.stderr.write('Runtime bridge spawn error: ' + String(error) + '\\n') } catch { /* best effort */ }
+  void closeAndExit(1)
+}
+`
+
+function createRuntimeLivenessBridgeSource(termTimeoutMs: number, killTimeoutMs: number): string {
+  const safeTermTimeout = Number.isFinite(termTimeoutMs) && termTimeoutMs >= 0 ? Math.floor(termTimeoutMs) : LOCAL_APP_RUNTIME_DEFAULTS.termTimeoutMs
+  const safeKillTimeout = Number.isFinite(killTimeoutMs) && killTimeoutMs >= 0 ? Math.floor(killTimeoutMs) : LOCAL_APP_RUNTIME_DEFAULTS.killTimeoutMs
+  return RUNTIME_LIVENESS_BRIDGE_SOURCE
+    .replace('__TERM_TIMEOUT_MS__', String(safeTermTimeout))
+    .replace('__KILL_TIMEOUT_MS__', String(safeKillTimeout))
+}
+
 type ActiveRuntime = {
   definition: LocalAppDefinition
   snapshot: LocalAppRuntimeSnapshot
@@ -349,6 +515,7 @@ export class LocalAppRuntimeSupervisor {
       runtime.snapshot = { ...runtime.snapshot, status: 'starting', phase: 'start', updatedAt: this.now(), logs: this.recentLogs(runtime) }
       this.emit(runtime, 'status')
       let lastError = 'readiness_timeout'
+      let lastDetail: string | undefined
       for (let attempt = 0; attempt < this.defaults.maxPortAttempts; attempt += 1) {
         if (runtime.controller.signal.aborted) return runtime.snapshot
         const port = await this.allocatePortImpl()
@@ -365,12 +532,16 @@ export class LocalAppRuntimeSupervisor {
             return runtime.snapshot
           }
           lastError = runtime.snapshot.errorCode ?? lastError
+          lastDetail = runtime.snapshot.detail ?? lastDetail
           await terminateProcessTree(process, this.defaults.termTimeoutMs, this.defaults.killTimeoutMs)
           runtime.process = undefined
           if (lastError !== 'process-exited' || crashAttempt >= this.defaults.crashRetryCount) break
           const delay = this.defaults.crashRetryDelaysMs[Math.min(crashAttempt, this.defaults.crashRetryDelaysMs.length - 1)] ?? 0
           await this.sleep(delay, runtime.controller.signal).catch(() => undefined)
         }
+      }
+      if (lastError === 'process-exited') {
+        return this.fail(runtime, lastError, lastDetail ?? this.latestReadableReason(runtime) ?? '开发服务进程提前退出', 'start')
       }
       return this.fail(runtime, lastError, '开发服务未在 loopback 地址就绪', 'readiness')
     } catch (error) {
@@ -459,22 +630,28 @@ export class LocalAppRuntimeSupervisor {
   }
 
   private spawnNpm(runtime: ActiveRuntime, cwd: string, port: number): RuntimeProcess {
-    const child = this.spawnProcess(npmExecutable(), ['run', 'dev'], {
+    const child = this.spawnProcess(runtimeBridgeExecutable(), ['-e', createRuntimeLivenessBridgeSource(this.defaults.termTimeoutMs, this.defaults.killTimeoutMs)], {
       cwd,
       shell: false,
       detached: process.platform !== 'win32',
       env: { ...buildAllowedRuntimeEnv(this.env), PORT: String(port), HOST: '127.0.0.1', NODE_ENV: 'development' },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     }) as RuntimeProcess
     runtime.snapshot = { ...runtime.snapshot, startedAt: this.now(), port, updatedAt: this.now() }
     child.stdout?.setEncoding('utf8')
     child.stderr?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => this.captureLog(runtime, 'stdout', chunk))
     child.stderr?.on('data', (chunk: string) => this.captureLog(runtime, 'stderr', chunk))
+    child.once('error', (error) => {
+      if (runtime.process !== child || runtime.controller.signal.aborted) return
+      const detail = `开发服务桥接器错误 (${error instanceof Error ? error.message : String(error)})`
+      runtime.snapshot = { ...runtime.snapshot, errorCode: 'process-exited', detail, updatedAt: this.now() }
+      this.emit(runtime, 'exit', { detail })
+    })
     child.once('exit', (code, signal) => {
       if (runtime.process !== child || runtime.controller.signal.aborted) return
       runtime.process = undefined
-      const exitDetail = `开发服务退出 (${code ?? signal ?? 'unknown'})`
+      const exitDetail = `开发服务退出 (${code ?? signal ?? 'unknown'})${this.latestReadableReason(runtime) ? `：${this.latestReadableReason(runtime)}` : ''}`
       runtime.snapshot = { ...runtime.snapshot, errorCode: 'process-exited', detail: exitDetail, updatedAt: this.now() }
       this.emit(runtime, 'exit', { code, signal: signal ?? undefined, detail: exitDetail })
       if (runtime.snapshot.status !== 'running') return
@@ -534,7 +711,11 @@ export class LocalAppRuntimeSupervisor {
       const delay = this.defaults.crashRetryDelaysMs[Math.min(attempt, this.defaults.crashRetryDelaysMs.length - 1)] ?? 0
       await this.sleep(delay, runtime.controller.signal).catch(() => undefined)
     }
-    return this.fail(runtime, runtime.snapshot.errorCode ?? 'process-exited', '开发服务崩溃后重试失败', 'readiness')
+    const errorCode = runtime.snapshot.errorCode ?? 'process-exited'
+    const detail = errorCode === 'process-exited'
+      ? runtime.snapshot.detail ?? this.latestReadableReason(runtime) ?? '开发服务崩溃后重试失败'
+      : '开发服务崩溃后重试失败'
+    return this.fail(runtime, errorCode, detail, errorCode === 'process-exited' ? 'start' : 'readiness')
   }
 
   private captureLog(runtime: ActiveRuntime, stream: 'stdout' | 'stderr', chunk: string): void {
@@ -553,8 +734,12 @@ export class LocalAppRuntimeSupervisor {
     const deadline = this.now() + this.defaults.readinessTimeoutMs
     let candidate: string | null = null
     while (this.now() < deadline && !runtime.controller.signal.aborted) {
-      if (runtime.snapshot.errorCode === 'process-exited' || process.exitCode !== null || process.signalCode !== null) {
-        runtime.snapshot = { ...runtime.snapshot, errorCode: 'process-exited', detail: `进程提前退出 (${process.exitCode ?? process.signalCode ?? 'unknown'})`, updatedAt: this.now() }
+      const processExited = (process.exitCode !== undefined && process.exitCode !== null)
+        || (process.signalCode !== undefined && process.signalCode !== null)
+      if (runtime.snapshot.errorCode === 'process-exited' || processExited) {
+        const detail = runtime.snapshot.detail
+          ?? `进程提前退出 (${process.exitCode ?? process.signalCode ?? 'unknown'})${this.latestReadableReason(runtime) ? `：${this.latestReadableReason(runtime)}` : ''}`
+        runtime.snapshot = { ...runtime.snapshot, errorCode: 'process-exited', detail, updatedAt: this.now() }
         return null
       }
       candidate = runtime.snapshot.readyUrl ?? candidate
@@ -603,6 +788,11 @@ export class LocalAppRuntimeSupervisor {
 
   private recentLogs(runtime: ActiveRuntime): string[] {
     return runtime.logs.slice(-this.defaults.logBufferLines).map((entry) => `[${entry.stream}] ${entry.line}`)
+  }
+
+  private latestReadableReason(runtime: ActiveRuntime): string | undefined {
+    const latest = runtime.logs.at(-1)
+    return latest ? `[${latest.stream}] ${latest.line}` : undefined
   }
 
   private emit(runtime: ActiveRuntime, type: LocalAppRuntimeEvent['type'], detail: Partial<LocalAppRuntimeEvent> = {}): void {
@@ -727,20 +917,57 @@ function runtimeDedupeKey(definition: LocalAppDefinition): string {
 }
 
 export async function terminateProcessTree(
-  child: { pid?: number | null; killed?: boolean; kill?: (signal?: NodeJS.Signals | number) => boolean },
+  child: { pid?: number | null; killed?: boolean; connected?: boolean; exitCode?: number | null; signalCode?: NodeJS.Signals | null; send?: ChildProcess['send']; kill?: (signal?: NodeJS.Signals | number) => boolean },
   termTimeoutMs = LOCAL_APP_RUNTIME_DEFAULTS.termTimeoutMs,
   killTimeoutMs = LOCAL_APP_RUNTIME_DEFAULTS.killTimeoutMs,
 ): Promise<void> {
   const pid = child.pid
   if (!pid || pid <= 0) return
+  // A ChildProcess that has already emitted exit must never be addressed by
+  // its old PID.  The PID may have been reused by an unrelated process.
+  const childIsAlive = () => (child.exitCode === undefined || child.exitCode === null)
+    && (child.signalCode === undefined || child.signalCode === null)
+  if (!childIsAlive()) return
+
+  // The liveness bridge has an IPC channel and owns a second, detached npm
+  // process group. Ask it to shut down over that ownership channel first, so
+  // it can finish the child cleanup before exiting. Signals remain a bounded
+  // fallback for an unresponsive bridge.
+  if (child.connected === true && child.send && child.kill) {
+    try { child.send({ type: 'runtime-shutdown' }) } catch { /* bridge is already stopping */ }
+    if (await waitForPidExit(pid, termTimeoutMs + killTimeoutMs)) return
+    if (!childIsAlive()) return
+    try { child.kill('SIGTERM') } catch { /* already stopped */ }
+    if (await waitForPidExit(pid, termTimeoutMs)) return
+    if (!childIsAlive()) return
+    try { child.kill('SIGKILL') } catch { /* already stopped */ }
+    await waitForPidExit(pid, killTimeoutMs)
+    return
+  }
+
   if (process.platform === 'win32') {
+    if (!childIsAlive()) return
     const taskkill = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { shell: false, stdio: 'ignore' })
     await waitChildExit(taskkill, termTimeoutMs + killTimeoutMs)
     return
   }
-  try { process.kill(-pid, 'SIGTERM') } catch { try { process.kill(pid, 'SIGTERM') } catch { /* already stopped */ } }
+  if (!childIsAlive()) return
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {
+    if (childIsAlive()) {
+      try { process.kill(pid, 'SIGTERM') } catch { /* already stopped */ }
+    }
+  }
   if (await waitForPidExit(pid, termTimeoutMs)) return
-  try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch { /* already stopped */ } }
+  if (!childIsAlive()) return
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    if (childIsAlive()) {
+      try { process.kill(pid, 'SIGKILL') } catch { /* already stopped */ }
+    }
+  }
   await waitForPidExit(pid, killTimeoutMs)
 }
 
@@ -770,6 +997,15 @@ async function waitChildExit(child: ChildProcess, timeoutMs: number): Promise<vo
 
 function npmExecutable(): string {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm'
+}
+
+function runtimeBridgeExecutable(): string {
+  // In regular Node tests/processes, execPath is the exact interpreter that
+  // loaded this module.  Electron's execPath is the Electron binary rather
+  // than a Node CLI, so prefer the interpreter npm exposes when available and
+  // otherwise resolve the host's `node` from PATH (npm itself requires it).
+  if (process.versions.electron) return process.env.npm_node_execpath ?? 'node'
+  return process.execPath
 }
 
 async function digestFile(filePath: string): Promise<string> {
