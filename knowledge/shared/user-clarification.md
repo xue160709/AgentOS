@@ -15,8 +15,3 @@
 ## 结果边界
 
 澄清答案可以进入任务包和后续产品产物的依据，但只有主 Agent 确认后的内容才能成为 `USER_PROFILE.md`、`GUARDRAILS.md` 或 PRD 的正式事实。问题过程、未选方向和未确认解释应保留为上下文信号，不得伪装成结论。
-
-## 本轮来源
-
-本轮只读提炼日期：2026-08-16。来源：`/Volumes/macOS/Github/CodeNow/.codex/rules/question-tools.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/product-user-profile.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/product-guardrails.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/lifecycle.md`。源中的题目数量、题库和工具配置未迁入当前项目。
-

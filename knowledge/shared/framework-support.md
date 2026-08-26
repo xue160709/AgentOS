@@ -24,6 +24,4 @@ Profile 只表达“工具形态 → 人读技术起点 → 当前参考资料�
 4. 根 README 可以投影已确认的支持说明，但不能反向决定项目是否支持某项能力。
 5. `03` 按冻结的选择实现；`update-prd` 只在代码事实形成后记录实际 as-built，不把规划选择冒充已实现能力。
 
-## 本轮来源
-
-本轮只读提炼日期：2026-08-16。来源：`/Volumes/macOS/Github/CodeNow/.codex/framework-adapters.json`、`/Volumes/macOS/Github/CodeNow/.codex/rules/lifecycle.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/runtime-contract.md`。只保留经当前仓库核对后仍成立的人读映射；源中的 adapter ID、schema、配置字段、版本承诺和运行时实现细节未迁入当前项目。
+本文件只保留经当前仓库核对后仍成立的人读映射；旧脚手架的 adapter ID、schema、配置字段和运行时实现未迁入本项目。

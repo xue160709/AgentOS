@@ -3,7 +3,7 @@
 ## 语言与模型
 
 - 面向人的说明、文档、任务包和汇报使用中文；Agent ID、TOML 字段、文件名和代码标识保留英文。
-- 项目级 sub-agent 的模型与推理档位以 `.codex/config.toml` 的默认值为唯一来源；角色 TOML 不重复声明，只在某角色长期需要偏离时覆盖。
+- 项目级 sub-agent 的模型与推理档位以各角色 TOML 的显式声明为准；`.codex/config.toml` 提供默认值，仅供未声明的新增角色继承。
 
 ## 面向用户
 
@@ -25,7 +25,7 @@
 - sub-agent 只向主 Agent 返回专业结果；公共行为准则见 `knowledge/shared/role-conduct.md`，各角色的使命与判断权见 `.codex/agents/*.toml`。
 - sub-agent 的输出默认都是草案；只有主 Agent 能把带有可定位来源的内容签署为正式合同。
 - 只调用 `.codex/config.toml` 已配置的角色。任务等级、专业缺口、执行方式、验证深度和验收授权以 `.codex/rules/lifecycle.md` 为准；文件数量、受影响专业面、Skill 命中、主 Agent 更快或并发不足都不能代替该判断。
-- 任务互相独立且写入路径不重叠时，研究、探索、审查和测试优先并行；存在依赖或路径重叠时按同一专业职责串行。
+- 委派与并行需要明确收益，以 `.codex/rules/lifecycle.md` 的委派规则为准；任务互相独立且写入路径不重叠时才并行，存在依赖或路径重叠时按同一专业职责串行。
 - 写入者、精确路径、失败恢复和降级以 `.codex/rules/ownership.md` 为准。
 
 ## 强路由入口
@@ -37,7 +37,7 @@
 | 修改文件、写代码、运行验收、同步 PRD/TODO 或进入多步骤流程 | `.codex/rules/lifecycle.md` |
 | 创建、推进、恢复或归档持久、跨角色、跨模块或跨会话变更 | `.codex/skills/change-package/SKILL.md` |
 | 分配写入路径、并行修改、判断负责人、处理 writer 失败或写入 `docs/` | `.codex/rules/ownership.md` |
-| 多个可独立验证的开发结果需要并行、依赖交接或跨会话恢复 | `.codex/rules/execution-pipeline.md` |
+| 两个以上可独立验证的开发结果、写入路径互斥可真实并行、且需跨会话恢复（三条同时成立） | `.codex/rules/execution-pipeline.md` |
 | 读取、创建、重命名或澄清产品术语，或涉及 `CONTEXT.md` / `CONTEXT-MAP.md` | `.codex/rules/context.md` |
 | 创建、修改或消费 `COLLABORATOR.md`，或按画像调整最终表达 | `.codex/rules/collaborator-profile.md` |
 | 创建、修改或消费 `GUARDRAILS.md`，或判断边界对规划、实现和验收的影响 | `.codex/rules/product-guardrails.md` |
@@ -68,6 +68,6 @@
 - 同一文件同一时间只允许一个 writer；根级共享产品状态、变更包状态和正式完成状态由主 Agent 按相应流程单写。
 - `docs/` 不产生长期角色领地；研究、日志和草稿默认留在线程或原始资料中，返回主 Agent 时只保留结论、证据、风险和必要路径。
 - 公开 Web 搜索可在目标明确且角色允许时进行；外部事实附来源链接和日期，并区分事实、推论、假设与设计灵感。
-- 下载、登录、使用账号或凭据、发送数据、启动 GUI、发布、部署、购买、联系真实用户及其它外部状态变更，必须先由主 Agent 获得用户明确授权。
+- 下载、安装依赖、登录、使用账号或凭据、发送数据、启动 GUI、发布、部署、购买、联系真实用户及其它外部状态变更，必须先由主 Agent 获得用户明确授权。本清单是唯一定义，其它文件只指向此处。
 - 不受限制的 shell 网络访问默认关闭；确有必要时由主 Agent 按最小范围申请。
-- 主 Agent 对用户先报结论与变化，再报依据、风险和下一步。
+- 主 Agent 对用户先报结论与变化，再报依据、风险和下一步。进度播报只在阶段边界（定级确认、合同冻结、实现完成、检查结果、收口）进行，长任务全程以 5–7 次关键节点为量级，不逐步播报。

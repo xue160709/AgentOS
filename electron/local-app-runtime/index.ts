@@ -3,7 +3,7 @@
  * named Desktop Seam 传入 Local App id 和受信定义，不能传 executable/args/env/URL。
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { existsSync } from 'node:fs'
@@ -14,7 +14,17 @@ import type {
   LocalAppRuntimeEvent,
   LocalAppRuntimeSnapshot,
   LocalAppRuntimeStatus,
+  RuntimeStaticDeclaration,
 } from '../../src/components/types'
+import {
+  fingerprintStaticSource,
+  parseAgentOSStaticDeclaration,
+  StaticArtifactStore,
+  StaticPreviewRegistry,
+  staticPreviewUrl,
+  type StaticOutputValidation,
+  validateStaticOutput,
+} from './static'
 
 export const LOCAL_APP_RUNTIME_DEFAULTS = {
   prepareTimeoutMs: 120_000,
@@ -37,6 +47,7 @@ export type LocalAppInspectFailureCode =
   | 'package-json-missing'
   | 'package-json-invalid'
   | 'dev-script-missing'
+  | 'static-declaration-invalid'
 
 export type LocalAppInspectResult =
   | {
@@ -48,6 +59,8 @@ export type LocalAppInspectResult =
       lockfilePath?: string
       lockDigest?: string
       nodeModulesPresent: boolean
+      mode: 'development' | 'static'
+      agentos?: RuntimeStaticDeclaration
     }
   | {
       ok: false
@@ -62,6 +75,19 @@ export type RuntimeLogEntry = {
   timestamp: number
 }
 
+/** Narrow seams used by focused tests to pause the build validation phases. */
+export type RuntimeStaticOutputValidator = (
+  projectRoot: string,
+  declaration: RuntimeStaticDeclaration,
+  signal: AbortSignal,
+) => Promise<StaticOutputValidation>
+
+export type RuntimeStaticSourceFingerprinter = (
+  projectRoot: string,
+  declaration: RuntimeStaticDeclaration,
+  signal: AbortSignal,
+) => Promise<string>
+
 export type RuntimeSupervisorOptions = {
   now?: () => number
   spawn?: typeof spawn
@@ -73,6 +99,12 @@ export type RuntimeSupervisorOptions = {
   preparationDigests?: Map<string, string>
   /** Optional durable record under Electron userData. */
   preparationRecordPath?: string
+  /** Static artifacts are private to the Main process and userData. */
+  staticArtifactStore?: StaticArtifactStore
+  staticPreviewRegistry?: StaticPreviewRegistry
+  validateStaticOutput?: RuntimeStaticOutputValidator
+  fingerprintStaticSource?: RuntimeStaticSourceFingerprinter
+  userDataPath?: string
   onEvent?: (event: LocalAppRuntimeEvent) => void
 }
 
@@ -248,6 +280,12 @@ type ActiveRuntime = {
   definition: LocalAppDefinition
   snapshot: LocalAppRuntimeSnapshot
   process?: RuntimeProcess
+  buildProcess?: RuntimeProcess
+  buildId?: string
+  buildOperationId?: string
+  buildController?: AbortController
+  buildOperation?: Promise<LocalAppRuntimeSnapshot>
+  buildPreSnapshot?: LocalAppRuntimeSnapshot
   operation?: Promise<LocalAppRuntimeSnapshot>
   controller: AbortController
   logs: RuntimeLogEntry[]
@@ -323,8 +361,10 @@ export async function inspectLocalAppDirectory(rootPath: string): Promise<LocalA
       const code = (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'package-json-missing' : 'package-json-invalid'
       return { ok: false, rootPath, code, message: code === 'package-json-missing' ? '缺少 package.json' : 'package.json 无法解析' }
     }
+    const staticDeclaration = parseAgentOSStaticDeclaration(packageJson)
+    if (!staticDeclaration.ok) return { ok: false, rootPath, code: staticDeclaration.code, message: staticDeclaration.message }
     const scripts = isRecord(packageJson) && isRecord(packageJson.scripts) ? packageJson.scripts : undefined
-    if (!scripts || typeof scripts.dev !== 'string' || !scripts.dev.trim()) {
+    if (!staticDeclaration.declaration && (!scripts || typeof scripts.dev !== 'string' || !scripts.dev.trim())) {
       return { ok: false, rootPath, code: 'dev-script-missing', message: 'package.json 缺少 dev 脚本' }
     }
     const lockfilePath = path.join(canonicalRoot, 'package-lock.json')
@@ -341,6 +381,8 @@ export async function inspectLocalAppDirectory(rootPath: string): Promise<LocalA
       lockfilePath: hasLockfile ? lockfilePath : undefined,
       lockDigest,
       nodeModulesPresent: existsSync(path.join(canonicalRoot, 'node_modules')),
+      mode: staticDeclaration.declaration ? 'static' : 'development',
+      agentos: staticDeclaration.declaration,
     }
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'path-missing' : 'invalid-root'
@@ -415,12 +457,17 @@ export class LocalAppRuntimeSupervisor {
   private readonly env: NodeJS.ProcessEnv
   private readonly preparationDigests: Map<string, string>
   private readonly preparationRecordPath?: string
+  private readonly staticArtifactStore: StaticArtifactStore
+  private readonly staticPreviewRegistry: StaticPreviewRegistry
+  private readonly validateStaticOutputImpl: RuntimeStaticOutputValidator
+  private readonly fingerprintStaticSourceImpl: RuntimeStaticSourceFingerprinter
   private preparationRecordLoaded = false
   private preparationRecordLoadPromise: Promise<void> | null = null
   private preparationRecordSavePromise: Promise<void> = Promise.resolve()
   private readonly onEvent?: (event: LocalAppRuntimeEvent) => void
   private readonly runtimes = new Map<string, ActiveRuntime>()
   private readonly generationByApp = new Map<string, number>()
+  private readonly buildLocks = new Map<string, Promise<void>>()
 
   constructor(options: RuntimeSupervisorOptions = {}) {
     this.now = options.now ?? Date.now
@@ -432,6 +479,10 @@ export class LocalAppRuntimeSupervisor {
     this.env = options.env ?? process.env
     this.preparationDigests = options.preparationDigests ?? new Map()
     this.preparationRecordPath = options.preparationRecordPath
+    this.staticArtifactStore = options.staticArtifactStore ?? new StaticArtifactStore(options.userDataPath ?? path.join(process.cwd(), '.agentos-runtime-data'), this.now)
+    this.staticPreviewRegistry = options.staticPreviewRegistry ?? new StaticPreviewRegistry()
+    this.validateStaticOutputImpl = options.validateStaticOutput ?? ((projectRoot, declaration) => validateStaticOutput(projectRoot, declaration))
+    this.fingerprintStaticSourceImpl = options.fingerprintStaticSource ?? ((projectRoot, declaration) => fingerprintStaticSource(projectRoot, declaration))
     this.onEvent = options.onEvent
   }
 
@@ -453,6 +504,28 @@ export class LocalAppRuntimeSupervisor {
 
   start(definition: LocalAppDefinition, consumerIds: Iterable<string> = []): Promise<LocalAppRuntimeSnapshot> {
     const existing = this.runtimes.get(definition.id)
+    // A mode transition may leave the stopped predecessor in the map while
+    // its bounded teardown promise is still draining. Reuse that transition
+    // instead of starting a second supervisor for the same definition id.
+    if (existing?.snapshot.status === 'stopped' && existing.operation) return existing.operation
+    if (!definition.mode && !definition.agentos) {
+      if (existing?.operation || existing?.buildOperation) return existing.operation ?? existing.buildOperation!
+      return this.detectModeAndStart(definition, consumerIds)
+    }
+    if (definition.mode === 'static') {
+      if (existing && existing.snapshot.mode === 'static' && existing.snapshot.status !== 'stopped') {
+        if (existing.operation) return existing.operation
+        if (existing.buildOperation) return existing.buildOperation
+        for (const consumerId of consumerIds) existing.consumerIds.add(consumerId)
+        return Promise.resolve(existing.snapshot)
+      }
+      if (existing) return this.transitionRuntime(existing, definition, () => this.startStaticTracked(definition, consumerIds))
+      return this.startStaticTracked(definition, consumerIds)
+    }
+    if (existing?.snapshot.mode === 'static' && existing.snapshot.status !== 'stopped') {
+      const developmentDefinition = definition.mode === 'development' ? definition : { ...definition, mode: 'development' as const }
+      return this.transitionRuntime(existing, developmentDefinition, () => this.start(developmentDefinition, consumerIds))
+    }
     if (existing?.operation) return existing.operation
     if (existing?.snapshot.status === 'running' || existing?.snapshot.status === 'starting' || existing?.snapshot.status === 'preparing') {
       return Promise.resolve(existing.snapshot)
@@ -461,7 +534,7 @@ export class LocalAppRuntimeSupervisor {
     this.generationByApp.set(definition.id, generation)
     const runtime: ActiveRuntime = {
       definition,
-      snapshot: this.createSnapshot(definition.id, generation, 'preparing'),
+      snapshot: { ...this.createSnapshot(definition.id, generation, 'preparing'), mode: 'development' },
       controller: new AbortController(),
       logs: [],
       consumerIds: new Set(consumerIds),
@@ -474,16 +547,157 @@ export class LocalAppRuntimeSupervisor {
     return operation
   }
 
+  private startStaticTracked(definition: LocalAppDefinition, consumerIds: Iterable<string>): Promise<LocalAppRuntimeSnapshot> {
+    const operation = this.startStatic(definition, consumerIds)
+    const created = this.runtimes.get(definition.id)
+    if (!created) return operation
+    const tracked = operation.finally(() => {
+      if (created.operation === tracked) created.operation = undefined
+    })
+    created.operation = tracked
+    return tracked
+  }
+
+  private transitionRuntime(
+    existing: ActiveRuntime,
+    definition: LocalAppDefinition,
+    starter: () => Promise<LocalAppRuntimeSnapshot>,
+  ): Promise<LocalAppRuntimeSnapshot> {
+    const previousOperation = existing.operation
+    const previousBuildOperation = existing.buildOperation
+    let transition!: Promise<LocalAppRuntimeSnapshot>
+    transition = (async () => {
+      await this.stop(definition.id, 'user')
+      await previousOperation?.catch(() => undefined)
+      await previousBuildOperation?.catch(() => undefined)
+      if (existing.operation === transition) existing.operation = undefined
+      return starter()
+    })()
+    existing.operation = transition
+    return transition.finally(() => {
+      if (existing.operation === transition) existing.operation = undefined
+    })
+  }
+
+  private async detectModeAndStart(definition: LocalAppDefinition, consumerIds: Iterable<string>): Promise<LocalAppRuntimeSnapshot> {
+    const inspection = await inspectLocalAppDirectory(definition.rootPath)
+    if (inspection.ok && inspection.mode === 'static' && inspection.agentos) {
+      return this.start({ ...definition, mode: 'static', agentos: inspection.agentos }, consumerIds)
+    }
+    if (!inspection.ok && inspection.code === 'static-declaration-invalid') {
+      // A legacy persisted definition may encounter a newly declared but
+      // malformed `agentos` block. It must surface the strict parse failure;
+      // silently falling back to npm run dev would bypass the static contract.
+      return this.start({ ...definition, mode: 'static', agentos: undefined }, consumerIds)
+    }
+    // Legacy definitions remain development runtimes. Setting the explicit
+    // mode avoids another inspection pass and preserves old npm run dev flow.
+    return this.start({ ...definition, mode: 'development' }, consumerIds)
+  }
+
+  /** Static restore is intentionally spawn-free and returns after artifact IO only. */
+  private async startStatic(definition: LocalAppDefinition, consumerIds: Iterable<string>): Promise<LocalAppRuntimeSnapshot> {
+    const generation = (this.generationByApp.get(definition.id) ?? 0) + 1
+    this.generationByApp.set(definition.id, generation)
+    const runtime: ActiveRuntime = {
+      definition,
+      snapshot: this.createSnapshot(definition.id, generation, 'build_required'),
+      controller: new AbortController(),
+      logs: [],
+      consumerIds: new Set(consumerIds),
+    }
+    runtime.snapshot = { ...runtime.snapshot, mode: 'static', buildStatus: 'build_required', phase: 'inspect' }
+    this.runtimes.set(definition.id, runtime)
+    const isActive = () => this.runtimes.get(definition.id) === runtime && !runtime.controller.signal.aborted
+    const inspection = await inspectLocalAppDirectory(definition.rootPath)
+    if (!isActive()) return runtime.snapshot
+    if (!inspection.ok) return this.fail(runtime, inspection.code, inspection.message, 'inspect')
+    if (inspection.mode !== 'static' || !inspection.agentos) return this.fail(runtime, 'static-declaration-invalid', 'Runtime 声明不是静态模式', 'inspect')
+    if (definition.trustStatus !== 'trusted') return this.fail(runtime, 'trust-required', '目录尚未获得信任', 'inspect')
+    const artifact = await this.staticArtifactStore.loadLastGood(definition.id, inspection.canonicalRoot)
+    if (!isActive()) return runtime.snapshot
+    let current = artifact
+    if (!current) {
+      try {
+        await validateStaticOutput(inspection.canonicalRoot, inspection.agentos)
+        if (!isActive()) return runtime.snapshot
+        const fingerprint = await fingerprintStaticSource(inspection.canonicalRoot, inspection.agentos)
+        if (!isActive()) return runtime.snapshot
+        current = await this.staticArtifactStore.commit(
+          definition.id,
+          inspection.canonicalRoot,
+          inspection.agentos,
+          path.resolve(inspection.canonicalRoot, ...inspection.agentos.outputRoot.split('/')),
+          fingerprint,
+          runtime.controller.signal,
+        )
+      } catch {
+        // An empty output cache is a normal first-run state. The renderer
+        // exposes an explicit build action instead of starting a dev server.
+        current = null
+      }
+    }
+    if (!isActive()) return runtime.snapshot
+    if (!current) {
+      runtime.snapshot = {
+        ...runtime.snapshot,
+        status: 'build_required',
+        mode: 'static',
+        buildStatus: 'build_required',
+        updatedAt: this.now(),
+      }
+      this.emit(runtime, 'status')
+      return runtime.snapshot
+    }
+    if (!isActive()) return runtime.snapshot
+    const token = this.staticPreviewRegistry.register(runtime.snapshot.runtimeId, generation, current)
+    runtime.snapshot = {
+      ...runtime.snapshot,
+      status: 'ready',
+      mode: 'static',
+      buildStatus: 'ready',
+      artifactId: current.artifactId,
+      lastBuildAt: current.lastBuildAt,
+      previewUrl: staticPreviewUrl(token),
+      stale: false,
+      phase: 'readiness',
+      updatedAt: this.now(),
+    }
+    this.emit(runtime, 'ready')
+    // Stale detection must never delay the first paint.
+    void this.checkStaticStale(runtime, inspection.canonicalRoot, inspection.agentos, current)
+    return runtime.snapshot
+  }
+
   async stop(localAppId: string, reason: LocalAppRuntimeSnapshot['stopReason'] = 'user'): Promise<LocalAppRuntimeSnapshot | null> {
     const runtime = this.runtimes.get(localAppId)
     if (!runtime) return null
     runtime.controller.abort()
+    runtime.buildController?.abort()
+    if (runtime.snapshot.mode === 'static') this.staticPreviewRegistry.revokeRuntime(runtime.snapshot.runtimeId, runtime.snapshot.generation)
     const process = runtime.process
-    runtime.snapshot = { ...runtime.snapshot, status: 'stopped', stopReason: reason, updatedAt: this.now(), readyUrl: undefined, port: undefined, logs: this.recentLogs(runtime) }
+    const buildProcess = runtime.buildProcess
+    runtime.snapshot = {
+      ...runtime.snapshot,
+      status: 'stopped',
+      stopReason: reason,
+      updatedAt: this.now(),
+      readyUrl: undefined,
+      previewUrl: undefined,
+      port: undefined,
+      logs: this.recentLogs(runtime),
+    }
     this.emit(runtime, 'status')
     if (process) await terminateProcessTree(process, this.defaults.termTimeoutMs, this.defaults.killTimeoutMs)
+    if (buildProcess) await terminateProcessTree(buildProcess, this.defaults.termTimeoutMs, this.defaults.killTimeoutMs)
     runtime.process = undefined
+    runtime.buildProcess = undefined
     runtime.operation = undefined
+    runtime.buildOperation = undefined
+    runtime.buildId = undefined
+    runtime.buildOperationId = undefined
+    runtime.buildController = undefined
+    runtime.buildPreSnapshot = undefined
     return runtime.snapshot
   }
 
@@ -493,9 +707,288 @@ export class LocalAppRuntimeSupervisor {
     return this.start(definition, preservedConsumers)
   }
 
+  getStaticPreviewRegistry(): StaticPreviewRegistry {
+    return this.staticPreviewRegistry
+  }
+
+  async build(definition: LocalAppDefinition, consumerIds: Iterable<string> = []): Promise<LocalAppRuntimeSnapshot> {
+    const previous = this.buildLocks.get(definition.id) ?? Promise.resolve()
+    const operation = previous.then(() => this.buildOnce(definition, consumerIds))
+    this.buildLocks.set(definition.id, operation.then(() => undefined, () => undefined))
+    return operation
+  }
+
+  private async buildOnce(definition: LocalAppDefinition, consumerIds: Iterable<string> = []): Promise<LocalAppRuntimeSnapshot> {
+    if (!definition.mode && !definition.agentos) {
+      const inspection = await inspectLocalAppDirectory(definition.rootPath)
+      if (inspection.ok && inspection.mode === 'static' && inspection.agentos) {
+        return this.buildOnce({ ...definition, mode: 'static', agentos: inspection.agentos }, consumerIds)
+      }
+    }
+    if (definition.mode !== 'static' || !definition.agentos) {
+      const existing = this.runtimes.get(definition.id)
+      return existing?.snapshot ?? this.createSnapshot(definition.id, 0, 'failed')
+    }
+    let runtime = this.runtimes.get(definition.id)
+    if (!runtime || runtime.snapshot.status === 'stopped') {
+      await this.start(definition, consumerIds)
+      runtime = this.runtimes.get(definition.id)
+    }
+    if (!runtime) throw new Error('static-runtime-missing')
+    for (const consumerId of consumerIds) runtime.consumerIds.add(consumerId)
+    if (runtime.buildOperation) return runtime.buildOperation
+    const inspection = await inspectLocalAppDirectory(definition.rootPath)
+    if (!inspection.ok) return this.fail(runtime, inspection.code, inspection.message, 'inspect')
+    if (inspection.mode !== 'static' || !inspection.agentos) return this.fail(runtime, 'static-declaration-invalid', 'Runtime 声明不是静态模式', 'inspect')
+    const buildId = `build-${this.now().toString(36)}-${randomBytes(6).toString('hex')}`
+    const operationId = `op-${this.now().toString(36)}-${randomBytes(6).toString('hex')}`
+    const buildController = new AbortController()
+    const previous = runtime.snapshot
+    runtime.buildPreSnapshot = { ...previous }
+    runtime.buildId = buildId
+    runtime.buildOperationId = operationId
+    runtime.buildController = buildController
+    runtime.snapshot = {
+      ...previous,
+      status: 'building',
+      mode: 'static',
+      buildStatus: 'building',
+      buildId,
+      operationId,
+      phase: 'build' as LocalAppRuntimeSnapshot['phase'],
+      errorCode: undefined,
+      detail: undefined,
+      updatedAt: this.now(),
+    }
+    this.emit(runtime, 'status')
+    const operation = this.runStaticBuild(runtime, inspection.canonicalRoot, inspection.agentos, buildId, operationId, buildController.signal)
+      .finally(() => {
+        if (runtime?.buildOperation === operation) {
+          runtime.buildOperation = undefined
+          runtime.buildProcess = undefined
+          runtime.buildController = undefined
+          runtime.buildId = undefined
+          runtime.buildOperationId = undefined
+          runtime.buildPreSnapshot = undefined
+          runtime.snapshot = { ...runtime.snapshot, buildId: undefined, operationId: undefined }
+        }
+      })
+      .then(() => runtime.snapshot)
+    runtime.buildOperation = operation
+    return operation
+  }
+
+  async cancelBuild(localAppId: string, buildId?: string): Promise<LocalAppRuntimeSnapshot | null> {
+    const runtime = this.runtimes.get(localAppId)
+    if (!runtime || !runtime.buildOperation) return runtime?.snapshot ?? null
+    if (buildId && runtime.buildId !== buildId) return runtime.snapshot
+    runtime.buildController?.abort()
+    if (runtime.buildProcess) await terminateProcessTree(runtime.buildProcess, this.defaults.termTimeoutMs, this.defaults.killTimeoutMs)
+    return runtime.buildOperation.catch(() => runtime.snapshot)
+  }
+
+  private async runStaticBuild(
+    runtime: ActiveRuntime,
+    canonicalRoot: string,
+    declaration: RuntimeStaticDeclaration,
+    buildId: string,
+    operationId: string,
+    signal: AbortSignal,
+  ): Promise<LocalAppRuntimeSnapshot> {
+    let child: RuntimeProcess
+    try {
+      child = this.spawnProcess(npmExecutable(), ['run', 'build'], {
+        cwd: canonicalRoot,
+        shell: false,
+        detached: process.platform !== 'win32',
+        env: { ...buildAllowedRuntimeEnv(this.env), NODE_ENV: 'production' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }) as RuntimeProcess
+    } catch (error) {
+      runtime.snapshot = {
+        ...runtime.snapshot,
+        status: 'build_failed',
+        buildStatus: 'build_failed',
+        errorCode: 'build-spawn-failed',
+        detail: error instanceof Error ? error.message : '静态构建进程无法启动',
+        updatedAt: this.now(),
+      }
+      this.emit(runtime, 'status', { buildId, operationId })
+      return runtime.snapshot
+    }
+    runtime.buildProcess = child
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => this.captureLog(runtime, 'stdout', chunk))
+    child.stderr?.on('data', (chunk: string) => this.captureLog(runtime, 'stderr', chunk))
+    const exit = await this.waitForBuildExit(child, signal)
+    const operationStillOwnsRuntime = () => runtime.buildId === buildId && runtime.buildOperationId === operationId
+    if (!operationStillOwnsRuntime()) return runtime.snapshot
+    if (signal.aborted) {
+      this.restoreStaticBuildAfterCancellation(runtime)
+      this.emit(runtime, 'status', { buildId, operationId })
+      return runtime.snapshot
+    }
+    if (exit.error || exit.code !== 0) {
+      runtime.snapshot = {
+        ...runtime.snapshot,
+        status: 'build_failed',
+        buildStatus: 'build_failed',
+        errorCode: signal.aborted ? 'build-cancelled' : 'build-failed',
+        detail: signal.aborted ? '静态构建已取消' : `静态构建失败 (${exit.code ?? exit.signal ?? 'unknown'})`,
+        updatedAt: this.now(),
+        logs: this.recentLogs(runtime),
+      }
+      this.emit(runtime, 'exit', { detail: runtime.snapshot.detail, code: exit.code, signal: exit.signal ?? undefined })
+      return runtime.snapshot
+    }
+    try {
+      await this.validateStaticOutputImpl(canonicalRoot, declaration, signal)
+      if (!operationStillOwnsRuntime()) return runtime.snapshot
+      if (signal.aborted) {
+        this.restoreStaticBuildAfterCancellation(runtime)
+        this.emit(runtime, 'status', { buildId, operationId })
+        return runtime.snapshot
+      }
+      const outputRoot = path.resolve(canonicalRoot, ...declaration.outputRoot.split('/'))
+      const fingerprint = await this.fingerprintStaticSourceImpl(canonicalRoot, declaration, signal)
+      if (!operationStillOwnsRuntime()) return runtime.snapshot
+      if (signal.aborted) {
+        this.restoreStaticBuildAfterCancellation(runtime)
+        this.emit(runtime, 'status', { buildId, operationId })
+        return runtime.snapshot
+      }
+      const artifact = await this.staticArtifactStore.commit(runtime.definition.id, canonicalRoot, declaration, outputRoot, fingerprint, signal)
+      if (!operationStillOwnsRuntime()) return runtime.snapshot
+      // `commit` returns only after the last-good pointer rename. That rename
+      // is the non-cancellable persistence boundary: an abort in this narrow
+      // window must publish the committed artifact, never roll memory back to
+      // the previous pointer.
+      // A successful commit is the generation boundary for Preview sessions;
+      // revoke the previous token only after the new artifact is atomically
+      // staged, so a failed/cancelled build still keeps the last-good session.
+      this.staticPreviewRegistry.revokeRuntime(runtime.snapshot.runtimeId, runtime.snapshot.generation)
+      const token = this.staticPreviewRegistry.register(runtime.snapshot.runtimeId, runtime.snapshot.generation, artifact)
+      runtime.snapshot = {
+        ...runtime.snapshot,
+        status: 'ready',
+        buildStatus: 'ready',
+        artifactId: artifact.artifactId,
+        lastBuildAt: artifact.lastBuildAt,
+        previewUrl: staticPreviewUrl(token),
+        stale: false,
+        errorCode: undefined,
+        detail: undefined,
+        phase: 'readiness',
+        updatedAt: this.now(),
+        logs: this.recentLogs(runtime),
+      }
+      this.emit(runtime, 'ready', { buildId, operationId })
+      return runtime.snapshot
+    } catch (error) {
+      if (!operationStillOwnsRuntime()) return runtime.snapshot
+      if (signal.aborted) {
+        this.restoreStaticBuildAfterCancellation(runtime)
+        this.emit(runtime, 'status', { buildId, operationId })
+        return runtime.snapshot
+      }
+      runtime.snapshot = {
+        ...runtime.snapshot,
+        status: 'build_failed',
+        buildStatus: 'build_failed',
+        errorCode: 'static-output-invalid',
+        detail: error instanceof Error ? error.message : '静态产物校验失败',
+        updatedAt: this.now(),
+        logs: this.recentLogs(runtime),
+      }
+      this.emit(runtime, 'status', { buildId, operationId })
+      return runtime.snapshot
+    }
+  }
+
+  private waitForBuildExit(
+    child: RuntimeProcess,
+    signal: AbortSignal,
+  ): Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }> {
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (result: { code: number | null; signal: NodeJS.Signals | null; error?: Error }) => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        resolve(result)
+      }
+      const onAbort = () => {
+        void terminateProcessTree(child, this.defaults.termTimeoutMs, this.defaults.killTimeoutMs).finally(() => finish({ code: null, signal: 'SIGTERM' }))
+      }
+      child.once('error', (error) => finish({ code: null, signal: null, error: error instanceof Error ? error : new Error(String(error)) }))
+      child.once('exit', (code, childSignal) => finish({ code, signal: childSignal }))
+      child.once('close', (code, childSignal) => finish({ code, signal: childSignal }))
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
+  private restoreStaticBuildAfterCancellation(runtime: ActiveRuntime): LocalAppRuntimeSnapshot {
+    const previous = runtime.buildPreSnapshot ?? runtime.snapshot
+    const hasLastGood = Boolean(previous.artifactId && previous.previewUrl)
+    const restoreStale = previous.status === 'stale' && previous.buildStatus === 'stale'
+    const restoreStatus = restoreStale ? 'stale' : hasLastGood ? 'ready' : 'build_required'
+    runtime.snapshot = {
+      ...runtime.snapshot,
+      status: restoreStatus,
+      mode: previous.mode ?? 'static',
+      buildStatus: restoreStatus,
+      stale: restoreStale ? previous.stale : hasLastGood ? false : undefined,
+      artifactId: previous.artifactId,
+      previewUrl: previous.previewUrl,
+      readyUrl: previous.readyUrl,
+      lastBuildAt: previous.lastBuildAt,
+      phase: previous.phase,
+      errorCode: 'build-cancelled',
+      detail: '静态构建已取消',
+      updatedAt: this.now(),
+      logs: this.recentLogs(runtime),
+    }
+    return runtime.snapshot
+  }
+
+  private async checkStaticStale(
+    runtime: ActiveRuntime,
+    canonicalRoot: string,
+    declaration: RuntimeStaticDeclaration,
+    artifact: { artifactId: string; sourceFingerprint?: string },
+  ): Promise<void> {
+    try {
+      const fingerprint = await fingerprintStaticSource(canonicalRoot, declaration)
+      if (this.runtimes.get(runtime.definition.id) !== runtime || runtime.controller.signal.aborted || runtime.snapshot.mode !== 'static' || runtime.snapshot.artifactId !== artifact.artifactId || runtime.snapshot.status === 'building' || runtime.snapshot.status === 'stopped') return
+      if (artifact.sourceFingerprint && artifact.sourceFingerprint === fingerprint) return
+      runtime.snapshot = {
+        ...runtime.snapshot,
+        status: 'stale',
+        buildStatus: 'stale',
+        stale: true,
+        updatedAt: this.now(),
+      }
+      this.emit(runtime, 'status')
+    } catch {
+      // Stale checking is advisory and must never make an otherwise usable
+      // last-good artifact unavailable.
+    }
+  }
+
   async stopAll(reason: LocalAppRuntimeSnapshot['stopReason'] = 'app-quit', timeoutMs = this.defaults.quitCleanupTimeoutMs): Promise<void> {
     const work = Promise.all([...this.runtimes.keys()].map((id) => this.stop(id, reason))).then(() => undefined)
-    await Promise.race([work, waitWithAbort(timeoutMs).catch(() => undefined)])
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        work,
+        new Promise<void>((resolve) => {
+          timeoutHandle = setTimeout(resolve, timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
+    }
   }
 
   private createSnapshot(localAppId: string, generation: number, status: LocalAppRuntimeStatus): LocalAppRuntimeSnapshot {
@@ -802,6 +1295,14 @@ export class LocalAppRuntimeSupervisor {
       runtimeId: runtime.snapshot.runtimeId,
       generation: runtime.snapshot.generation,
       status: runtime.snapshot.status,
+      mode: runtime.snapshot.mode,
+      buildStatus: runtime.snapshot.buildStatus,
+      artifactId: runtime.snapshot.artifactId,
+      buildId: runtime.snapshot.buildId,
+      operationId: runtime.snapshot.operationId,
+      stale: runtime.snapshot.stale,
+      lastBuildAt: runtime.snapshot.lastBuildAt,
+      previewUrl: runtime.snapshot.previewUrl,
       readyUrl: runtime.snapshot.readyUrl,
       port: runtime.snapshot.port,
       phase: runtime.snapshot.phase,
@@ -893,6 +1394,26 @@ export class LocalAppRuntimeManager {
     return this.supervisor.restart(this.definitions.get(ownerId) ?? definition, consumers)
   }
 
+  build(localAppId: string, consumerId?: string): Promise<LocalAppRuntimeSnapshot> {
+    const definition = this.definitions.get(localAppId)
+    if (!definition) return Promise.reject(new Error('local-app-definition-missing'))
+    if (definition.trustStatus !== 'trusted') return Promise.reject(new Error('local-app-trust-required'))
+    const ownerId = this.ownerId(localAppId)
+    const ownerDefinition = this.definitions.get(ownerId) ?? definition
+    const consumers = this.consumers.get(ownerId) ?? new Set<string>()
+    if (consumerId) consumers.add(consumerId)
+    this.consumers.set(ownerId, consumers)
+    return this.supervisor.build(ownerDefinition, consumers)
+  }
+
+  cancelBuild(localAppId: string, buildId?: string): Promise<LocalAppRuntimeSnapshot | null> {
+    return this.supervisor.cancelBuild(this.ownerId(localAppId), buildId)
+  }
+
+  getStaticPreviewRegistry(): StaticPreviewRegistry {
+    return this.supervisor.getStaticPreviewRegistry()
+  }
+
   async release(localAppId: string, consumerId: string): Promise<LocalAppRuntimeSnapshot | null> {
     const ownerId = this.ownerId(localAppId)
     const consumers = this.consumers.get(ownerId)
@@ -913,7 +1434,9 @@ export class LocalAppRuntimeManager {
 function runtimeDedupeKey(definition: LocalAppDefinition): string {
   const normalized = (definition.canonicalRoot ?? definition.rootPath).replace(/\\/g, '/').replace(/\/+$/, '')
   const comparable = process.platform === 'win32' ? normalized.toLowerCase() : normalized
-  return `${comparable}|npm run dev`
+  return definition.mode === 'static'
+    ? `${comparable}|static|${definition.agentos?.outputRoot ?? ''}|${definition.agentos?.entryFile ?? ''}`
+    : `${comparable}|npm run dev`
 }
 
 export async function terminateProcessTree(

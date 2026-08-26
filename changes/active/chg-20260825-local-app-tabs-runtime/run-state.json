@@ -1,7 +1,7 @@
 {
   "version": 1,
   "changeId": "chg-20260825-local-app-tabs-runtime",
-  "revision": 2,
+  "revision": 4,
   "qualityRequired": true,
   "slices": [
     {
@@ -53,14 +53,175 @@
         "node --test electron/local-app-runtime.test.mjs"
       ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "RUNNING",
+      "developmentStatus": "REWORK",
       "reviewStatus": "NOT_READY",
       "reviewImpact": "NONE",
       "verificationIds": [],
       "reviewEvidenceIds": []
+    },
+    {
+      "id": "PERF-P0-01",
+      "outcome": "选择 Workspace Tab 后旧活动线程不再覆盖目标 Tab",
+      "dependsOn": [],
+      "contracts": [
+        "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
+        "src/components/workspace-session.ts"
+      ],
+      "riskContractIds": ["R-TAB-SELECTION-01"],
+      "parallelGroup": null,
+      "writeAllowlist": ["src/components/workspace-session.ts"],
+      "testAllowlist": ["electron/workspace-session.test.mjs"],
+      "testCommands": ["node --test electron/workspace-session.test.mjs"],
+      "integrationOwner": "main_agent",
+      "developmentStatus": "TESTED",
+      "reviewStatus": "PASS",
+      "reviewImpact": "NONE",
+      "verificationIds": ["VER-PERF-P0-01-WS-26b24048"],
+      "reviewEvidenceIds": ["Q-PERF-QUALITY-602f1dce"]
+    },
+    {
+      "id": "PERF-P1-01",
+      "outcome": "Runtime 纯日志事件有界批处理，关键状态事件仍即时生效",
+      "dependsOn": [{"sliceId": "PERF-P0-01", "gate": "TESTED"}],
+      "contracts": [
+        "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
+        "src/components/AppShell.tsx"
+      ],
+      "riskContractIds": ["R-RUNTIME-EVENT-BATCH-01"],
+      "parallelGroup": null,
+      "writeAllowlist": ["src/components/AppShell.tsx", "src/components/runtime-event-state.ts"],
+      "testAllowlist": ["electron/runtime-event-state.test.mjs", "electron/desktop-seam.test.mjs"],
+      "testCommands": ["node --test electron/runtime-event-state.test.mjs electron/desktop-seam.test.mjs", "npm run typecheck", "npm run test:electron"],
+      "integrationOwner": "main_agent",
+      "developmentStatus": "TESTED",
+      "reviewStatus": "PASS",
+      "reviewImpact": "NONE",
+      "verificationIds": ["VER-PERF-P1-01-BATCH-b8751d22", "VER-PERF-P1-01-TSC-b8751d22", "VER-PERF-INTEGRATION-ELECTRON-b835aecb", "VER-PERF-INTEGRATION-ELECTRON-602f1dce"],
+      "reviewEvidenceIds": ["Q-PERF-QUALITY-602f1dce"]
+    },
+    {
+      "id": "PERF-P1-02",
+      "outcome": "Workspace staging 不再在 layout effect 中阻塞绘制",
+      "dependsOn": [{"sliceId": "PERF-P1-01", "gate": "TESTED"}],
+      "contracts": [
+        "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
+        "src/components/AppShell.tsx"
+      ],
+      "riskContractIds": ["R-WORKSPACE-PAINT-01"],
+      "parallelGroup": null,
+      "writeAllowlist": ["src/components/AppShell.tsx"],
+      "testAllowlist": ["electron/workspace-session.test.mjs"],
+      "testCommands": ["node --test electron/workspace-session.test.mjs", "npm run typecheck"],
+      "integrationOwner": "main_agent",
+      "developmentStatus": "TESTED",
+      "reviewStatus": "PASS",
+      "reviewImpact": "NONE",
+      "verificationIds": ["VER-PERF-P1-02-WS-b8751d22", "VER-PERF-P1-02-TSC-b8751d22"],
+      "reviewEvidenceIds": ["Q-PERF-QUALITY-602f1dce"]
+    },
+    {
+      "id": "PERF-P2-01",
+      "outcome": "Runtime fixture 与 app-owned 进程树在停止后有界退出且不误杀外部进程",
+      "dependsOn": [{"sliceId": "PERF-P1-02", "gate": "TESTED"}],
+      "contracts": [
+        "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
+        "prd/local-app-runtime/technical.md",
+        "electron/local-app-runtime/index.ts"
+      ],
+      "riskContractIds": ["R-PERF-PROC-OWNERSHIP-01", "R-PERF-PROC-RECOVERY-01"],
+      "parallelGroup": null,
+      "writeAllowlist": ["electron/local-app-runtime/index.ts"],
+      "testAllowlist": ["electron/local-app-runtime.test.mjs", "test-fixtures/local-app-runtime/server.mjs"],
+      "testCommands": ["node --test electron/local-app-runtime.test.mjs"],
+      "integrationOwner": "main_agent",
+      "developmentStatus": "TESTED",
+      "reviewStatus": "PASS",
+      "reviewImpact": "NONE",
+      "verificationIds": ["VER-PERF-P2-01-RUNTIME-7edd44ac", "VER-PERF-INTEGRATION-ELECTRON-602f1dce"],
+      "reviewEvidenceIds": ["Q-PERF-QUALITY-602f1dce"]
+    },
+    {
+      "id": "STATIC-RUNTIME-04",
+      "outcome": "静态项目默认 zero-spawn 直开 last-good，用户显式构建并可切换开发模式，CodeNow Wiki 产出完整静态导出",
+      "dependsOn": [],
+      "contracts": [
+        "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
+        "prd/local-app-runtime/design.md",
+        "prd/local-app-runtime/technical.md",
+        "prd/local-app-runtime/acceptance.md"
+      ],
+      "riskContractIds": ["R-STATIC-OPEN-04", "R-STATIC-PROTOCOL-04", "R-STATIC-BUILD-04", "R-STATIC-MODE-04"],
+      "parallelGroup": null,
+      "writeAllowlist": [
+        "electron/local-app-runtime/**",
+        "electron/main.ts",
+        "electron/preload.ts",
+        "src/components/**",
+        "src/desktop-api.ts",
+        "src/desktop-seam.ts",
+        "/Volumes/macOS/Github/codenow.wiki/**"
+      ],
+      "testAllowlist": [
+        "electron/static-runtime.test.mjs",
+        "electron/local-app-runtime.test.mjs",
+        "electron/local-app-preview.test.mjs",
+        "electron/desktop-seam.test.mjs"
+      ],
+      "testCommands": ["npm run typecheck", "npm run test:electron", "npm run build (CodeNow Wiki)"],
+      "integrationOwner": "main_agent",
+      "developmentStatus": "TESTED",
+      "reviewStatus": "PASS",
+      "reviewImpact": "NONE",
+      "verificationIds": ["VER-STATIC-INTEGRATION-e30a5973", "VER-CODENOW-EXPORT-624"],
+      "reviewEvidenceIds": ["Q-STATIC-QUALITY-e30a5973"]
     }
   ],
   "riskContracts": [
+    {
+      "id": "R-TAB-SELECTION-01",
+      "invariant": "选择有效 Workspace Tab 会清空 activeThreadId，并在 active/restore 解析后保留目标 activeWorkspaceTabId",
+      "severity": "P0",
+      "sliceId": "PERF-P0-01",
+      "testPath": "electron/workspace-session.test.mjs",
+      "testCommand": "node --test electron/workspace-session.test.mjs",
+      "status": "PASS"
+    },
+    {
+      "id": "R-RUNTIME-EVENT-BATCH-01",
+      "invariant": "纯日志事件按短窗口合并且最多保留既有日志上限；ready/stopped/failed 与 generation/runtimeId 切换不等待日志批次",
+      "severity": "P1",
+      "sliceId": "PERF-P1-01",
+      "testPath": "electron/runtime-event-state.test.mjs",
+      "testCommand": "node --test electron/runtime-event-state.test.mjs",
+      "status": "PASS"
+    },
+    {
+      "id": "R-WORKSPACE-PAINT-01",
+      "invariant": "Workspace staging 不在 React layout effect 中执行，且即时本地镜像、延迟 Main 保存与卸载 flush 语义保持",
+      "severity": "P1",
+      "sliceId": "PERF-P1-02",
+      "testPath": "src/components/AppShell.tsx; electron/workspace-session.test.mjs",
+      "testCommand": "node --test electron/workspace-session.test.mjs && npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "id": "R-PERF-PROC-OWNERSHIP-01",
+      "invariant": "Runtime 进程分组与测试兜底只终止由当前 bridge 明确创建的进程树，同目录 external 进程保持存活",
+      "severity": "P0",
+      "sliceId": "PERF-P2-01",
+      "testPath": "electron/local-app-runtime.test.mjs",
+      "testCommand": "node --test electron/local-app-runtime.test.mjs",
+      "status": "PASS"
+    },
+    {
+      "id": "R-PERF-PROC-RECOVERY-01",
+      "invariant": "正常 stop、测试异常路径与 bridge 父连接断开后，本轮 app-owned npm/server 子树均在有界时间内退出",
+      "severity": "P0",
+      "sliceId": "PERF-P2-01",
+      "testPath": "electron/local-app-runtime.test.mjs",
+      "testCommand": "node --test electron/local-app-runtime.test.mjs",
+      "status": "PASS"
+    },
     {
       "id": "R-UI-HEIGHT-01",
       "invariant": "Workspace Runtime Preview 的宿主边界占满 app-main 的可用高度，不回退为 320px 内容高度",
@@ -105,9 +266,144 @@
       "testPath": "electron/local-app-runtime.test.mjs",
       "testCommand": "node --test electron/local-app-runtime.test.mjs",
       "status": "PLANNED"
+    },
+    {
+      "id": "R-STATIC-OPEN-04",
+      "invariant": "静态 Definition 的默认 start/restore 只加载 last-good，不 spawn npm/Node/Next、不分配端口或等待 HTTP readiness",
+      "severity": "P0",
+      "sliceId": "STATIC-RUNTIME-04",
+      "testPath": "electron/static-runtime.test.mjs",
+      "testCommand": "node --test electron/static-runtime.test.mjs",
+      "status": "PASS"
+    },
+    {
+      "id": "R-STATIC-PROTOCOL-04",
+      "invariant": "每个 Preview session 只服务精确 token 的 artifact；GET/HEAD、站内路由、路径穿越和 symlink containment 均受控",
+      "severity": "P0",
+      "sliceId": "STATIC-RUNTIME-04",
+      "testPath": "electron/static-runtime.test.mjs; electron/local-app-preview.test.mjs",
+      "testCommand": "node --test electron/static-runtime.test.mjs electron/local-app-preview.test.mjs",
+      "status": "PASS"
+    },
+    {
+      "id": "R-STATIC-BUILD-04",
+      "invariant": "固定 npm run build 串行执行；失败、取消、late event、stale 与 pointer commit 边界保持 last-good 磁盘和内存状态一致",
+      "severity": "P0",
+      "sliceId": "STATIC-RUNTIME-04",
+      "testPath": "electron/static-runtime.test.mjs",
+      "testCommand": "node --test electron/static-runtime.test.mjs",
+      "status": "PASS"
+    },
+    {
+      "id": "R-STATIC-MODE-04",
+      "invariant": "dev 仅显式启动；development/static 双向切换会先回收旧 operation 与子进程，不遗留 npm/Node，同时保留静态 artifact",
+      "severity": "P1",
+      "sliceId": "STATIC-RUNTIME-04",
+      "testPath": "electron/local-app-runtime.test.mjs",
+      "testCommand": "node --test electron/local-app-runtime.test.mjs",
+      "status": "PASS"
     }
   ],
   "verifications": [
+    {
+      "id": "Q-PERF-QUALITY-602f1dce",
+      "scope": "PERF-P0-01, PERF-P1-01, PERF-P1-02, PERF-P2-01 independent Development Check",
+      "diffHash": "602f1dce442434859da159a0b7f89503fef3d0d08c561a2a67e88f16872a0926",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "quality_verifier independent readonly Development Check",
+      "durationMs": 0,
+      "exitCode": 0,
+      "summary": "PASS with P0=0 and P1=0; two P2 hardening findings closed, one test-only PID reuse risk remains open.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-PERF-INTEGRATION-ELECTRON-602f1dce",
+      "scope": "Revision 3 final integrated implementation",
+      "diffHash": "602f1dce442434859da159a0b7f89503fef3d0d08c561a2a67e88f16872a0926",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "npm run test:electron (loopback-enabled environment)",
+      "durationMs": 2544,
+      "exitCode": 0,
+      "summary": "Final full Electron Node suite passed 132/132, including bounded 10k Runtime log queue and controlled fixture finally cleanup.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-PERF-INTEGRATION-ELECTRON-b835aecb",
+      "scope": "Revision 3 integrated implementation",
+      "diffHash": "b835aecba429485ad3da44582b41a2cf5989ec6540b4961d5d8c6265804cba14",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "npm run test:electron (loopback-enabled environment)",
+      "durationMs": 2643,
+      "exitCode": 0,
+      "summary": "Full Electron Node suite passed 131/131 after updating the static Desktop Seam contract for the extracted Runtime event helper.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-PERF-P2-01-RUNTIME-7edd44ac",
+      "scope": "PERF-P2-01",
+      "diffHash": "7edd44ac384b5d2c6cc90096791a44486efaa37bf9f4245001c1c5232d48415b",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "node --test electron/local-app-runtime.test.mjs (loopback-enabled environment)",
+      "durationMs": 1526,
+      "exitCode": 0,
+      "summary": "Runtime target suite passed 18/18; stop/disconnect subset also passed 10/10 across five repeated runs with no new fixture PIDs.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-PERF-P0-01-WS-26b24048",
+      "scope": "PERF-P0-01",
+      "diffHash": "26b24048b61a52b7d4c2f149e703b44ac5323a13bf643cd3628caa63a44cd2e2",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "node --test electron/workspace-session.test.mjs",
+      "durationMs": 836,
+      "exitCode": 0,
+      "summary": "Workspace Session target tests passed 16/16, including selection/restore regression.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-PERF-P1-01-BATCH-b8751d22",
+      "scope": "PERF-P1-01",
+      "diffHash": "b8751d22e61d8b60b1eebe2dab8aeaa1dfd3a877b09ab087ebcf9c4f0751db38",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "node --test electron/runtime-event-state.test.mjs",
+      "durationMs": 160,
+      "exitCode": 0,
+      "summary": "Runtime event batching tests passed 4/4.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-PERF-P1-01-TSC-b8751d22",
+      "scope": "PERF-P1-01",
+      "diffHash": "b8751d22e61d8b60b1eebe2dab8aeaa1dfd3a877b09ab087ebcf9c4f0751db38",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "npm run typecheck",
+      "durationMs": 3400,
+      "exitCode": 0,
+      "summary": "TypeScript typecheck passed after Runtime batching integration.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-PERF-P1-02-WS-b8751d22",
+      "scope": "PERF-P1-02",
+      "diffHash": "b8751d22e61d8b60b1eebe2dab8aeaa1dfd3a877b09ab087ebcf9c4f0751db38",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "node --test electron/workspace-session.test.mjs electron/runtime-event-state.test.mjs",
+      "durationMs": 949,
+      "exitCode": 0,
+      "summary": "Combined Workspace and Runtime renderer tests passed 20/20 after moving staging to useEffect.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-PERF-P1-02-TSC-b8751d22",
+      "scope": "PERF-P1-02",
+      "diffHash": "b8751d22e61d8b60b1eebe2dab8aeaa1dfd3a877b09ab087ebcf9c4f0751db38",
+      "environmentHash": "0b280b58e6ec3a97c0d5ed5b9fb238915d366aac7c9dcbd8e4037fe97568ea43",
+      "command": "npm run typecheck",
+      "durationMs": 4300,
+      "exitCode": 0,
+      "summary": "TypeScript typecheck passed after Workspace staging effect change.",
+      "logPath": "evidence.md"
+    },
     {
       "id": "VER-REG-UI-01-TYPECHECK-72bf1fb9",
       "scope": "REG-UI-01",
@@ -162,6 +458,39 @@
       "exitCode": 0,
       "summary": "Overview contained the existing heading, composer, project controls, and cards only; Runtime content was absent and tabs remained page-level.",
       "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-STATIC-INTEGRATION-e30a5973",
+      "scope": "STATIC-RUNTIME-04",
+      "diffHash": "e30a5973078cd69c8e9f14edadac36ac77757c2d32dbedb962acbdd7c20d0325",
+      "environmentHash": "macos-loopback-enabled-20260826",
+      "command": "npm run typecheck && npm run test:electron && git diff --check",
+      "durationMs": 5941,
+      "exitCode": 0,
+      "summary": "Typecheck passed; full Electron suite passed 145/145; diff check passed.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-CODENOW-EXPORT-624",
+      "scope": "STATIC-RUNTIME-04",
+      "diffHash": "3fd40b44571a7426d42e0dc82f719ec8c7e6fffb28b08275773389e60b7c58aa",
+      "environmentHash": "codenow-wiki-local-20260826",
+      "command": "npm run build",
+      "durationMs": 0,
+      "exitCode": 0,
+      "summary": "Next static export generated 624/624 pages and required root, Codex, and tutorial artifacts.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "Q-STATIC-QUALITY-e30a5973",
+      "scope": "STATIC-RUNTIME-04 independent readonly Development Check",
+      "diffHash": "e30a5973078cd69c8e9f14edadac36ac77757c2d32dbedb962acbdd7c20d0325",
+      "environmentHash": "quality-verifier-20260826",
+      "command": "quality_verifier targeted readonly Development Check",
+      "durationMs": 0,
+      "exitCode": 0,
+      "summary": "PASS with P0=0, P1=0, P2=0 after QVR-STATIC-001 through QVR-STATIC-005 were fixed and replayed.",
+      "logPath": "evidence.md"
     }
   ],
   "agents": [
@@ -199,16 +528,16 @@
       "instanceId": "/root/runtime_orphan_impl",
       "taskId": "REG-RUNTIME-01",
       "role": "implementation_engineer",
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-08-25T21:17:12+08:00",
-      "completedAt": null,
+      "completedAt": "2026-08-26T13:10:00+08:00",
       "wallDurationMs": null,
       "model": "gpt-5.6-luna",
       "inputTokens": null,
       "outputTokens": null,
       "resultPath": null,
       "resultHash": null,
-      "consumed": false
+      "consumed": true
     },
     {
       "instanceId": "/root/runtime_layout_rework",
@@ -224,8 +553,98 @@
       "resultPath": null,
       "resultHash": null,
       "consumed": true
+    },
+    {
+      "instanceId": "/root/runtime_event_batching",
+      "taskId": "PERF-P1-01",
+      "role": "implementation_engineer",
+      "status": "DONE",
+      "startedAt": "2026-08-26T13:22:04+08:00",
+      "completedAt": "2026-08-26T13:24:00+08:00",
+      "wallDurationMs": null,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
+    },
+    {
+      "instanceId": "/root/runtime_process_cleanup",
+      "taskId": "PERF-P2-01",
+      "role": "implementation_engineer",
+      "status": "DONE",
+      "startedAt": "2026-08-26T13:26:26+08:00",
+      "completedAt": "2026-08-26T13:42:44+08:00",
+      "wallDurationMs": null,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
+    },
+    {
+      "instanceId": "/root/runtime_performance_quality",
+      "taskId": "PERF-CHECK-01",
+      "role": "quality_verifier",
+      "status": "DONE",
+      "startedAt": "2026-08-26T13:43:41+08:00",
+      "completedAt": "2026-08-26T13:54:44+08:00",
+      "wallDurationMs": null,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
+    },
+    {
+      "instanceId": "/root/static_runtime_arch",
+      "taskId": "ARCH-P0-04",
+      "role": "technical_architect",
+      "status": "DONE",
+      "startedAt": "2026-08-26T00:00:00+08:00",
+      "completedAt": "2026-08-26T00:00:00+08:00",
+      "wallDurationMs": null,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
+    },
+    {
+      "instanceId": "/root/static_runtime_impl",
+      "taskId": "DEV-P0-05",
+      "role": "implementation_engineer",
+      "status": "DONE",
+      "startedAt": "2026-08-26T00:00:00+08:00",
+      "completedAt": "2026-08-26T00:00:00+08:00",
+      "wallDurationMs": null,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
+    },
+    {
+      "instanceId": "/root/static_runtime_quality",
+      "taskId": "CHECK-P0-04",
+      "role": "quality_verifier",
+      "status": "DONE",
+      "startedAt": "2026-08-26T00:00:00+08:00",
+      "completedAt": "2026-08-26T00:00:00+08:00",
+      "wallDurationMs": null,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": true
     }
   ],
-  "fullDevelopmentCheckHashes": [],
-  "openFindingIds": []
+  "fullDevelopmentCheckHashes": ["602f1dce442434859da159a0b7f89503fef3d0d08c561a2a67e88f16872a0926", "e30a5973078cd69c8e9f14edadac36ac77757c2d32dbedb962acbdd7c20d0325"],
+  "openFindingIds": ["PERF-P2-PID-REUSE-001"]
 }

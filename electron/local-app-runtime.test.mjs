@@ -53,6 +53,64 @@ async function waitForPath(path, { present = true, timeoutMs = 5_000 } = {}) {
   assert.equal(existsSync(path), present, `${present ? 'expected' : 'expected no'} path: ${path}`)
 }
 
+function readPid(path) {
+  const value = Number.parseInt(readFileSync(path, 'utf8').trim(), 10)
+  assert.ok(Number.isInteger(value) && value > 0, `expected PID evidence at ${path}`)
+  return value
+}
+
+function isPidAlive(pid) {
+  if (!pid || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForPidGone(pid, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  assert.equal(isPidAlive(pid), false, `expected PID to exit: ${pid}`)
+}
+
+async function waitForChildExit(child, timeoutMs = 5_000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  await new Promise((resolve) => {
+    let timer
+    const finish = () => {
+      if (timer) clearTimeout(timer)
+      child.removeListener('exit', finish)
+      resolve()
+    }
+    timer = setTimeout(finish, timeoutMs)
+    child.once('exit', finish)
+  })
+  assert.ok(child.exitCode !== null || child.signalCode !== null, 'expected child to exit')
+}
+
+async function cleanupOwnedRuntimeFixture(supervisor, bridgeChildren, ownedPids) {
+  await supervisor.stopAll('app-quit').catch(() => undefined)
+  for (const child of bridgeChildren) {
+    await runtime.terminateProcessTree(child, 500, 500).catch(() => undefined)
+    await waitForChildExit(child, 1_500).catch(() => undefined)
+  }
+  for (const pid of ownedPids) {
+    if (!isPidAlive(pid)) continue
+    try { process.kill(pid, 'SIGTERM') } catch { /* already stopped */ }
+  }
+  for (const pid of ownedPids) {
+    await waitForPidGone(pid, 1_000).catch(async () => {
+      try { process.kill(pid, 'SIGKILL') } catch { /* already stopped */ }
+      await waitForPidGone(pid, 1_000)
+    })
+  }
+}
+
 function writeOwnedProcessFixture(root) {
   mkdirSync(resolve(root, 'node_modules'))
   writeFileSync(resolve(root, 'package.json'), JSON.stringify({
@@ -66,18 +124,26 @@ import path from 'node:path'
 const role = process.argv[2] || 'owned'
 const pidPath = path.join(process.cwd(), '.' + role + '-pid')
 const lockPath = path.join(process.cwd(), '.' + role + '-lock')
+const parentPidPath = path.join(process.cwd(), '.' + role + '-parent-pid')
 let stopping = false
+function cleanup() {
+  try { fs.unlinkSync(lockPath) } catch {}
+  try { fs.unlinkSync(pidPath) } catch {}
+  try { fs.unlinkSync(parentPidPath) } catch {}
+}
 function stop() {
   if (stopping) return
   stopping = true
-  try { fs.unlinkSync(lockPath) } catch {}
-  try { fs.unlinkSync(pidPath) } catch {}
+  cleanup()
   process.exit(0)
 }
 process.once('SIGTERM', stop)
 process.once('SIGINT', stop)
+process.once('SIGHUP', stop)
+process.once('exit', cleanup)
 fs.writeFileSync(pidPath, String(process.pid) + '\\n')
 fs.writeFileSync(lockPath, 'held\\n')
+fs.writeFileSync(parentPidPath, String(process.ppid) + '\\n')
 setInterval(() => {}, 1000)
 `)
 }
@@ -230,23 +296,28 @@ test('IPC disconnect only cleans the bridge-owned npm subtree and leaves an exte
     },
   })
   const ownedPidPath = resolve(root, '.owned-pid')
-  const ownedLockPath = resolve(root, '.owned-lock')
   const externalPidPath = resolve(root, '.external-pid')
   const externalLockPath = resolve(root, '.external-lock')
+  const ownedParentPidPath = resolve(root, '.owned-parent-pid')
+  const ownedPids = []
   try {
     await waitForPath(externalPidPath)
     const startPromise = supervisor.start(definition(root))
     await waitForPath(ownedPidPath)
+    await waitForPath(ownedParentPidPath)
+    ownedPids.push(readPid(ownedPidPath), readPid(ownedParentPidPath))
     assert.equal(bridgeChildren.length, 1)
     assert.equal(bridgeChildren[0].connected, true)
     bridgeChildren[0].disconnect()
     const failed = await startPromise
     assert.equal(failed.errorCode, 'process-exited')
     assert.equal(failed.phase, 'start')
-    await waitForPath(ownedLockPath, { present: false })
+    await Promise.all(ownedPids.map((pid) => waitForPidGone(pid)))
+    await waitForChildExit(bridgeChildren[0])
     assert.equal(existsSync(externalLockPath), true)
     assert.doesNotThrow(() => process.kill(external.pid, 0))
   } finally {
+    await cleanupOwnedRuntimeFixture(supervisor, bridgeChildren, ownedPids)
     await cleanupChild(external)
     rmSync(root, { recursive: true, force: true })
   }
@@ -268,18 +339,24 @@ test('Normal stop, stopAll, and repeated stop release the bridge-owned subtree',
   })
   const app = definition(root)
   const ownedPidPath = resolve(root, '.owned-pid')
-  const ownedLockPath = resolve(root, '.owned-lock')
+  const ownedParentPidPath = resolve(root, '.owned-parent-pid')
+  const ownedPids = []
   try {
     const startPromise = supervisor.start(app)
     await waitForPath(ownedPidPath)
+    await waitForPath(ownedParentPidPath)
+    ownedPids.push(readPid(ownedPidPath), readPid(ownedParentPidPath))
+    assert.equal(bridgeChildren.length, 1)
     const stopped = await supervisor.stop(app.id, 'user')
     assert.equal(stopped.status, 'stopped')
     assert.equal((await supervisor.stop(app.id, 'user')).status, 'stopped')
     await startPromise
-    await waitForPath(ownedLockPath, { present: false })
+    await Promise.all(ownedPids.map((pid) => waitForPidGone(pid)))
+    await waitForChildExit(bridgeChildren[0])
     await supervisor.stopAll('app-quit')
     await supervisor.stopAll('app-quit')
   } finally {
+    await cleanupOwnedRuntimeFixture(supervisor, bridgeChildren, ownedPids)
     rmSync(root, { recursive: true, force: true })
   }
 })
@@ -486,6 +563,125 @@ test('Runtime stop invalidates the generation before a later start', async () =>
   await supervisor.stop(second.localAppId, 'user')
 })
 
+test('Development to static transition stops the old supervisor before replacing the runtime map', async () => {
+  const root = mkdtempSync(`${tmpdir()}/local-app-mode-transition-dev-static-`)
+  const userData = mkdtempSync(`${tmpdir()}/local-app-mode-transition-dev-static-data-`)
+  mkdirSync(resolve(root, 'node_modules'))
+  mkdirSync(resolve(root, 'out'))
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
+  writeFileSync(resolve(root, 'out', 'index.html'), '<h1>static</h1>')
+  const children = []
+  const supervisor = new runtime.LocalAppRuntimeSupervisor({
+    userDataPath: userData,
+    allocatePort: async () => 45500,
+    fetch: async () => ({ status: 200 }),
+    defaults: { readinessTimeoutMs: 100, probeIntervalMs: 1, probeTimeoutMs: 10 },
+    spawn: () => {
+      const child = new EventEmitter()
+      child.pid = 999999
+      child.exitCode = null
+      child.signalCode = null
+      child.connected = true
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+      child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {}
+      child.send = (message) => {
+        child.shutdownMessage = message
+        child.connected = false
+        child.exitCode = 0
+        queueMicrotask(() => child.emit('exit', 0, null))
+      }
+      child.kill = () => { child.exitCode = 0; return true }
+      children.push(child)
+      queueMicrotask(() => child.stdout.emit('data', 'ready at http://127.0.0.1:45500/'))
+      return child
+    },
+  })
+  const devDefinition = definition(root)
+  try {
+    const dev = await supervisor.start(devDefinition)
+    assert.equal(dev.mode, 'development')
+    assert.equal(children.length, 1)
+    writeFileSync(resolve(root, 'package.json'), JSON.stringify({
+      scripts: { dev: 'fixture', build: 'fixture-build' },
+      agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'out', entryFile: 'index.html' },
+    }))
+    const staticDefinition = { ...devDefinition, mode: 'static', agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'out', entryFile: 'index.html' } }
+    const restored = await supervisor.start(staticDefinition)
+    assert.equal(restored.mode, 'static')
+    assert.equal(restored.status, 'ready')
+    assert.equal(children[0].shutdownMessage?.type, 'runtime-shutdown')
+    assert.equal(children.filter((child) => child.exitCode === null).length, 0)
+    assert.equal(children.length, 1, 'static restore must not spawn a dev child')
+  } finally {
+    await supervisor.stopAll('app-quit')
+    rmSync(root, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true })
+  }
+})
+
+test('Static to development transition revokes the active preview without deleting the artifact', async () => {
+  const root = mkdtempSync(`${tmpdir()}/local-app-mode-transition-static-dev-`)
+  const userData = mkdtempSync(`${tmpdir()}/local-app-mode-transition-static-dev-data-`)
+  mkdirSync(resolve(root, 'node_modules'))
+  mkdirSync(resolve(root, 'out'), { recursive: true })
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({
+    scripts: { dev: 'fixture', build: 'fixture-build' },
+    agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'out', entryFile: 'index.html' },
+  }))
+  writeFileSync(resolve(root, 'out', 'index.html'), '<h1>static</h1>')
+  const children = []
+  const spawnDev = () => {
+    const child = new EventEmitter()
+    child.pid = 999998
+    child.exitCode = null
+    child.signalCode = null
+    child.connected = true
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+    child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {}
+    child.send = (message) => {
+      child.shutdownMessage = message
+      child.connected = false
+      child.exitCode = 0
+      queueMicrotask(() => child.emit('exit', 0, null))
+    }
+    child.kill = () => { child.exitCode = 0; return true }
+    children.push(child)
+    queueMicrotask(() => child.stdout.emit('data', 'ready at http://127.0.0.1:45510/'))
+    return child
+  }
+  const staticDefinition = { ...definition(root), mode: 'static', agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'out', entryFile: 'index.html' } }
+  const supervisor = new runtime.LocalAppRuntimeSupervisor({
+    userDataPath: userData,
+    allocatePort: async () => 45510,
+    fetch: async () => ({ status: 200 }),
+    defaults: { readinessTimeoutMs: 100, probeIntervalMs: 1, probeTimeoutMs: 10 },
+    spawn: spawnDev,
+  })
+  try {
+    const staticSnapshot = await supervisor.start(staticDefinition)
+    assert.equal(staticSnapshot.status, 'ready')
+    const staticArtifactId = staticSnapshot.artifactId
+    const devSnapshot = await supervisor.start({ ...staticDefinition, mode: 'development' })
+    assert.equal(devSnapshot.mode, 'development')
+    assert.equal(devSnapshot.status, 'running')
+    assert.equal(children.length, 1)
+    assert.equal(supervisor.getStaticPreviewRegistry().resolve(new URL(staticSnapshot.previewUrl).hostname), null)
+    assert.equal(children.filter((child) => child.exitCode === null).length, 1)
+    await supervisor.stop(staticDefinition.id, 'user')
+    assert.equal(children.filter((child) => child.exitCode === null).length, 0)
+
+    const restoring = new runtime.LocalAppRuntimeSupervisor({ userDataPath: userData, spawn: () => { throw new Error('static restore must not spawn') } })
+    const restored = await restoring.start(staticDefinition)
+    assert.equal(restored.status, 'ready')
+    assert.equal(restored.artifactId, staticArtifactId)
+    await restoring.stop(staticDefinition.id, 'user')
+  } finally {
+    await supervisor.stopAll('app-quit')
+    rmSync(root, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true })
+  }
+})
+
 test('Controlled fixture runs through npm run dev, dynamic readiness, and bounded stop cleanup', async () => {
   const fixtureSource = resolve(testDir, '../test-fixtures/local-app-runtime')
   const root = mkdtempSync(`${tmpdir()}/local-app-runtime-fixture-`)
@@ -493,17 +689,17 @@ test('Controlled fixture runs through npm run dev, dynamic readiness, and bounde
     copyFileSync(resolve(fixtureSource, file), resolve(root, file))
   }
   const app = definition(root)
+  const supervisor = new runtime.LocalAppRuntimeSupervisor({
+    defaults: {
+      prepareTimeoutMs: 15_000,
+      readinessTimeoutMs: 8_000,
+      probeIntervalMs: 25,
+      probeTimeoutMs: 500,
+      termTimeoutMs: 1_000,
+      killTimeoutMs: 500,
+    },
+  })
   try {
-    const supervisor = new runtime.LocalAppRuntimeSupervisor({
-      defaults: {
-        prepareTimeoutMs: 15_000,
-        readinessTimeoutMs: 8_000,
-        probeIntervalMs: 25,
-        probeTimeoutMs: 500,
-        termTimeoutMs: 1_000,
-        killTimeoutMs: 500,
-      },
-    })
     const running = await supervisor.start(app)
     assert.equal(running.status, 'running', JSON.stringify(running))
     assert.match(running.readyUrl, /^http:\/\/(?:localhost|127\.0\.0\.1):\d+\//)
@@ -512,6 +708,7 @@ test('Controlled fixture runs through npm run dev, dynamic readiness, and bounde
     const stopped = await supervisor.stop(app.id, 'user')
     assert.equal(stopped.status, 'stopped')
   } finally {
+    await supervisor.stopAll('app-quit')
     rmSync(root, { recursive: true, force: true })
   }
 })

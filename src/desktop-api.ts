@@ -17,6 +17,7 @@ import type {
   RuntimeDefinition,
   RuntimeEvent,
   RuntimeSnapshot,
+  RuntimeStaticDeclaration,
   WorkspaceTab,
   ProjectFilePreviewResult,
 } from './components/types'
@@ -107,7 +108,9 @@ export type LocalAppPreviewResult =
   | { ok: true; previewId: string; status: 'creating' | 'loading' | 'ready' | 'failed' | 'closed' | 'degraded'; detail?: string }
   | { ok: false; message: string }
 
-export type RuntimeInspectResult = LocalAppInspectResult
+export type RuntimeInspectResult =
+  | (Extract<LocalAppInspectResult, { ok: true }> & { mode: 'development' | 'static'; agentos?: RuntimeStaticDeclaration })
+  | (Extract<LocalAppInspectResult, { ok: false }> & { code: Extract<Extract<LocalAppInspectResult, { ok: false }>['code'], string> | 'static-declaration-invalid' })
 export type RuntimeDefinitionResult =
   | { ok: true; definition: RuntimeDefinition }
   | { ok: false; message: string; code?: string }
@@ -126,6 +129,10 @@ export type RuntimePreviewResult = LocalAppPreviewResult
 export type ProjectRuntimeResult =
   | { ok: true; status: 'ready' | 'trust_required'; projectId: string; mountId: string; definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null }
   | { ok: false; message: string; code?: string }
+
+export type RuntimeBuildResult =
+  | { ok: true; runtime: RuntimeSnapshot }
+  | { ok: false; message: string; code?: string; runtime?: RuntimeSnapshot }
 
 export type DesktopAPI = {
   platform: NodeJS.Platform
@@ -237,6 +244,8 @@ export type DesktopAPI = {
   stopLocalAppRuntime?: (localAppId: string, reason?: 'user' | 'last-consumer' | 'app-quit') => Promise<LocalAppRuntimeSnapshot | null>
   releaseLocalAppRuntime?: (localAppId: string, consumerId: string) => Promise<LocalAppRuntimeSnapshot | null>
   restartLocalAppRuntime?: (localAppId: string) => Promise<LocalAppRuntimeSnapshot>
+  buildLocalAppRuntime?: (localAppId: string) => Promise<RuntimeBuildResult>
+  cancelLocalAppRuntimeBuild?: (localAppId: string, buildId?: string) => Promise<LocalAppRuntimeSnapshot | null>
   createLocalAppPreview?: (tabId: string, localAppId: string) => Promise<LocalAppPreviewResult>
   setLocalAppPreviewBounds?: (previewId: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>
   setLocalAppPreviewVisible?: (previewId: string, visible: boolean) => Promise<boolean>
@@ -256,6 +265,11 @@ export type DesktopAPI = {
   stopRuntime?: (runtimeDefinitionId: string, reason?: 'user' | 'last-consumer' | 'app-quit') => Promise<RuntimeSnapshot | null>
   releaseRuntime?: (runtimeDefinitionId: string, consumerId: string) => Promise<RuntimeSnapshot | null>
   restartRuntime?: (runtimeDefinitionId: string) => Promise<RuntimeSnapshot>
+  /** Explicit user action; Main derives the fixed npm run build command. */
+  buildRuntime?: (runtimeDefinitionId: string) => Promise<RuntimeBuildResult>
+  cancelRuntimeBuild?: (runtimeDefinitionId: string, buildId?: string) => Promise<RuntimeSnapshot | null>
+  /** Explicit opt-in development mode for static definitions. */
+  startRuntimeDevelopment?: (runtimeDefinitionId: string, consumerId?: string) => Promise<RuntimeSnapshot>
   createRuntimePreview?: (host: RuntimePreviewHost) => Promise<RuntimePreviewResult>
   setRuntimePreviewBounds?: (previewId: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>
   setRuntimePreviewVisible?: (previewId: string, visible: boolean) => Promise<boolean>

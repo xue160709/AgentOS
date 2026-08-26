@@ -216,6 +216,12 @@ const desktopAdapter = {
   restartLocalAppRuntime(localAppId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.restartLocalAppRuntime, localAppId) as Promise<LocalAppRuntimeSnapshot>
   },
+  buildLocalAppRuntime(localAppId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.buildLocalAppRuntime, localAppId)
+  },
+  cancelLocalAppRuntimeBuild(localAppId: string, buildId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.cancelLocalAppRuntimeBuild, localAppId, buildId) as Promise<LocalAppRuntimeSnapshot | null>
+  },
   createLocalAppPreview(tabId: string, localAppId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createLocalAppPreview, tabId, localAppId) as Promise<LocalAppPreviewResult>
   },
@@ -274,6 +280,15 @@ const desktopAdapter = {
   },
   restartRuntime(runtimeDefinitionId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.restartRuntime, runtimeDefinitionId) as Promise<RuntimeSnapshot>
+  },
+  buildRuntime(runtimeDefinitionId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.buildRuntime, runtimeDefinitionId)
+  },
+  cancelRuntimeBuild(runtimeDefinitionId: string, buildId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild, runtimeDefinitionId, buildId) as Promise<RuntimeSnapshot | null>
+  },
+  startRuntimeDevelopment(runtimeDefinitionId: string, consumerId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startRuntimeDevelopment, runtimeDefinitionId, consumerId) as Promise<RuntimeSnapshot>
   },
   createRuntimePreview(host: RuntimePreviewHost) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createRuntimePreview, host) as Promise<RuntimePreviewResult>

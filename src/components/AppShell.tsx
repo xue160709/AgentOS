@@ -6,7 +6,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -73,6 +72,7 @@ import { configureProjectHomeRuntime, type ProjectHomeRuntimeContext } from './c
 import { WorkspaceSession } from './workspace-session'
 import { RuntimeOnboardingDialog } from './RuntimeOnboardingDialog'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
+import { applyRuntimeEvents, RuntimeEventBatcher } from './runtime-event-state'
 
 const INITIAL_PROVIDER_SKIP_VALUE = '__skip'
 const INITIAL_PROVIDER_CUSTOM_VALUE = '__custom'
@@ -91,6 +91,14 @@ function mergeAcceptedRuntime(
     runtimeId: incoming.runtimeId,
     generation: incoming.generation,
     status: incoming.status,
+    mode: incoming.mode,
+    buildStatus: incoming.buildStatus,
+    artifactId: incoming.artifactId,
+    buildId: incoming.buildId,
+    operationId: incoming.operationId,
+    stale: incoming.stale,
+    lastBuildAt: incoming.lastBuildAt,
+    previewUrl: incoming.previewUrl,
     readyUrl: incoming.readyUrl,
     port: incoming.port,
     restartAttempt: incoming.restartAttempt,
@@ -588,8 +596,16 @@ export function AppShell() {
       onToggleLogs: () => setProjectRuntimeState((current) => ({ ...current, logsOpen: !current.logsOpen })),
       onRestart: () => { if (projectRuntimeState.definition) void window.desktop?.restartRuntime?.(projectRuntimeState.definition.id).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
       onStop: () => { if (projectRuntimeState.definition) void window.desktop?.stopRuntime?.(projectRuntimeState.definition.id, 'user').then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
+      onBuild: () => { if (projectRuntimeState.definition) void window.desktop?.buildRuntime?.(projectRuntimeState.definition.id).then((result) => { if (result.ok) setProjectRuntimeState((current) => ({ ...current, runtime: result.runtime })); else if (result.runtime) setProjectRuntimeState((current) => ({ ...current, runtime: result.runtime! })) }) },
+      onCancelBuild: () => {
+        const definition = projectRuntimeState.definition
+        const buildId = projectRuntimeState.runtime?.buildId
+        const request = definition ? window.desktop?.cancelRuntimeBuild?.(definition.id, buildId) : undefined
+        void request?.then((runtime) => { if (runtime) setProjectRuntimeState((current) => ({ ...current, runtime })) })
+      },
+      onDevelopment: () => { if (projectRuntimeState.definition) void window.desktop?.startRuntimeDevelopment?.(projectRuntimeState.definition.id, `project-home:${activeProject?.id ?? ''}:${projectRuntimeState.mountId}`).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
     }
-  }, [activeProject, openProjectRuntimeTab, projectHomeViewMode, projectRuntimePreviewId, projectRuntimeState, setProjectHomeViewMode, startProjectRuntime])
+  }, [activeProject, openProjectRuntimeTab, projectHomeViewMode, projectRuntimePreviewId, projectRuntimeState, setProjectHomeViewMode, startProjectRuntime, window.desktop])
 
   useEffect(() => {
     configureProjectHomeRuntime(projectRuntimeContext)
@@ -776,36 +792,19 @@ export function AppShell() {
 
   // Runtime event scope is checked by runtimeDefinitionId/runtimeId/generation; old generations are discarded.
   useEffect(() => {
-    const unsubscribe = window.desktop?.onRuntimeEvent?.((event: RuntimeEvent) => {
-      setRuntimeStates((current) => {
-        const runtimeDefinitionId = event.runtimeDefinitionId
-        if (!runtimeDefinitionId) return current
-        const previous = current[runtimeDefinitionId]
-        if (previous && event.generation < previous.generation) return current
-        if (previous && event.runtimeId !== previous.runtimeId && event.generation === previous.generation) return current
-        const next: RuntimeSnapshot = {
-          runtimeDefinitionId,
-          runtimeId: event.runtimeId,
-          generation: event.generation,
-          // Preview failures are view-level health and must not turn a live
-          // managed process into a runtime failure. Main marks these events
-          // with phase=preview and carries previewStatus separately.
-          status: event.phase === 'preview' ? previous?.status ?? 'running' : event.status,
-          readyUrl: event.readyUrl ?? previous?.readyUrl,
-          port: event.port ?? previous?.port,
-          restartAttempt: previous?.restartAttempt ?? 0,
-          startedAt: previous?.startedAt,
-          updatedAt: event.timestamp,
-          phase: event.phase ?? previous?.phase,
-          errorCode: event.errorCode ?? previous?.errorCode,
-          detail: event.detail ?? previous?.detail,
-          previewStatus: event.phase === 'preview' ? event.previewStatus : previous?.previewStatus,
-          logs: event.line ? [...(previous?.logs ?? []).slice(-159), `[${event.stream ?? 'runtime'}] ${event.line}`] : previous?.logs,
-        }
-        return { ...current, [runtimeDefinitionId]: next }
-      })
+    let mounted = true
+    const batcher = new RuntimeEventBatcher({
+      commit: (events) => {
+        if (!mounted) return
+        setRuntimeStates((current) => applyRuntimeEvents(current, events))
+      },
     })
-    return () => unsubscribe?.()
+    const unsubscribe = window.desktop?.onRuntimeEvent?.((event: RuntimeEvent) => batcher.handle(event))
+    return () => {
+      mounted = false
+      batcher.dispose()
+      unsubscribe?.()
+    }
   }, [])
 
   const applyInitialModelSnapshot = useCallback(
@@ -1020,7 +1019,7 @@ export function AppShell() {
   }, [projectSkillProjectKey, showProjectSkillsInSidebar, t])
 
   // --- Autosave through Workspace Session / 通过 Workspace Session 自动保存 ---
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!chatWorkspace) return
     workspaceSession.stage(chatWorkspace)
   }, [chatWorkspace, workspaceSession])
@@ -1555,6 +1554,27 @@ export function AppShell() {
       if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
     }).catch(() => undefined)
   }, [])
+
+  const buildLocalApp = useCallback((localAppId: string) => {
+    const request = window.desktop?.buildRuntime?.(localAppId)
+    void request?.then((result) => {
+      if (result.ok) setRuntimeStates((current) => mergeAcceptedRuntime(current, result.runtime))
+      else if (result.runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, result.runtime!))
+    }).catch(() => undefined)
+  }, [])
+
+  const cancelLocalAppBuild = useCallback((localAppId: string, buildId?: string) => {
+    const request = window.desktop?.cancelRuntimeBuild?.(localAppId, buildId)
+    void request?.then((runtime) => {
+      if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
+    }).catch(() => undefined)
+  }, [])
+
+  const startLocalAppDevelopment = useCallback((localAppId: string) => {
+    const tab = chatWorkspace?.workspaceTabs.find((item) => item.runtimeDefinitionId === localAppId && item.id === chatWorkspace.activeWorkspaceTabId)
+    const request = window.desktop?.startRuntimeDevelopment?.(localAppId, tab ? `tab:${tab.id}` : undefined)
+    void request?.then((runtime) => setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))).catch(() => undefined)
+  }, [chatWorkspace])
 
   const closeLocalAppTab = useCallback(async (tabId: string) => {
     const current = chatWorkspace
@@ -2505,6 +2525,9 @@ export function AppShell() {
                 onStop={() => stopLocalApp(activeRuntimeDefinition.id)}
                 onReload={() => reloadLocalAppPreview(activeWorkspaceTab.id, activeRuntimeDefinition.id)}
                 onRelocate={() => void relocateLocalApp(activeRuntimeDefinition.id)}
+                onBuild={() => buildLocalApp(activeRuntimeDefinition.id)}
+                onCancelBuild={() => cancelLocalAppBuild(activeRuntimeDefinition.id, runtimeStates[activeRuntimeDefinition.id]?.buildId)}
+                onDevelopment={() => startLocalAppDevelopment(activeRuntimeDefinition.id)}
               />
             </main>
           </div>

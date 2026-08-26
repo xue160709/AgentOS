@@ -1160,5 +1160,20 @@ function formatThreadTime(timestamp: number, locale: AppLocale, t: (path: string
 }
 
 function localAppStatusLabel(t: (path: string) => string, status: RuntimeSnapshot['status']): string {
-  return t(({ preparing: 'runtime.runtimePreparing', starting: 'runtime.runtimeStarting', running: 'runtime.runtimeRunning', degraded: 'runtime.runtimeDegraded', failed: 'runtime.runtimeFailed', path_missing: 'runtime.runtimePathMissing', stopped: 'runtime.runtimeStopped' })[status])
+  const labels: Record<RuntimeSnapshot['status'], string> = {
+    ready: 'runtime.runtimeReady',
+    stale: 'runtime.runtimeStale',
+    build_required: 'runtime.runtimeBuildRequired',
+    building: 'runtime.runtimeBuilding',
+    build_failed: 'runtime.runtimeBuildFailed',
+    development: 'runtime.runtimeRunning',
+    preparing: 'runtime.runtimePreparing',
+    starting: 'runtime.runtimeStarting',
+    running: 'runtime.runtimeRunning',
+    degraded: 'runtime.runtimeDegraded',
+    failed: 'runtime.runtimeFailed',
+    path_missing: 'runtime.runtimePathMissing',
+    stopped: 'runtime.runtimeStopped',
+  }
+  return t(labels[status])
 }

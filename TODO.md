@@ -4,12 +4,17 @@
 
 ## 1. 活跃变更
 
-### 1.1 Workspace Tab 与可复用 Runtime（Revision 2）
+### 1.1 Workspace Tab 与可复用 Runtime（Revision 4）
 
 - **Change**：[`chg-20260825-local-app-tabs-runtime`](changes/active/chg-20260825-local-app-tabs-runtime/proposal.md)
 - **PRD**：[`prd/local-app-runtime/README.md`](prd/local-app-runtime/README.md)
 - **验收契约**：[`prd/local-app-runtime/acceptance.md`](prd/local-app-runtime/acceptance.md)
-- **当前状态**：Revision 2 已实现并通过独立 Development Check；正式 `project-verify` 尚未执行。Revision 1 正式 Acceptance 历史仍为 10/16 通过、6/16 待补证据、0 失败。
+- **当前状态**：Revision 4“静态直开 + 手动构建 + 显式开发模式”已实现并通过独立 Development Check；正式 `project-verify` 尚未执行。Revision 2 Development Check 与 Revision 1 正式 Acceptance 历史继续保留。
+
+#### Revision 4 当前开发
+
+- [x] `DEV-P0-05`｜把静态项目默认打开路径改为直接加载 last-good 构建，不启动常驻 npm/Next 进程；实现手动构建、stale/失败回退、静态协议安全边界与显式 dev fallback，并把 CodeNow Wiki 改为可静态导出。来源：`C-010`–`C-012`。
+- [x] `CHECK-P0-04`｜对静态零 spawn、固定构建命令、路径/符号链接隔离、last-good/late event、dev fallback 和 CodeNow Wiki 导出执行独立 Development Check；结果 PASS，不修改正式 Acceptance 状态。
 
 #### Revision 2 当前开发
 
@@ -44,4 +49,4 @@
 ## 3. 验证与文档状态
 
 - [x] 业务实现完成后进入 `project-verify`，由独立 `quality_verifier` 逐条验证 `prd/local-app-runtime/acceptance.md`（2026-08-25 首轮：10/16 通过、6/16 待补证据、0 失败）。
-- [ ] 正式验收通过后，才能回写 Acceptance 与本 TODO 的完成状态，并将 Planned 同步为 as-built Current。
+- [ ] 正式验收通过后，才能把 Acceptance 标记为正式通过并更新模块总体验收状态；已实现的 Revision 4 开发事实已同步为 Current/as-built。

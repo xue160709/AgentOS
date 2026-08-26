@@ -21,7 +21,9 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
     const previous = previewIdRef.current
     if (previous) void window.desktop?.setRuntimePreviewVisible?.(previous, false)
     previewIdRef.current = null
-    if (!active || runtime?.status !== 'running' || !runtime.readyUrl || !window.desktop?.createRuntimePreview) {
+    const staticReady = runtime?.mode === 'static' && runtime.status !== 'stopped' && Boolean(runtime.previewUrl) && ['ready', 'stale', 'building', 'build_failed'].includes(runtime.buildStatus ?? runtime.status)
+    const developmentReady = runtime?.status === 'running' && Boolean(runtime.readyUrl)
+    if (!active || (!staticReady && !developmentReady) || !window.desktop?.createRuntimePreview) {
       setPreviewStatus(runtime?.status === 'degraded' ? 'degraded' : 'idle')
       return () => { cancelled = true; requestRef.current += 1 }
     }
@@ -42,7 +44,7 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
         void window.desktop?.closeRuntimePreview?.(previewId)
       }
     }
-  }, [active, host.kind, host.kind === 'project-home' ? host.projectId : host.workspaceTabId, host.kind === 'project-home' ? host.mountId : host.runtimeDefinitionId, host.runtimeDefinitionId, runtime?.generation, runtime?.readyUrl, runtime?.status])
+  }, [active, host.kind, host.kind === 'project-home' ? host.projectId : host.workspaceTabId, host.kind === 'project-home' ? host.mountId : host.runtimeDefinitionId, host.runtimeDefinitionId, runtime?.generation, runtime?.readyUrl, runtime?.previewUrl, runtime?.mode])
   useEffect(() => {
     const element = hostRef.current
     const previewId = previewIdRef.current
@@ -55,6 +57,10 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
     window.addEventListener('scroll', sync, true)
     return () => { observer?.disconnect(); window.removeEventListener('resize', sync); window.removeEventListener('scroll', sync, true); void window.desktop?.setRuntimePreviewVisible?.(previewId, false) }
   }, [active, previewStatus])
-  const status = runtime?.status === 'preparing' ? t('runtime.runtimePreparing') : runtime?.status === 'starting' ? t('runtime.runtimeStarting') : runtime?.status === 'running' && previewStatus === 'ready' ? t('runtime.preview') : runtime?.status === 'failed' ? t('runtime.runtimeFailed') : runtime?.status === 'path_missing' ? t('runtime.runtimePathMissing') : t('runtime.runtimeStopped')
+  const status = runtime?.mode === 'static' && runtime.buildStatus === 'building'
+    ? t('runtime.runtimeBuilding')
+    : runtime?.mode === 'static' && runtime.buildStatus === 'build_required'
+      ? t('runtime.runtimeBuildRequired')
+      : runtime?.status === 'preparing' ? t('runtime.runtimePreparing') : runtime?.status === 'starting' ? t('runtime.runtimeStarting') : (runtime?.status === 'running' || runtime?.status === 'ready' || runtime?.status === 'stale' || runtime?.status === 'build_failed') && previewStatus === 'ready' ? t('runtime.preview') : runtime?.status === 'failed' ? t('runtime.runtimeFailed') : runtime?.status === 'path_missing' ? t('runtime.runtimePathMissing') : t('runtime.runtimeStopped')
   return <div ref={hostRef} className={`runtime-preview-host is-${previewStatus}`} data-testid={testId} role="region" aria-label={status}>{previewStatus !== 'ready' ? <div className="local-app-preview-placeholder" role="status"><strong>{status}</strong><span>{runtime?.detail ?? t('runtime.preview')}</span></div> : null}</div>
 }

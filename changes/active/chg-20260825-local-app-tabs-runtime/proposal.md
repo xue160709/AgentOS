@@ -1,12 +1,48 @@
 ---
 change_id: chg-20260825-local-app-tabs-runtime
-revision: 2
+revision: 4
 decision: accepted
 delivery: in_progress
 owner: main_agent
+confirmation_source: explicit_user_statement
+confirmed_scope: "2026-08-26 用户确认手动构建可接受，并在静态直开推荐方案后要求完成开发"
 ---
 
 # 通用 Workspace Tab 与可复用 Runtime
+
+## Revision 4：手动构建与静态直开
+
+用户确认 CodeNow Wiki 修改代码后可以由用户手动触发构建；平时打开标签页必须优先追求最快冷启动，不再默认常驻 `npm run dev` 或以 `npm run start` 作为最终方案。
+
+- 已有可用静态构建时，Runtime 直接加载构建产物，不启动 npm、Next.js dev/start server，不分配 loopback 端口，也不等待 HTTP readiness。
+- 没有构建产物时显示明确的“需要构建”状态，由用户主动触发构建；构建进程只在构建期间存在，结束后立即退出。
+- 源码比最后成功构建更新时，旧构建仍可立即打开，同时提示预览可能过期；用户点击“重新构建”后再切换到新产物。
+- 构建失败不得破坏最后一次成功产物或当前可用预览；失败原因和最近日志可观察，可再次重试。
+- 现有 `npm run dev` 作为显式开发模式保留，不再是静态项目的默认打开路径；`npm run start` 不作为最快路径。
+- CodeNow Wiki 改为可静态导出的 Next.js 产物；教程内容不再依赖常驻 Route Handler。需要动态网络数据的页面不得因此获得 Electron/Node bridge。
+
+### Revision 4 非目标
+
+- 不自动监听源码并持续重建，不恢复 dev server 的常驻编译成本。
+- 不删除已有 RuntimeDefinition、WorkspaceTab、consumer、generation、持久化迁移或 dev 模式合同。
+- 不扩大 Preview 对任意本地文件、外部导航、弹窗、权限或 Electron/Node 能力的访问范围。
+
+### Revision 4 风险
+
+- 静态资源协议必须把每个请求严格约束在该 Runtime 已确认的构建根目录内，拒绝路径穿越、符号链接逃逸和跨 Runtime 访问。
+- 构建属于显式信任目录内的代码执行；只允许 Main 使用固定、已确认的构建命令，Renderer 不得传入 executable、args、root 或任意 URL。
+- 构建成功切换、构建失败回退、快速关闭/重新打开和 late build event 必须按 runtimeDefinitionId、operation/generation 校验。
+
+## Revision 3：运行时交互性能回归修复
+
+用户在真实工作区中确认：Runtime 恢复后界面持续显示“运行中”，但 Workspace Tab 点击不切换，整个项目的点击与页面反馈明显卡顿。本 revision 不改变 Workspace Tab / Runtime 产品模型，按严重度修复以下已定位问题：
+
+- Workspace Tab 被选中后必须同时清除旧 `activeThreadId`，恢复解析不能再让旧线程覆盖新 Tab。
+- 高频 Runtime 日志不得逐行触发 AppShell 根状态更新；状态事件即时应用，日志在 Renderer 内有界批处理。
+- Workspace 自动保存不得在 `useLayoutEffect` 的首屏阻塞阶段执行完整快照序列化和同步 localStorage 写入。
+- Runtime 停止与测试清理必须确保 app-owned 子进程树在有界时间内退出，并保留“不扫描目录/端口、不误杀外部进程”的所有权边界。
+
+受信任 Runtime 的自动启动数量属于可见产品行为，本 revision 先不擅自改变；完成前三项确定性修复后再依据实测决定“仅活动 Tab 懒启动”或“允许后台运行但设置上限”。
 
 ## 原因
 
@@ -42,6 +78,10 @@ Revision 1 已实现从本地目录自动运行 `npm run dev`、受控 Preview�
 - 项目首页 Runtime 不创建隐藏 Tab；同 root/command 的首页与侧栏 Tab 共享一个 Runtime，任一宿主离开不误停另一个宿主。
 - Preview 创建、隐藏、关闭与 late event 都按 host + runtimeId + generation 校验；外部导航、窗口和权限边界不回退。
 - 类型检查、Workspace/IPC/Runtime/Preview 目标测试和风险定向质量检查达到可交付状态；正式产品验收仍由 `project-verify` 完成。
+- 从活动线程点击任意 Workspace Tab 后，`activeThreadId` 清空且 `activeWorkspaceTabId` 保持为目标 Tab；刷新恢复也不得反选旧线程。
+- Runtime 连续输出日志时，日志仍有界保留，但 AppShell 状态提交频率受批处理窗口约束；停止、失败、就绪等状态不等待日志批次。
+- 工作区 staging 发生在浏览器完成布局/绘制之后；既有即时镜像、延迟 Main 保存与卸载 flush 语义不退化。
+- Runtime 目标测试结束后不残留 fixture 的 npm/node 子进程；清理仍只作用于能证明由 AgentOS Runtime 创建的进程树。
 
 ## 决策与风险
 

@@ -1,5 +1,76 @@
 # Tasks
 
+> Revision 4：2026-08-26 用户确认“手动构建 + 静态直开 + 保留显式开发模式”，并要求完成开发。本 revision 以一个紧耦合实现结果串行推进，不新建并行 slice DAG。
+
+```yaml
+revision: 4
+task_level: Heavy
+level_basis: 自定义本地资源协议、受信构建命令、Preview 沙箱与跨进程异步状态
+professional_gaps: [technical_static_runtime, implementation, quality]
+role_plan: [technical_architect, implementation_engineer, quality_verifier]
+not_needed:
+  - product_manager: existing_contract_sufficient
+  - experience_designer: existing_contract_sufficient
+  - visual_interface_designer: strict_reuse_of_existing_pattern
+  - user_researcher: existing_evidence_sufficient
+  - market_researcher: no_relevant_impact
+  - cmo_value_strategist: no_relevant_impact
+  - independent_reviewer: no_independent_review_trigger
+confirmation: user_confirmed
+acceptance_requested: false
+coverage_gate: pass
+```
+
+## Revision 4 架构、同步、开发与质量
+
+- [x] `ARCH-P0-04`｜owner=`technical_architect`｜write_mode=`response_only`｜依赖：用户确认
+  - 冻结：静态 Runtime 声明/探测、构建产物所有权、直接加载协议、路径隔离、手动 build/rebuild、stale/failed/late event、dev fallback 与 CodeNow Wiki 静态迁移合同。
+  - 保持：Preview 无 preload/Node/Electron bridge；不允许 Renderer 传任意命令、路径或 URL；旧 RuntimeDefinition 与 dev 模式继续可读可用。
+
+- [x] `SYNC-P0-04`｜owner=`main_agent`｜write_mode=`writer`｜依赖：`ARCH-P0-04`
+  - 写入：`prd/local-app-runtime/README.md`、`prd/local-app-runtime/design.md`、`prd/local-app-runtime/technical.md`、`prd/local-app-runtime/acceptance.md`、`TODO.md`。
+  - 边界：只同步已确认 Planned/Current 语义；不把开发自检写成正式验收通过，不勾选根 TODO 完成状态。
+
+- [x] `DEV-P0-05`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`ARCH-P0-04`,`SYNC-P0-04`
+  - observable_outcome：CodeNow Wiki 已有静态构建时标签页直接打开且无 npm/Next 常驻子进程；无产物/过期/构建中/失败状态可见，用户可手动构建，成功自动刷新，失败保留最后成功预览；显式 dev 模式仍可使用。
+  - ownership：`deadline=90m`；`attempt=3`；`instance_id=/root/static_runtime_impl`；状态转换与重试按 `.codex/rules/ownership.md`。
+  - `exact_write_allowlist=src/components/types.ts,src/chat-workspace-persistence.ts,src/workspace-snapshot-resolution.ts,src/desktop-types.ts,src/desktop-api.ts,src/desktop-seam.ts,src/components/AppShell.tsx,src/components/AppShellSidebar.tsx,src/components/AppShellWorkspace.tsx,src/components/LocalAppWorkspace.tsx,src/components/RuntimeWorkspace.tsx,src/components/RuntimePreview.tsx,src/components/RuntimeOnboardingDialog.tsx,src/components/chat/ProjectHomeRuntimeView.tsx,src/style.css,src/locales/zh.json,src/locales/en.json,electron/main.ts,electron/preload.ts,electron/local-app-runtime/index.ts,electron/local-app-runtime/preview.ts,electron/local-app-runtime/static.ts,electron/chat-workspace-store.ts,electron/desktop-seam.test.mjs,electron/local-app-runtime.test.mjs,electron/local-app-preview.test.mjs,electron/static-runtime.test.mjs,electron/chat-workspace-store.test.mjs,test-fixtures/local-app-runtime/**,/Volumes/macOS/Github/codenow.wiki/.gitignore,/Volumes/macOS/Github/codenow.wiki/next-env.d.ts,/Volumes/macOS/Github/codenow.wiki/package.json,/Volumes/macOS/Github/codenow.wiki/next.config.ts,/Volumes/macOS/Github/codenow.wiki/app/api/**,/Volumes/macOS/Github/codenow.wiki/app/icon.tsx,/Volumes/macOS/Github/codenow.wiki/app/icon.svg,/Volumes/macOS/Github/codenow.wiki/app/opengraph-image.tsx,/Volumes/macOS/Github/codenow.wiki/app/robots.ts,/Volumes/macOS/Github/codenow.wiki/app/sitemap.ts,/Volumes/macOS/Github/codenow.wiki/app/knowledge/page.tsx,/Volumes/macOS/Github/codenow.wiki/app/mission/page.tsx,/Volumes/macOS/Github/codenow.wiki/app/codex/page.tsx,/Volumes/macOS/Github/codenow.wiki/app/codex-quota/page.tsx,/Volumes/macOS/Github/codenow.wiki/lib/site.ts,/Volumes/macOS/Github/codenow.wiki/lib/codex-radar.ts,/Volumes/macOS/Github/codenow.wiki/lib/codex-quota-forecast.ts,/Volumes/macOS/Github/codenow.wiki/components/tutorial-data.ts,/Volumes/macOS/Github/codenow.wiki/components/tutorial-panel.tsx,/Volumes/macOS/Github/codenow.wiki/public/tutorials/**,/Volumes/macOS/Github/codenow.wiki/scripts/**`。
+  - `diff_baseline=CodeX-UI-Template 当前 Revision 3 dirty tree + codenow.wiki 仅 AGENTS.md/AGENTS copy.md 用户改动`；不得回退或覆盖这些既有修改。
+  - 风险自检：唯一目标命令覆盖协议路径穿越/符号链接、Renderer 任意命令拒绝、last-good 构建回退、late build event、dev fallback 和 CodeNow Wiki 静态导出。
+  - 停止：需要新增依赖、删除用户数据、读取构建根外文件、允许页面 Electron/Node bridge、修改白名单外文件或外部仓库写权限不可用。
+
+- [x] `CHECK-P0-04`｜owner=`quality_verifier`｜write_mode=`readonly`｜依赖：`DEV-P0-05`
+  - V3 独立开发质量检查：只读稳定集成 diff；验证静态直开无常驻子进程、构建命令不可注入、协议文件边界、last-good 回退、late event、dev fallback 和 CodeNow Wiki 构建产物。
+  - 不执行正式 Acceptance，不修改产品实现或正式状态。
+  - 结果：第三轮定向复核 PASS，P0/P1/P2 均为 0；真实打包 Electron Chromium GUI custom-scheme 全流程留待正式验收。
+
+> Revision 3：2026-08-26 用户要求按严重度顺序修复 Runtime 工作区卡顿，并恢复允许使用 subagents。以下任务串行推进，避免同一根状态和 Runtime 生命周期同时改写。
+
+## Revision 3 性能回归修复
+
+- [x] `PERF-P0-01`｜owner=`main_agent`｜write_mode=`writer`｜依赖：无
+  - 修复：选择 Workspace Tab 时清空旧 `activeThreadId`，保证 `WorkspaceSession.active()` 与刷新恢复解析不再反选旧线程。
+  - 写入：`src/components/workspace-session.ts`、`electron/workspace-session.test.mjs`。
+  - 验证：`node --test electron/workspace-session.test.mjs`。
+
+- [x] `PERF-P1-01`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`PERF-P0-01`
+  - 修复：Runtime 状态事件即时提交；纯日志事件在 Renderer 内按固定短窗口合并，日志上限与 generation/runtimeId 隔离保持不变。
+  - 写入：`src/components/AppShell.tsx`，以及必要的单元化 helper/目标测试。
+  - 验证：目标 batching 测试、`npm run typecheck`。
+
+- [x] `PERF-P1-02`｜owner=`main_agent`｜write_mode=`writer`｜依赖：`PERF-P1-01`
+  - 修复：Workspace Session staging 从 `useLayoutEffect` 移至普通 effect，避免同步序列化/localStorage 写入阻塞布局与点击反馈。
+  - 写入：`src/components/AppShell.tsx`。
+  - 验证：Workspace Session 目标测试、`npm run typecheck`。
+
+- [x] `PERF-P2-01`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`PERF-P1-02`
+  - 修复：复查并补强 app-owned liveness bridge / terminate 流程与 Runtime fixture 清理，测试结束不得遗留 npm/node 子进程。
+  - 写入：`electron/local-app-runtime/index.ts`、`electron/local-app-runtime.test.mjs`、必要 fixture。
+  - 验证：`node --test electron/local-app-runtime.test.mjs`，并以只读 PID 检查确认本轮新 fixture 无残留。
+
+- [x] `PERF-CHECK-01`｜owner=`quality_verifier`｜write_mode=`readonly`｜依赖：全部 Revision 3 实现任务
+  - 目标：检查 Tab 选择不变量、Runtime event batching、持久化时序、进程所有权/回收与回归风险；不执行正式产品验收。
+
 > Revision 2：用户已取代 Revision 1 的“Local App”用户概念。以下任务在保留 Revision 1 实现与历史证据的前提下，完成 Workspace Tab、Runtime 多宿主与项目首页双系统切换。
 
 ```yaml

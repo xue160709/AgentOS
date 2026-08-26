@@ -56,5 +56,20 @@ export function LocalAppWorkspace({ tab, definition, runtime, onRetry, onRestart
 }
 
 function runtimeStatusLabel(t: (path: string) => string, status: LocalAppRuntimeSnapshot['status']): string {
-  return t(({ preparing: 'localApp.runtimePreparing', starting: 'localApp.runtimeStarting', running: 'localApp.runtimeRunning', degraded: 'localApp.runtimeDegraded', failed: 'localApp.runtimeFailed', path_missing: 'localApp.runtimePathMissing', stopped: 'localApp.runtimeStopped' })[status])
+  const labels: Record<LocalAppRuntimeSnapshot['status'], string> = {
+    ready: 'localApp.runtimeReady',
+    stale: 'localApp.runtimeStale',
+    build_required: 'localApp.runtimeBuildRequired',
+    building: 'localApp.runtimeBuilding',
+    build_failed: 'localApp.runtimeBuildFailed',
+    development: 'localApp.runtimeRunning',
+    preparing: 'localApp.runtimePreparing',
+    starting: 'localApp.runtimeStarting',
+    running: 'localApp.runtimeRunning',
+    degraded: 'localApp.runtimeDegraded',
+    failed: 'localApp.runtimeFailed',
+    path_missing: 'localApp.runtimePathMissing',
+    stopped: 'localApp.runtimeStopped',
+  }
+  return t(labels[status])
 }

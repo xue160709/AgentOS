@@ -393,7 +393,7 @@ export class WorkspaceSession {
 
   selectWorkspaceTab(state: ChatWorkspaceState, tabId: string): ChatWorkspaceState {
     if (!state.workspaceTabs.some((item) => item.id === tabId)) return state
-    return withActiveWorkspaceTab(state, tabId)
+    return withActiveWorkspaceTab({ ...state, activeThreadId: '' }, tabId)
   }
 
   closeWorkspaceTab(state: ChatWorkspaceState, tabId: string): ChatWorkspaceState {

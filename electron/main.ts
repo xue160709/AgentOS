@@ -3,7 +3,7 @@
  * Electron main entry: window lifecycle, tray menu, IPC bridges, and Claude Agent runner.
  */
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, shell, Tray, WebContentsView } from 'electron'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -62,6 +62,10 @@ import {
   canonicalizeLocalAppRoot,
 } from './local-app-runtime/index'
 import { LocalAppPreviewManager } from './local-app-runtime/preview'
+import type { StaticPreviewSessionRegistrar } from './local-app-runtime/preview'
+import { resolveStaticRequest, STATIC_PREVIEW_SCHEME } from './local-app-runtime/static'
+import type { StaticPreviewRegistry } from './local-app-runtime/static'
+import type { Session } from 'electron'
 import type { RuntimeDefinition, RuntimeEvent, RuntimeSnapshot, WorkspaceTab } from '../src/components/types'
 import type { LocalAppDefinition, LocalAppRuntimeSnapshot } from '../src/components/types'
 import type { LocalAppDefinitionResult, LocalAppPreviewResult, LocalAppRelocationResult, RuntimeCreationResult, WorkspaceTabResult, WorkspaceTabCloseResult } from '../src/desktop-api'
@@ -109,6 +113,12 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 
 
 const APP_NAME = 'AgentOS'
 
+// Must be declared before app.ready. Renderer pages never receive a path or
+// command; the opaque host is resolved only by this Main-owned registry.
+protocol.registerSchemesAsPrivileged([
+  { scheme: STATIC_PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false, stream: true } },
+])
+
 const TRAY_LOCALE_BUNDLE = { zh, en } as const
 type TrayLocale = keyof typeof TRAY_LOCALE_BUNDLE
 
@@ -129,6 +139,7 @@ let localAppRuntimeManager: LocalAppRuntimeManager | null = null
 let localAppTrustStore: LocalAppTrustStore | null = null
 let localAppPreviewManager: LocalAppPreviewManager | null = null
 let localAppQuitCleanup: Promise<void> | null = null
+let staticPreviewSessionRegistrar: StaticPreviewSessionRegistrar | null = null
 
 type ProjectRuntimeHostRegistration = {
   projectId: string
@@ -138,6 +149,32 @@ type ProjectRuntimeHostRegistration = {
 }
 
 const projectRuntimeHosts = new Map<string, ProjectRuntimeHostRegistration>()
+
+async function staticPreviewResponse(
+  request: { url: string; method: string },
+  registry: StaticPreviewRegistry,
+  expectedHost?: string,
+): Promise<Response> {
+  if (expectedHost) {
+    let requestHost: string
+    try { requestHost = new URL(request.url).hostname.toLowerCase() } catch { return new Response('invalid-url', { status: 400 }) }
+    if (requestHost !== expectedHost) return new Response('cross-runtime', { status: 403 })
+  }
+  const resolved = await resolveStaticRequest(request.url, request.method, registry)
+  if (!resolved.ok) return new Response(resolved.reason, { status: resolved.status })
+  let body: Uint8Array | null = null
+  if (request.method.toUpperCase() !== 'HEAD') {
+    try { body = await fs.readFile(resolved.filePath) } catch { return new Response('missing', { status: 404 }) }
+  }
+  return new Response(body as unknown as BodyInit | null, {
+    status: 200,
+    headers: {
+      'content-type': resolved.contentType,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    },
+  })
+}
 
 function projectRuntimeConsumerId(host: Pick<ProjectRuntimeHostRegistration, 'projectId' | 'mountId'>): string {
   return `project-home:${host.projectId}:${host.mountId}`
@@ -280,6 +317,10 @@ function createWindow() {
   localAppPreviewManager = new LocalAppPreviewManager({
     window: win,
     createView: ({ webPreferences }) => new WebContentsView({ webPreferences }),
+    registerStaticPreviewSession: (session, previewUrl) => {
+      if (!staticPreviewSessionRegistrar) throw new Error('static-preview-session-handler-unavailable')
+      return staticPreviewSessionRegistrar(session, previewUrl)
+    },
     onEvent: (snapshot) => {
       // Preview 状态通过 runtime event seam 复用；不把预览对象写入 workspace snapshot。
       // Preview health is not process health. Keep the managed runtime status
@@ -663,6 +704,7 @@ if (gotSingleInstanceLock) {
     localAppTrustStore = new LocalAppTrustStore(userDataPath)
     localAppRuntimeManager = new LocalAppRuntimeManager({
       preparationRecordPath: path.join(userDataPath, 'local-app-preparation.json'),
+      userDataPath,
       onEvent: (event) => {
         const runtimeDefinitionId = event.runtimeDefinitionId
         if (!runtimeDefinitionId) return
@@ -672,6 +714,14 @@ if (gotSingleInstanceLock) {
           runtimeId: event.runtimeId,
           generation: event.generation,
           status: event.status,
+          mode: event.mode,
+          buildStatus: event.buildStatus,
+          artifactId: event.artifactId,
+          buildId: event.buildId,
+          operationId: event.operationId,
+          stale: event.stale,
+          lastBuildAt: event.lastBuildAt,
+          previewUrl: event.previewUrl,
           readyUrl: event.readyUrl,
           port: event.port,
           stream: event.stream,
@@ -686,6 +736,31 @@ if (gotSingleInstanceLock) {
         })
       },
     })
+    const staticRegistry = localAppRuntimeManager.getStaticPreviewRegistry()
+    const staticSessionHosts = new WeakMap<Session, string>()
+    const staticSessionRegistrations = new WeakMap<Session, Promise<void>>()
+    staticPreviewSessionRegistrar = async (session, previewUrl) => {
+      let expectedHost: string
+      try {
+        const url = new URL(previewUrl)
+        expectedHost = url.hostname.toLowerCase()
+        if (url.protocol !== `${STATIC_PREVIEW_SCHEME}:` || !/^[a-f0-9]{48}$/.test(expectedHost)) throw new Error('static-preview-host-invalid')
+      } catch (error) {
+        throw error instanceof Error ? error : new Error('static-preview-host-invalid')
+      }
+      staticSessionHosts.set(session, expectedHost)
+      const previous = staticSessionRegistrations.get(session) ?? Promise.resolve()
+      const registration = previous.then(async () => {
+        staticSessionHosts.set(session, expectedHost)
+        if (await session.protocol.isProtocolHandled(STATIC_PREVIEW_SCHEME)) return
+        await session.protocol.handle(STATIC_PREVIEW_SCHEME, (request) => {
+          const allowedHost = staticSessionHosts.get(session)
+          return staticPreviewResponse(request, staticRegistry, allowedHost)
+        })
+      })
+      staticSessionRegistrations.set(session, registration.catch(() => undefined))
+      await registration
+    }
     void localAppTrustStore.load()
     applyLoginItemSettingsOnStartup(getDesktopPreferencesStore().read())
     currentTrayLocale = normalizeUiLocale(getDesktopPreferencesStore().read().locale)
@@ -820,7 +895,7 @@ if (gotSingleInstanceLock) {
             (item.canonicalRoot ?? item.rootPath) === inspected.canonicalRoot,
           )
           const definition: RuntimeDefinition = existingDefinition
-            ? { ...existingDefinition, name: inspected.name, rootPath: inspected.rootPath, canonicalRoot: inspected.canonicalRoot, trustStatus: 'trusted', updatedAt: now }
+            ? { ...existingDefinition, name: inspected.name, rootPath: inspected.rootPath, canonicalRoot: inspected.canonicalRoot, mode: inspected.mode, agentos: inspected.agentos, trustStatus: 'trusted', updatedAt: now }
             : {
                 id: `runtime-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
                 name: inspected.name,
@@ -828,6 +903,8 @@ if (gotSingleInstanceLock) {
                 canonicalRoot: inspected.canonicalRoot,
                 packageManager: 'npm',
                 devCommand: { executable: 'npm', args: ['run', 'dev'] },
+                mode: inspected.mode,
+                agentos: inspected.agentos,
                 trustStatus: 'trusted',
                 autoStart: true,
                 createdAt: now,
@@ -1009,7 +1086,7 @@ if (gotSingleInstanceLock) {
       }
       const now = Date.now()
       const definition: LocalAppDefinition = existing
-        ? { ...existing, rootPath: inspected.rootPath, canonicalRoot: inspected.canonicalRoot, name: existing.name || project.name, trustStatus: 'trusted', updatedAt: now }
+        ? { ...existing, rootPath: inspected.rootPath, canonicalRoot: inspected.canonicalRoot, name: existing.name || project.name, mode: inspected.mode, agentos: inspected.agentos, trustStatus: 'trusted', updatedAt: now }
         : {
             id: `runtime-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
             name: project.name || inspected.name,
@@ -1017,6 +1094,8 @@ if (gotSingleInstanceLock) {
             canonicalRoot: inspected.canonicalRoot,
             packageManager: 'npm',
             devCommand: { executable: 'npm', args: ['run', 'dev'] },
+            mode: inspected.mode,
+            agentos: inspected.agentos,
             trustStatus: 'trusted',
             autoStart: false,
             createdAt: now,
@@ -1056,6 +1135,8 @@ if (gotSingleInstanceLock) {
         canonicalRoot: inspected.canonicalRoot,
         packageManager: 'npm',
         devCommand: { executable: 'npm', args: ['run', 'dev'] },
+        mode: inspected.mode,
+        agentos: inspected.agentos,
         trustStatus: 'trusted',
         autoStart: true,
         createdAt: now,
@@ -1093,6 +1174,8 @@ if (gotSingleInstanceLock) {
           rootPath: inspected.rootPath,
           canonicalRoot: inspected.canonicalRoot,
           name: inspected.name,
+          mode: inspected.mode,
+          agentos: inspected.agentos,
           trustStatus: 'trusted',
           updatedAt: now,
         }
@@ -1106,7 +1189,7 @@ if (gotSingleInstanceLock) {
           (item.canonicalRoot ?? item.rootPath) === inspected.canonicalRoot && item.trustStatus === 'trusted',
         ) || trustStore.isTrusted(inspected.canonicalRoot)
         const previousRuntime = runtimeManager.get(rawId)
-        const shouldRestoreRuntime = Boolean(previousRuntime && ['preparing', 'starting', 'running', 'degraded'].includes(previousRuntime.status))
+        const shouldRestoreRuntime = Boolean(previousRuntime && ['preparing', 'starting', 'running', 'degraded', 'ready', 'stale', 'build_required', 'build_failed'].includes(previousRuntime.status))
         let oldStopped = false
         let stopAttempted = false
         let newTrustGranted = false
@@ -1164,7 +1247,7 @@ if (gotSingleInstanceLock) {
         for (const tab of committed.workspace.workspaceTabs.filter((item) => item.runtimeDefinitionId === rawId)) {
           runtime = await runtimeManager.start(rawId, `tab:${tab.id}`)
         }
-        if (runtime && runtime.status !== 'running' && runtime.status !== 'degraded') {
+        if (runtime && !['running', 'degraded', 'ready', 'stale', 'build_required', 'build_failed'].includes(runtime.status)) {
           warnings.push('新目录运行时尚未就绪，可重试')
         } else if (committed.revokeOldRoot) {
           try { await trustStore.revoke(committed.oldCanonicalRoot) } catch { warnings.push('旧目录授权撤销失败，可在设置中重试') }
@@ -1251,6 +1334,67 @@ if (gotSingleInstanceLock) {
       await localAppPreviewManager?.closeForLocalApp(rawId.trim())
       return localAppRuntimeManager.restart(rawId.trim())
     })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.buildRuntime, async (_event, rawId: unknown) => {
+      if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) return { ok: false, code: 'invalid-id', message: 'Runtime 标识无效' }
+      const id = rawId.trim()
+      const definition = readRuntimeDefinition(id)
+      if (!definition) return { ok: false, code: 'runtime-definition-missing', message: 'Runtime 不存在' }
+      const inspected = await inspectLocalAppDirectory(definition.rootPath)
+      if (!inspected.ok) return { ok: false, code: inspected.code, message: inspected.message }
+      if (inspected.mode !== 'static' || !inspected.agentos) return { ok: false, code: 'static-runtime-required', message: '只有静态 Runtime 可以构建' }
+      await assertRuntimeTrust(definition)
+      if (!localAppRuntimeManager) return { ok: false, code: 'runtime-unavailable', message: 'Runtime 服务暂不可用，请重试' }
+      const staticDefinition: RuntimeDefinition = { ...definition, mode: 'static', agentos: inspected.agentos }
+      const currentRuntime = localAppRuntimeManager.get(id)
+      const isStaticRuntime = currentRuntime?.mode === 'static' || currentRuntime?.buildStatus !== undefined
+      // A static build keeps the existing last-good artifact and Preview alive
+      // while npm runs. Only an explicit development runtime needs stopping
+      // before the static build can claim the same definition id.
+      if (currentRuntime && !isStaticRuntime) {
+        await localAppPreviewManager?.closeForLocalApp(id)
+        await localAppRuntimeManager.stop(id, 'user')
+      }
+      localAppRuntimeManager.register(staticDefinition)
+      try {
+        const runtime = await localAppRuntimeManager.build(id)
+        if (runtime.buildStatus === 'build_failed') {
+          return {
+            ok: false,
+            code: runtime.errorCode ?? 'build-failed',
+            message: runtime.detail ?? '静态构建失败',
+            runtime,
+          }
+        }
+        return { ok: true, runtime }
+      } catch (error) {
+        return { ok: false, code: 'build-failed', message: error instanceof Error ? error.message : '静态构建失败', runtime: localAppRuntimeManager.get(id) ?? undefined }
+      }
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild, async (_event, rawId: unknown, rawBuildId: unknown) => {
+      if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) return null
+      const buildId = typeof rawBuildId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(rawBuildId) ? rawBuildId : undefined
+      return localAppRuntimeManager?.cancelBuild(rawId.trim(), buildId) ?? null
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startRuntimeDevelopment, async (_event, rawId: unknown, rawConsumerId: unknown) => {
+      if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) throw new Error('runtime-definition-id-invalid')
+      const id = rawId.trim()
+      const definition = readRuntimeDefinition(id)
+      if (!definition) throw new Error('runtime-definition-missing')
+      await assertRuntimeTrust(definition)
+      if (!localAppRuntimeManager) throw new Error('local-app-runtime-unavailable')
+      await localAppPreviewManager?.closeForLocalApp(id)
+      await localAppRuntimeManager.stop(id, 'user')
+      // The explicit development action is the only path that may opt a
+      // static definition into the existing npm run dev supervisor.
+      const developmentDefinition: RuntimeDefinition = { ...definition, mode: 'development', agentos: undefined }
+      localAppRuntimeManager.register(developmentDefinition)
+      const requestedConsumer = typeof rawConsumerId === 'string' && rawConsumerId.trim() && rawConsumerId.length <= 200 ? rawConsumerId.trim() : `tab:${id}`
+      const consumerId = requestedConsumer.startsWith('project-home:') || requestedConsumer.startsWith('tab:') ? requestedConsumer : `tab:${requestedConsumer}`
+      if (consumerId.startsWith('project-home:') && ![...projectRuntimeHosts.values()].some((host) => projectRuntimeConsumerId(host) === consumerId && host.runtimeDefinitionId === id)) {
+        throw new Error('project-runtime-host-stale')
+      }
+      return localAppRuntimeManager.start(id, consumerId)
+    })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.createRuntimePreview, async (_event, rawHostOrTabId: unknown, rawAppId?: unknown): Promise<LocalAppPreviewResult> => {
       const host = isRecord(rawHostOrTabId) && (rawHostOrTabId.kind === 'workspace-tab' || rawHostOrTabId.kind === 'project-home')
         ? rawHostOrTabId
@@ -1279,7 +1423,7 @@ if (gotSingleInstanceLock) {
         return { ok: false, message: 'Runtime 预览视图不存在' }
       }
       const runtime = localAppRuntimeManager?.get(rawRuntimeDefinitionId)
-      if (!runtime?.readyUrl) return { ok: false, message: '运行时尚未就绪' }
+      if (!runtime?.readyUrl && !runtime?.previewUrl) return { ok: false, message: '运行时尚未就绪' }
       if (!localAppPreviewManager) return { ok: false, message: '预览窗口不可用' }
       const previewId = `preview-${rawTabId}-${runtime.generation}`
       const existing = localAppPreviewManager.getForTab(rawTabId)

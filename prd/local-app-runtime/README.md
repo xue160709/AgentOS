@@ -1,5 +1,15 @@
 # Workspace Runtime
 
+## Revision 4 Current / as-built：静态直开与手动构建
+
+默认 Runtime 将从“恢复时自动启动 `npm run dev`”改为“直接打开最后一次成功的静态构建”。已有可用产物时不启动 npm、Node/Next server、不分配端口、不等待 HTTP readiness；没有产物时进入明确的“需要构建”状态，由用户主动构建。
+
+项目通过 `package.json.agentos` 声明固定的静态构建合同：`mode=static`、`buildCommand=npm run build`、`outputRoot=out`、`entryFile=index.html`。构建只在用户点击时执行，结束后进程退出；AgentOS 校验项目输出后复制到 Main 管理的不可变 last-good 缓存并原子切换。构建失败继续打开上一次成功版本，源码更新则异步提示预览可能过期。
+
+`npm run dev` 作为显式开发模式继续保留，供需要热更新时主动启用；`npm run start` 不是最快打开路径，也不作为静态项目默认方案。CodeNow Wiki 是首个静态导出接入项目，代码变更后由用户手动重新构建。
+
+Revision 4 已实现并通过独立 Development Check：AgentOS 类型检查通过，完整 Electron 测试 145/145 通过，CodeNow Wiki 静态构建生成 624/624 页面。正式 Acceptance 状态见 [`acceptance.md`](acceptance.md)；本节的 Current/as-built 不等同于正式验收通过。
+
 ## Revision 2 Current / as-built
 
 用户层不再使用“Local App / 本地应用”概念：它被收敛为侧栏中的 `Workspace Tab`，底层能力统一称为 `Runtime`。Tab 标题由用户创建时填写并可重命名；目录或 package 名只作为默认建议，不是不可修改的显示名。关闭入口从行内按钮移至右键/键盘上下文菜单。

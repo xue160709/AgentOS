@@ -1,5 +1,40 @@
 # Workspace Runtime 技术文档
 
+## Revision 4 Current / as-built：静态 Runtime 技术合同
+
+### 声明、探测与兼容
+
+- 静态项目通过 `package.json.agentos` 声明 `{ mode: "static", buildCommand: "npm run build", outputRoot: "out", entryFile: "index.html" }`。Main 只接受这一固定 build command；`outputRoot`/`entryFile` 必须是无绝对路径、反斜杠、NUL 和 `..` 的相对路径，最终 realpath 必须位于 canonical root 内。
+- 没有有效静态声明的既有 Definition 继续按 Revision 2 的固定 `npm run dev` 合同运行。静态 Definition 的默认 `start/restore` 只解析 last-good，不 spawn；显式 development action 才进入旧 supervisor。
+- Renderer 只能传 runtimeDefinitionId、consumer/host 和预期 generation/operation；不得传 executable、args、cwd、输出目录、文件 URL 或任意 ready URL。
+
+### 构建产物与原子切换
+
+- 用户触发 build 后，Main 在复核信任、canonical root、package 声明和当前 operation 后执行固定 `npm run build`。同一 Definition 的 build 串行化；取消、重复点击和 late exit 使用 buildId/operationId 隔离。
+- 项目构建到自己的 `outputRoot`。命令成功后，Main 递归校验输出根和入口、不跟随根外符号链接，再复制到 `userData/runtime-static/<definition-key>/artifacts/<artifact-id>/` 临时目录；校验完成后以原子 manifest/pointer 切换 `last-good`。
+- Preview 从不直接服务项目 `out`，也不在 build 开始时替换 last-good。构建失败、取消、复制失败或 AgentOS 重启只清理未提交 staging；已有 last-good 保持可用。
+- 第一次打开且缓存尚不存在时，可从已存在且通过相同校验的项目 `outputRoot` 导入一次；没有安全产物则返回 `build_required`。源码 stale 检查排除 `.git`、`node_modules`、`.next`、声明的输出目录和常见构建目录，并在页面可见后异步执行。
+
+### 静态协议与 Preview 安全
+
+- Electron 在 `app.ready` 前注册私有标准安全 scheme，并由每个 Preview 的隔离 session 注册 Main-owned handler。URL 使用 Main 生成的不透明 host/runtime token；Renderer 只接收当前 generation 的 ready URL。
+- handler 只允许 `GET/HEAD`。对 URL 解码、规范化和路由候选（`/` → `index.html`，`/route` 与 `/route/` → `route/index.html`）逐级做 lexical containment 与 realpath containment；拒绝编码穿越、NUL、反斜杠、符号链接逃逸、跨 host/runtime 访问、目录列表和构建根外读取。
+- 响应使用固定 MIME 映射和最小安全 headers。Preview 继续 `sandbox: true`、`contextIsolation: true`、`nodeIntegration: false`、无应用 preload；外部导航、窗口创建和权限申请继续拒绝，不因静态模式增加文件或 Electron bridge。
+
+### 类型、事件与 UI seam
+
+- `RuntimeDefinition` 增加向后兼容的 mode/static build 配置；`RuntimeSnapshot`/`RuntimeEvent` 增加 mode、buildStatus、artifact/build 标识、stale 与最后成功时间。现有 runtimeId/generation 校验继续成立。
+- Desktop Seam 增加 Main-authoritative `buildRuntime(definitionId)` 与显式静态/开发模式切换动作。build 日志沿用脱敏和有界 ring buffer，不高频提交 AppShell 根状态。
+- 静态 ready 不拥有项目子进程；Stop 只关闭显式 development supervisor 或取消当前 build，不删除 last-good。移除 Definition 时是否清理 AgentOS 私有缓存必须与 workspace 权威删除同序完成，不删除项目目录或项目 `out`。
+
+### CodeNow Wiki 静态导出
+
+- Next.js 配置使用 `output: "export"`、`trailingSlash: true` 和 unoptimized images；`npm run build` 生成 `out/index.html` 及完整路由资源。
+- 教程内容在 build 前复制到 `public/tutorials` 并使用静态 URL；依赖 Route Handler 的教程 API 被移除。CodeNow Radar/Quota 改为构建时快照或静态页面，不保留需要运行时 Next server 的 Route Handler/redirect。
+- `npm run dev` 仍可独立用于显式开发模式；静态导出失败不得影响 AgentOS 已保存的 last-good。
+
+本节为 Revision 4 Current/as-built 技术事实。实现已通过 `npm run typecheck`、完整 Electron 145/145 测试、CodeNow Wiki 624/624 静态页面构建与第三轮独立 Development Check；正式 Acceptance 仍只由 `project-verify` 更新。
+
 ## Revision 2 Current / as-built 技术合同
 
 - durable schema 升级到 v3：`runtimeDefinitions`、`workspaceTabs`、`activeWorkspaceTabId`、`projectHomeViewModes`；读取时一次性兼容 Revision 1 的 `localAppDefinitions/localAppTabs/activeLocalAppTabId`，保留 id、用户标题、信任和活动选择，损坏信任降为 revoked；新写入只使用中性字段。

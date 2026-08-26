@@ -20,6 +20,17 @@ export type AppViewId = 'home' | 'docs' | 'settings'
 /** Runtime directory trust state / Runtime 目录信任状态 */
 export type RuntimeTrustStatus = 'trusted' | 'revoked'
 
+/** Static build declaration read from package.json.agentos. */
+export type RuntimeStaticDeclaration = {
+  mode: 'static'
+  buildCommand: 'npm run build'
+  outputRoot: string
+  entryFile: string
+}
+
+export type RuntimeMode = 'development' | 'static'
+export type RuntimeBuildStatus = 'ready' | 'stale' | 'build_required' | 'building' | 'build_failed' | 'idle'
+
 /** Durable Runtime definition / Runtime 持久化定义 */
 export type RuntimeDefinition = {
   id: string
@@ -28,6 +39,10 @@ export type RuntimeDefinition = {
   canonicalRoot?: string
   packageManager: 'npm'
   devCommand: { executable: 'npm'; args: ['run', 'dev'] }
+  /** Omitted on legacy definitions; omission keeps the existing dev mode. */
+  mode?: RuntimeMode
+  /** Main-validated package.json.agentos declaration for static projects. */
+  agentos?: RuntimeStaticDeclaration
   trustStatus: RuntimeTrustStatus
   autoStart: boolean
   createdAt: number
@@ -46,6 +61,12 @@ export type WorkspaceTab = {
 }
 
 export type RuntimeStatus =
+  | 'ready'
+  | 'stale'
+  | 'build_required'
+  | 'building'
+  | 'build_failed'
+  | 'development'
   | 'preparing'
   | 'starting'
   | 'running'
@@ -61,13 +82,22 @@ export type RuntimeSnapshot = {
   runtimeId: string
   generation: number
   status: RuntimeStatus
+  mode?: RuntimeMode
+  buildStatus?: RuntimeBuildStatus
+  artifactId?: string
+  buildId?: string
+  operationId?: string
+  stale?: boolean
+  lastBuildAt?: number
+  /** Main-generated static scheme URL; never a filesystem path. */
+  previewUrl?: string
   readyUrl?: string
   port?: number
   restartAttempt: number
   startedAt?: number
   updatedAt: number
   stopReason?: 'user' | 'last-consumer' | 'app-quit' | 'crash' | 'error'
-  phase?: 'inspect' | 'prepare' | 'start' | 'readiness' | 'preview' | 'stop'
+  phase?: 'inspect' | 'prepare' | 'start' | 'build' | 'readiness' | 'preview' | 'stop'
   errorCode?: string
   detail?: string
   logs?: string[]
@@ -83,6 +113,14 @@ export type RuntimeEvent = {
   runtimeId: string
   generation: number
   status: RuntimeStatus
+  mode?: RuntimeMode
+  buildStatus?: RuntimeBuildStatus
+  artifactId?: string
+  buildId?: string
+  operationId?: string
+  stale?: boolean
+  lastBuildAt?: number
+  previewUrl?: string
   readyUrl?: string
   port?: number
   stream?: 'stdout' | 'stderr'

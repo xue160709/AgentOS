@@ -34,6 +34,10 @@ test('Preview navigation is limited to the current loopback origin', () => {
   assert.equal(preview.isAllowedPreviewNavigation('http://127.0.0.1:3001/path', 'http://127.0.0.1:3001'), true)
   assert.equal(preview.isAllowedPreviewNavigation('https://example.com/', 'http://127.0.0.1:3001'), false)
   assert.equal(preview.isAllowedPreviewNavigation('http://127.0.0.1:3002/', 'http://127.0.0.1:3001'), false)
+  const token = 'a'.repeat(48)
+  assert.equal(preview.isAllowedPreviewNavigation(`agentos-static://${token}/route`, `agentos-static://${token}/`), true)
+  assert.equal(preview.isAllowedPreviewNavigation(`agentos-static://${'b'.repeat(48)}/route`, `agentos-static://${token}/`), false)
+  assert.equal(preview.isAllowedPreviewNavigation('https://example.com/route', `agentos-static://${token}/`), false)
 })
 
 test('Preview manager creates a sandboxed view and rejects external windows/navigation', async () => {
@@ -66,6 +70,56 @@ test('Preview manager creates a sandboxed view and rejects external windows/navi
   assert.notEqual(partitions[0], partitions[1])
   await manager.close('preview-1')
   assert.equal(manager.get('preview-1'), null)
+})
+
+test('Static Preview registers its partition handler before load and pins the opaque host', async () => {
+  const tokenA = 'a'.repeat(48)
+  const tokenB = 'b'.repeat(48)
+  const order = []
+  let handler
+  const session = {
+    protocol: {
+      isProtocolHandled: async () => { order.push('is-handled'); return false },
+      handle: async (_scheme, callback) => { order.push('handle'); handler = callback },
+    },
+    setPermissionRequestHandler: () => undefined,
+  }
+  const contents = new EventEmitter()
+  contents.setWindowOpenHandler = () => undefined
+  contents.loadURL = async () => {
+    order.push('load')
+    assert.equal(typeof handler, 'function')
+    assert.equal((await handler({ url: `agentos-static://${tokenB}/`, method: 'GET' })).status, 403)
+    assert.equal((await handler({ url: `agentos-static://${tokenA}/`, method: 'GET' })).status, 200)
+  }
+  contents.close = () => undefined
+  contents.session = session
+  const view = { webContents: contents, setBounds: () => undefined, setVisible: () => undefined }
+  const manager = new preview.LocalAppPreviewManager({
+    window: { contentView: { addChildView: () => undefined, removeChildView: () => undefined } },
+    createView: () => view,
+    registerStaticPreviewSession: async (currentSession, previewUrl) => {
+      order.push('register')
+      assert.equal(currentSession, session)
+      const allowedHost = new URL(previewUrl).hostname
+      if (await currentSession.protocol.isProtocolHandled('agentos-static')) return
+      await currentSession.protocol.handle('agentos-static', async (request) => {
+        return new URL(request.url).hostname === allowedHost ? { status: 200 } : { status: 403 }
+      })
+    },
+  })
+  const snapshot = await manager.create('preview-static-session', 'tab-static', 'local-app-static', {
+    runtimeId: 'runtime-static', generation: 1, previewUrl: `agentos-static://${tokenA}/`,
+  })
+  assert.equal(snapshot.status, 'ready')
+  assert.deepEqual(order, ['register', 'is-handled', 'handle', 'load'])
+  let prevented = false
+  contents.emit('will-navigate', { preventDefault: () => { prevented = true } }, `agentos-static://${tokenA}/route`)
+  assert.equal(prevented, false)
+  contents.emit('will-navigate', { preventDefault: () => { prevented = true } }, `agentos-static://${tokenB}/route`)
+  assert.equal(prevented, true)
+  contents.emit('will-navigate', { preventDefault: () => { prevented = true } }, 'https://example.com/route')
+  assert.equal(prevented, true)
 })
 
 test('Preview manager reuses the same tab session and closes it by tab without touching Runtime', async () => {

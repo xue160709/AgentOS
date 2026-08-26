@@ -43,7 +43,3 @@ Guardrail 的五类语义、正式门槛、ID、变更和下游效力只以 [`.c
 
 - Acceptance 只在对应模块契约中定义；TODO 只放任务状态和指针，验证证据另行记录并由独立验收关联。
 - 完成、部分完成、阻塞、失败或跳过必须如实保留；未完成项不能因代码已写或文档已同步而自动变成完成。
-
-## 本轮来源
-
-本轮只读提炼日期：2026-08-16。来源：`/Volumes/macOS/Github/CodeNow/.codex/rules/runtime-contract.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/product-user-profile.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/product-guardrails.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/acceptance-contract.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/todo-writeback.md`。源中的模板、脚本、配置和专用角色未迁入当前项目。

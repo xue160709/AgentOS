@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-读取时机：本轮要定义、设计、实现或验收界面状态时。下方"状态覆盖清单"适用于任何界面工作；其余各节针对多步骤、可取消、需等待外部回调或会切换视图的流程。本文提炼状态不变量，不复制原 Skill 的审查脚本或输出模板。
+读取时机：本轮要定义、设计、实现或验收界面状态时。下方"状态覆盖清单"适用于任何界面工作；其余各节针对多步骤、可取消、需等待外部回调或会切换视图的流程。本文只提炼状态不变量；流程级的审查步骤见 [`interaction-flow-review`](../../.codex/skills/interaction-flow-review/SKILL.md)。
 
 ## 状态覆盖清单
 
@@ -39,8 +39,3 @@
 ## 验收与证据
 
 交互验收应覆盖至少一条竞态或 late-event 路径，并验证状态文案、按钮、焦点、selection 和输入恢复；无法自动化时提供明确的手工步骤。审查或验收记录应说明事件顺序、用户可见症状、复现路径、期望/实际行为、证据和未覆盖的设备/权限/网络条件。
-
-## 本轮来源
-
-本轮只读提炼日期：2026-08-16。来源：`/Volumes/macOS/Github/CodeNow/.codex/skills/interaction-flow-review/SKILL.md`、`/Volumes/macOS/Github/CodeNow/.codex/skills/interaction-flow-review/references/async-state-smells.md`、`/Volumes/macOS/Github/CodeNow/.codex/skills/interaction-flow-review/references/acceptance-scenarios.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/acceptance-contract.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/verification-levels.md`。源中的 Skill、脚本、测试模板和代码未迁入当前项目。
-

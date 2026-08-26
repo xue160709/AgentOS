@@ -28,7 +28,7 @@
 
 ## 任务模式
 
-任务包声明的交付深度：`consult`、`draft`、`review`、`revise`。模式只改变返回内容的深度与成本，不改变角色的判断权、写入边界和搜索档位；定义见[角色公共行为准则](role-conduct.md)。
+任务包声明的交付深度：`consult`、`draft`、`review`、`revise`、`compare`。模式只改变返回内容的深度与成本，不改变角色的判断权、写入边界和搜索档位；定义见[角色公共行为准则](role-conduct.md)。
 
 ## 任务包
 
@@ -64,9 +64,9 @@
 
 未选答案、模型推断、竞品缺失、Demo 外观或代码现状等尚未确认的线索；可用于继续提问或风险提示，不能直接写成产品事实或正式 Guardrail。
 
-## Codex 自检 / 正式验收
+## 实现自检 / 正式验收
 
-- **Codex 自检**：按本轮风险做局部、最小充分的检查，不回写正式 Acceptance 通过状态。
+- **实现自检**：实现职责按本轮风险做局部、最小充分的检查，不回写正式 Acceptance 通过状态。
 - **正式验收**：由 `project-verify` 派出的 `quality_verifier` 按验收契约逐条验证，带日期和可定位证据，并由主 Agent 记录正式状态。
 
 ## 事务边界 / late event
@@ -74,14 +74,10 @@
 - **事务边界**：提交或确认动作开始后，旧输入、回调和状态是否还能影响当前流程的明确界线。
 - **late event**：事务边界、取消、切页或对象切换之后才到达的旧异步事件；必须被作用域或取消机制识别为失效。
 
-## 本轮来源
-
-本轮只读提炼日期：2026-08-16。来源：`/Volumes/macOS/Github/CodeNow/.codex/rules/question-tools.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/product-user-profile.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/product-guardrails.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/acceptance-contract.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/verification-levels.md`、`/Volumes/macOS/Github/CodeNow/.codex/rules/todo-writeback.md`、`/Volumes/macOS/Github/CodeNow/.codex/skills/interaction-flow-review/SKILL.md`。源中的具体 Skill/脚本/配置未迁入当前项目。
-
 ## 公开 Web 搜索
 
 读取公开网页并引用来源的研究行为，不包括登录、下载文件、使用账号、发送数据或改变外部状态。
 
 ## 外部操作
 
-下载、登录、使用账号或凭据、发送数据、联系他人、发布、部署、购买或其他改变工作区之外状态的行为。执行前必须获得用户确认。
+改变工作区之外状态的行为，执行前必须获得用户确认；需授权操作的清单以 `AGENTS.md`「写入、外部操作与汇报」为唯一定义。

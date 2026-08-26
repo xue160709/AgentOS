@@ -61,7 +61,7 @@ test('Desktop seam contract drives preload forwarding and main registration', ()
 
   for (const capability of Object.keys(DESKTOP_INVOKE_CHANNELS)) {
     assert.match(preload, new RegExp(`DESKTOP_INVOKE_CHANNELS\\.${capability}\\b`), `preload forwards ${capability}`)
-    if (capability !== 'getAppVersion' && !['inspectLocalAppDirectory', 'trustLocalAppDirectory', 'createLocalApp', 'openLocalAppTab', 'closeLocalAppTab', 'relocateLocalApp', 'revokeLocalAppTrust', 'getLocalAppRuntime', 'startLocalAppRuntime', 'stopLocalAppRuntime', 'releaseLocalAppRuntime', 'restartLocalAppRuntime', 'createLocalAppPreview', 'setLocalAppPreviewBounds', 'setLocalAppPreviewVisible', 'reloadLocalAppPreview', 'closeLocalAppPreview', 'inspectRuntimeDirectory', 'trustRuntimeDirectory', 'createWorkspaceTab', 'openWorkspaceTab', 'closeWorkspaceTab', 'renameWorkspaceTab', 'relocateRuntime', 'revokeRuntimeTrust', 'getRuntime', 'startRuntime', 'stopRuntime', 'releaseRuntime', 'restartRuntime', 'createRuntimePreview', 'setRuntimePreviewBounds', 'setRuntimePreviewVisible', 'reloadRuntimePreview', 'closeRuntimePreview', 'ensureProjectRuntime', 'trustProjectRuntime'].includes(capability)) {
+    if (capability !== 'getAppVersion' && !['inspectLocalAppDirectory', 'trustLocalAppDirectory', 'createLocalApp', 'openLocalAppTab', 'closeLocalAppTab', 'relocateLocalApp', 'revokeLocalAppTrust', 'getLocalAppRuntime', 'startLocalAppRuntime', 'stopLocalAppRuntime', 'releaseLocalAppRuntime', 'restartLocalAppRuntime', 'buildLocalAppRuntime', 'cancelLocalAppRuntimeBuild', 'createLocalAppPreview', 'setLocalAppPreviewBounds', 'setLocalAppPreviewVisible', 'reloadLocalAppPreview', 'closeLocalAppPreview', 'inspectRuntimeDirectory', 'trustRuntimeDirectory', 'createWorkspaceTab', 'openWorkspaceTab', 'closeWorkspaceTab', 'renameWorkspaceTab', 'relocateRuntime', 'revokeRuntimeTrust', 'getRuntime', 'startRuntime', 'stopRuntime', 'releaseRuntime', 'restartRuntime', 'buildRuntime', 'cancelRuntimeBuild', 'startRuntimeDevelopment', 'createRuntimePreview', 'setRuntimePreviewBounds', 'setRuntimePreviewVisible', 'reloadRuntimePreview', 'closeRuntimePreview', 'ensureProjectRuntime', 'trustProjectRuntime'].includes(capability)) {
       assert.match(registrationSource, new RegExp(`DESKTOP_INVOKE_CHANNELS\\.${capability}\\b`), `main registers ${capability}`)
     }
   }
@@ -73,6 +73,32 @@ test('Desktop seam contract drives preload forwarding and main registration', ()
 
   assert.doesNotMatch(preload, /ipcRenderer\.invoke\(['"](?:desktop|desktop-preferences|chat-workspace|app-updater):/)
   assert.doesNotMatch(registrationSource, /ipcMain\.handle\(['"](?:desktop|desktop-preferences|chat-workspace|app-updater):/)
+})
+
+test('Static build keeps last-good Preview alive and cancellation uses the build seam', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const buildStart = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.buildRuntime')
+  const buildEnd = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild', buildStart)
+  assert.ok(buildStart >= 0 && buildEnd > buildStart)
+  const buildHandler = main.slice(buildStart, buildEnd)
+  const stopGuard = buildHandler.indexOf('if (currentRuntime && !isStaticRuntime)')
+  assert.ok(stopGuard >= 0)
+  assert.ok(stopGuard < buildHandler.indexOf('closeForLocalApp(id)'))
+  assert.ok(stopGuard < buildHandler.indexOf("localAppRuntimeManager.stop(id, 'user')"))
+  assert.doesNotMatch(main, /protocol\.handle\(STATIC_PREVIEW_SCHEME, \(request\) => staticPreviewResponse\(request, staticRegistry\)\)/)
+  assert.match(buildHandler, /runtime\.buildStatus === 'build_failed'/)
+
+  const runtime = readFileSync(resolve(root, 'electron/local-app-runtime/index.ts'), 'utf8')
+  assert.match(runtime, /detached: process\.platform !== 'win32'/)
+  const workspace = readFileSync(resolve(root, 'src/components/RuntimeWorkspace.tsx'), 'utf8')
+  assert.match(workspace, /runtime-cancel-build/)
+  assert.match(workspace, /onCancelBuild \?\? onStop/)
+  const projectHome = readFileSync(resolve(root, 'src/components/chat/ProjectHomeRuntimeView.tsx'), 'utf8')
+  assert.match(projectHome, /project-runtime-cancel-build/)
+  assert.match(projectHome, /onCancelBuild \?\? controller\.onStop/)
+  const preview = readFileSync(resolve(root, 'src/components/RuntimePreview.tsx'), 'utf8')
+  assert.match(preview, /'building', 'build_failed'/)
+  assert.doesNotMatch(preview, /runtime\?\.buildStatus, runtime\?\.mode/)
 })
 
 test('Local App Tab close is Main-authoritative and releases side effects only after readback', () => {
@@ -201,8 +227,10 @@ test('Main Preview creation revalidates the authoritative tab and Runtime after 
   const previewEvent = main.slice(main.indexOf('localAppPreviewManager = new LocalAppPreviewManager'), main.indexOf('attachExternalLinkHandlers'))
   assert.doesNotMatch(previewEvent, /localAppId:/)
   const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
-  assert.match(appShell, /const runtimeDefinitionId = event\.runtimeDefinitionId\n/)
-  assert.doesNotMatch(appShell.slice(appShell.indexOf('const neutralSnapshot'), appShell.indexOf('return \{ \.\.\.current, \[runtimeDefinitionId\]')),
+  const runtimeEventState = readFileSync(resolve(root, 'src/components/runtime-event-state.ts'), 'utf8')
+  assert.match(appShell, /new RuntimeEventBatcher\(/)
+  assert.match(runtimeEventState, /const runtimeDefinitionId = event\.runtimeDefinitionId\n/)
+  assert.doesNotMatch(runtimeEventState.slice(runtimeEventState.indexOf('const next: RuntimeSnapshot'), runtimeEventState.indexOf('return \{ \.\.\.current, \[runtimeDefinitionId\]')),
     /localAppId:/)
 })
 

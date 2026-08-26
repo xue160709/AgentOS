@@ -30,7 +30,3 @@
 Acceptance 正式通过必须同时具备：`project-verify` 派出的 `quality_verifier` 的独立验证、明确的独立验证日期、可定位可复核的验证证据。三者缺一只能保留未完成、待验证或其他真实状态；产品 Acceptance、对应 TODO 状态及 Change 中的产品正式验收声明只能由主 Agent 依据这层证据写入。
 
 验收失败或跳过时任务保持未完成并记录原因；修复后回到 `project-verify` 复验，不通过改写契约或降低标准收口。Change 自身的 `delivery` 按 `change-package` 门禁关闭，不与产品 Acceptance 合并；纯治理或文档 Change 不虚构产品 Acceptance，sub-agent 不写 Change 状态。
-
-## 本轮来源
-
-本文件是跨 Skill 的验收职责与证据边界事实源；运行判断与授权规则见 [`.codex/rules/lifecycle.md`](../../.codex/rules/lifecycle.md)。

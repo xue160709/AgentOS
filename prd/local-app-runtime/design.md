@@ -1,5 +1,31 @@
 # Workspace Runtime 产品设计
 
+## Revision 4 Current / as-built：最快打开旅程
+
+默认旅程从“打开 Tab → 等待开发服务器启动”改为“打开 Tab → 立即显示最后成功页面”。用户平时不需要知道端口或 Node 进程；只有修改代码并希望预览更新时，才主动点击“构建”。
+
+### 状态与动作
+
+| 状态 | 页面行为 | 用户动作 |
+| --- | --- | --- |
+| `ready` | 立即显示 last-good 静态页面，无常驻项目进程 | 刷新；需要热更新时显式进入开发模式 |
+| `stale` | 仍立即显示旧页面，并提示源码可能比预览新 | 重新构建 |
+| `build_required` | 没有可安全打开的构建产物 | 构建 |
+| `building` | 保留旧页面；没有旧页面时显示构建进度 | 等待或取消 |
+| `build_failed` | 保留旧页面并显示稳定错误摘要/最近日志 | 重试构建或继续使用旧版 |
+| `development` | 显式运行既有 dev server，支持热更新 | 停止/重启并可返回静态模式 |
+
+- 打开和恢复不得隐式构建，也不得默认启动 `npm run dev` 或 `npm run start`。
+- 构建成功后当前 host 切换到新静态产物；快速关闭、重开或切换 host 时，旧 operation/generation 的结果不得覆盖当前视图。
+- 工具栏复用现有布局：静态模式显示构建、构建状态、刷新和“开发模式”；开发模式保留现有日志、重启和停止能力。侧栏 Tab 与项目首页 Runtime host 共享同一 RuntimeDefinition 和最后成功产物。
+- stale 检查在旧页面已经可见后异步执行，不得进入首屏阻塞路径；它只提示，不自动执行项目代码。
+
+### 信任说明
+
+静态页面读取不执行项目代码；“构建”会在用户已信任目录中执行固定的 `npm run build`，仍属于本地受信代码执行。页面继续运行在无应用 preload、无 Node/Electron bridge 的 sandboxed Preview 中。
+
+本节已按当前实现同步为 Current/as-built，并通过独立 Development Check；真实打包 Electron Chromium GUI 的 custom-scheme 全流程尚未执行正式验收。
+
 > Revision 2 Current/as-built（Development Check PASS）：侧栏对象已改为用户命名的 `Workspace Tab`，Tabs 区位于新对话与搜索上方，关闭使用右键/键盘菜单；项目首页以页级 `Overview / Runtime` Tab 在既有卡片系统和独立 Runtime 页面之间切换。`ProjectHomeSurface` 卡片区域保持原样，项目首页 Runtime host 不创建隐藏 Tab，同一 Runtime 可被两类 host 共享。正式 Acceptance 尚未执行。
 
 ## Revision 2 信息架构与交互合同

@@ -1,5 +1,33 @@
 # Evidence
 
+## Revision 4：手动构建与静态直开
+
+### ORCH-012
+
+- skill: `change-package / technical architecture / update-prd / project-iterate`
+- actual_execution: `subagents`
+- roles: `technical_architect=DONE@ARCH-P0-04//root/static_runtime_arch`；`implementation_engineer=DONE@DEV-P0-05//root/static_runtime_impl`；`quality_verifier=PASS@CHECK-P0-04//root/static_runtime_quality`；其它角色按 tasks.md Revision 4 的 `not_needed` 理由。
+- confirmation: `2026-08-26 用户确认代码变化后手动构建可接受；在“默认静态直开、手动重新构建、保留 dev 模式”的最终推荐后回复“OK，完成开发”。`
+- coverage_gate: `pass`
+- architecture: `Main 签署静态模式声明、固定 npm run build、私有安全 scheme、GET/HEAD 路径/realpath 隔离、sandboxed Preview、buildId/operation/generation、显式 dev fallback 合同。与架构草案相比，项目仍正常构建到 outputRoot；成功后再复制进 userData 不可变 staging 并原子切换 last-good，避免依赖 Next 专属动态 distDir，也保证构建失败不污染当前预览。`
+- prd_sync: `Revision 4 已机械同步为 Current/as-built；C-010～C-012 标记“已实现，待正式验收”，未冒充 project-verify 正式通过。`
+
+### ORCH-013｜Revision 4 实现与 Development Check
+
+- implementation_engineer: `/root/static_runtime_impl`，三轮实现/定向修复，最终 `DONE`。
+- quality_verifier: `/root/static_runtime_quality`，三轮只读 Development Check；最终 `PASS`，P0=0、P1=0、P2=0。
+- implementation: `agentos-static` 每 Preview 隔离 session、精确 token host、GET/HEAD 与 lexical/realpath containment；zero-spawn static restore；固定 `npm run build`；不可变 artifact + 原子 last-good；手动 build/cancel/stale/failure；显式 dev fallback 与双向 mode transition 进程回收。
+- CodeNow: `package.json.agentos.mode=static`；Next `output=export`、`trailingSlash`、unoptimized images；教程静态复制；Radar/Quota 构建期快照；现有 `out` 供首次导入，生成目录已 gitignore。
+- validation:
+  - `npm run typecheck`: PASS
+  - `npm run test:electron`: 145/145 PASS（允许本机 loopback 的环境）
+  - CodeNow Wiki `npm run build`: 624/624 静态页面生成成功
+  - artifacts: `out/index.html`、`out/codex/index.html`、`out/tutorials/codex/01-what-is-codex/index.html`
+  - 两仓 `git diff --check`: PASS
+  - final implementation diff: `e30a5973078cd69c8e9f14edadac36ac77757c2d32dbedb962acbdd7c20d0325`
+- fixed_findings: `QVR-STATIC-001`～`QVR-STATIC-005` 均已修复并重放通过；包含 custom-scheme origin=null、无尾斜杠静态路由、构建完成后取消、dev→static 孤儿进程、pointer commit 原子边界与 stale 取消恢复。
+- acceptance_boundary: `本轮未执行 project-verify；真实打包 Electron Chromium GUI custom-scheme 全流程仍需正式验收。`
+
 ## Revision 2：Workspace Tab 与项目首页 Runtime
 
 ### ORCH-006
@@ -212,3 +240,21 @@
 > 用户于随后截图明确纠正：hero 与 Composer 不属于切换内容，必须始终保留；`Overview / Runtime` 只切换 Composer 下方的卡片区与 Runtime 面板。因此 attempt 1 的两个项目首页 GUI 结论仅作为失败诊断历史，不再进入当前 slice 的有效 `verificationIds`；Workspace Runtime 全高结论也将在 attempt 2 新 diff 上重跑后再消费。
 
 > 用户第二次截图确认 attempt 2 仍然错误：虽然 Composer 已固定，但首页整体 flex/overflow/留白被重写、Tab 被放成页面顶栏，破坏了原项目首页。attempt 3 以 `c5aed82^` 的原 `ChatStartView` DOM/CSS 为布局基线，仅在原 `chat-start-view__below-composer` 内包住 cards/runtime 局部切换；attempt 2 的 dd894b22 自检不作为当前有效验证。
+
+### ORCH-011｜2026-08-26 Runtime 工作区性能诊断与 Revision 3
+
+- 用户现象：打开 Runtime Workspace Tab 后持续显示运行中，项目整体点击迟钝，切换 Tab 页面无变化；用户要求按顺序修复并重新允许 subagents。
+- `PERF-P0-01` 根因：`WorkspaceSession.selectWorkspaceTab()` 只写 `activeWorkspaceTabId`，没有清空旧 `activeThreadId`；`WorkspaceSession.active()` 的恢复解析优先保留旧线程并把 Tab 解析为空，形成“点击已触发但页面不变”。只读复现：`selected={activeThreadId:"thread",activeWorkspaceTabId:"tab"}`，`resolved={threadId:"thread",workspaceTabId:null}`。
+- `PERF-P1-01` 根因：Main 每行 stdout/stderr 都发送一个 Runtime event，`AppShell` 对每个事件执行根级 `setRuntimeStates` 并复制日志数组；没有 Renderer 合并窗口。
+- `PERF-P1-02` 根因：`AppShell` 在 `useLayoutEffect` 中 stage 完整工作区；即时镜像路径会做 durable fingerprint 序列化和同步 localStorage 序列化/写入，发生在浏览器绘制前。
+- `PERF-P2-01` 证据：诊断时发现 8 组历史 `local-app-runtime-stop-*` fixture 进程树，共约 126 MiB、CPU 近零；本轮不会在未获清理授权时直接终止这些历史进程，只修复所有权明确的测试/停止路径并验证不新增残留。
+- 资源基线：当前 AgentOS 约 480 MiB RSS；两个用户配置的不同 Runtime root 约 525 MiB RSS，总计约 1005 MiB，空闲 CPU 约 0.2%。自动启动策略属于产品行为，暂不在确定性性能修复中擅自更改。
+- stale recovery：`/root/runtime_orphan_impl` 已无 live agent，相关 liveness bridge 实现已进入提交 `eedcf52`；Revision 2 的 `RUNNING` 记录按恢复审计关闭，并由 `PERF-P2-01` 重新检查残留缺陷。
+- `PERF-P0-01`：`WorkspaceSession.selectWorkspaceTab()` 现在以同一次状态转换清空 `activeThreadId` 并选择目标 Tab；新增 active/restore 回归测试。`node --test electron/workspace-session.test.mjs` PASS，16/16。
+- `PERF-P1-01`：实现角色 `/root/runtime_event_batching` 抽取 `RuntimeEventBatcher` 与纯状态归并 helper；纯日志按 75ms 窗口合并，非日志状态先按到达顺序带上排队日志后立即提交，cleanup 清 timer/队列。`node --test electron/runtime-event-state.test.mjs` PASS，4/4；`npm run typecheck` PASS；主 Agent 已复核 diff 与重跑结果。
+- `PERF-P1-02`：`AppShell` 的 Workspace Session staging 已从 `useLayoutEffect` 移至普通 `useEffect`；保存实现、即时 localStorage 镜像、750ms Main flush 与 StrictMode cleanup 未改。联合目标测试 PASS，20/20；`npm run typecheck` PASS。
+- `PERF-P2-01`：实现角色 `/root/runtime_process_cleanup` 确认历史泄漏均来自测试 fixture 失败/中断路径；其“合并 bridge/npm 进程组”半成品在重复测试中出现间歇性 lock cleanup 失败，主 Agent 未消费该风险改动并恢复既有生产分组合同。最终保留两项确定性修复：`stopAll()` 在工作先完成时清除未胜出的 5 秒 timeout；Runtime fixture 的 `finally` 以本轮写入的 npm/server PID 证据先做有界 TERM/KILL 和退出等待，再删除临时目录。停止/IPC 断连用例重复 5 轮 10/10 PASS，单轮 Node 退出由约 5.6s 降至约 0.6–0.7s；完整 Runtime 套件在允许 loopback 的环境 18/18 PASS；类型检查和 diff-check PASS。
+- `PERF-P2-01` 进程核对：完整测试后只读列表仍只有 2026-08-25 21:28–21:32 的原 8 组 `server.mjs owned` 历史残留，本轮没有新增 fixture PID；未对历史进程执行终止。
+- Revision 3 集成回归：首次 `npm run test:electron` 为 130/131，唯一失败是 `desktop-seam.test.mjs` 仍要求 Runtime event neutralization 内联于 `AppShell.tsx`；实现已抽到 `runtime-event-state.ts`，因此更新静态 seam 测试去检查新 helper 与 AppShell batcher 装配。随后目标 Desktop Seam 11/11 PASS，完整 Electron 套件 131/131 PASS；稳定实现 diff hash=`b835aecba429485ad3da44582b41a2cf5989ec6540b4961d5d8c6265804cba14`。
+- 独立 Development Check：`quality_verifier` `/root/runtime_performance_quality` 对最终 diff `602f1dce442434859da159a0b7f89503fef3d0d08c561a2a67e88f16872a0926` 结论 PASS，P0=0、P1=0。其首轮提出的 `PERF-P2-BATCH-001` 与 `PERF-P2-CLEANUP-001` 已分别通过 10,000 行有界队列测试和 controlled fixture `finally stopAll → rm` 关闭；完整 Electron 套件最终 132/132 PASS。
+- 剩余 `PERF-P2-PID-REUSE-001`：仅测试 fixture 的异常兜底在极窄窗口按刚写入的裸 PID TERM/KILL，理论上存在 PID 复用误杀；生产 Runtime 清理没有增加裸 PID、目录、端口或锁扫描。本 change 保持 active，并将该 P2 finding 留作后续测试基础设施加固。

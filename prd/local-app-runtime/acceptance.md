@@ -4,6 +4,40 @@
 >
 > 项目首页 Claude 分栏、Agent 沙箱工具代理和生产级 OS Sandbox Provider 不属于本切片通过条件。
 
+## Revision 4 验收增量（已实现，待正式验收）
+
+以下确认项定义“静态直开 + 手动构建 + 显式开发模式”的后续正式验收标准。代码已实现并通过 Development Check，但当前均未执行 `project-verify`，开发自检不得改写为正式通过。
+
+### C-010：静态产物最快打开
+
+系统 SHALL 在已有安全 last-good 产物时直接显示页面，不启动 npm、Node/Next server、不分配 loopback 端口，也不等待 HTTP readiness。
+
+- GIVEN 已信任的静态 Runtime 存在最后一次成功构建
+- WHEN 用户打开/恢复 Workspace Tab 或项目首页 Runtime host
+- THEN 页面从 Main 管理的静态产物立即加载，状态为 ready 或 stale；打开路径不 spawn 项目进程，stale 检查不阻塞首屏
+
+> 实现状态：🟡 已实现，待正式验收｜Development Check：PASS｜建议 selectors：`runtime-mode-static`, `runtime-build-status`, `runtime-preview`｜
+
+### C-011：手动构建与 last-good 回退
+
+系统 SHALL 只在用户明确触发时执行固定 `npm run build`，成功后原子切换新产物；失败、取消或迟到事件不得破坏最后成功页面。
+
+- GIVEN 静态 Runtime 没有产物、源码较新，或上次构建失败
+- WHEN 用户点击构建/重新构建并等待成功、失败、取消或快速关闭重开
+- THEN 同一 Definition 构建串行；成功刷新到新 artifact；失败/取消保留旧 artifact；buildId/operation/generation 不匹配的结果被丢弃；Renderer 不能注入命令、cwd 或输出路径
+
+> 实现状态：🟡 已实现，待正式验收｜Development Check：PASS｜建议 selectors：`runtime-build`, `runtime-build-status`, `runtime-build-error`, `runtime-build-logs`｜
+
+### C-012：静态协议安全、开发模式与 CodeNow 导出
+
+系统 SHALL 在不扩大 Preview 权限的前提下加载 CodeNow Wiki 静态导出，并保留显式 `npm run dev` 开发模式。
+
+- GIVEN 页面请求正常资源、编码路径穿越、符号链接、错误 host/runtime、外部导航、弹窗或权限，且 CodeNow Wiki 已执行静态构建
+- WHEN Main 静态协议处理请求或用户显式切换开发模式
+- THEN 只返回当前 artifact 根内 GET/HEAD 资源；所有越界请求被拒绝；Preview 无 Node/Electron bridge；CodeNow Wiki 的页面/教程静态路由可用且没有运行时 Route Handler 依赖；只有显式开发模式才启动 dev server，退出后可返回静态页面
+
+> 实现状态：🟡 已实现，待正式验收｜Development Check：PASS｜建议 selectors：`runtime-development-mode`, `runtime-static-mode`, `runtime-preview`｜
+
 ## Revision 2 验收增量（已实现，尚未正式验收）
 
 Revision 1 的 10/16 历史正式结果继续保留。以下确认项用于本轮开发与后续 `project-verify`；实现自检不得把它们标记为通过。

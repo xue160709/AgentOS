@@ -132,6 +132,47 @@ test('Workspace Session interface owns active selection and thread lifecycle inv
   })
 })
 
+test('selecting a Workspace Tab clears the previous thread and survives active restore', () => {
+  const harness = createHarness()
+  const runtimeDefinition = {
+    id: 'runtime-1',
+    name: 'Runtime One',
+    rootPath: '/runtime-one',
+    packageManager: 'npm',
+    devCommand: { executable: 'npm', args: ['run', 'dev'] },
+    trustStatus: 'trusted',
+    autoStart: true,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const workspaceTab = {
+    id: 'workspace-tab-1',
+    runtimeDefinitionId: runtimeDefinition.id,
+    title: 'Runtime One',
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const state = {
+    ...createState(),
+    runtimeDefinitions: [runtimeDefinition],
+    workspaceTabs: [workspaceTab],
+    activeWorkspaceTabId: '',
+  }
+
+  const selected = harness.session.selectWorkspaceTab(state, workspaceTab.id)
+
+  assert.equal(selected.activeThreadId, '')
+  assert.equal(selected.activeWorkspaceTabId, workspaceTab.id)
+  assert.deepEqual(harness.session.active(selected), {
+    project: selected.projects[0],
+    thread: undefined,
+    runtimeDefinition,
+    workspaceTab,
+    localAppDefinition: runtimeDefinition,
+    localAppTab: workspaceTab,
+  })
+})
+
 test('Workspace Session restore owns active project and latest visible thread fallback', () => {
   const harness = createHarness()
   const state = {

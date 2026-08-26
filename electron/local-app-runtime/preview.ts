@@ -3,8 +3,9 @@
  * 并且只允许加载当前 Runtime 保存的 loopback origin。
  */
 
-import type { BrowserWindow, WebContents, WebContentsView } from 'electron'
+import type { BrowserWindow, Session, WebContents, WebContentsView } from 'electron'
 import { normalizeLoopbackUrl } from './index'
+import { STATIC_PREVIEW_SCHEME } from './static'
 import type { LocalAppPreviewStatus } from '../../src/components/types'
 
 export type PreviewBounds = { x: number; y: number; width: number; height: number }
@@ -30,9 +31,13 @@ export type PreviewViewFactory = (options: {
   }
 }) => WebContentsView
 
+/** Main-owned registration hook for a static preview's isolated session. */
+export type StaticPreviewSessionRegistrar = (session: Session, previewUrl: string) => Promise<void> | void
+
 export type LocalAppPreviewManagerOptions = {
   window: BrowserWindow
   createView: PreviewViewFactory
+  registerStaticPreviewSession?: StaticPreviewSessionRegistrar
   onEvent?: (snapshot: PreviewSessionSnapshot) => void
 }
 
@@ -45,12 +50,14 @@ type ActivePreview = {
 export class LocalAppPreviewManager {
   private readonly window: BrowserWindow
   private readonly createView: PreviewViewFactory
+  private readonly registerStaticPreviewSession?: StaticPreviewSessionRegistrar
   private readonly onEvent?: (snapshot: PreviewSessionSnapshot) => void
   private readonly previews = new Map<string, ActivePreview>()
 
   constructor(options: LocalAppPreviewManagerOptions) {
     this.window = options.window
     this.createView = options.createView
+    this.registerStaticPreviewSession = options.registerStaticPreviewSession
     this.onEvent = options.onEvent
   }
 
@@ -78,11 +85,14 @@ export class LocalAppPreviewManager {
     previewId: string,
     tabId: string,
     localAppId: string,
-    runtime: { runtimeId: string; generation: number; readyUrl?: string },
+    runtime: { runtimeId: string; generation: number; readyUrl?: string; previewUrl?: string },
   ): Promise<PreviewSessionSnapshot> {
+    const staticPreviewUrl = normalizeStaticPreviewUrl(runtime.previewUrl ?? '')
+    const readyUrl = normalizeLoopbackUrl(runtime.readyUrl ?? '') ?? staticPreviewUrl
     const previous = this.previews.get(previewId)
     if (previous && previous.snapshot.tabId === tabId && previous.snapshot.localAppId === localAppId &&
-      previous.snapshot.runtimeId === runtime.runtimeId && previous.snapshot.generation === runtime.generation) {
+      previous.snapshot.runtimeId === runtime.runtimeId && previous.snapshot.generation === runtime.generation &&
+      previous.snapshot.readyUrl === readyUrl) {
       // A tab can unmount while its native view remains hidden. Reuse that
       // session so returning to the tab does not reload the page or spawn a
       // second native view.
@@ -93,7 +103,6 @@ export class LocalAppPreviewManager {
       }
     }
     if (this.previews.has(previewId)) await this.close(previewId)
-    const readyUrl = normalizeLoopbackUrl(runtime.readyUrl ?? '')
     if (!readyUrl) {
       const failed: PreviewSessionSnapshot = {
         previewId, tabId, localAppId, runtimeId: runtime.runtimeId, generation: runtime.generation,
@@ -103,7 +112,11 @@ export class LocalAppPreviewManager {
       return failed
     }
     const url = new URL(readyUrl)
-    const origin = url.origin
+    // `URL.origin` is the literal string `null` for the private static
+    // scheme. Keep the opaque scheme/host pair as the navigation boundary;
+    // otherwise a same-token document navigation would be rejected by the
+    // security hooks below.
+    const origin = staticPreviewUrl ?? url.origin
     const view = this.createView({
       webPreferences: {
         nodeIntegration: false,
@@ -117,6 +130,30 @@ export class LocalAppPreviewManager {
         partition: `local-app-${localAppId}-${tabId}-${previewId}-${runtime.generation}`,
       },
     })
+    if (staticPreviewUrl) {
+      if (!this.registerStaticPreviewSession) {
+        try { view.webContents.close() } catch { /* test double/window may already be gone */ }
+        const failed: PreviewSessionSnapshot = {
+          previewId, tabId, localAppId, runtimeId: runtime.runtimeId, generation: runtime.generation,
+          status: 'failed', detail: '静态 Preview 协议未注册',
+        }
+        this.onEvent?.(failed)
+        return failed
+      }
+      try {
+        // This is deliberately before addChildView/loadURL. A partition does
+        // not inherit the default session's protocol handlers.
+        await this.registerStaticPreviewSession(view.webContents.session, staticPreviewUrl)
+      } catch (error) {
+        try { view.webContents.close() } catch { /* test double/window may already be gone */ }
+        const failed: PreviewSessionSnapshot = {
+          previewId, tabId, localAppId, runtimeId: runtime.runtimeId, generation: runtime.generation,
+          status: 'failed', detail: error instanceof Error ? error.message : '静态 Preview 协议注册失败',
+        }
+        this.onEvent?.(failed)
+        return failed
+      }
+    }
     const snapshot: PreviewSessionSnapshot = {
       previewId, tabId, localAppId, runtimeId: runtime.runtimeId, generation: runtime.generation,
       status: 'loading', readyUrl,
@@ -251,9 +288,23 @@ export { LocalAppPreviewManager as RuntimePreviewManager }
 export function isAllowedPreviewNavigation(targetUrl: string, origin: string): boolean {
   try {
     const target = new URL(targetUrl)
-    return target.origin === origin && normalizeLoopbackUrl(target.toString()) !== null
+    const base = new URL(origin)
+    if (target.protocol !== base.protocol || target.hostname !== base.hostname || target.port !== base.port) return false
+    if (target.protocol === `${STATIC_PREVIEW_SCHEME}:`) return Boolean(target.hostname && /^[a-f0-9]{48}$/.test(target.hostname))
+    return normalizeLoopbackUrl(target.toString()) !== null
   } catch {
     return false
+  }
+}
+
+function normalizeStaticPreviewUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw.trim())
+    if (url.protocol !== `${STATIC_PREVIEW_SCHEME}:` || !/^[a-f0-9]{48}$/.test(url.hostname) || url.username || url.password || url.port) return null
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return null
   }
 }
 

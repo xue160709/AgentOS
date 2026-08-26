@@ -360,6 +360,7 @@ function normalizeRuntimeDefinitions(value: unknown): RuntimeDefinition[] {
     if (!rootPath) return []
     seen.add(item.id)
     const devCommand = { executable: 'npm' as const, args: ['run', 'dev'] as ['run', 'dev'] }
+    const agentos = normalizeStaticDeclaration(item.agentos)
     return [{
       id: item.id,
       name: typeof item.name === 'string' && item.name.trim()
@@ -369,6 +370,8 @@ function normalizeRuntimeDefinitions(value: unknown): RuntimeDefinition[] {
       canonicalRoot: typeof item.canonicalRoot === 'string' && item.canonicalRoot.trim() ? item.canonicalRoot.trim() : undefined,
       packageManager: 'npm',
       devCommand,
+      mode: agentos ? 'static' : undefined,
+      agentos,
       // Unknown/newly corrupted trust fields must never become executable by
       // default. The binding remains visible so the user can re-trust it.
       trustStatus: item.trustStatus === 'trusted' ? 'trusted' : 'revoked',
@@ -377,6 +380,23 @@ function normalizeRuntimeDefinitions(value: unknown): RuntimeDefinition[] {
       updatedAt: toFiniteNumber(item.updatedAt, Date.now()),
     }]
   })
+}
+
+function normalizeStaticDeclaration(value: unknown): RuntimeDefinition['agentos'] {
+  if (!isRecord(value) || value.mode !== 'static' || value.buildCommand !== 'npm run build') return undefined
+  if (typeof value.outputRoot !== 'string' || typeof value.entryFile !== 'string') return undefined
+  if (!isSafeStaticRelativePath(value.outputRoot) || !isSafeStaticRelativePath(value.entryFile)) return undefined
+  return {
+    mode: 'static',
+    buildCommand: 'npm run build',
+    outputRoot: value.outputRoot.split('/').join('/'),
+    entryFile: value.entryFile.split('/').join('/'),
+  }
+}
+
+function isSafeStaticRelativePath(value: string): boolean {
+  if (!value || value.includes('\\') || value.includes('\0') || value.startsWith('/') || /^[A-Za-z]:/.test(value)) return false
+  return value.split('/').every((segment) => segment && segment !== '.' && segment !== '..')
 }
 
 function normalizeWorkspaceTabs(value: unknown, definitionIds: Set<string>): WorkspaceTab[] {

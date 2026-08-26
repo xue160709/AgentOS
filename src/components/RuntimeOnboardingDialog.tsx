@@ -60,7 +60,7 @@ export function RuntimeOnboardingDialog({ inspect, existingDefinitions = [], cho
   </div>
   const definition: RuntimeDefinition | null = inspect.ok ? {
     id: '', name: title.trim(), rootPath: inspect.rootPath, canonicalRoot: inspect.canonicalRoot,
-    packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, trustStatus: 'trusted', autoStart: true,
+    packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, mode: inspect.mode, agentos: inspect.agentos, trustStatus: 'trusted', autoStart: true,
     createdAt: Date.now(), updatedAt: Date.now(),
   } : null
   return <div className="local-app-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}>
@@ -69,7 +69,7 @@ export function RuntimeOnboardingDialog({ inspect, existingDefinitions = [], cho
       {error ? <p role="alert" className="local-app-dialog__error">{error}</p> : null}
       {inspect.ok ? <>
         <label className="local-app-dialog__field"><span>{t('runtime.tabTitle')}</span><input data-testid="runtime-tab-title-input" value={title} maxLength={64} onChange={(event) => setTitle(event.target.value)} /></label>
-        <dl className="local-app-dialog__details"><div><dt>{t('runtime.directory')}</dt><dd title={inspect.canonicalRoot}>{inspect.canonicalRoot}</dd></div><div><dt>{t('runtime.command')}</dt><dd><code>npm run dev</code></dd></div></dl>
+        <dl className="local-app-dialog__details"><div><dt>{t('runtime.directory')}</dt><dd title={inspect.canonicalRoot}>{inspect.canonicalRoot}</dd></div><div><dt>{t('runtime.command')}</dt><dd><code>{inspect.mode === 'static' ? 'npm run build' : 'npm run dev'}</code></dd></div></dl>
       </> : <p role="alert">{inspect.message || t('runtime.invalid')}</p>}
       <footer className="local-app-dialog__actions"><button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>{t('runtime.cancel')}</button><button type="button" className="btn btn-primary" data-testid="runtime-trust-confirm" disabled={!definition || !definition.name || busy} onClick={() => { if (definition) onTrust(definition) }}>{busy ? t('runtime.connecting') : t('runtime.trust')}</button></footer>
     </section>
