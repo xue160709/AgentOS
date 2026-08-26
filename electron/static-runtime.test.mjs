@@ -160,6 +160,62 @@ test('static restore imports out without spawning and successful build uses npm 
   rmSync(userData, { recursive: true, force: true })
 })
 
+test('trusted first static import automatically builds once and opens the committed artifact', async () => {
+  const project = mkdtempSync(resolve(tmpdir(), 'agentos-static-first-import-'))
+  const userData = mkdtempSync(resolve(tmpdir(), 'agentos-static-first-import-data-'))
+  writeFileSync(resolve(project, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { build: 'node build.mjs' }, agentos: staticDeclaration() }))
+  const calls = []
+  const events = []
+  const supervisor = new runtime.LocalAppRuntimeSupervisor({
+    userDataPath: userData,
+    spawn: (executable, args, options) => {
+      calls.push({ executable, args, options })
+      mkdirSync(resolve(options.cwd, 'out'), { recursive: true })
+      writeFileSync(resolve(options.cwd, 'out', 'index.html'), '<h1>first import</h1>')
+      const child = new FakeBuildChild()
+      setImmediate(() => { child.exitCode = 0; child.emit('exit', 0, null); child.emit('close', 0, null) })
+      return child
+    },
+    onEvent: (event) => events.push(event),
+  })
+  const started = await supervisor.start(staticDefinition(project))
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].args, ['run', 'build'])
+  assert.equal(started.status, 'ready')
+  assert.equal(started.buildStatus, 'ready')
+  assert.ok(started.artifactId)
+  assert.ok(started.previewUrl)
+  assert.ok(events.some((event) => event.status === 'building' && event.buildStatus === 'building'))
+  await supervisor.stop(started.runtimeDefinitionId, 'user')
+  rmSync(project, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
+})
+
+test('automatic first static build failure stays build_failed and never starts development mode', async () => {
+  const project = mkdtempSync(resolve(tmpdir(), 'agentos-static-first-failure-'))
+  const userData = mkdtempSync(resolve(tmpdir(), 'agentos-static-first-failure-data-'))
+  writeFileSync(resolve(project, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { build: 'node build.mjs', dev: 'node dev.mjs' }, agentos: staticDeclaration() }))
+  const calls = []
+  const supervisor = new runtime.LocalAppRuntimeSupervisor({
+    userDataPath: userData,
+    spawn: (executable, args, options) => {
+      calls.push({ executable, args, options })
+      const child = new FakeBuildChild()
+      setImmediate(() => { child.exitCode = 1; child.emit('exit', 1, null); child.emit('close', 1, null) })
+      return child
+    },
+  })
+  const failed = await supervisor.start(staticDefinition(project))
+  assert.equal(failed.status, 'build_failed')
+  assert.equal(failed.buildStatus, 'build_failed')
+  assert.equal(failed.previewUrl, undefined)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].args, ['run', 'build'])
+  await supervisor.stop(failed.runtimeDefinitionId, 'user')
+  rmSync(project, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
+})
+
 test('failed or cancelled builds retain the last-good artifact and ignore late events', async () => {
   const project = mkdtempSync(resolve(tmpdir(), 'agentos-static-rollback-'))
   const userData = mkdtempSync(resolve(tmpdir(), 'agentos-static-rollback-data-'))
@@ -223,7 +279,7 @@ test('cancelling after the child exits during validation restores last-good or b
       },
     })
     const definition = staticDefinition(project)
-    const restored = await supervisor.start(definition)
+    const restored = await supervisor.start(definition, [], { autoBuild: false })
     const buildPromise = supervisor.build(definition)
     await entered.promise
     const building = supervisor.snapshot(definition.id)

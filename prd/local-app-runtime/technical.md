@@ -1,5 +1,15 @@
 # Workspace Runtime 技术文档
 
+## Revision 5 Planned：自动首次构建与静态能力声明
+
+- 静态能力仍只由 Main 严格解析 `package.json.agentos`；未声明项目不做框架启发式猜测。声明通过且目录已获信任后，首次 `start` 若既无 last-good、也无可安全导入的现有 output，则在同一 Definition 的受控 build queue 中自动执行固定 `npm run build`。
+- 自动首次构建复用现有 buildId/operationId、串行锁、最小环境、`shell: false`、进程树回收、输出校验与 last-good 原子 pointer；Renderer 不新增命令、cwd、outputRoot 或 URL 输入。
+- 首次构建的 build 事件必须与手动重建走同一 Main-authoritative snapshot。首次无产物失败回到 `build_failed`，已有产物失败保留 Preview；两种情况都不隐式进入 development。
+- AppShell 的 Tab host 与 project-home host 只通过 runtimeId/generation 合并 Main 事件；`RuntimePreview` 的本地加载状态不得覆盖 Runtime 状态，只能补充“正在打开/预览失败”。
+- homepage 增加受控静态声明，Next.js 使用静态 export；所有运行时 cookie/Route Handler 依赖迁移为构建期或客户端能力，构建须产出 `out/index.html`，并保留现有中英文与书籍访问路径。
+
+状态：Planned / 未实现；实现完成后再以代码和验证事实同步为 Current。
+
 ## Revision 4 Current / as-built：静态 Runtime 技术合同
 
 ### 声明、探测与兼容

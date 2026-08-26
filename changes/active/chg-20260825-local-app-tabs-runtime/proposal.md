@@ -1,14 +1,32 @@
 ---
 change_id: chg-20260825-local-app-tabs-runtime
-revision: 4
+revision: 5
 decision: accepted
 delivery: in_progress
 owner: main_agent
 confirmation_source: explicit_user_statement
-confirmed_scope: "2026-08-26 用户确认手动构建可接受，并在静态直开推荐方案后要求完成开发"
+confirmed_scope: "2026-08-26 用户纠正首次使用闭环：导入并确认信任后自动首次构建；后续源码变化才由用户决定重新构建；同时要求 homepage 支持静态导出并修复运行/预览状态不同步"
 ---
 
 # 通用 Workspace Tab 与可复用 Runtime
+
+## Revision 5：导入即自动首次构建
+
+用户明确取代 Revision 4 的“没有产物时由用户主动点击构建”：首次导入是产品主流程，用户不应理解 `npm run build`、`out/` 或 Next.js 静态导出细节。
+
+- 用户选择目录并确认信任后，Main 检测项目是否通过受控声明支持静态导出；检测仍以 `package.json.agentos` 的严格声明为准，不猜测或改写任意项目。
+- 静态项目没有 last-good 或可安全导入的既有产物时，AgentOS 自动执行一次固定 `npm run build`，界面显示“正在首次构建”；构建成功后直接打开静态页面。
+- 已有 last-good 时保持零 spawn 直开；源码比 last-good 新时继续显示旧页面和 stale 提示，只有这时才由用户决定是否重新构建。
+- 自动首次构建失败或取消时不得启动 `npm run dev` 兜底；界面明确说明项目构建失败并提供重试或显式开发模式。
+- 不支持静态导出的项目继续明确使用开发服务器，不把它伪装成静态项目，也不静默改变运行模式。
+- `/Volumes/macOS/Github/homepage` 增加明确静态声明并完成必要的 Next.js 静态导出迁移，使其首次导入走上述自动构建路径。
+- Runtime 工具栏、侧栏状态与中央 Preview 必须消费同一份 Main-authoritative snapshot；`building/ready/build_failed/stopped` 不得出现“顶部运行中、中央已停止”的互相矛盾显示。
+
+### Revision 5 非目标
+
+- 不对没有受控静态声明的普通 Next.js/Vite 项目做启发式自动改造。
+- 不在源码变化后自动监听或持续重建。
+- 不放宽固定构建命令、信任、路径隔离、Preview sandbox、generation/operation 或进程回收边界。
 
 ## Revision 4：手动构建与静态直开
 

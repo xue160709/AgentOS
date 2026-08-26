@@ -28,6 +28,27 @@
 - fixed_findings: `QVR-STATIC-001`～`QVR-STATIC-005` 均已修复并重放通过；包含 custom-scheme origin=null、无尾斜杠静态路由、构建完成后取消、dev→static 孤儿进程、pointer commit 原子边界与 stale 取消恢复。
 - acceptance_boundary: `本轮未执行 project-verify；真实打包 Electron Chromium GUI custom-scheme 全流程仍需正式验收。`
 
+### ORCH-014｜Revision 4 开发收口复核
+
+- skill: `change-package / project-iterate`
+- actual_execution: `main_direct`
+- roles: `沿用 ORCH-013 已完成的 technical_architect、implementation_engineer 与 quality_verifier 结果；主 Agent 在 HEAD a9b8f51bc1a3d8c960fd3cfd7d42a67015903a1a 重跑 npm run typecheck=PASS、npm run test:electron=145/145 PASS，并在 CodeNow Wiki 当前 diff 3fd40b44571a7426d42e0dc82f719ec8c7e6fffb28b08275773389e60b7c58aa 上重跑 npm run build=624/624 PASS；acceptance_requested=false。`
+
+### ORCH-015｜Revision 5 首次导入闭环
+
+- skill: `change-package / update-prd / project-iterate`
+- actual_execution: `subagents`
+- roles: `implementation_engineer=RUNNING@DEV-P0-06//root/first_import_build_impl`；`quality_verifier=SKIPPED@CHECK-P0-05/pending-development`；`product_manager=not_needed(existing_contract_sufficient)`；`experience_designer=not_needed(existing_contract_sufficient)`；`technical_architect=not_needed(existing_contract_sufficient)`；`visual_interface_designer=not_needed(strict_reuse_of_existing_pattern)`；`acceptance_requested=false`；证据待 DEV-P0-06 与 CHECK-P0-05 返回后收口。
+
+### ORCH-016｜Revision 5 stale 与 Tab 页面保持回归
+
+- skill: `project-debug(FIX) / interaction-flow-review / project-iterate`
+- actual_execution: `mixed`
+- roles: `technical_architect=DONE@REVIEW-P1-06//root/runtime_state_arch_review`；`experience_designer=DONE@REVIEW-P1-06//root/runtime_tab_ux_review`；`quality_verifier=DONE@REVIEW-P1-06//root/runtime_tab_quality_review`；`main_agent=DONE@FIX-P1-06/main_direct`；`acceptance_requested=false`。
+- root_cause: `homepage last-good=2026-08-26T13:17:31.799Z，之后 package.json 与书籍资源 route 的 mtime 更新且 Git working tree 有实际修改；codenow.wiki last-good=2026-08-26T08:02:07.674Z，之后有 741 个纳入指纹的文件 mtime 更新且 Git working tree 有实际修改，因此当前 size+mtime stale 检查有触发依据。Tab 返回首页则由 RuntimePreview unmount cleanup 主动 close PreviewSession 导致重新 loadURL。`
+- implementation: `stale 从 recovery bar 移除；三个静态 Runtime 宿主补齐 build/rebuild 文案和普通 Shell 顶部 Build/Cancel 入口；RuntimePreview cleanup 改为只隐藏，真实 close 仍由 Main authoritative tab close、release 与 generation replacement 管理。`
+- validation: `npm run typecheck=PASS；node --test electron/desktop-seam.test.mjs electron/local-app-preview.test.mjs=21/21 PASS；git diff --check=PASS。未执行真实 GUI smoke，未进入 project-verify。`
+
 ## Revision 2：Workspace Tab 与项目首页 Runtime
 
 ### ORCH-006

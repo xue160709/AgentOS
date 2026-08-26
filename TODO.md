@@ -4,12 +4,17 @@
 
 ## 1. 活跃变更
 
-### 1.1 Workspace Tab 与可复用 Runtime（Revision 4）
+### 1.1 Workspace Tab 与可复用 Runtime（Revision 5）
 
 - **Change**：[`chg-20260825-local-app-tabs-runtime`](changes/active/chg-20260825-local-app-tabs-runtime/proposal.md)
 - **PRD**：[`prd/local-app-runtime/README.md`](prd/local-app-runtime/README.md)
 - **验收契约**：[`prd/local-app-runtime/acceptance.md`](prd/local-app-runtime/acceptance.md)
-- **当前状态**：Revision 4“静态直开 + 手动构建 + 显式开发模式”已实现并通过独立 Development Check；正式 `project-verify` 尚未执行。Revision 2 Development Check 与 Revision 1 正式 Acceptance 历史继续保留。
+- **当前状态**：Revision 5 已确认“导入并信任后自动首次构建；后续 stale 才手动重建”，正在实现；它取代 Revision 4 的首次手动构建语义。Revision 4 其余实现与 Development Check 历史继续保留，正式 `project-verify` 尚未执行。
+
+#### Revision 5 当前开发
+
+- [ ] `DEV-P0-06`｜实现静态项目首次导入自动构建、失败/取消无 dev fallback、last-good/stale 后续手动重建与工具栏/侧栏/Preview 状态一致；并让 homepage 具备静态声明和完整 `out` 导出。来源：`C-013`–`C-015`。
+- [ ] `CHECK-P0-05`｜对首次自动构建、失败/取消/late event、last-good/stale、模式切换进程回收、状态一致性与 homepage 静态导出执行独立 Development Check；不修改正式 Acceptance 状态。
 
 #### Revision 4 当前开发
 

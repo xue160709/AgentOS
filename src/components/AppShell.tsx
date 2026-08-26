@@ -2649,6 +2649,8 @@ export function AppShell() {
           onStopRuntime={activeRuntimeDefinition ? () => stopLocalApp(activeRuntimeDefinition.id) : undefined}
           onReloadRuntime={activeWorkspaceTab && activeRuntimeDefinition ? () => reloadLocalAppPreview(activeWorkspaceTab.id, activeRuntimeDefinition.id) : undefined}
           onRelocateRuntime={activeRuntimeDefinition ? () => void relocateLocalApp(activeRuntimeDefinition.id) : undefined}
+          onBuildRuntime={activeRuntimeDefinition ? () => buildLocalApp(activeRuntimeDefinition.id) : undefined}
+          onCancelBuildRuntime={activeRuntimeDefinition ? () => cancelLocalAppBuild(activeRuntimeDefinition.id, runtimeStates[activeRuntimeDefinition.id]?.buildId) : undefined}
           projectDefaultModelPick={projectDefaultModelPick}
           projectHomeModelPick={projectHomeModelPick}
           threads={chatWorkspace.threads}

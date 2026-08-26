@@ -1,5 +1,58 @@
 # Tasks
 
+> Revision 5：2026-08-26 用户纠正首次使用流程，要求“导入并确认信任后自动首次构建；后续源码变化才手动重建”，并要求 homepage 静态导出与运行/预览状态一致。本 revision 取代 Revision 4 的首次 `build_required` 用户动作，不取代 last-good、stale、显式开发模式与安全边界。
+
+```yaml
+revision: 5
+task_level: Heavy
+level_basis: 信任后自动执行受控项目构建，涉及跨进程异步状态、取消/late event、Preview sandbox 与本地进程回收
+professional_gaps: [implementation, quality]
+role_plan: [implementation_engineer, quality_verifier]
+not_needed:
+  - product_manager: existing_contract_sufficient
+  - experience_designer: existing_contract_sufficient
+  - visual_interface_designer: strict_reuse_of_existing_pattern
+  - technical_architect: existing_contract_sufficient
+  - user_researcher: existing_evidence_sufficient
+  - market_researcher: no_relevant_impact
+  - cmo_value_strategist: no_relevant_impact
+  - independent_reviewer: no_independent_review_trigger
+confirmation: user_confirmed
+acceptance_requested: false
+coverage_gate: in_progress
+```
+
+## Revision 5 自动首次构建、homepage 静态导出与状态同步
+
+- [x] `SYNC-P0-05`｜owner=`main_agent`｜write_mode=`writer`｜依赖：用户纠正
+  - 写入：`proposal.md`、`tasks.md`、`prd/local-app-runtime/design.md`、`prd/local-app-runtime/technical.md`、`prd/local-app-runtime/acceptance.md`、`TODO.md`。
+  - 边界：Revision 5 先写 Planned/未实现，不把开发自检冒充 Current 或正式验收。
+
+- [ ] `DEV-P0-06`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`SYNC-P0-05`
+  - observable_outcome：静态项目首次导入并确认信任后自动构建且成功即打开；已有 last-good 零 spawn 直开；stale 后只提示手动重建；失败/取消不回退 dev；homepage 可静态导出；工具栏、侧栏与 Preview 状态一致。
+  - ownership：`deadline=90m`；`attempt=2`；`instance_id=/root/first_import_build_impl`；状态转换与重试按 `.codex/rules/ownership.md`。
+  - `exact_write_allowlist=electron/local-app-runtime/index.ts,electron/main.ts,electron/static-runtime.test.mjs,electron/local-app-runtime.test.mjs,electron/desktop-seam.test.mjs,src/components/AppShell.tsx,src/components/RuntimePreview.tsx,src/components/RuntimeWorkspace.tsx,src/components/chat/ProjectHomeRuntimeView.tsx,src/components/types.ts,src/locales/zh.json,src/locales/en.json,/Volumes/macOS/Github/homepage/package.json,/Volumes/macOS/Github/homepage/next.config.mjs,/Volumes/macOS/Github/homepage/lib/site-language-server.ts,/Volumes/macOS/Github/homepage/lib/article-language-server.ts,/Volumes/macOS/Github/homepage/lib/articles-data.ts,/Volumes/macOS/Github/homepage/lib/ebooks-data.ts,/Volumes/macOS/Github/homepage/components/language-provider.tsx,/Volumes/macOS/Github/homepage/components/bilingual-text.tsx,/Volumes/macOS/Github/homepage/components/articles/**,/Volumes/macOS/Github/homepage/components/books/**,/Volumes/macOS/Github/homepage/app/articles/**,/Volumes/macOS/Github/homepage/app/books/**,/Volumes/macOS/Github/homepage/scripts/**,/Volumes/macOS/Github/homepage/public/books/design-in-the-age-of-agents/**`。
+  - rework：attempt 1 的静态导出把服务端语言固定为 zh，导致文章正文与电子书章节无法随现有语言开关切到英文；attempt 2 必须以静态站可运行的客户端双语数据切换保留原主流程，不能只保留导航/按钮的 `BilingualText`。
+  - `diff_baseline=CodeX-UI-Template HEAD a9b8f51bc1a3d8c960fd3cfd7d42a67015903a1a + evidence.md 既有 ORCH-014 dirty diff；homepage 当前 app/books/page.tsx、lib/ebook-config.ts 与 public 新内容均为用户既有改动，必须保留并适配`。
+  - 风险自检：正常路径=信任后首次自动构建并打开；失败与取消=无 dev fallback、last-good 不损坏、late event 不覆盖；状态切换与恢复=首次/已有产物/stale/dev↔static/切 host；资源回收=build/dev 子进程有界退出；回滚与完整性=pointer 原子提交与用户 homepage 既有改动保留。
+  - 目标命令：`npm run typecheck && node --test electron/static-runtime.test.mjs electron/local-app-runtime.test.mjs electron/desktop-seam.test.mjs`；homepage 另执行 `npm run build` 并核对 `out/index.html`。
+  - 停止：需要新增依赖、放宽 Renderer 命令/路径输入、未确认地删除 homepage 用户内容、静态迁移必须牺牲现有中英文主流程，或外部仓库写权限不可用。
+
+- [ ] `CHECK-P0-05`｜owner=`quality_verifier`｜write_mode=`readonly`｜依赖：`DEV-P0-06`
+  - V3 独立开发质量检查：按上述五面风险清单一次检查稳定 diff；覆盖首次自动构建、失败/取消/late event、last-good/stale、模式切换进程回收、状态一致性和 homepage 静态产物。
+  - 不执行正式 Acceptance，不修改产品实现或正式状态。
+
+## Revision 5 用户反馈修复：stale 动作与 Tab 页面保持
+
+- [x] `REVIEW-P1-06`｜owner=`technical_architect + experience_designer + quality_verifier`｜write_mode=`response_only`｜依赖：用户 2026-08-26 截图与反馈
+  - 结论：两个真实项目均存在晚于 last-good 的文件修改，当前 stale 状态有事实依据；不修改指纹持久化格式。stale 只保留顶部状态与唯一“重新构建”动作，`build_required/build_failed` 继续保留必要恢复区。
+  - 交互：切换 Workspace Tab 只隐藏并复用同一 PreviewSession；真实关闭 Tab、generation/artifact replacement 与最后 consumer release 仍由 Main 回收。
+
+- [x] `FIX-P1-06`｜owner=`main_agent`｜write_mode=`writer`｜依赖：`REVIEW-P1-06`
+  - 修复：补齐 Runtime 新命名空间的 build/rebuild/development 文案；Runtime-only、普通项目 Shell 与 project-home stale 状态均显示明确“重新构建”。
+  - 修复：stale 不再渲染重复 recovery bar；`RuntimePreview` 卸载只隐藏原生 View，不再主动 close，返回 Tab 复用同一 previewId/runtimeId/generation。
+  - 自检：`npm run typecheck && node --test electron/desktop-seam.test.mjs electron/local-app-preview.test.mjs && git diff --check`，21/21 PASS；未执行正式 Acceptance 或真实 GUI smoke。
+
 > Revision 4：2026-08-26 用户确认“手动构建 + 静态直开 + 保留显式开发模式”，并要求完成开发。本 revision 以一个紧耦合实现结果串行推进，不新建并行 slice DAG。
 
 ```yaml

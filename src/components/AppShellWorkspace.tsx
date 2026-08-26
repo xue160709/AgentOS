@@ -107,6 +107,8 @@ type AppShellWorkspaceProps = {
   onStopRuntime?: () => void
   onReloadRuntime?: () => void
   onRelocateRuntime?: () => void
+  onBuildRuntime?: () => void
+  onCancelBuildRuntime?: () => void
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
   threads: WorkspaceThread[]
@@ -152,6 +154,8 @@ export function AppShellWorkspace({
   onStopRuntime,
   onReloadRuntime,
   onRelocateRuntime,
+  onBuildRuntime,
+  onCancelBuildRuntime,
   projectDefaultModelPick,
   projectHomeModelPick,
   threads,
@@ -499,6 +503,10 @@ export function AppShellWorkspace({
 
   const folderToolbarActive = sidePanel.open && sidePanel.tab === 'files'
   const activePreviewPath = filePreview?.status === 'ready' ? filePreview.file.path : filePreview?.path ?? null
+  const activeRuntimeStatus = activeRuntime?.status ?? 'stopped'
+  const activeStaticRuntime = activeRuntime?.mode === 'static' || activeRuntimeDefinition?.mode === 'static'
+  const activeRuntimeHasLastGood = Boolean(activeRuntime?.artifactId && activeRuntime?.previewUrl)
+  const canBuildActiveRuntime = ['ready', 'stale', 'build_required', 'build_failed', 'stopped'].includes(activeRuntimeStatus)
 
   // --- Layout: title bar (hidden in settings), routed `<main>`, right drawer / 布局：标题栏（设置页隐藏）、路由主区、右侧抽屉 ---
 
@@ -537,12 +545,23 @@ export function AppShellWorkspace({
               >
                 {runtimeWorkspaceStatusLabel(t, activeRuntime?.status ?? 'stopped')}
               </span>
+              {activeStaticRuntime ? <button
+                type="button"
+                className="btn btn-primary local-app-runtime-action"
+                data-testid={activeRuntimeStatus === 'building' ? 'runtime-cancel-build' : 'runtime-build'}
+                onClick={activeRuntimeStatus === 'building' ? onCancelBuildRuntime : onBuildRuntime}
+                disabled={activeRuntimeStatus === 'building' ? !onCancelBuildRuntime : (!onBuildRuntime || !canBuildActiveRuntime)}
+                aria-label={activeRuntimeStatus === 'building' ? t('runtime.cancel') : (activeRuntimeHasLastGood ? t('runtime.rebuild') : t('runtime.build'))}
+                title={activeRuntimeStatus === 'building' ? t('runtime.cancel') : (activeRuntimeHasLastGood ? t('runtime.rebuild') : t('runtime.build'))}
+              >
+                <span className="local-app-runtime-action__label">{activeRuntimeStatus === 'building' ? t('runtime.cancel') : (activeRuntimeHasLastGood ? t('runtime.rebuild') : t('runtime.build'))}</span>
+              </button> : null}
               <button
                 type="button"
                 className="btn btn-toolbar local-app-runtime-action"
                 data-testid="runtime-refresh"
                 onClick={onReloadRuntime}
-                disabled={!activeRuntime?.readyUrl}
+                disabled={!activeRuntime?.readyUrl && !activeRuntime?.previewUrl}
                 aria-label={t('runtime.refresh')}
                 title={t('runtime.refresh')}
               >

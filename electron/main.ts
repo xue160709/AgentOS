@@ -1291,7 +1291,7 @@ if (gotSingleInstanceLock) {
       }
       return null
     })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startRuntime, async (_event, rawId: unknown, _rawCause: unknown, rawConsumerId: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startRuntime, async (_event, rawId: unknown, rawCause: unknown, rawConsumerId: unknown) => {
       if (typeof rawId !== 'string' || !rawId.trim()) throw new Error('runtime-definition-id-invalid')
       const definition = readRuntimeDefinition(rawId.trim())
       if (!definition) throw new Error('runtime-definition-missing')
@@ -1306,7 +1306,11 @@ if (gotSingleInstanceLock) {
         const host = [...projectRuntimeHosts.values()].find((candidate) => projectRuntimeConsumerId(candidate) === consumerId)
         if (!host || host.runtimeDefinitionId !== rawId.trim()) throw new Error('project-runtime-host-stale')
       }
-      return localAppRuntimeManager.start(rawId.trim(), consumerId)
+      // Restore is deliberately spawn-free. A user opening a newly trusted
+      // static project is allowed to trigger its first fixed build here;
+      // subsequent opens reuse the last-good artifact without spawning.
+      const cause = rawCause === 'restore' ? 'restore' : 'user'
+      return localAppRuntimeManager.start(rawId.trim(), consumerId, { autoBuild: cause !== 'restore' })
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.stopRuntime, async (_event, rawId: unknown, rawReason: unknown) => {
       if (typeof rawId !== 'string' || !rawId.trim()) return null

@@ -108,6 +108,15 @@ export type RuntimeSupervisorOptions = {
   onEvent?: (event: LocalAppRuntimeEvent) => void
 }
 
+/**
+ * Start policy is kept inside Main so restoring a trusted tab can stay
+ * spawn-free while a user-initiated first import may build its static
+ * artifact immediately after trust is granted.
+ */
+export type RuntimeStartOptions = {
+  autoBuild?: boolean
+}
+
 type RuntimeProcess = ChildProcess & { pid: number }
 
 /**
@@ -502,7 +511,11 @@ export class LocalAppRuntimeSupervisor {
     return this.stop(localAppId, 'last-consumer')
   }
 
-  start(definition: LocalAppDefinition, consumerIds: Iterable<string> = []): Promise<LocalAppRuntimeSnapshot> {
+  start(
+    definition: LocalAppDefinition,
+    consumerIds: Iterable<string> = [],
+    options: RuntimeStartOptions = {},
+  ): Promise<LocalAppRuntimeSnapshot> {
     const existing = this.runtimes.get(definition.id)
     // A mode transition may leave the stopped predecessor in the map while
     // its bounded teardown promise is still draining. Reuse that transition
@@ -510,21 +523,21 @@ export class LocalAppRuntimeSupervisor {
     if (existing?.snapshot.status === 'stopped' && existing.operation) return existing.operation
     if (!definition.mode && !definition.agentos) {
       if (existing?.operation || existing?.buildOperation) return existing.operation ?? existing.buildOperation!
-      return this.detectModeAndStart(definition, consumerIds)
+      return this.detectModeAndStart(definition, consumerIds, options)
     }
     if (definition.mode === 'static') {
       if (existing && existing.snapshot.mode === 'static' && existing.snapshot.status !== 'stopped') {
+        for (const consumerId of consumerIds) existing.consumerIds.add(consumerId)
         if (existing.operation) return existing.operation
         if (existing.buildOperation) return existing.buildOperation
-        for (const consumerId of consumerIds) existing.consumerIds.add(consumerId)
         return Promise.resolve(existing.snapshot)
       }
-      if (existing) return this.transitionRuntime(existing, definition, () => this.startStaticTracked(definition, consumerIds))
-      return this.startStaticTracked(definition, consumerIds)
+      if (existing) return this.transitionRuntime(existing, definition, () => this.startStaticTracked(definition, consumerIds, options))
+      return this.startStaticTracked(definition, consumerIds, options)
     }
     if (existing?.snapshot.mode === 'static' && existing.snapshot.status !== 'stopped') {
       const developmentDefinition = definition.mode === 'development' ? definition : { ...definition, mode: 'development' as const }
-      return this.transitionRuntime(existing, developmentDefinition, () => this.start(developmentDefinition, consumerIds))
+      return this.transitionRuntime(existing, developmentDefinition, () => this.start(developmentDefinition, consumerIds, options))
     }
     if (existing?.operation) return existing.operation
     if (existing?.snapshot.status === 'running' || existing?.snapshot.status === 'starting' || existing?.snapshot.status === 'preparing') {
@@ -547,8 +560,12 @@ export class LocalAppRuntimeSupervisor {
     return operation
   }
 
-  private startStaticTracked(definition: LocalAppDefinition, consumerIds: Iterable<string>): Promise<LocalAppRuntimeSnapshot> {
-    const operation = this.startStatic(definition, consumerIds)
+  private startStaticTracked(
+    definition: LocalAppDefinition,
+    consumerIds: Iterable<string>,
+    options: RuntimeStartOptions = {},
+  ): Promise<LocalAppRuntimeSnapshot> {
+    const operation = this.startStatic(definition, consumerIds, options)
     const created = this.runtimes.get(definition.id)
     if (!created) return operation
     const tracked = operation.finally(() => {
@@ -579,24 +596,32 @@ export class LocalAppRuntimeSupervisor {
     })
   }
 
-  private async detectModeAndStart(definition: LocalAppDefinition, consumerIds: Iterable<string>): Promise<LocalAppRuntimeSnapshot> {
+  private async detectModeAndStart(
+    definition: LocalAppDefinition,
+    consumerIds: Iterable<string>,
+    options: RuntimeStartOptions = {},
+  ): Promise<LocalAppRuntimeSnapshot> {
     const inspection = await inspectLocalAppDirectory(definition.rootPath)
     if (inspection.ok && inspection.mode === 'static' && inspection.agentos) {
-      return this.start({ ...definition, mode: 'static', agentos: inspection.agentos }, consumerIds)
+      return this.start({ ...definition, mode: 'static', agentos: inspection.agentos }, consumerIds, options)
     }
     if (!inspection.ok && inspection.code === 'static-declaration-invalid') {
       // A legacy persisted definition may encounter a newly declared but
       // malformed `agentos` block. It must surface the strict parse failure;
       // silently falling back to npm run dev would bypass the static contract.
-      return this.start({ ...definition, mode: 'static', agentos: undefined }, consumerIds)
+      return this.start({ ...definition, mode: 'static', agentos: undefined }, consumerIds, options)
     }
     // Legacy definitions remain development runtimes. Setting the explicit
     // mode avoids another inspection pass and preserves old npm run dev flow.
-    return this.start({ ...definition, mode: 'development' }, consumerIds)
+    return this.start({ ...definition, mode: 'development' }, consumerIds, options)
   }
 
-  /** Static restore is intentionally spawn-free and returns after artifact IO only. */
-  private async startStatic(definition: LocalAppDefinition, consumerIds: Iterable<string>): Promise<LocalAppRuntimeSnapshot> {
+  /** Static restore is spawn-free unless this is the trusted first import. */
+  private async startStatic(
+    definition: LocalAppDefinition,
+    consumerIds: Iterable<string>,
+    options: RuntimeStartOptions = {},
+  ): Promise<LocalAppRuntimeSnapshot> {
     const generation = (this.generationByApp.get(definition.id) ?? 0) + 1
     this.generationByApp.set(definition.id, generation)
     const runtime: ActiveRuntime = {
@@ -639,6 +664,12 @@ export class LocalAppRuntimeSupervisor {
     }
     if (!isActive()) return runtime.snapshot
     if (!current) {
+      if (options.autoBuild !== false) {
+        // Reuse the regular build queue and operation identity. This keeps
+        // first import subject to the same cancellation, atomic pointer and
+        // late-event guards as an explicit rebuild.
+        return this.build(definition, consumerIds)
+      }
       runtime.snapshot = {
         ...runtime.snapshot,
         status: 'build_required',
@@ -731,7 +762,7 @@ export class LocalAppRuntimeSupervisor {
     }
     let runtime = this.runtimes.get(definition.id)
     if (!runtime || runtime.snapshot.status === 'stopped') {
-      await this.start(definition, consumerIds)
+      await this.start(definition, consumerIds, { autoBuild: false })
       runtime = this.runtimes.get(definition.id)
     }
     if (!runtime) throw new Error('static-runtime-missing')
@@ -1364,7 +1395,11 @@ export class LocalAppRuntimeManager {
     return this.supervisor.snapshot(this.ownerId(localAppId))
   }
 
-  async start(localAppId: string, consumerId?: string): Promise<LocalAppRuntimeSnapshot> {
+  async start(
+    localAppId: string,
+    consumerId?: string,
+    options: RuntimeStartOptions = {},
+  ): Promise<LocalAppRuntimeSnapshot> {
     const definition = this.definitions.get(localAppId)
     if (!definition) throw new Error('local-app-definition-missing')
     if (definition.trustStatus !== 'trusted') throw new Error('local-app-trust-required')
@@ -1379,7 +1414,7 @@ export class LocalAppRuntimeManager {
       this.pendingDefinitionStops.delete(ownerId)
       await pendingStop
     }
-    return this.supervisor.start(ownerDefinition, consumers)
+    return this.supervisor.start(ownerDefinition, consumers, options)
   }
 
   stop(localAppId: string, reason: LocalAppRuntimeSnapshot['stopReason'] = 'user'): Promise<LocalAppRuntimeSnapshot | null> {

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "changeId": "chg-20260825-local-app-tabs-runtime",
-  "revision": 4,
+  "revision": 5,
   "qualityRequired": true,
   "slices": [
     {
@@ -174,6 +174,43 @@
       "reviewImpact": "NONE",
       "verificationIds": ["VER-STATIC-INTEGRATION-e30a5973", "VER-CODENOW-EXPORT-624"],
       "reviewEvidenceIds": ["Q-STATIC-QUALITY-e30a5973"]
+    },
+    {
+      "id": "FIRST-BUILD-05",
+      "outcome": "静态项目在首次导入并确认信任后自动完成一次受控构建并打开；homepage 生成完整静态产物，所有 Runtime 宿主显示一致状态",
+      "dependsOn": [],
+      "contracts": [
+        "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
+        "prd/local-app-runtime/design.md",
+        "prd/local-app-runtime/technical.md",
+        "prd/local-app-runtime/acceptance.md"
+      ],
+      "riskContractIds": ["R-FIRST-BUILD-05", "R-LAST-GOOD-05", "R-STATE-SYNC-05", "R-PROC-CLEANUP-05", "R-HOMEPAGE-EXPORT-05"],
+      "parallelGroup": null,
+      "writeAllowlist": [
+        "electron/local-app-runtime/index.ts",
+        "electron/main.ts",
+        "src/components/AppShell.tsx",
+        "src/components/RuntimePreview.tsx",
+        "src/components/RuntimeWorkspace.tsx",
+        "src/components/chat/ProjectHomeRuntimeView.tsx",
+        "src/components/types.ts",
+        "src/locales/zh.json",
+        "src/locales/en.json",
+        "/Volumes/macOS/Github/homepage/**"
+      ],
+      "testAllowlist": [
+        "electron/static-runtime.test.mjs",
+        "electron/local-app-runtime.test.mjs",
+        "electron/desktop-seam.test.mjs"
+      ],
+      "testCommands": ["npm run typecheck && node --test electron/static-runtime.test.mjs electron/local-app-runtime.test.mjs electron/desktop-seam.test.mjs", "npm run build (homepage)"],
+      "integrationOwner": "main_agent",
+      "developmentStatus": "RUNNING",
+      "reviewStatus": "NOT_READY",
+      "reviewImpact": "NONE",
+      "verificationIds": [],
+      "reviewEvidenceIds": []
     }
   ],
   "riskContracts": [
@@ -302,6 +339,51 @@
       "testPath": "electron/local-app-runtime.test.mjs",
       "testCommand": "node --test electron/local-app-runtime.test.mjs",
       "status": "PASS"
+    },
+    {
+      "id": "R-FIRST-BUILD-05",
+      "invariant": "有效静态声明在信任后且无 last-good/可导入产物时自动进入同一受控 build queue；成功自动打开，失败、取消和 late event 均不隐式启动 dev",
+      "severity": "P0",
+      "sliceId": "FIRST-BUILD-05",
+      "testPath": "electron/static-runtime.test.mjs; electron/local-app-runtime.test.mjs",
+      "testCommand": "node --test electron/static-runtime.test.mjs electron/local-app-runtime.test.mjs",
+      "status": "PLANNED"
+    },
+    {
+      "id": "R-LAST-GOOD-05",
+      "invariant": "首次构建与后续重建共享原子 pointer；失败、取消、部分写入或并发请求不损坏 last-good，已有页面继续可用且 stale 只提示手动重建",
+      "severity": "P0",
+      "sliceId": "FIRST-BUILD-05",
+      "testPath": "electron/static-runtime.test.mjs",
+      "testCommand": "node --test electron/static-runtime.test.mjs",
+      "status": "PLANNED"
+    },
+    {
+      "id": "R-STATE-SYNC-05",
+      "invariant": "侧栏、工具栏、project-home 与 Preview 从同一 Main snapshot 派生 Runtime 状态；Preview 本地 loading/failed 只补充加载状态，不把 building/ready/running 显示为 stopped",
+      "severity": "P1",
+      "sliceId": "FIRST-BUILD-05",
+      "testPath": "electron/desktop-seam.test.mjs; src/components/RuntimePreview.tsx",
+      "testCommand": "node --test electron/desktop-seam.test.mjs && npm run typecheck",
+      "status": "PLANNED"
+    },
+    {
+      "id": "R-PROC-CLEANUP-05",
+      "invariant": "首次 build、取消、失败、dev↔static 切换和最后 consumer 释放均有界回收 app-owned 子进程、监听器与临时状态，不残留 npm/Node",
+      "severity": "P0",
+      "sliceId": "FIRST-BUILD-05",
+      "testPath": "electron/local-app-runtime.test.mjs; electron/static-runtime.test.mjs",
+      "testCommand": "node --test electron/local-app-runtime.test.mjs electron/static-runtime.test.mjs",
+      "status": "PLANNED"
+    },
+    {
+      "id": "R-HOMEPAGE-EXPORT-05",
+      "invariant": "homepage 在保留用户既有内容、中英文与书籍路径的前提下通过 npm run build 生成 out/index.html 和适用静态资源，并含有效 agentos 静态声明",
+      "severity": "P1",
+      "sliceId": "FIRST-BUILD-05",
+      "testPath": "/Volumes/macOS/Github/homepage/package.json; /Volumes/macOS/Github/homepage/out/index.html",
+      "testCommand": "npm run build",
+      "status": "PLANNED"
     }
   ],
   "verifications": [
@@ -643,6 +725,21 @@
       "resultPath": null,
       "resultHash": null,
       "consumed": true
+    },
+    {
+      "instanceId": "/root/first_import_build_impl",
+      "taskId": "DEV-P0-06",
+      "role": "implementation_engineer",
+      "status": "RUNNING",
+      "startedAt": "2026-08-26T17:00:00+08:00",
+      "completedAt": null,
+      "wallDurationMs": null,
+      "model": "gpt-5.6-luna",
+      "inputTokens": null,
+      "outputTokens": null,
+      "resultPath": null,
+      "resultHash": null,
+      "consumed": false
     }
   ],
   "fullDevelopmentCheckHashes": ["602f1dce442434859da159a0b7f89503fef3d0d08c561a2a67e88f16872a0926", "e30a5973078cd69c8e9f14edadac36ac77757c2d32dbedb962acbdd7c20d0325"],

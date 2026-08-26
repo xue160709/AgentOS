@@ -4,6 +4,32 @@
 >
 > 项目首页 Claude 分栏、Agent 沙箱工具代理和生产级 OS Sandbox Provider 不属于本切片通过条件。
 
+## Revision 5 验收增量（Planned / 未实现）
+
+> 本节取代 C-010 中“无产物显示 build_required 并等待用户构建”的首次导入语义；Revision 4 的 last-good、stale、失败回退、安全协议和显式开发模式继续成立。
+
+### C-013：首次导入自动构建
+
+- GIVEN 用户导入含有效 `package.json.agentos` 静态声明的项目且尚无 last-good/可导入产物
+- WHEN 用户确认该目录的信任
+- THEN Main 自动执行一次固定 `npm run build`，界面显示“正在首次构建”，成功后自动打开静态页面，用户无需点击构建或理解产物目录
+- AND 没有有效静态声明的项目明确保持开发服务器模式，不被启发式改写为静态模式
+
+### C-014：首次失败、后续 stale 与状态一致
+
+- GIVEN 首次自动构建失败、取消或产生迟到事件
+- WHEN Runtime 回到可恢复状态
+- THEN 不自动启动 dev server、不发布损坏产物，显示失败原因与重试/显式开发模式；迟到事件不能覆盖当前 generation/operation
+- AND 已有 last-good 后源码更新时旧页面继续可用，只提示用户选择重新构建
+- AND 侧栏、顶部工具栏和中央 Preview 对 `building/ready/build_failed/running/stopped` 的表述一致，Preview 加载中不得显示“已停止”
+
+### C-015：homepage 静态导出
+
+- GIVEN `/Volumes/macOS/Github/homepage` 保留当前用户内容、中英文和书籍访问路径
+- WHEN 执行 `npm run build`
+- THEN 构建成功生成 `out/index.html` 与适用静态路由/资源，并通过有效 `agentos` 声明被 AgentOS 识别为静态项目
+- AND 默认打开不启动常驻 Node/Next 服务器
+
 ## Revision 4 验收增量（已实现，待正式验收）
 
 以下确认项定义“静态直开 + 手动构建 + 显式开发模式”的后续正式验收标准。代码已实现并通过 Development Check，但当前均未执行 `project-verify`，开发自检不得改写为正式通过。
