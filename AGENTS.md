@@ -3,7 +3,7 @@
 ## 语言与模型
 
 - 面向人的说明、文档、任务包和汇报使用中文；Agent ID、TOML 字段、文件名和代码标识保留英文。
-- 项目级 sub-agent 固定使用 `gpt-5.6-luna`，推理努力程度固定为 `max`。
+- 项目级 sub-agent 的模型与推理档位以 `.codex/config.toml` 的默认值为唯一来源；角色 TOML 不重复声明，只在某角色长期需要偏离时覆盖。
 
 ## 面向用户
 
@@ -19,14 +19,14 @@
 - 在可用主流程上逐层增加能力；保持模块职责清晰，优先复用现有依赖和成熟库。
 - 不接受明知会留下补丁债的方案；必须权衡时向用户说明长期代价。
 
-## 组织与专业覆盖
+## 组织
 
 - 主 Agent 是唯一用户责任人和 orchestrator，负责意图、确认、任务包、派工、冲突裁决、共享状态和最终承诺。
-- sub-agent 只向主 Agent 返回专业结果，不直接向用户承诺，也不创建或管理下一级 Agent。
-- 只调用 `.codex/config.toml` 已配置的角色；lifecycle 判定的 Light 任务由主 Agent 直接实现，Medium/Heavy 的专业缺口、实现和独立审查/验收由相应角色承担，串行只改变顺序，不取消 required 职责。
+- sub-agent 只向主 Agent 返回专业结果；公共行为准则见 `knowledge/shared/role-conduct.md`，各角色的使命与判断权见 `.codex/agents/*.toml`。
+- sub-agent 的输出默认都是草案；只有主 Agent 能把带有可定位来源的内容签署为正式合同。
+- 只调用 `.codex/config.toml` 已配置的角色。任务等级、专业缺口、执行方式、验证深度和验收授权以 `.codex/rules/lifecycle.md` 为准；文件数量、受影响专业面、Skill 命中、主 Agent 更快或并发不足都不能代替该判断。
 - 任务互相独立且写入路径不重叠时，研究、探索、审查和测试优先并行；存在依赖或路径重叠时按同一专业职责串行。
-- 任务等级、专业缺口、执行方式、`required/not_needed`、质量触发和确认策略以 `.codex/rules/lifecycle.md` 为准；文件数量、受影响专业面、Skill 命中、主 Agent 更快或并发不足都不能代替该判断。
-- 写入者、精确路径、失败恢复和降级以 `.codex/rules/ownership.md` 为准；实现自检不等于开发质量检查或正式验收。
+- 写入者、精确路径、失败恢复和降级以 `.codex/rules/ownership.md` 为准。
 
 ## 强路由入口
 
@@ -37,7 +37,7 @@
 | 修改文件、写代码、运行验收、同步 PRD/TODO 或进入多步骤流程 | `.codex/rules/lifecycle.md` |
 | 创建、推进、恢复或归档持久、跨角色、跨模块或跨会话变更 | `.codex/skills/change-package/SKILL.md` |
 | 分配写入路径、并行修改、判断负责人、处理 writer 失败或写入 `docs/` | `.codex/rules/ownership.md` |
-| Medium/Heavy 开发包含多个可独立验证结果、并行开发、增量 review、验证复用或 Agent 结果消费 | `.codex/rules/execution-pipeline.md` |
+| 多个可独立验证的开发结果需要并行、依赖交接或跨会话恢复 | `.codex/rules/execution-pipeline.md` |
 | 读取、创建、重命名或澄清产品术语，或涉及 `CONTEXT.md` / `CONTEXT-MAP.md` | `.codex/rules/context.md` |
 | 创建、修改或消费 `COLLABORATOR.md`，或按画像调整最终表达 | `.codex/rules/collaborator-profile.md` |
 | 创建、修改或消费 `GUARDRAILS.md`，或判断边界对规划、实现和验收的影响 | `.codex/rules/product-guardrails.md` |
@@ -45,10 +45,12 @@
 
 命中多项时读取全部入口。Skill 的局部指针只能补充，不能覆盖本表。
 
+`.codex/rules/lifecycle.md` 的快速通道适用时，直接按 Light 实现，不加载其它入口。
+
 ## 上下文与信息层
 
-- 首次实质工作前检查根 `USER_PROFILE.md`、`GUARDRAILS.md`、`COLLABORATOR.md` 是否存在；只有本轮会受用户画像、产品边界或协作表达影响，或对应强路由入口命中时才读取。它们只能由对应产品或画像流程创建和修改。
-- 派发 sub-agent 前必须读取 `knowledge/shared/context-sharing.md`，提供自包含的精简任务包和精确路径；仅当未落盘的最近语义会改变结果时继承最少必要对话。
+- 首次实质工作前检查根 `USER_PROFILE.md`、`GUARDRAILS.md`、`COLLABORATOR.md` 是否存在；只有本轮会受用户画像、产品边界或协作表达影响，或对应强路由入口命中时才读取。
+- 派发 sub-agent 前读取 `knowledge/shared/context-sharing.md`，提供自包含的精简任务包和精确路径；仅当未落盘的最近语义会改变结果时继承最少必要对话。
 - `knowledge/shared/README.md` 是共享 Knowledge 路由；任务包或 Skill 未列全共享材料时，读取该索引及全部命中分支。
 
 | 层次 | 权威内容 |
@@ -68,4 +70,4 @@
 - 公开 Web 搜索可在目标明确且角色允许时进行；外部事实附来源链接和日期，并区分事实、推论、假设与设计灵感。
 - 下载、登录、使用账号或凭据、发送数据、启动 GUI、发布、部署、购买、联系真实用户及其它外部状态变更，必须先由主 Agent 获得用户明确授权。
 - 不受限制的 shell 网络访问默认关闭；确有必要时由主 Agent 按最小范围申请。
-- sub-agent 默认返回结论、关键依据、完成内容、风险/未知项、需主 Agent 决定的问题和重要路径；主 Agent 对用户先报结论与变化，再报依据、风险和下一步。
+- 主 Agent 对用户先报结论与变化，再报依据、风险和下一步。

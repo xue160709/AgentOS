@@ -1,25 +1,23 @@
-# 产品开发生命周期
+# 阶段之间的事实流向
 
-本文件只记录跨 Skill 稳定的阶段职责与事实流。本轮阶段、等级、角色和 Skill 路由必须另读 [`.codex/rules/lifecycle.md`](../../.codex/rules/lifecycle.md)；具体步骤以对应 Skill 为准。
+读取时机：一个阶段要消费上游阶段的产物，或要判断本阶段的产出能不能改写上游事实时。
 
-## 阶段职责
+本轮的阶段判定、Skill 路由、等级、验证深度与验收授权以 [`.codex/rules/lifecycle.md`](../../.codex/rules/lifecycle.md) 为唯一事实源；各产物的单一事实源见 [`product-artifact-contracts.md`](product-artifact-contracts.md)。本文件只回答一件它们都不回答的事：**事实沿阶段向下流动时，下游能拿它做什么、不能拿它做什么。**
 
-| 阶段组 | 稳定职责 | 交接边界 |
-|---|---|---|
-| 探索与问题理解 | `intent-decision`、`product-thinking-partner`、`product-discovery`、`product-problem-investigation`、`product-design`，以及按需的 `user-perspective-review`、`interaction-flow-review`、`design-proposal-loop`，帮助收敛意图、范围、根因、证据和方案 | 默认不写正式产品状态；未确认方向不进入 change/Planned，严格设计评审的具体门禁以对应 Skill 为准 |
-| 零到一首版 | `01` 定义产品与用户，`02` 形成开发规格和 Acceptance，`03` 实现首版 | 只适用于 lifecycle 判定的 `mvp_initial` |
-| 成熟产品增量 | `product-discovery`/`product-design` 确认改变，change 管理持久工作，专业草案经 `update-prd` 同步，`project-iterate` 实现 | 缺合同、Demo/README 漂移或大块重规划不回流 02 |
-| 故障与维护 | 未知根因先 `project-debug(DIAGNOSE)`，已知根因或获授权修复进入 `project-iterate` | 诊断不自动授权修复，复验不等于正式验收 |
-| 状态同步 | `update-prd` 分离同步已确认 Planned 与代码/已验证行为形成的 Current/as-built | 不从代码反推未确认产品范围、画像或边界 |
-| 只读审查 | `code-review` 对明确范围检查工程正确性、仓库约束和规格兑现 | 只返回经主 Agent 复核的候选发现，不授权修复、提交或正式验收 |
-| 正式验收 | `project-verify` 派 `quality_verifier` 按 Acceptance 独立验证 | 只有该证据可驱动正式 Acceptance 和对应 TODO 完成状态 |
+## 流向表
 
-## 跨阶段事实流
+| 产生阶段 | 产生的事实 | 下游可以 | 下游不可以 |
+|---|---|---|---|
+| 探索与问题理解 | 意图、问题、根因、候选方向 | 作为规划与提问的输入 | 当作已确认范围，或据此写正式产品状态 |
+| `01` 首版定义 | 服务对象、正向范围、已确认边界 | `02` 消费并细化为开发规格 | 反向改写画像与边界 |
+| `02` 开发准备 | 开发规格、Acceptance 契约 | `03` 按冻结的契约实现 | 改写契约来适配实现的方便 |
+| `03`／`project-iterate` 实现 | 代码与 as-built 行为 | `update-prd` 记录为 Current | 反推出未确认的产品范围、画像或边界 |
+| 开发阶段质量检查 | 五态证据与缺口 | 作为该 Change 的验证输入 | 构成正式验收，或回写正式 Acceptance/TODO |
+| `project-verify` 正式验收 | 独立验证证据与日期 | 主 Agent 据此写正式 Acceptance 与对应 TODO | 由实现自检或开发质量检查替代 |
+| `change-package` | 一次变更的决定、任务与状态 | 产品行为变化时映射到根 `TODO.md` | 纯治理变更虚构产品 TODO 或 Acceptance |
 
-- `01` 形成服务对象、正向范围和已确认边界；`02` 消费这些事实并形成规格，不反向改写。
-- 实现角色只写精确授权的代码、测试和开发文档；产品、体验或技术合同缺失时返回对应专业流程。
-- 除 `project-verify` 外，Acceptance 相关输出只能是 `DRAFT_ONLY` 契约、质量检查或证据候选。
-- `changes/` 管理一次持久变更；根 `TODO.md` 管理产品交付。纯治理 change 不虚构产品 TODO、Acceptance 或实现角色。
-- 完成、部分完成、阻塞、失败和跳过保持真实状态；文档同步、代码写完或局部自检都不能自动宣称正式完成。
+## 缺口的去向
 
-产品产物和状态单一事实源见 `product-artifact-contracts.md`，验收角色与证据见 `acceptance-and-verification.md`，组织和 writer 边界见 `agent-orchestration.md` 与 `.codex/rules/ownership.md`。
+下游发现上游事实缺失、互相矛盾或已过期时，回到产生该事实的阶段补齐，不在下游就地补一个版本继续。成熟项目缺 Acceptance、设计或技术合同时按增量路径由对应专业角色补草案并经 `update-prd` 同步，不回流 `01`/`02`/`03`。
+
+完成标准：本轮消费的每一类上游事实都能说出它的产生阶段，且没有任何一项被下游反向改写。
