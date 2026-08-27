@@ -207,7 +207,7 @@ function RuntimeOnlySidebar({
     if (title.length < 1 || title.length > 64) return
     if (await onRename(tab.id, title) !== false) setEditingId(null)
   }
-  return <aside className="app-sidebar local-app-only-sidebar" aria-label={t('runtime.section')}>
+  return <aside className="app-sidebar local-app-only-sidebar draggable" aria-label={t('runtime.section')}>
     <div className="app-sidebar-inner">
       <button type="button" className="app-sidebar-new-thread" data-testid="runtime-new-tab" onClick={onNew}><IconInline name="plus" /><span>{t('runtime.newTab')}</span></button>
       <div className="local-app-sidebar-list runtime-tabs-list">

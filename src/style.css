@@ -173,7 +173,12 @@ label,
 .draggable input,
 .draggable textarea,
 .draggable select,
-.draggable a {
+.draggable a,
+.draggable [role='button'],
+.draggable [role='menuitem'],
+.draggable [role='separator'],
+.draggable [draggable='true'],
+.draggable [contenteditable='true'] {
   -webkit-app-region: no-drag;
 }
 
@@ -323,7 +328,7 @@ html.is-eye-comfort body::after {
   gap: 4px;
   width: var(--width-chrome-toolbar);
   height: var(--height-toolbar-pane);
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
 
 html[data-windows-titlebar-overlay='true'] .app-chrome-toolbar {

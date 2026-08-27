@@ -51,10 +51,15 @@ test('workspace header is not a global drag region', () => {
   assert.match(source, /className="app-workspace-drag-gap draggable"/)
 })
 
-test('Windows settings sidebar removes unnecessary top inset from shell platform class', () => {
+test('sidebar chrome keeps stable drag regions without swallowing interactive controls', () => {
   const appShellSource = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../src/components/AppShell.tsx'), 'utf8')
+  const sidebarSource = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../src/components/AppShellSidebar.tsx'), 'utf8')
   const styleSource = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../src/style.css'), 'utf8')
 
   assert.match(appShellSource, /isWindows\s*\?\s*' is-platform-win32'/)
   assert.match(styleSource, /\.app-shell\.is-platform-win32\.is-shell-settings\s+\.app-sidebar-scroll\s*\{[^}]*padding-top:\s*calc\(var\(--spacing\) \* 3\)/s)
+  assert.match(sidebarSource, /className="app-chrome-toolbar draggable"/)
+  assert.match(sidebarSource, /className=\{`app-sidebar draggable\$\{isSettingsSidebar/)
+  assert.match(appShellSource, /className="app-sidebar local-app-only-sidebar draggable"/)
+  assert.match(styleSource, /\.draggable \[draggable='true'\][^{]*\{\s*-webkit-app-region:\s*no-drag/s)
 })

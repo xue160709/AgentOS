@@ -566,7 +566,7 @@ export function AppShellSidebar({
 
   return (
     <>
-      <div className="app-chrome-toolbar no-drag" aria-label={t('sidebar.windowNav')}>
+      <div className="app-chrome-toolbar draggable" aria-label={t('sidebar.windowNav')}>
         <button
           type="button"
           className="btn btn-toolbar"
@@ -601,7 +601,7 @@ export function AppShellSidebar({
         </button>
       </div>
       <aside
-        className={`app-sidebar${isSettingsSidebar ? ' is-settings-mode' : ''}`}
+        className={`app-sidebar draggable${isSettingsSidebar ? ' is-settings-mode' : ''}`}
         aria-label={isSettingsSidebar ? t('sidebar.settingsNav') : t('sidebar.appNav')}
         ref={sidebarRef}
       >
