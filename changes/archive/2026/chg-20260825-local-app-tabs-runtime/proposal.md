@@ -2,8 +2,11 @@
 change_id: chg-20260825-local-app-tabs-runtime
 revision: 5
 decision: accepted
-delivery: in_progress
+delivery: done
 owner: main_agent
+closed_at: 2026-08-27
+coverage_gate: degraded
+acceptance_status: not_accepted
 confirmation_source: explicit_user_statement
 confirmed_scope: "2026-08-26 用户纠正首次使用闭环：导入并确认信任后自动首次构建；后续源码变化才由用户决定重新构建；同时要求 homepage 支持静态导出并修复运行/预览状态不同步"
 ---

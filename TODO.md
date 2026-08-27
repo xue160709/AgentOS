@@ -1,20 +1,18 @@
 # AgentOS TODO
 
 > 继续开发入口。产品验收契约只在对应 `prd/<module>/acceptance.md` 定义；TODO 不复制 GWT 场景，也不因代码自检自动勾选。
+>
+> 勾选图例：`[x]` 已完成且有证据；`[~]` 实现已落盘并通过自动化检查，仅卡在正式验收证据，**不是待开工**；`[ ]` 未开工或未决。
 
 ## 1. 活跃变更
 
-### 1.1 Workspace Tab 与可复用 Runtime（Revision 5）
+### 1.1 Workspace Tab 与可复用 Runtime（Revision 5）— 已关闭
 
-- **Change**：[`chg-20260825-local-app-tabs-runtime`](changes/active/chg-20260825-local-app-tabs-runtime/proposal.md)
+- **Change**：[`chg-20260825-local-app-tabs-runtime`](changes/archive/2026/chg-20260825-local-app-tabs-runtime/proposal.md)（已归档）
 - **PRD**：[`prd/local-app-runtime/README.md`](prd/local-app-runtime/README.md)
 - **验收契约**：[`prd/local-app-runtime/acceptance.md`](prd/local-app-runtime/acceptance.md)
-- **当前状态**：Revision 5 已确认“导入并信任后自动首次构建；后续 stale 才手动重建”，正在实现；它取代 Revision 4 的首次手动构建语义。Revision 4 其余实现与 Development Check 历史继续保留，正式 `project-verify` 尚未执行。
-
-#### Revision 5 当前开发
-
-- [ ] `DEV-P0-06`｜实现静态项目首次导入自动构建、失败/取消无 dev fallback、last-good/stale 后续手动重建与工具栏/侧栏/Preview 状态一致；并让 homepage 具备静态声明和完整 `out` 导出。来源：`C-013`–`C-015`。
-- [ ] `CHECK-P0-05`｜对首次自动构建、失败/取消/late event、last-good/stale、模式切换进程回收、状态一致性与 homepage 静态导出执行独立 Development Check；不修改正式 Acceptance 状态。
+- **当前状态**：2026-08-27 按用户指示关闭，`delivery=done`、`coverage_gate=degraded`。关闭前实跑 `npm run typecheck`（PASS）、`npm run test:electron`（147/147）、homepage `npm run build`（PASS，104 个 HTML）。
+- **关闭时的已知缺口**（详见归档包 `evidence.md` 的“关闭记录”）：Revision 5 的独立 Development Check 未执行；`R-UI-HEIGHT-01` / `R-UI-FLOW-01` 两条 GUI smoke 未执行，首页布局返工 attempt 3 的视觉回归无人复核；`project-verify` 仍为 `BLOCKED`。**Change 关闭不等于产品正式验收。**
 
 #### Revision 4 当前开发
 
@@ -30,14 +28,14 @@
 
 #### P0：用户可见闭环
 
-- [ ] `DEV-P0-01`｜实现 Local App Definition/Tab、侧栏 `New Tab`、首次目录选择与信任确认、创建/激活/关闭及旧快照迁移。来源：`C-001`；验收：`ATDD-P0-01`。
-- [ ] `DEV-P0-02`｜实现 AgentOS 自动依赖准备、`npm run dev`、动态 readiness、运行状态、日志、重试、停止和进程回收基础。来源：`C-002`；验收：`ATDD-P0-02`。
-- [ ] `DEV-P0-03`｜以 `/Volumes/macOS/Github/codenow.wiki` 做首个真实接入，确认 `next dev` 自动启动和页面预览，不硬编码路径以外的产品逻辑或端口。来源：`C-003`；验收：`ATDD-P0-03`。
+- [~] `DEV-P0-01`｜实现 Local App Definition/Tab、侧栏 `New Tab`、首次目录选择与信任确认、创建/激活/关闭及旧快照迁移。来源：`C-001`；验收：`ATDD-P0-01`。
+- [~] `DEV-P0-02`｜实现 AgentOS 自动依赖准备、`npm run dev`、动态 readiness、运行状态、日志、重试、停止和进程回收基础。来源：`C-002`；验收：`ATDD-P0-02`。
+- [~] `DEV-P0-03`｜以 `/Volumes/macOS/Github/codenow.wiki` 做首个真实接入，确认 `next dev` 自动启动和页面预览，不硬编码路径以外的产品逻辑或端口。来源：`C-003`；验收：`ATDD-P0-03`。
 
 #### P1：交付前必要正确性
 
-- [ ] `DEV-P1-01`｜实现 Tab/Runtime/Preview 分离、同应用 Runtime 复用、AgentOS 恢复后自动启动、generation 防迟到事件和退出时进程树清理。来源：`C-004`；验收：`ATDD-P1-01`。
-- [ ] `DEV-P1-02`｜实现独立无 Node Preview、HMR/刷新/重启、导航/弹窗/权限限制和安全负例测试。来源：`C-005`；验收：`ATDD-P1-02`。
+- [~] `DEV-P1-01`｜实现 Tab/Runtime/Preview 分离、同应用 Runtime 复用、AgentOS 恢复后自动启动、generation 防迟到事件和退出时进程树清理。来源：`C-004`；验收：`ATDD-P1-01`。
+- [~] `DEV-P1-02`｜实现独立无 Node Preview、HMR/刷新/重启、导航/弹窗/权限限制和安全负例测试。来源：`C-005`；验收：`ATDD-P1-02`。
 
 #### 实施门禁
 
@@ -45,11 +43,16 @@
 - [ ] 为 Local App writer 任务分配精确代码路径、diff 基线和唯一实现者；实现后按风险触发开发质量检查。
 - [ ] CodeNow Wiki live smoke 需要实际启动外部项目时，单独执行并保留真实日志/页面证据；fixture 不得替代。
 
-## 2. 后续范围
+## 2. 未排期 Backlog
 
-- [ ] `LATER-01`｜已被 Revision 2 的“项目首页独立 Runtime 页”取代；不再采用左预览/右 Claude 分栏，也不改卡片系统。
+> 不属于任何 active change。来自 `chg-20260825-local-app-tabs-runtime` 关闭时迁出。
+
 - [ ] `LATER-02`｜Claude Agent SDK 通过通用 SandboxBroker 在项目运行时中读写、安装依赖和控制进程。
 - [ ] `LATER-03`｜确定并实现生产级跨平台 Sandbox Provider；完成项目外文件、网络、环境变量和子进程逃逸验证后再声明强隔离。
+- [ ] `PERF-P2-PID-REUSE-001`（P2）｜测试 fixture 的异常兜底在极窄窗口按刚写入的裸 PID 发 TERM/KILL，理论上存在 PID 复用误杀。生产 Runtime 清理路径不受影响。来源：`chg-20260825-local-app-tabs-runtime` PERF 轮质量检查。
+- [ ] `GUI-REG-01`｜补 `R-UI-HEIGHT-01` / `R-UI-FLOW-01` 的 Electron GUI smoke：Workspace Runtime 全高预览、Overview/Runtime 常规与窄宽度布局。首页布局返工 attempt 3 至今只有 typecheck 覆盖。
+
+> `LATER-01` 已被 Revision 2 的“项目首页独立 Runtime 页”取代，不再跟踪。
 
 ## 3. 验证与文档状态
 

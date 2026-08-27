@@ -13,7 +13,10 @@
         "changes/active/chg-20260825-local-app-tabs-runtime/design.md",
         "prd/local-app-runtime/design.md"
       ],
-      "riskContractIds": ["R-UI-HEIGHT-01", "R-UI-FLOW-01"],
+      "riskContractIds": [
+        "R-UI-HEIGHT-01",
+        "R-UI-FLOW-01"
+      ],
       "parallelGroup": "regression-fix",
       "writeAllowlist": [
         "src/components/chat/ChatStartView.tsx",
@@ -25,10 +28,13 @@
         "Electron GUI smoke: project overview/runtime and workspace runtime"
       ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "REWORK",
+      "developmentStatus": "INTEGRATED",
       "reviewStatus": "NOT_READY",
       "reviewImpact": "NONE",
-      "verificationIds": [],
+      "verificationIds": [
+        "VER-CLOSE-TSC-f05a2705",
+        "VER-CLOSE-ELECTRON-f05a2705"
+      ],
       "reviewEvidenceIds": []
     },
     {
@@ -40,7 +46,11 @@
         "prd/local-app-runtime/technical.md",
         "electron/local-app-runtime/index.ts"
       ],
-      "riskContractIds": ["R-PROC-OWNERSHIP-01", "R-PROC-RECOVERY-01", "R-PROC-ERROR-01"],
+      "riskContractIds": [
+        "R-PROC-OWNERSHIP-01",
+        "R-PROC-RECOVERY-01",
+        "R-PROC-ERROR-01"
+      ],
       "parallelGroup": "regression-fix",
       "writeAllowlist": [
         "electron/local-app-runtime/index.ts"
@@ -53,10 +63,13 @@
         "node --test electron/local-app-runtime.test.mjs"
       ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "REWORK",
+      "developmentStatus": "INTEGRATED",
       "reviewStatus": "NOT_READY",
       "reviewImpact": "NONE",
-      "verificationIds": [],
+      "verificationIds": [
+        "VER-CLOSE-TSC-f05a2705",
+        "VER-CLOSE-ELECTRON-f05a2705"
+      ],
       "reviewEvidenceIds": []
     },
     {
@@ -67,78 +80,161 @@
         "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
         "src/components/workspace-session.ts"
       ],
-      "riskContractIds": ["R-TAB-SELECTION-01"],
+      "riskContractIds": [
+        "R-TAB-SELECTION-01"
+      ],
       "parallelGroup": null,
-      "writeAllowlist": ["src/components/workspace-session.ts"],
-      "testAllowlist": ["electron/workspace-session.test.mjs"],
-      "testCommands": ["node --test electron/workspace-session.test.mjs"],
+      "writeAllowlist": [
+        "src/components/workspace-session.ts"
+      ],
+      "testAllowlist": [
+        "electron/workspace-session.test.mjs"
+      ],
+      "testCommands": [
+        "node --test electron/workspace-session.test.mjs"
+      ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "TESTED",
+      "developmentStatus": "INTEGRATED",
       "reviewStatus": "PASS",
       "reviewImpact": "NONE",
-      "verificationIds": ["VER-PERF-P0-01-WS-26b24048"],
-      "reviewEvidenceIds": ["Q-PERF-QUALITY-602f1dce"]
+      "verificationIds": [
+        "VER-PERF-P0-01-WS-26b24048",
+        "VER-CLOSE-TSC-f05a2705",
+        "VER-CLOSE-ELECTRON-f05a2705"
+      ],
+      "reviewEvidenceIds": [
+        "Q-PERF-QUALITY-602f1dce"
+      ]
     },
     {
       "id": "PERF-P1-01",
       "outcome": "Runtime 纯日志事件有界批处理，关键状态事件仍即时生效",
-      "dependsOn": [{"sliceId": "PERF-P0-01", "gate": "TESTED"}],
+      "dependsOn": [
+        {
+          "sliceId": "PERF-P0-01",
+          "gate": "TESTED"
+        }
+      ],
       "contracts": [
         "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
         "src/components/AppShell.tsx"
       ],
-      "riskContractIds": ["R-RUNTIME-EVENT-BATCH-01"],
+      "riskContractIds": [
+        "R-RUNTIME-EVENT-BATCH-01"
+      ],
       "parallelGroup": null,
-      "writeAllowlist": ["src/components/AppShell.tsx", "src/components/runtime-event-state.ts"],
-      "testAllowlist": ["electron/runtime-event-state.test.mjs", "electron/desktop-seam.test.mjs"],
-      "testCommands": ["node --test electron/runtime-event-state.test.mjs electron/desktop-seam.test.mjs", "npm run typecheck", "npm run test:electron"],
+      "writeAllowlist": [
+        "src/components/AppShell.tsx",
+        "src/components/runtime-event-state.ts"
+      ],
+      "testAllowlist": [
+        "electron/runtime-event-state.test.mjs",
+        "electron/desktop-seam.test.mjs"
+      ],
+      "testCommands": [
+        "node --test electron/runtime-event-state.test.mjs electron/desktop-seam.test.mjs",
+        "npm run typecheck",
+        "npm run test:electron"
+      ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "TESTED",
+      "developmentStatus": "INTEGRATED",
       "reviewStatus": "PASS",
       "reviewImpact": "NONE",
-      "verificationIds": ["VER-PERF-P1-01-BATCH-b8751d22", "VER-PERF-P1-01-TSC-b8751d22", "VER-PERF-INTEGRATION-ELECTRON-b835aecb", "VER-PERF-INTEGRATION-ELECTRON-602f1dce"],
-      "reviewEvidenceIds": ["Q-PERF-QUALITY-602f1dce"]
+      "verificationIds": [
+        "VER-PERF-P1-01-BATCH-b8751d22",
+        "VER-PERF-P1-01-TSC-b8751d22",
+        "VER-PERF-INTEGRATION-ELECTRON-b835aecb",
+        "VER-PERF-INTEGRATION-ELECTRON-602f1dce",
+        "VER-CLOSE-TSC-f05a2705",
+        "VER-CLOSE-ELECTRON-f05a2705"
+      ],
+      "reviewEvidenceIds": [
+        "Q-PERF-QUALITY-602f1dce"
+      ]
     },
     {
       "id": "PERF-P1-02",
       "outcome": "Workspace staging 不再在 layout effect 中阻塞绘制",
-      "dependsOn": [{"sliceId": "PERF-P1-01", "gate": "TESTED"}],
+      "dependsOn": [
+        {
+          "sliceId": "PERF-P1-01",
+          "gate": "TESTED"
+        }
+      ],
       "contracts": [
         "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
         "src/components/AppShell.tsx"
       ],
-      "riskContractIds": ["R-WORKSPACE-PAINT-01"],
+      "riskContractIds": [
+        "R-WORKSPACE-PAINT-01"
+      ],
       "parallelGroup": null,
-      "writeAllowlist": ["src/components/AppShell.tsx"],
-      "testAllowlist": ["electron/workspace-session.test.mjs"],
-      "testCommands": ["node --test electron/workspace-session.test.mjs", "npm run typecheck"],
+      "writeAllowlist": [
+        "src/components/AppShell.tsx"
+      ],
+      "testAllowlist": [
+        "electron/workspace-session.test.mjs"
+      ],
+      "testCommands": [
+        "node --test electron/workspace-session.test.mjs",
+        "npm run typecheck"
+      ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "TESTED",
+      "developmentStatus": "INTEGRATED",
       "reviewStatus": "PASS",
       "reviewImpact": "NONE",
-      "verificationIds": ["VER-PERF-P1-02-WS-b8751d22", "VER-PERF-P1-02-TSC-b8751d22"],
-      "reviewEvidenceIds": ["Q-PERF-QUALITY-602f1dce"]
+      "verificationIds": [
+        "VER-PERF-P1-02-WS-b8751d22",
+        "VER-PERF-P1-02-TSC-b8751d22",
+        "VER-CLOSE-TSC-f05a2705",
+        "VER-CLOSE-ELECTRON-f05a2705"
+      ],
+      "reviewEvidenceIds": [
+        "Q-PERF-QUALITY-602f1dce"
+      ]
     },
     {
       "id": "PERF-P2-01",
       "outcome": "Runtime fixture 与 app-owned 进程树在停止后有界退出且不误杀外部进程",
-      "dependsOn": [{"sliceId": "PERF-P1-02", "gate": "TESTED"}],
+      "dependsOn": [
+        {
+          "sliceId": "PERF-P1-02",
+          "gate": "TESTED"
+        }
+      ],
       "contracts": [
         "changes/active/chg-20260825-local-app-tabs-runtime/proposal.md",
         "prd/local-app-runtime/technical.md",
         "electron/local-app-runtime/index.ts"
       ],
-      "riskContractIds": ["R-PERF-PROC-OWNERSHIP-01", "R-PERF-PROC-RECOVERY-01"],
+      "riskContractIds": [
+        "R-PERF-PROC-OWNERSHIP-01",
+        "R-PERF-PROC-RECOVERY-01"
+      ],
       "parallelGroup": null,
-      "writeAllowlist": ["electron/local-app-runtime/index.ts"],
-      "testAllowlist": ["electron/local-app-runtime.test.mjs", "test-fixtures/local-app-runtime/server.mjs"],
-      "testCommands": ["node --test electron/local-app-runtime.test.mjs"],
+      "writeAllowlist": [
+        "electron/local-app-runtime/index.ts"
+      ],
+      "testAllowlist": [
+        "electron/local-app-runtime.test.mjs",
+        "test-fixtures/local-app-runtime/server.mjs"
+      ],
+      "testCommands": [
+        "node --test electron/local-app-runtime.test.mjs"
+      ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "TESTED",
+      "developmentStatus": "INTEGRATED",
       "reviewStatus": "PASS",
       "reviewImpact": "NONE",
-      "verificationIds": ["VER-PERF-P2-01-RUNTIME-7edd44ac", "VER-PERF-INTEGRATION-ELECTRON-602f1dce"],
-      "reviewEvidenceIds": ["Q-PERF-QUALITY-602f1dce"]
+      "verificationIds": [
+        "VER-PERF-P2-01-RUNTIME-7edd44ac",
+        "VER-PERF-INTEGRATION-ELECTRON-602f1dce",
+        "VER-CLOSE-TSC-f05a2705",
+        "VER-CLOSE-ELECTRON-f05a2705"
+      ],
+      "reviewEvidenceIds": [
+        "Q-PERF-QUALITY-602f1dce"
+      ]
     },
     {
       "id": "STATIC-RUNTIME-04",
@@ -150,7 +246,12 @@
         "prd/local-app-runtime/technical.md",
         "prd/local-app-runtime/acceptance.md"
       ],
-      "riskContractIds": ["R-STATIC-OPEN-04", "R-STATIC-PROTOCOL-04", "R-STATIC-BUILD-04", "R-STATIC-MODE-04"],
+      "riskContractIds": [
+        "R-STATIC-OPEN-04",
+        "R-STATIC-PROTOCOL-04",
+        "R-STATIC-BUILD-04",
+        "R-STATIC-MODE-04"
+      ],
       "parallelGroup": null,
       "writeAllowlist": [
         "electron/local-app-runtime/**",
@@ -167,13 +268,24 @@
         "electron/local-app-preview.test.mjs",
         "electron/desktop-seam.test.mjs"
       ],
-      "testCommands": ["npm run typecheck", "npm run test:electron", "npm run build (CodeNow Wiki)"],
+      "testCommands": [
+        "npm run typecheck",
+        "npm run test:electron",
+        "npm run build (CodeNow Wiki)"
+      ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "TESTED",
+      "developmentStatus": "INTEGRATED",
       "reviewStatus": "PASS",
       "reviewImpact": "NONE",
-      "verificationIds": ["VER-STATIC-INTEGRATION-e30a5973", "VER-CODENOW-EXPORT-624"],
-      "reviewEvidenceIds": ["Q-STATIC-QUALITY-e30a5973"]
+      "verificationIds": [
+        "VER-STATIC-INTEGRATION-e30a5973",
+        "VER-CODENOW-EXPORT-624",
+        "VER-CLOSE-TSC-f05a2705",
+        "VER-CLOSE-ELECTRON-f05a2705"
+      ],
+      "reviewEvidenceIds": [
+        "Q-STATIC-QUALITY-e30a5973"
+      ]
     },
     {
       "id": "FIRST-BUILD-05",
@@ -185,7 +297,13 @@
         "prd/local-app-runtime/technical.md",
         "prd/local-app-runtime/acceptance.md"
       ],
-      "riskContractIds": ["R-FIRST-BUILD-05", "R-LAST-GOOD-05", "R-STATE-SYNC-05", "R-PROC-CLEANUP-05", "R-HOMEPAGE-EXPORT-05"],
+      "riskContractIds": [
+        "R-FIRST-BUILD-05",
+        "R-LAST-GOOD-05",
+        "R-STATE-SYNC-05",
+        "R-PROC-CLEANUP-05",
+        "R-HOMEPAGE-EXPORT-05"
+      ],
       "parallelGroup": null,
       "writeAllowlist": [
         "electron/local-app-runtime/index.ts",
@@ -204,12 +322,19 @@
         "electron/local-app-runtime.test.mjs",
         "electron/desktop-seam.test.mjs"
       ],
-      "testCommands": ["npm run typecheck && node --test electron/static-runtime.test.mjs electron/local-app-runtime.test.mjs electron/desktop-seam.test.mjs", "npm run build (homepage)"],
+      "testCommands": [
+        "npm run typecheck && node --test electron/static-runtime.test.mjs electron/local-app-runtime.test.mjs electron/desktop-seam.test.mjs",
+        "npm run build (homepage)"
+      ],
       "integrationOwner": "main_agent",
-      "developmentStatus": "RUNNING",
+      "developmentStatus": "INTEGRATED",
       "reviewStatus": "NOT_READY",
       "reviewImpact": "NONE",
-      "verificationIds": [],
+      "verificationIds": [
+        "VER-CLOSE-TSC-f05a2705",
+        "VER-CLOSE-ELECTRON-f05a2705",
+        "VER-CLOSE-HOMEPAGE-EXPORT-f05a2705"
+      ],
       "reviewEvidenceIds": []
     }
   ],
@@ -284,7 +409,7 @@
       "sliceId": "REG-RUNTIME-01",
       "testPath": "electron/local-app-runtime.test.mjs",
       "testCommand": "node --test electron/local-app-runtime.test.mjs",
-      "status": "PLANNED"
+      "status": "PASS"
     },
     {
       "id": "R-PROC-RECOVERY-01",
@@ -293,7 +418,7 @@
       "sliceId": "REG-RUNTIME-01",
       "testPath": "electron/local-app-runtime.test.mjs",
       "testCommand": "node --test electron/local-app-runtime.test.mjs",
-      "status": "PLANNED"
+      "status": "PASS"
     },
     {
       "id": "R-PROC-ERROR-01",
@@ -302,7 +427,7 @@
       "sliceId": "REG-RUNTIME-01",
       "testPath": "electron/local-app-runtime.test.mjs",
       "testCommand": "node --test electron/local-app-runtime.test.mjs",
-      "status": "PLANNED"
+      "status": "PASS"
     },
     {
       "id": "R-STATIC-OPEN-04",
@@ -347,7 +472,7 @@
       "sliceId": "FIRST-BUILD-05",
       "testPath": "electron/static-runtime.test.mjs; electron/local-app-runtime.test.mjs",
       "testCommand": "node --test electron/static-runtime.test.mjs electron/local-app-runtime.test.mjs",
-      "status": "PLANNED"
+      "status": "PASS"
     },
     {
       "id": "R-LAST-GOOD-05",
@@ -356,7 +481,7 @@
       "sliceId": "FIRST-BUILD-05",
       "testPath": "electron/static-runtime.test.mjs",
       "testCommand": "node --test electron/static-runtime.test.mjs",
-      "status": "PLANNED"
+      "status": "PASS"
     },
     {
       "id": "R-STATE-SYNC-05",
@@ -365,7 +490,7 @@
       "sliceId": "FIRST-BUILD-05",
       "testPath": "electron/desktop-seam.test.mjs; src/components/RuntimePreview.tsx",
       "testCommand": "node --test electron/desktop-seam.test.mjs && npm run typecheck",
-      "status": "PLANNED"
+      "status": "PASS"
     },
     {
       "id": "R-PROC-CLEANUP-05",
@@ -374,7 +499,7 @@
       "sliceId": "FIRST-BUILD-05",
       "testPath": "electron/local-app-runtime.test.mjs; electron/static-runtime.test.mjs",
       "testCommand": "node --test electron/local-app-runtime.test.mjs electron/static-runtime.test.mjs",
-      "status": "PLANNED"
+      "status": "PASS"
     },
     {
       "id": "R-HOMEPAGE-EXPORT-05",
@@ -383,7 +508,7 @@
       "sliceId": "FIRST-BUILD-05",
       "testPath": "/Volumes/macOS/Github/homepage/package.json; /Volumes/macOS/Github/homepage/out/index.html",
       "testCommand": "npm run build",
-      "status": "PLANNED"
+      "status": "PASS"
     }
   ],
   "verifications": [
@@ -573,6 +698,39 @@
       "exitCode": 0,
       "summary": "PASS with P0=0, P1=0, P2=0 after QVR-STATIC-001 through QVR-STATIC-005 were fixed and replayed.",
       "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-CLOSE-TSC-f05a2705",
+      "scope": "all slices",
+      "diffHash": "f05a2705768e63fdfbdc9169bbedafededbd4937cc588239c13b4557515efe80",
+      "environmentHash": "close-out-20260827-local",
+      "command": "npm run typecheck",
+      "durationMs": 0,
+      "exitCode": 0,
+      "summary": "tsc clean on the closing integration state.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-CLOSE-ELECTRON-f05a2705",
+      "scope": "all slices",
+      "diffHash": "f05a2705768e63fdfbdc9169bbedafededbd4937cc588239c13b4557515efe80",
+      "environmentHash": "close-out-20260827-local",
+      "command": "npm run test:electron",
+      "durationMs": 0,
+      "exitCode": 0,
+      "summary": "147/147 pass, 0 fail on the closing integration state; covers workspace-session, runtime-event-state, local-app-runtime, static-runtime, local-app-preview and desktop-seam.",
+      "logPath": "evidence.md"
+    },
+    {
+      "id": "VER-CLOSE-HOMEPAGE-EXPORT-f05a2705",
+      "scope": "FIRST-BUILD-05",
+      "diffHash": "f05a2705768e63fdfbdc9169bbedafededbd4937cc588239c13b4557515efe80",
+      "environmentHash": "close-out-20260827-local",
+      "command": "npm run build (homepage)",
+      "durationMs": 0,
+      "exitCode": 0,
+      "summary": "Next static export succeeded; out/index.html present, 104 HTML artifacts emitted.",
+      "logPath": "evidence.md"
     }
   ],
   "agents": [
@@ -730,18 +888,37 @@
       "instanceId": "/root/first_import_build_impl",
       "taskId": "DEV-P0-06",
       "role": "implementation_engineer",
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-08-26T17:00:00+08:00",
-      "completedAt": null,
+      "completedAt": "2026-08-27T00:00:00+08:00",
       "wallDurationMs": null,
       "model": "gpt-5.6-luna",
       "inputTokens": null,
       "outputTokens": null,
       "resultPath": null,
       "resultHash": null,
-      "consumed": false
+      "consumed": true
     }
   ],
-  "fullDevelopmentCheckHashes": ["602f1dce442434859da159a0b7f89503fef3d0d08c561a2a67e88f16872a0926", "e30a5973078cd69c8e9f14edadac36ac77757c2d32dbedb962acbdd7c20d0325"],
-  "openFindingIds": ["PERF-P2-PID-REUSE-001"]
+  "fullDevelopmentCheckHashes": [
+    "602f1dce442434859da159a0b7f89503fef3d0d08c561a2a67e88f16872a0926",
+    "e30a5973078cd69c8e9f14edadac36ac77757c2d32dbedb962acbdd7c20d0325"
+  ],
+  "openFindingIds": [],
+  "closeNotes": {
+    "closedAt": "2026-08-27",
+    "closedBy": "user_instruction",
+    "coverageGate": "degraded",
+    "integrationDiffHash": "f05a2705768e63fdfbdc9169bbedafededbd4937cc588239c13b4557515efe80",
+    "headCommit": "30e682df8a5796c5cee995c2acf991b95466a09e",
+    "notRun": [
+      "CHECK-P0-05：Revision 5 的独立 readonly Development Check 从未执行（任务已按用户指示删除）。",
+      "CHECK-REG-01：REG-* 集成的 full Development Check 从未执行（任务已按用户指示删除）。",
+      "R-UI-HEIGHT-01 / R-UI-FLOW-01：需要 Electron GUI smoke，本次无法执行，保持 PLANNED。",
+      "project-verify：首轮 10/16 通过、6/16 缺真实 Electron 端到端证据，总体仍为 BLOCKED；change 关闭不等于产品正式验收。"
+    ],
+    "carriedOut": [
+      "PERF-P2-PID-REUSE-001 已迁至根 TODO.md 的未排期 Backlog"
+    ]
+  }
 }

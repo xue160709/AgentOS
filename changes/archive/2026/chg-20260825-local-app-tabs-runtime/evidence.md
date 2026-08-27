@@ -1,5 +1,43 @@
 # Evidence
 
+## 关闭记录（2026-08-27）
+
+- trigger: 用户指示“把没做完的删掉，改成 done”。关闭属于用户对自有变更包的记账决定，不等于产品正式验收。
+- `delivery: done`，`coverage_gate: degraded`，`acceptance_status: not_accepted`。
+- 关闭基线：`HEAD=30e682df8a5796c5cee995c2acf991b95466a09e`，工作树 diff hash `f05a2705768e63fdfbdc9169bbedafededbd4937cc588239c13b4557515efe80`。
+
+### 关闭前本会话实际执行的验证
+
+| 验证 ID | 命令 | 结果 |
+| --- | --- | --- |
+| `VER-CLOSE-TSC-f05a2705` | `npm run typecheck` | PASS（tsc 无输出，exit 0） |
+| `VER-CLOSE-ELECTRON-f05a2705` | `npm run test:electron` | PASS，147/147，0 fail |
+| `VER-CLOSE-HOMEPAGE-EXPORT-f05a2705` | `npm run build`（homepage） | PASS，`out/index.html` 存在，产出 104 个 HTML |
+
+据此把以下原 `PLANNED` 风险改判为 `PASS`：`R-PROC-OWNERSHIP-01`、`R-PROC-RECOVERY-01`、`R-PROC-ERROR-01`、`R-FIRST-BUILD-05`、`R-LAST-GOOD-05`、`R-STATE-SYNC-05`、`R-PROC-CLEANUP-05`、`R-HOMEPAGE-EXPORT-05`。全部 8 个 slice 置为 `INTEGRATED`，僵尸 agent `/root/first_import_build_impl` 由 `RUNNING` 收为 `DONE`。
+
+### 关闭时未验证、已知留下的缺口
+
+`validate_run_state.py` 在关闭状态下仍返回 3 条 ERROR，**未做任何掩盖**：
+
+1. `V3 change requires exactly one stable integration quality check` —— `fullDevelopmentCheckHashes` 保留 Revision 4 与 PERF 两轮真实检查；Revision 5 的独立 Development Check（原 `CHECK-P0-05`）从未执行，任务已按用户指示删除，不补造哈希。
+2. `risk R-UI-HEIGHT-01 is not PASS at close` —— 需要 Electron GUI smoke，本会话无法执行，保持 `PLANNED`。
+3. `risk R-UI-FLOW-01 is not PASS at close` —— 同上。
+
+`REG-UI-01` attempt 3（以 `c5aed82^` 原首页 DOM/CSS 为基线的返工）只有 `npm run typecheck` 覆盖，**首页布局的视觉回归从未被人或工具复核过**。attempt 1 的三条 `VER-REG-UI-01-*-72bf1fb9` GUI 结论已被用户否定，不作为有效证据。
+
+原 `CHECK-REG-01`（REG-* 集成的 full Development Check）同样从未执行，任务已删除。
+
+### 迁出本包的条目
+
+- `PERF-P2-PID-REUSE-001`（P2，测试 fixture 兜底按裸 PID 发信号，理论 PID 复用误杀）→ 根 `TODO.md` 未排期 Backlog。
+- `LATER-01` / `LATER-02` / `LATER-03`（首页开发模式左预览右 SDK、SandboxBroker、生产级 Sandbox Provider）→ 根 `TODO.md` 未排期 Backlog。
+
+### 与产品正式验收的关系
+
+`project-verify` 首轮结果维持不变：10/16 通过、6/16 缺真实 Electron 端到端证据、0 失败，总体 `BLOCKED`。本次关闭不改写该状态，也不授权把 `prd/local-app-runtime/acceptance.md` 标为通过。
+
+
 ## Revision 4：手动构建与静态直开
 
 ### ORCH-012

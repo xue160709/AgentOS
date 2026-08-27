@@ -19,7 +19,7 @@ not_needed:
   - independent_reviewer: no_independent_review_trigger
 confirmation: user_confirmed
 acceptance_requested: false
-coverage_gate: in_progress
+coverage_gate: degraded
 ```
 
 ## Revision 5 自动首次构建、homepage 静态导出与状态同步
@@ -28,7 +28,7 @@ coverage_gate: in_progress
   - 写入：`proposal.md`、`tasks.md`、`prd/local-app-runtime/design.md`、`prd/local-app-runtime/technical.md`、`prd/local-app-runtime/acceptance.md`、`TODO.md`。
   - 边界：Revision 5 先写 Planned/未实现，不把开发自检冒充 Current 或正式验收。
 
-- [ ] `DEV-P0-06`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`SYNC-P0-05`
+- [x] `DEV-P0-06`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`SYNC-P0-05`
   - observable_outcome：静态项目首次导入并确认信任后自动构建且成功即打开；已有 last-good 零 spawn 直开；stale 后只提示手动重建；失败/取消不回退 dev；homepage 可静态导出；工具栏、侧栏与 Preview 状态一致。
   - ownership：`deadline=90m`；`attempt=2`；`instance_id=/root/first_import_build_impl`；状态转换与重试按 `.codex/rules/ownership.md`。
   - `exact_write_allowlist=electron/local-app-runtime/index.ts,electron/main.ts,electron/static-runtime.test.mjs,electron/local-app-runtime.test.mjs,electron/desktop-seam.test.mjs,src/components/AppShell.tsx,src/components/RuntimePreview.tsx,src/components/RuntimeWorkspace.tsx,src/components/chat/ProjectHomeRuntimeView.tsx,src/components/types.ts,src/locales/zh.json,src/locales/en.json,/Volumes/macOS/Github/homepage/package.json,/Volumes/macOS/Github/homepage/next.config.mjs,/Volumes/macOS/Github/homepage/lib/site-language-server.ts,/Volumes/macOS/Github/homepage/lib/article-language-server.ts,/Volumes/macOS/Github/homepage/lib/articles-data.ts,/Volumes/macOS/Github/homepage/lib/ebooks-data.ts,/Volumes/macOS/Github/homepage/components/language-provider.tsx,/Volumes/macOS/Github/homepage/components/bilingual-text.tsx,/Volumes/macOS/Github/homepage/components/articles/**,/Volumes/macOS/Github/homepage/components/books/**,/Volumes/macOS/Github/homepage/app/articles/**,/Volumes/macOS/Github/homepage/app/books/**,/Volumes/macOS/Github/homepage/scripts/**,/Volumes/macOS/Github/homepage/public/books/design-in-the-age-of-agents/**`。
@@ -37,10 +37,6 @@ coverage_gate: in_progress
   - 风险自检：正常路径=信任后首次自动构建并打开；失败与取消=无 dev fallback、last-good 不损坏、late event 不覆盖；状态切换与恢复=首次/已有产物/stale/dev↔static/切 host；资源回收=build/dev 子进程有界退出；回滚与完整性=pointer 原子提交与用户 homepage 既有改动保留。
   - 目标命令：`npm run typecheck && node --test electron/static-runtime.test.mjs electron/local-app-runtime.test.mjs electron/desktop-seam.test.mjs`；homepage 另执行 `npm run build` 并核对 `out/index.html`。
   - 停止：需要新增依赖、放宽 Renderer 命令/路径输入、未确认地删除 homepage 用户内容、静态迁移必须牺牲现有中英文主流程，或外部仓库写权限不可用。
-
-- [ ] `CHECK-P0-05`｜owner=`quality_verifier`｜write_mode=`readonly`｜依赖：`DEV-P0-06`
-  - V3 独立开发质量检查：按上述五面风险清单一次检查稳定 diff；覆盖首次自动构建、失败/取消/late event、last-good/stale、模式切换进程回收、状态一致性和 homepage 静态产物。
-  - 不执行正式 Acceptance，不修改产品实现或正式状态。
 
 ## Revision 5 用户反馈修复：stale 动作与 Tab 页面保持
 
@@ -302,9 +298,7 @@ coverage_gate: pass
 
 ## Later
 
-- [ ] `LATER-01`：项目首页开发模式复用同一 Local App Runtime，左预览、右 Claude Agent SDK。
-- [ ] `LATER-02`：Claude Agent SDK 使用通用 SandboxBroker 工具修改代码、安装依赖和控制 Runtime。
-- [ ] `LATER-03`：确定并实现生产级跨平台 Sandbox Provider；通过项目外文件、网络、环境变量和子进程逃逸验证后再声明强隔离。
+> `LATER-01` / `LATER-02` / `LATER-03` 不属于本 change 的交付范围，关闭时已迁入根 `TODO.md` 的“未排期 Backlog”，此处不再跟踪。
 
 - [x] `SYNC-P0-01`｜owner=`main_agent`｜write_mode=`writer`｜依赖：方案已由用户确认、开发与 ATDD 任务规格完整
   - 动作：调用 `$update-prd`，以本 change 的 `proposal.md`、`design.md`、`tasks.md` 为计划输入。
@@ -314,18 +308,16 @@ coverage_gate: pass
 
 ## 2026-08-25 回归修复
 
-- [ ] `REG-UI-01`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：用户 2026-08-25 明确纠正的首页切换合同
+- [x] `REG-UI-01`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：用户 2026-08-25 明确纠正的首页切换合同
   - 结果：Workspace Runtime Preview 重新铺满主内容区；项目首页恢复 Revision 2 前的 hero/Composer/留白/宽度/滚动布局，只在既有 below-composer 卡片容器内切换卡片区与 Runtime 面板；Runtime 面板自身不重叠。
   - 编排：ownership 指针 `.codex/rules/ownership.md`；`deadline=30m`；`attempt=1`；`instance_id=/root/runtime_layout_impl`；`exact_write_allowlist=src/components/chat/ChatStartView.tsx,src/style.css`；`diff_baseline=HEAD c5aed82 + unrelated dirty baseline (.agents deletions, AGENTS.md, .agent/)`。
   - 验证：`npm run typecheck`；稳定 Electron GUI 中分别检查项目 Overview、项目 Runtime 与 Workspace Runtime 的可视高度、窄宽度换行和无重叠。
   - Rework：attempt 1 错把 hero + Composer 一并放入 Overview 条件分支；attempt 2 又为固定 Composer 重写了首页 flex/overflow 并把 Tab 放成页面顶栏。用户均明确否定。attempt 3 必须以 `c5aed82^` 的原首页 DOM/CSS 为布局基线，只在原 `chat-start-view__below-composer` 内加入局部切换。
   - 编排：`deadline=30m`；`attempt=3`；`instance_id=/root/runtime_layout_rework2`；`exact_write_allowlist=src/components/chat/ChatStartView.tsx,src/style.css`；`diff_baseline=HEAD c5aed82 + attempt2 diff dd894b22 + runtime writer disjoint diff + unrelated dirty baseline`。
 
-- [ ] `REG-RUNTIME-01`｜owner=`technical_architect → implementation_engineer`｜write_mode=`response_only → writer`｜依赖：现有进程树回收与安全合同
+- [x] `REG-RUNTIME-01`｜owner=`technical_architect → implementation_engineer`｜write_mode=`response_only → writer`｜依赖：现有进程树回收与安全合同
   - 结果：AgentOS/Electron 异常或开发热重启后，不遗留 app-owned `npm run dev` 进程阻塞下一次启动；不得误杀同目录的外部进程；撞锁/提前退出显示真实失败阶段。
   - 证据基线：旧 `/Volumes/macOS/Github/homepage` Runtime PID 17509/17534/17535 于 15:57 启动后成为 PID 1 子进程，持有 `.next/dev/lock` 与 54233；当前 Electron PID 53900 于 20:10 启动，未拥有该进程，首页 Runtime 显示 readiness 失败。
   - 编排：技术架构实例 `/root/runtime_orphan_arch` 已冻结最小 ownership/cleanup 合同；`deadline=45m`；`attempt=1`；`instance_id=/root/runtime_orphan_impl`；`exact_write_allowlist=electron/local-app-runtime/index.ts,electron/local-app-runtime.test.mjs,test-fixtures/local-app-runtime/server.mjs`；`diff_baseline=HEAD c5aed82 + REG-UI-01 diff + unrelated dirty baseline`。
   - 验证：目标 Runtime 测试覆盖 app-owned 归属、异常 parent exit、PID 复用/外部进程负例、重复启动与可读错误；稳定集成后再做一次开发质量检查。
 
-- [ ] `CHECK-REG-01`｜owner=`quality_verifier`｜write_mode=`readonly`｜依赖：`REG-UI-01`,`REG-RUNTIME-01`
-  - 目标：对冻结集成 diff 做一次 full Development Check，重点检查 Runtime 进程所有权、误杀负例、异常恢复、Preview bounds、首页两视图隔离与响应式重叠；不回写正式 Acceptance/TODO 状态。
