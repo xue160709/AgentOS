@@ -38,6 +38,7 @@ import { createProjectChatBrokerRunnerAdapter, createProjectChatScopedReadCollab
 import { ProjectChatPresenceRegistry } from './project-chat-presence'
 import { ProjectChatWindowManager } from './project-chat-window-manager'
 import { ProjectChatViewStateStore } from './project-chat-view-state-store'
+import { RuntimePreviewLayoutStore } from './runtime-preview-layout-store'
 import { AgentOSDeepLinkQueue, parseAgentOSDeepLink } from './agentos-deep-link'
 import { AgentOSTicketClient, createDeadlineBoundAgentOSTicketTransport, type AgentOSTicketTransport } from './agentos-ticket-client'
 import { AgentOSExternalTaskService } from './agentos-external-task'
@@ -159,6 +160,7 @@ let agentModeSettingsStore: AgentModeSettingsStore | null = null
 let chatWorkspaceStore: ChatWorkspaceStore | null = null
 let chatWorkspaceCoordinator: ChatWorkspaceCoordinator | null = null
 let desktopPreferencesStore: DesktopPreferencesStore | null = null
+let runtimePreviewLayoutStore: RuntimePreviewLayoutStore | null = null
 let taskHomePluginManager: TaskHomePluginManager | null = null
 let speechRecognitionService: MacSpeechRecognitionService | null = null
 let claudeSettingsOperationChain: Promise<void> = Promise.resolve()
@@ -482,6 +484,10 @@ function getDesktopPreferencesStore() {
     throw new Error('Desktop preferences store is not ready.')
   }
   return desktopPreferencesStore
+}
+
+function getRuntimePreviewLayoutStore() {
+  return runtimePreviewLayoutStore ??= new RuntimePreviewLayoutStore({ userDataPath: app.getPath('userData') })
 }
 
 function getTaskHomePluginManager() {
@@ -1133,6 +1139,18 @@ if (gotSingleInstanceLock) {
         void taskHomePluginManager?.refreshFromWorkspace(saved)
         return saved
       })
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewLayout, (event, rawProjectId: unknown) => {
+      if (!isAuthorizedMainWindowInvoke(event) || typeof rawProjectId !== 'string') throw new Error('runtime-preview-layout-not-authorized')
+      return getRuntimePreviewLayoutStore().get(rawProjectId)
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.saveRuntimePreviewLayout, (event, rawProjectId: unknown, rawSize: unknown) => {
+      if (!isAuthorizedMainWindowInvoke(event) || typeof rawProjectId !== 'string' || !isRecord(rawSize)) throw new Error('runtime-preview-layout-not-authorized')
+      return getRuntimePreviewLayoutStore().save(rawProjectId, rawSize as { width: number; height: number })
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.resetRuntimePreviewLayout, (event, rawProjectId: unknown) => {
+      if (!isAuthorizedMainWindowInvoke(event) || typeof rawProjectId !== 'string') throw new Error('runtime-preview-layout-not-authorized')
+      return getRuntimePreviewLayoutStore().reset(rawProjectId)
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.inspectRuntimeDirectory, async (_event, rawRoot: unknown) => {
       if (typeof rawRoot !== 'string') {
@@ -1794,6 +1812,7 @@ if (gotSingleInstanceLock) {
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.clearChatWorkspaceData, () => {
       return runChatWorkspaceOperation(async () => {
         await clearChatWorkspaceData(userDataPath)
+        await getRuntimePreviewLayoutStore().clear()
       })
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.clearClaudeAgentSettings, () => {
@@ -2543,6 +2562,10 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function isAuthorizedMainWindowInvoke(event: Electron.IpcMainInvokeEvent): boolean {
+  return Boolean(win && !win.isDestroyed() && event.sender.id === win.webContents.id && event.senderFrame === event.sender.mainFrame)
 }
 
 function isAgentKnowledgeSearchKind(value: unknown): value is AgentKnowledgeSearchKind {

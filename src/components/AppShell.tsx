@@ -2138,6 +2138,7 @@ export function AppShell() {
         return next
       })
       if (!didRemove) return
+      void window.desktop?.resetRuntimePreviewLayout?.(projectId)
       setSelectedProjectSkill((current) => (current?.projectId === projectId ? null : current))
       goHome()
     },

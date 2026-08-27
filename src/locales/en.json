@@ -187,7 +187,13 @@
     "openTab": "Create Workbench",
     "preview": "Preview",
     "noLogs": "No logs yet",
-    "projectRuntime": "Project Runtime"
+    "projectRuntime": "Project Runtime",
+    "resizePreviewWidth": "Resize preview width; use Left and Right arrows for fine adjustments",
+    "resizePreviewHeight": "Resize preview height; use Up and Down arrows for fine adjustments",
+    "resizePreviewBoth": "Resize preview width and height",
+    "resetPreviewSizeHint": "Double-click to restore the default size",
+    "previewSizeSaving": "Saving size…",
+    "previewSizeSaveFailed": "Could not save the size. Please retry."
   },
   "projectChatWindow": {
     "aria": "Project chat",

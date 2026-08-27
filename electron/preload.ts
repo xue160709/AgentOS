@@ -41,7 +41,7 @@ import type {
   ClaudeChatAttachmentPickerResult,
   ClaudeChatAPI,
 } from '../src/claude-chat-types'
-import type { DesktopAPI, LocalAppCloseTabResult, LocalAppCreationResult, LocalAppDefinitionResult, LocalAppOpenTabResult, LocalAppPreviewResult, LocalAppRelocationResult, ProjectRuntimeResult, RuntimeCreationResult, RuntimeDefinitionResult, RuntimeInspectResult, RuntimePreviewHost, RuntimePreviewNavigationState, RuntimePreviewResult, WorkspaceTabCloseResult, WorkspaceTabResult } from '../src/desktop-api'
+import type { DesktopAPI, LocalAppCloseTabResult, LocalAppCreationResult, LocalAppDefinitionResult, LocalAppOpenTabResult, LocalAppPreviewResult, LocalAppRelocationResult, ProjectRuntimeResult, RuntimeCreationResult, RuntimeDefinitionResult, RuntimeInspectResult, RuntimePreviewHost, RuntimePreviewLayout, RuntimePreviewLayoutSize, RuntimePreviewNavigationState, RuntimePreviewResult, WorkspaceTabCloseResult, WorkspaceTabResult } from '../src/desktop-api'
 import type { LocalAppRuntimeEvent, LocalAppRuntimeSnapshot, RuntimeEvent, RuntimeSnapshot } from '../src/components/types'
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
 import {
@@ -314,6 +314,15 @@ const desktopAdapter = {
   },
   createRuntimePreview(host: RuntimePreviewHost) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createRuntimePreview, host) as Promise<RuntimePreviewResult>
+  },
+  getRuntimePreviewLayout(projectId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewLayout, projectId) as Promise<RuntimePreviewLayout>
+  },
+  saveRuntimePreviewLayout(projectId: string, size: RuntimePreviewLayoutSize) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveRuntimePreviewLayout, projectId, size) as Promise<RuntimePreviewLayout>
+  },
+  resetRuntimePreviewLayout(projectId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.resetRuntimePreviewLayout, projectId) as Promise<RuntimePreviewLayout>
   },
   getRuntimePreviewNavigationState(previewId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewNavigationState, previewId) as Promise<RuntimePreviewNavigationState | null>

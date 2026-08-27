@@ -187,7 +187,13 @@
     "openTab": "创建工作台",
     "preview": "预览",
     "noLogs": "暂无日志",
-    "projectRuntime": "项目运行时"
+    "projectRuntime": "项目运行时",
+    "resizePreviewWidth": "调整预览宽度；可用左右方向键微调",
+    "resizePreviewHeight": "调整预览高度；可用上下方向键微调",
+    "resizePreviewBoth": "同时调整预览宽度和高度",
+    "resetPreviewSizeHint": "双击恢复默认尺寸",
+    "previewSizeSaving": "正在保存尺寸…",
+    "previewSizeSaveFailed": "尺寸保存失败，请重试"
   },
   "projectChatWindow": {
     "aria": "项目对话",
