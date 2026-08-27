@@ -39,10 +39,32 @@ import type {
   AgentKnowledgeSearchProject,
   AgentKnowledgeSearchResult,
   ClaudeChatAttachmentPickerResult,
+  ClaudeChatAPI,
 } from '../src/claude-chat-types'
 import type { DesktopAPI, LocalAppCloseTabResult, LocalAppCreationResult, LocalAppDefinitionResult, LocalAppOpenTabResult, LocalAppPreviewResult, LocalAppRelocationResult, ProjectRuntimeResult, RuntimeCreationResult, RuntimeDefinitionResult, RuntimeInspectResult, RuntimePreviewHost, RuntimePreviewResult, WorkspaceTabCloseResult, WorkspaceTabResult } from '../src/desktop-api'
 import type { LocalAppRuntimeEvent, LocalAppRuntimeSnapshot, RuntimeEvent, RuntimeSnapshot } from '../src/components/types'
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
+import {
+  type AnswerProjectPromptInput,
+  type ArchiveProjectThreadInput,
+  type CancelProjectRunInput,
+  type CreateProjectThreadInput,
+  type EditAndSubmitProjectRunInput,
+  type ForkProjectThreadInput,
+  type MarkProjectFileDiffReviewedInput,
+  type RewindProjectFileDiffInput,
+  type ReportProjectChatPresenceInput,
+  type SaveProjectChatWindowViewStateInput,
+  type SubmitProjectRunInput,
+  type SetProjectThreadModelInput,
+  type SetProjectThreadPinnedInput,
+  type ProjectChatAPI,
+  type ProjectChatClientEvent,
+  type GetProjectChatThreadStatusInput,
+  type ReadProjectChatAttachmentsInput,
+  type SearchProjectChatFilesInput,
+} from '../src/project-chat-contract'
+import { PROJECT_CHAT_EVENT_CHANNELS, PROJECT_CHAT_INVOKE_CHANNELS } from '../src/project-chat-ipc-seam'
 
 const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
 
@@ -401,11 +423,9 @@ const desktopAdapter = {
   },
 } satisfies DesktopAPI
 
-contextBridge.exposeInMainWorld('desktop', desktopAdapter)
-
 // --- Claude chat IPC / Claude 聊天 IPC ---
 
-contextBridge.exposeInMainWorld('claudeChat', {
+const claudeChatAdapter: ClaudeChatAPI = {
   submit(payload: ClaudeChatSubmitPayload) {
     return ipcRenderer.invoke('claude-chat:submit', payload)
   },
@@ -441,4 +461,95 @@ contextBridge.exposeInMainWorld('claudeChat', {
     ipcRenderer.on(CLAUDE_CHAT_EVENT_CHANNEL, listener)
     return () => ipcRenderer.off(CLAUDE_CHAT_EVENT_CHANNEL, listener)
   },
-})
+}
+
+// Disabled Project Chat v2 bridge. M0-05 is responsible for enabling callers/handlers.
+const projectChatAdapter: ProjectChatAPI = {
+  getSnapshot(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getSnapshot, projectId)
+  },
+  createThread(input: CreateProjectThreadInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.createThread, input)
+  },
+  submitRun(input: SubmitProjectRunInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.submitRun, input)
+  },
+  forkThread(input: ForkProjectThreadInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.forkThread, input) },
+  editAndSubmitRun(input: EditAndSubmitProjectRunInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.editAndSubmitRun, input) },
+  archiveThread(input: ArchiveProjectThreadInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.archiveThread, input) },
+  setThreadPinned(input: SetProjectThreadPinnedInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.setThreadPinned, input) },
+  setThreadModel(input: SetProjectThreadModelInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.setThreadModel, input) },
+  markFileDiffReviewed(input: MarkProjectFileDiffReviewedInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.markFileDiffReviewed, input) },
+  rewindFileDiff(input: RewindProjectFileDiffInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.rewindFileDiff, input) },
+  cancelRun(input: CancelProjectRunInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.cancelRun, input)
+  },
+  answerPrompt(input: AnswerProjectPromptInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.answerPrompt, input)
+  },
+  reportPresenceSelection(input: ReportProjectChatPresenceInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.reportPresenceSelection, input) },
+  openProjectWindow(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openProjectWindow, projectId)
+  },
+  openWorkspaceTabProjectChat(workspaceTabId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openWorkspaceTabProjectChat, workspaceTabId)
+  },
+  openProjectPreview(projectId: string) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openProjectPreview, projectId) },
+  openProjectPathRecovery(projectId: string) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openProjectPathRecovery, projectId) },
+  getWindowViewState(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getWindowViewState, projectId)
+  },
+  saveWindowViewState(input: SaveProjectChatWindowViewStateInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.saveWindowViewState, input)
+  },
+  markExternalTasksSeen(projectId: string, seenAt: number) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.markExternalTasksSeen, { projectId, seenAt }) },
+  listWebsiteBindings() {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.listWebsiteBindings)
+  },
+  revokeWebsiteBinding(bindingId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.revokeWebsiteBinding, bindingId)
+  },
+  respondToWebsitePairing(input) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.respondToWebsitePairing, input)
+  },
+  initializePermissionMode(legacyMode) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.initializePermissionMode, legacyMode)
+  },
+  setPermissionMode(mode) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.setPermissionMode, mode)
+  },
+  getModelCatalog() {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getModelCatalog)
+  },
+  getAgentContext(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getAgentContext, projectId)
+  },
+  searchProjectFiles(input: SearchProjectChatFilesInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.searchProjectFiles, input)
+  },
+  pickAttachments(options?: { allowImages?: boolean }) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.pickAttachments, options)
+  },
+  readProjectAttachments(input: ReadProjectChatAttachmentsInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.readProjectAttachments, input)
+  },
+  getThreadStatus(input: GetProjectChatThreadStatusInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getThreadStatus, input)
+  },
+  onEvent(handler: (event: ProjectChatClientEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: ProjectChatClientEvent) => handler(event)
+    ipcRenderer.on(PROJECT_CHAT_EVENT_CHANNELS.onEvent, listener)
+    return () => ipcRenderer.off(PROJECT_CHAT_EVENT_CHANNELS.onEvent, listener)
+  },
+}
+
+/** Only Main-controlled BrowserWindow additionalArguments select this profile. */
+export function isProjectChatWindowProfile(argv: readonly string[] = process.argv): boolean {
+  return argv.includes('--agentos-window-kind=project-chat')
+}
+
+if (!isProjectChatWindowProfile()) {
+  contextBridge.exposeInMainWorld('desktop', desktopAdapter)
+  contextBridge.exposeInMainWorld('claudeChat', claudeChatAdapter)
+}
+contextBridge.exposeInMainWorld('projectChat', projectChatAdapter)

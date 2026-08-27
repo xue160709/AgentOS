@@ -20,7 +20,43 @@ function loadChatRunModule() {
     fileName: modulePath,
   })
   const module = { exports: {} }
+  const localRequire = (specifier) => {
+    if (specifier === '../../project-chat-reducer') return loadProjectChatReducerModule()
+    return require(specifier)
+  }
+  Function('exports', 'module', 'require', outputText)(module.exports, module, localRequire)
+  return module.exports
+}
+
+function loadProjectChatReducerModule() {
+  const modulePath = resolve(testDir, '../src/project-chat-reducer.ts')
+  const source = readFileSync(modulePath, 'utf8')
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+    fileName: modulePath,
+  })
+  const module = { exports: {} }
   Function('exports', 'module', 'require', outputText)(module.exports, module, require)
+  return module.exports
+}
+
+function loadRunnerModule() {
+  const modulePath = resolve(testDir, './claude-agent-runner.ts')
+  const source = readFileSync(modulePath, 'utf8')
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }, fileName: modulePath })
+  class Coalescer { constructor(publish) { this.publish = publish } emit(event) { this.publish(event) } flushRequest() {} }
+  class Router { constructor() {} }
+  const module = { exports: {} }
+  const localRequire = (specifier) => {
+    if (specifier === '@anthropic-ai/claude-agent-sdk') return { query: () => undefined }
+    if (specifier === './claude-agent-runner/event-coalescer') return { ClaudeChatEventCoalescer: Coalescer }
+    if (specifier === './claude-agent-runner/sdk-message-router') return { ClaudeSdkMessageRouter: Router }
+    if (specifier === './claude-agent-runner/input') return { normalizeSubmitAttachments: () => [], resolveWorkspaceCwd: (cwd, fallback) => cwd ?? fallback }
+    if (specifier === './safe-console') return { safeConsoleError() {}, safeConsoleInfo() {}, safeConsoleWarn() {} }
+    if (specifier.startsWith('./claude-agent-runner/') || specifier === './agent-context' || specifier === './home-plugin-customization-prompt') return {}
+    return require(specifier)
+  }
+  Function('exports', 'module', 'require', outputText)(module.exports, module, localRequire)
   return module.exports
 }
 
@@ -610,4 +646,14 @@ test('Chat Run interface absorbs terminal-before-submit-acknowledgement races', 
   assert.equal(accepted, undefined)
   assert.equal(harness.run.runStateForThread('thread-1'), undefined)
   assert.equal(harness.scheduled[0].delayMs, 30_000)
+})
+
+test('runner rewind restores a durable session only when no in-memory session exists', async () => {
+  const { ClaudeAgentRunner } = loadRunnerModule()
+  const runner = new ClaudeAgentRunner({ publish() {} }, '/workspace', () => ({}), async () => ({}), async () => ({}), () => 'zh')
+  await runner.rewindFiles({ threadId: 'restart-thread', checkpointId: 'checkpoint', sessionId: ' durable-session ' })
+  assert.equal(runner.threadRuntimeStates.get('restart-thread').sessionId, 'durable-session')
+  runner.threadRuntimeStates.set('live-thread', { sessionId: 'live-session' })
+  await runner.rewindFiles({ threadId: 'live-thread', checkpointId: 'checkpoint', sessionId: 'durable-session' })
+  assert.equal(runner.threadRuntimeStates.get('live-thread').sessionId, 'live-session')
 })

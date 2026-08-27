@@ -25,6 +25,7 @@ import {
   type StaticOutputValidation,
   validateStaticOutput,
 } from './static'
+import type { RuntimeEditCoordinator, RuntimeEditIntent } from '../runtime-edit-coordinator'
 
 export const LOCAL_APP_RUNTIME_DEFAULTS = {
   prepareTimeoutMs: 120_000,
@@ -59,6 +60,8 @@ export type LocalAppInspectResult =
       lockfilePath?: string
       lockDigest?: string
       nodeModulesPresent: boolean
+      /** The only reliable signal that a temporary edit-time dev Runtime is supported. */
+      hasDevScript: boolean
       mode: 'development' | 'static'
       agentos?: RuntimeStaticDeclaration
     }
@@ -137,6 +140,7 @@ const { spawn } = require('node:child_process')
 const TERM_TIMEOUT_MS = __TERM_TIMEOUT_MS__
 const KILL_TIMEOUT_MS = __KILL_TIMEOUT_MS__
 const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npmArgs = __NPM_ARGS__
 
 let child
 let closing = false
@@ -251,7 +255,7 @@ process.once('unhandledRejection', (reason) => {
 })
 
 try {
-  child = spawn(npmExecutable, ['run', 'dev'], {
+  child = spawn(npmExecutable, npmArgs, {
     cwd: process.cwd(),
     shell: false,
     detached: process.platform !== 'win32',
@@ -277,12 +281,27 @@ try {
 }
 `
 
-function createRuntimeLivenessBridgeSource(termTimeoutMs: number, killTimeoutMs: number): string {
+function createRuntimeLivenessBridgeSource(termTimeoutMs: number, killTimeoutMs: number, npmArgs: readonly string[]): string {
   const safeTermTimeout = Number.isFinite(termTimeoutMs) && termTimeoutMs >= 0 ? Math.floor(termTimeoutMs) : LOCAL_APP_RUNTIME_DEFAULTS.termTimeoutMs
   const safeKillTimeout = Number.isFinite(killTimeoutMs) && killTimeoutMs >= 0 ? Math.floor(killTimeoutMs) : LOCAL_APP_RUNTIME_DEFAULTS.killTimeoutMs
   return RUNTIME_LIVENESS_BRIDGE_SOURCE
     .replace('__TERM_TIMEOUT_MS__', String(safeTermTimeout))
     .replace('__KILL_TIMEOUT_MS__', String(safeKillTimeout))
+    .replace('__NPM_ARGS__', JSON.stringify(npmArgs))
+}
+
+const NEXT_TURBOPACK_CONFIG_CONFLICT = /empty turbopack config in your Next config file/i
+
+/**
+ * Next 16 enables Turbopack by default and exits when an older project has a
+ * custom webpack config but no Turbopack config. Retry only that recognized
+ * compatibility failure with Next's documented webpack CLI switch. Other
+ * frameworks and arbitrary startup failures keep their original command.
+ */
+export function runtimeDevCommandArgs(logs: readonly RuntimeLogEntry[]): string[] {
+  return logs.some((entry) => entry.stream === 'stderr' && NEXT_TURBOPACK_CONFIG_CONFLICT.test(entry.line))
+    ? ['run', 'dev', '--', '--webpack']
+    : ['run', 'dev']
 }
 
 type ActiveRuntime = {
@@ -390,6 +409,7 @@ export async function inspectLocalAppDirectory(rootPath: string): Promise<LocalA
       lockfilePath: hasLockfile ? lockfilePath : undefined,
       lockDigest,
       nodeModulesPresent: existsSync(path.join(canonicalRoot, 'node_modules')),
+      hasDevScript: Boolean(scripts && typeof scripts.dev === 'string' && scripts.dev.trim()),
       mode: staticDeclaration.declaration ? 'static' : 'development',
       agentos: staticDeclaration.declaration,
     }
@@ -397,6 +417,74 @@ export async function inspectLocalAppDirectory(rootPath: string): Promise<LocalA
     const code = (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'path-missing' : 'invalid-root'
     return { ok: false, rootPath, code, message: code === 'path-missing' ? 'Runtime 目录不存在' : 'Runtime 目录不可用' }
   }
+}
+
+/**
+ * Narrow adapter from Agent edit facts to the Revision 5 Runtime. It owns no
+ * edit/session state: the coordinator remains the generation fence, while the
+ * Runtime remains the sole owner of dev processes, builds and last-good.
+ */
+export class RuntimeEditRuntimeBridge {
+  constructor(private readonly options: {
+    coordinator: Pick<RuntimeEditCoordinator, 'beginBuild' | 'completeBuild'>
+    manager: Pick<LocalAppRuntimeManager, 'register' | 'start' | 'release' | 'build' | 'cancelBuild'>
+    resolveDefinition: (projectId: string) => LocalAppDefinition | null
+    inspect?: (rootPath: string) => Promise<LocalAppInspectResult>
+  }) {}
+
+  async handle(intent: RuntimeEditIntent): Promise<void> {
+    if (intent.type === 'potential-run-registered') {
+      // A new potential writer invalidates a currently settling generation.
+      // Cancelling is bounded by the Runtime; a later build is started only by
+      // the coordinator's newest settle intent.
+      const definition = this.options.resolveDefinition(intent.projectId)
+      if (definition) await this.options.manager.cancelBuild(definition.id)
+      return
+    }
+    if (intent.type === 'agent-lease-acquired') {
+      await this.startTemporaryDevelopment(intent.projectId, editConsumerId(intent.projectId, intent.requestId, intent.toolUseId))
+      return
+    }
+    if (intent.type === 'agent-lease-released') {
+      const definition = this.options.resolveDefinition(intent.projectId)
+      if (definition) await this.options.manager.release(definition.id, editConsumerId(intent.projectId, intent.requestId, intent.toolUseId))
+      return
+    }
+    if (intent.type !== 'settle') return
+
+    const definition = this.options.resolveDefinition(intent.projectId)
+    if (!definition) return
+    const inspected = await (this.options.inspect ?? inspectLocalAppDirectory)(definition.rootPath)
+    // Development-only, static-less and invalid declarations are deliberately
+    // no-ops. There is no command inference path here.
+    if (!inspected.ok || inspected.mode !== 'static' || !inspected.agentos) return
+    const operationId = this.options.coordinator.beginBuild(intent.projectId, intent.editGeneration)
+    if (!operationId) return
+    try {
+      this.options.manager.register({ ...definition, mode: 'static', agentos: inspected.agentos })
+      await this.options.manager.build(definition.id)
+    } finally {
+      this.options.coordinator.completeBuild(intent.projectId, intent.editGeneration, operationId)
+    }
+  }
+
+  private async startTemporaryDevelopment(projectId: string, consumerId: string): Promise<void> {
+    const definition = this.options.resolveDefinition(projectId)
+    if (!definition) return
+    const inspected = await (this.options.inspect ?? inspectLocalAppDirectory)(definition.rootPath)
+    // A development-only Runtime is already a valid managed dev Runtime. A
+    // static Runtime may use one only when its package declares dev explicitly.
+    if (!inspected.ok || (inspected.mode === 'static' && !inspected.hasDevScript)) return
+    const developmentDefinition: LocalAppDefinition = inspected.mode === 'static'
+      ? { ...definition, mode: 'development', agentos: undefined }
+      : { ...definition, mode: 'development' }
+    this.options.manager.register(developmentDefinition)
+    await this.options.manager.start(definition.id, consumerId)
+  }
+}
+
+function editConsumerId(projectId: string, requestId: string, toolUseId: string): string {
+  return `runtime-edit:${projectId}:${requestId}:${toolUseId}`
 }
 
 export async function allocateLoopbackPort(): Promise<number> {
@@ -1154,7 +1242,8 @@ export class LocalAppRuntimeSupervisor {
   }
 
   private spawnNpm(runtime: ActiveRuntime, cwd: string, port: number): RuntimeProcess {
-    const child = this.spawnProcess(runtimeBridgeExecutable(), ['-e', createRuntimeLivenessBridgeSource(this.defaults.termTimeoutMs, this.defaults.killTimeoutMs)], {
+    const npmArgs = runtimeDevCommandArgs(runtime.logs)
+    const child = this.spawnProcess(runtimeBridgeExecutable(), ['-e', createRuntimeLivenessBridgeSource(this.defaults.termTimeoutMs, this.defaults.killTimeoutMs, npmArgs)], {
       cwd,
       shell: false,
       detached: process.platform !== 'win32',

@@ -34,17 +34,25 @@ export type PreviewViewFactory = (options: {
 /** Main-owned registration hook for a static preview's isolated session. */
 export type StaticPreviewSessionRegistrar = (session: Session, previewUrl: string) => Promise<void> | void
 
+/**
+ * The only Preview-to-Main escape hatch. The receiver owns protocol parsing
+ * and routing; Preview never receives a bridge, token, or protocol parser.
+ */
+export type PreviewAgentOSDeepLinkHandler = (rawUrl: string, session: PreviewSessionSnapshot) => void
+
 export type LocalAppPreviewManagerOptions = {
   window: BrowserWindow
   createView: PreviewViewFactory
   registerStaticPreviewSession?: StaticPreviewSessionRegistrar
   onEvent?: (snapshot: PreviewSessionSnapshot) => void
+  onAgentOSDeepLink?: PreviewAgentOSDeepLinkHandler
 }
 
 type ActivePreview = {
   snapshot: PreviewSessionSnapshot
   view: WebContentsView
   origin: string
+  capturedAgentOSUrls: Set<string>
 }
 
 export class LocalAppPreviewManager {
@@ -52,6 +60,7 @@ export class LocalAppPreviewManager {
   private readonly createView: PreviewViewFactory
   private readonly registerStaticPreviewSession?: StaticPreviewSessionRegistrar
   private readonly onEvent?: (snapshot: PreviewSessionSnapshot) => void
+  private readonly onAgentOSDeepLink?: PreviewAgentOSDeepLinkHandler
   private readonly previews = new Map<string, ActivePreview>()
 
   constructor(options: LocalAppPreviewManagerOptions) {
@@ -59,6 +68,7 @@ export class LocalAppPreviewManager {
     this.createView = options.createView
     this.registerStaticPreviewSession = options.registerStaticPreviewSession
     this.onEvent = options.onEvent
+    this.onAgentOSDeepLink = options.onAgentOSDeepLink
   }
 
   get(previewId: string): PreviewSessionSnapshot | null {
@@ -158,7 +168,7 @@ export class LocalAppPreviewManager {
       previewId, tabId, localAppId, runtimeId: runtime.runtimeId, generation: runtime.generation,
       status: 'loading', readyUrl,
     }
-    const active: ActivePreview = { snapshot, view, origin }
+    const active: ActivePreview = { snapshot, view, origin, capturedAgentOSUrls: new Set() }
     this.previews.set(previewId, active)
     this.configureSecurity(active)
     this.window.contentView.addChildView(view)
@@ -252,11 +262,22 @@ export class LocalAppPreviewManager {
 
   private configureSecurity(active: ActivePreview): void {
     const contents = active.view.webContents
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    contents.setWindowOpenHandler(({ url }) => {
+      this.captureAgentOSDeepLink(active, url)
+      return { action: 'deny' }
+    })
     contents.on('will-navigate', (event, targetUrl) => {
+      if (this.captureAgentOSDeepLink(active, targetUrl)) {
+        event.preventDefault()
+        return
+      }
       if (!isAllowedPreviewNavigation(targetUrl, active.origin)) event.preventDefault()
     })
     contents.on('will-redirect', (event, targetUrl) => {
+      if (this.captureAgentOSDeepLink(active, targetUrl)) {
+        event.preventDefault()
+        return
+      }
       if (!isAllowedPreviewNavigation(targetUrl, active.origin)) event.preventDefault()
     })
     contents.on('did-start-loading', () => {
@@ -280,6 +301,27 @@ export class LocalAppPreviewManager {
     })
     contents.session.setPermissionRequestHandler?.((_webContents, _permission, callback) => callback(false))
   }
+
+  /**
+   * agentos:// remains a denied Preview navigation. A current session may hand
+   * the raw URL to Main once; all parsing, deduplication, and task routing stay
+   * in Main's shared AgentOS queue.
+   */
+  private captureAgentOSDeepLink(active: ActivePreview, targetUrl: string): boolean {
+    if (!isAgentOSUrl(targetUrl)) return false
+    if (!this.isActive(active)) return true
+    if (active.capturedAgentOSUrls.has(targetUrl)) return true
+    active.capturedAgentOSUrls.add(targetUrl)
+    this.onAgentOSDeepLink?.(targetUrl, active.snapshot)
+    // The callback is intentionally synchronous. Re-checking means a callback
+    // that closes/replaces the Preview cannot cause any follow-up Preview work.
+    if (!this.isActive(active)) return true
+    return true
+  }
+
+  private isActive(active: ActivePreview): boolean {
+    return this.previews.get(active.snapshot.previewId) === active && active.snapshot.status !== 'closed'
+  }
 }
 
 /** Neutral public name; the physical module path remains migration-only. */
@@ -295,6 +337,10 @@ export function isAllowedPreviewNavigation(targetUrl: string, origin: string): b
   } catch {
     return false
   }
+}
+
+function isAgentOSUrl(targetUrl: string): boolean {
+  try { return new URL(targetUrl).protocol === 'agentos:' } catch { return false }
 }
 
 function normalizeStaticPreviewUrl(raw: string): string | null {

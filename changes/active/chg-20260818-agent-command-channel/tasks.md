@@ -42,22 +42,28 @@ coverage_gate: ready_for_implementation
 - [x] `CONFIRM-02` owner: user｜依赖：`DISC-MERGE-02`｜执行：conversation｜2026-08-27 用户要求先基于事实统一，并直接产出可交付 Terra 的 spec/TODO；Decision Brief 与三个建议默认选择据此转为 accepted。
 - [x] `SPEC-02` owner: main_agent｜依赖：`CONFIRM-02`｜写入：change package｜已冻结 `design.md`、`technical.md`、`protocol-v1.md`、`acceptance.md`，明确产品行为、数据/IPC/状态机、网站线协议、错误码和门禁。
 - [x] `SYNC-02` owner: main_agent｜依赖：`SPEC-02`｜写入：`prd/**`、`TODO.md`、change package｜已同步 Revision 2 planned 状态、正式 GWT、根 TODO 与 Terra work orders；未写业务代码。
-- [x] `PLAN-TERRA-02` owner: main_agent｜依赖：`SPEC-02`｜写入：`work-orders/**`｜已拆成 13 个串行/依赖明确的 work order，每单含 read/write allowlist、步骤、测试、完成/停止条件。
+- [x] `PLAN-TERRA-02` owner: main_agent｜依赖：`SPEC-02`｜写入：`work-orders/**`｜已拆成逐单串行/依赖明确的 work orders；M0 实施复核中按事实增加 M0-05A scoped-capability、M0-05B thread-mutation、M0-05C single-writer coordinator 与 M0-05D runtime/scoped-services 前置，每单均含 read/write allowlist、步骤、测试、完成/停止条件。
 
-### Revision 2 实现 Work Orders（均未开工）
+### Revision 2 实现 Work Orders
 
-- [ ] `M0-01` owner: implementation_engineer｜依赖：`SYNC-02`｜任务单：`work-orders/M0-01-contracts-runner-sink.md`｜共享合同、纯 reducer、runner event sink。
-- [ ] `M0-02` owner: implementation_engineer｜依赖：`M0-01`｜任务单：`work-orders/M0-02-main-chat-broker.md`｜Main broker、single writer、run/prompt 路由。
-- [ ] `M0-03` owner: implementation_engineer｜依赖：`M0-02`｜任务单：`work-orders/M0-03-ipc-permission-capability.md`｜typed IPC、sender capability、app-global permission。
-- [ ] `M0-04` owner: implementation_engineer｜依赖：`M0-03`｜任务单：`work-orders/M0-04-project-chat-window.md`｜每项目唯一窗口与 view state。
-- [ ] `M0-05` owner: implementation_engineer｜依赖：`M0-04`｜任务单：`work-orders/M0-05-renderer-cutover.md`｜主窗口 snapshot 投影、封闭 renderer durable writer。
-- [ ] `M0-06` owner: implementation_engineer｜依赖：`M0-05`｜任务单：`work-orders/M0-06-project-window-command-channel.md`｜完整项目窗口、Revision 1 通道迁移；完成后执行 M0 Gate。
-- [ ] `M1-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：`work-orders/M1-01-binding-protocol-stores.md`｜protocol parser、Binding/receipt stores。
-- [ ] `M1-02` owner: implementation_engineer｜依赖：`M1-01`｜任务单：`work-orders/M1-02-deep-link-ticket.md`｜cold/warm deep link、HTTPS Ticket、外部任务提交。
-- [ ] `M1-03` owner: implementation_engineer｜依赖：`M1-02`｜任务单：`work-orders/M1-03-pairing-settings-focus.md`｜配对/连接管理 UI 与新任务焦点规则。
-- [ ] `M1A-01` owner: implementation_engineer｜依赖：`M1-02`｜任务单：`work-orders/M1A-01-preview-capture.md`｜Preview 窄捕获与安全隔离。
-- [ ] `M2-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：`work-orders/M2-01-runtime-edit-coordinator.md`｜edit lease、mutation、settle generation。
-- [ ] `M2-02` owner: implementation_engineer｜依赖：`M2-01`｜任务单：`work-orders/M2-02-runtime-ui-integration.md`｜接入 Runtime/last-good 与状态 UI。
+- [x] `M0-01` owner: implementation_engineer｜依赖：`SYNC-02`｜任务单：`work-orders/M0-01-contracts-runner-sink.md`｜共享合同、唯一纯 reducer、runner event sink 与 WebContents 迁移 adapter 已完成；独立复跑 typecheck、目标测试 16/16、diff check 均 PASS，未实现 request ownership/unknown-request。
+- [x] `M0-02` owner: implementation_engineer｜依赖：`M0-01`｜任务单：`work-orders/M0-02-main-chat-broker.md`｜Broker core、single writer、run/prompt 路由与 creationSource 迁移已完成；独立复跑 typecheck、目标测试 46/46、diff check 均 PASS，未做 production wiring。
+- [x] `M0-03` owner: implementation_engineer｜依赖：`M0-02`｜任务单：`work-orders/M0-03-ipc-permission-capability.md`｜typed bridge、strict sender/frame/project capability、app-global permission 与 capability-aware broadcaster disabled seam 已完成；独立复跑 typecheck、目标测试 38/38、diff check 均 PASS，未 production wiring。
+- [x] `M0-04` owner: implementation_engineer｜依赖：`M0-03`｜任务单：`work-orders/M0-04-project-chat-window.md`｜每项目唯一 window manager、固定 scoped-profile 参数、原子 view state 与最小同 bundle 壳已完成；独立复跑 typecheck、目标测试 40/40、diff check 均 PASS，仍未 production wiring。
+- [x] `M0-05A` owner: implementation_engineer｜依赖：`M0-04`｜任务单：`work-orders/M0-05A-scoped-chat-capabilities.md`｜project-window 窄 preload、六个脱敏 capability、安全 attachment/thread snapshot projector 已完成；独立复跑 typecheck、目标测试 38/38、diff check 均 PASS，仍保持 disabled seam。
+- [x] `M0-05B` owner: implementation_engineer｜依赖：`M0-05A`｜任务单：`work-orders/M0-05B-broker-thread-mutations.md`｜fork/edit-resubmit/archive/pin/model/diff-review Main-owned intent 已完成；独立复跑 typecheck、目标测试 49/49、diff check 均 PASS，仍保持 disabled seam。
+- [x] `M0-05C` owner: implementation_engineer｜依赖：`M0-05B`｜任务单：`work-orders/M0-05C-workspace-coordinator.md`｜broker/Main 已共用唯一 read-transform-save operation coordinator；独立复跑目标测试 61/61、完整 Electron 199/199、typecheck 与 diff check 均 PASS，仍保持 disabled seam。
+- [x] `M0-05D` owner: implementation_engineer｜依赖：`M0-05C`｜任务单：`work-orders/M0-05D-runtime-scoped-services.md`｜真实 runner adapter、durable scoped read services、附件 canonical containment 已完成；独立复跑目标测试 53/53、完整 Electron 204/204、typecheck 与 diff check 均 PASS，仍保持 disabled composition。
+- [x] `M0-05E` owner: implementation_engineer｜依赖：`M0-05D`｜任务单：`work-orders/M0-05E-prompt-presence-rewind.md`｜Terra 回报完成：typecheck 0、目标 73/73、完整 Electron 210/210、diff check 0；按用户指示不再独立复核。
+- [x] `M0-05F` owner: implementation_engineer｜依赖：`M0-05E`｜任务单：`work-orders/M0-05F-production-composition.md`｜default-off production composition、TaskHome/sink/handler 原子边界已完成；typecheck、目标测试与 composition/window smoke 通过，完整 Electron 的 loopback 环境失败已在授权环境复跑排除。
+- [x] `M0-05` owner: implementation_engineer｜依赖：`M0-05F`｜任务单：`work-orders/M0-05-renderer-cutover.md`｜主窗口 snapshot 投影、recipient prompt ownership 与 renderer durable writer 封闭已完成；完整 Electron 219/219 通过。
+- [x] `M0-06` owner: implementation_engineer｜依赖：`M0-05`｜任务单：`work-orders/M0-06-project-window-command-channel.md`｜完整项目窗口与 Revision 1 通道迁移已完成；目标测试 36/36、完整 Electron 221/221、真实 Electron 入口/单窗/bridge/draft 恢复 smoke 通过。无凭据 fixture 未覆盖 active run/prompt owner GUI smoke，保留为默认开启前风险，不阻塞 M1/M2 开发。
+- [x] `M1-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：`work-orders/M1-01-binding-protocol-stores.md`｜protocol parser、加密 Binding store 与幂等 receipt store 已完成；typecheck 与目标测试 7/7 通过。
+- [x] `M1-02` owner: implementation_engineer｜依赖：`M1-01`｜任务单：`work-orders/M1-02-deep-link-ticket.md`｜cold/warm deep link、HTTPS Ticket、外部任务线性化与协议注册已完成；typecheck、diff check、目标测试 31/31 与受控 HTTPS fixture 通过。TS/Vite/Electron/zip build 成功，arm64 DMG 的 HFS+/APFS 环境失败保留为发布打包风险。
+- [x] `M1-03` owner: implementation_engineer｜依赖：`M1-02`｜任务单：`work-orders/M1-03-pairing-settings-focus.md`｜Main-only 配对 FIFO、网站连接管理、external task 焦点/持久未读、徽标 seen cursor 与路径恢复已完成；typecheck、diff check、目标测试及授权 loopback 环境完整 Electron 267/267 全部通过。
+- [x] `M1A-01` owner: implementation_engineer｜依赖：`M1-02`｜任务单：`work-orders/M1A-01-preview-capture.md`｜Preview 的合法 agentos pair/task 窄捕获、session/generation fence 与无 preload/Chat IPC 隔离已完成；typecheck、diff check 与目标测试 33/33 通过。
+- [x] `M2-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：`work-orders/M2-01-runtime-edit-coordinator.md`｜结构化 SDK hooks、edit lease、mutation、settle generation 与失败栅栏已完成；typecheck、diff check 与目标测试 42/42 通过。
+- [x] `M2-02` owner: implementation_engineer｜依赖：`M2-01`｜任务单：`work-orders/M2-02-runtime-ui-integration.md`｜Runtime intent、双 Host/Chat 状态、scoped preview navigation 与 last-good 收口已完成；精确安全断言 92/92、完整 Electron 243/243、typecheck 与 diff check 全部通过。
 - [ ] `CHECK-02` owner: quality_verifier｜依赖：`M1-03`、`M1A-01`、`M2-02`｜任务单：`work-orders/CHECK-02-development-check.md`｜执行独立 Development Check；仅在用户另行明确授权时进入正式验收。
 
 ## Revision 1 已完成基线

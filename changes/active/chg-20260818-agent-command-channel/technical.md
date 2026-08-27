@@ -1,7 +1,7 @@
 # Agent 指令通道与独立项目 Chat 窗口｜技术规格
 
 > Change：`chg-20260818-agent-command-channel` Revision 2  
-> 状态：Accepted / Planned，未实现  
+> 状态：Accepted / In implementation（M0-01–M0-05E 已完成，M0-05F production composition 开始）
 > 解释优先级：`protocol-v1.md`（网站线协议）→ 本文（进程/IPC/持久化）→ `design.md`（用户行为）→ work order。发现冲突必须停工更新规格，不能由实现者自行选择。
 
 ## 1. 实现目标与迁移边界
@@ -125,12 +125,122 @@ export type ProjectChatRunSnapshot = {
   error?: ProjectChatError
 }
 
+export type ProjectChatPromptPayload =
+  | {
+      kind: 'permission'
+      permissionRequestId: string
+      toolUseId: string
+      toolName: string
+      title: string
+      displayName: string
+      description: string
+      inputPreview: string
+    }
+  | {
+      kind: 'question'
+      permissionRequestId: string
+      toolUseId: string
+      questions: ClaudeAskUserQuestion[]
+    }
+
+export type ProjectChatPromptSnapshot = {
+  projectId: string
+  threadId: string
+  requestId: string
+  promptId: string
+  kind: ProjectChatPromptPayload['kind']
+  ownerWebContentsId?: number
+  createdAt: number
+  payload: ProjectChatPromptPayload
+}
+
+export type ProjectChatProjectSnapshot = {
+  id: string
+  name: string
+  pathMissing: boolean
+}
+
+export type ProjectChatMessageAttachment = {
+  id: string
+  kind: 'text' | 'image'
+  name: string
+  mimeType: string
+  size: number
+  preview?: string
+  dataUrl?: string
+}
+
+export type ProjectChatTaskItem = {
+  id: string
+  toolUseId?: string
+  subject: string
+  description?: string
+  activeForm?: string
+  status: 'pending' | 'in_progress' | 'completed' | 'deleted'
+  owner?: string
+  blocks?: string[]
+  blockedBy?: string[]
+  createdAt: number
+  updatedAt: number
+  order: number
+}
+
+export type ProjectChatTaskState = {
+  updatedAt: number
+  items: ProjectChatTaskItem[]
+}
+
+export type ProjectChatFileDiffFile = {
+  relativePath: string
+  status: ClaudeFileDiffFileStatus
+  additions: number
+  deletions: number
+  hunks: ClaudeFileDiffHunk[]
+  truncated?: boolean
+}
+
+export type ProjectChatTranscriptItem =
+  | (Omit<ChatMessageItem, 'attachments'> & { attachments?: ProjectChatMessageAttachment[] })
+  | ChatToolItem
+  | ChatThinkingItem
+  | ChatActivityItem
+  | ChatContextCompactionItem
+  | {
+      type: 'file_diff'
+      id: string
+      changeSetId: string
+      files: ProjectChatFileDiffFile[]
+      status: ClaudeFileChangeSetStatus
+      detail?: string
+    }
+
+export type ProjectChatThreadSnapshot = {
+  id: string
+  projectId: string
+  title: string
+  purpose?: 'home-plugin-customization' | 'home-plugin-card-customization' | 'task-run' | 'skill-run'
+  homePluginSlug?: string
+  skillCommand?: string
+  skillTitle?: string
+  createdAt: number
+  updatedAt: number
+  pinnedAt?: number
+  archivedAt?: number
+  chatState: {
+    model: string
+    modelPick?: ChatModelPick
+    tasks?: ProjectChatTaskState
+    items: ProjectChatTranscriptItem[]
+  }
+}
+
 export type ProjectChatSnapshot = {
   projectId: string
+  project: ProjectChatProjectSnapshot
   workspaceRevision: number
   sequence: number
   routeGeneration: number
-  threads: WorkspaceThread[]
+  threads: ProjectChatThreadSnapshot[]
   runs: ProjectChatRunSnapshot[]
   pendingPrompts: ProjectChatPromptSnapshot[]
   permissionMode: ClaudePermissionMode
@@ -149,6 +259,10 @@ export type ProjectChatEvent = {
 
 v1 事件采用完整项目 snapshot，而不是 renderer 自行 patch durable state。实现可以在以后新增 patch event，但不得在本变更中同时维护两种权威折叠路径。
 
+`ProjectChatProjectSnapshot` 是独立窗口可见的最小项目摘要：只含显示名称与路径是否可用，不暴露本地绝对路径。项目已删除时 `getSnapshot` 返回 `project-not-found`；窗口据此显示“项目已移除”。
+
+`ProjectChatThreadSnapshot` 是 broker durable thread 的显式 renderer 投影，绝不能用 `WorkspaceThread`、`ChatState` 或对象 spread 代替。它故意不含 `sessionId`、`cwd`、`creationSource`/`bindingId`、`skillPath`、task `metadata`、message attachment `path`、file diff `path`/`checkpointId`/内部 `requestId`。`getSnapshot` 和 `ProjectChatEvent.snapshot` 必须经过同一个 projector；主窗口 capability 也不例外。Transcript 的用户/助手自然语言和已展示的 tool/thinking/activity 内容属于 Chat 可见内容，不做关键词式“脱敏”；这里只移除未列出的结构化内部字段。
+
 ### 4.1 Bridge API
 
 ```ts
@@ -156,6 +270,12 @@ export type ProjectChatAPI = {
   getSnapshot(projectId: string): Promise<ProjectChatResult<ProjectChatSnapshot>>
   createThread(input: CreateProjectThreadInput): Promise<ProjectChatResult<CreateProjectThreadResult>>
   submitRun(input: SubmitProjectRunInput): Promise<ProjectChatResult<SubmitProjectRunResult>>
+  forkThread(input: ForkProjectThreadInput): Promise<ProjectChatResult<CreateProjectThreadResult>>
+  editAndSubmitRun(input: EditAndSubmitProjectRunInput): Promise<ProjectChatResult<SubmitProjectRunResult>>
+  archiveThread(input: ArchiveProjectThreadInput): Promise<ProjectChatResult<void>>
+  setThreadPinned(input: SetProjectThreadPinnedInput): Promise<ProjectChatResult<void>>
+  setThreadModel(input: SetProjectThreadModelInput): Promise<ProjectChatResult<void>>
+  markFileDiffReviewed(input: MarkProjectFileDiffReviewedInput): Promise<ProjectChatResult<void>>
   cancelRun(input: CancelProjectRunInput): Promise<ProjectChatResult<void>>
   answerPrompt(input: AnswerProjectPromptInput): Promise<ProjectChatResult<void>>
   openProjectWindow(projectId: string): Promise<ProjectChatResult<void>>
@@ -165,13 +285,192 @@ export type ProjectChatAPI = {
   revokeWebsiteBinding(bindingId: string): Promise<ProjectChatResult<void>>
   initializePermissionMode(legacyMode?: ClaudePermissionMode): Promise<ProjectChatResult<ClaudePermissionMode>>
   setPermissionMode(mode: ClaudePermissionMode): Promise<ProjectChatResult<ClaudePermissionMode>>
+  getModelCatalog(): Promise<ProjectChatResult<ProjectChatModelCatalog>>
+  getAgentContext(projectId: string): Promise<ProjectChatResult<ProjectChatAgentContext>>
+  searchProjectFiles(input: SearchProjectChatFilesInput): Promise<ProjectChatResult<ProjectChatFileSearchItem[]>>
+  pickAttachments(options?: { allowImages?: boolean }): Promise<ProjectChatResult<ProjectChatAttachmentSelection>>
+  readProjectAttachments(input: ReadProjectChatAttachmentsInput): Promise<ProjectChatResult<ProjectChatAttachmentSelection>>
+  getThreadStatus(input: GetProjectChatThreadStatusInput): Promise<ProjectChatResult<ProjectChatThreadStatus>>
   onEvent(handler: (event: ProjectChatEvent) => void): () => void
 }
 ```
 
+为避免项目窗口复用现有 bridge 时读取 provider credential、任意本地路径或全局 desktop 能力，以上只读/选择能力使用以下冻结的脱敏 DTO：
+
+```ts
+type ProjectChatModelProvider = {
+  id: string
+  name: string
+  model: string
+  modelSupportsImages: boolean
+  defaultHaikuModel: string
+  defaultHaikuSupportsImages: boolean
+  defaultOpusModel: string
+  defaultOpusSupportsImages: boolean
+  defaultSonnetModel: string
+  defaultSonnetSupportsImages: boolean
+}
+
+type ProjectChatModelCatalog = {
+  activeProviderId: string
+  activeAnthropicModel: string
+  providers: ProjectChatModelProvider[]
+}
+
+type ProjectChatAgentContext = {
+  skills: Array<{
+    kind: 'skill' | 'command'
+    name: string
+    command: string
+    title: string
+    description: string
+    argumentHint: string
+    relativePath: string
+    scope: 'user' | 'project'
+    source: 'claude' | 'agent' | 'agents' | 'cursor'
+    native: boolean
+  }>
+  agents: Array<{
+    kind: 'agent'
+    name: string
+    description: string
+    relativePath: string
+    scope: 'user' | 'project'
+    source: 'claude' | 'agent' | 'agents' | 'cursor'
+    native: boolean
+    model?: string
+    tools: string[]
+  }>
+}
+
+type SearchProjectChatFilesInput = { projectId: string; query: string }
+type ProjectChatFileSearchItem = { label: string; relativePath: string; type: 'directory' | 'file' }
+
+type ProjectChatAttachment = {
+  id: string
+  kind: 'text' | 'image'
+  name: string
+  mimeType: string
+  size: number
+  text?: string
+  base64?: string
+  preview?: string
+  dataUrl?: string
+}
+type ProjectChatAttachmentSelection = {
+  attachments: ProjectChatAttachment[]
+  skipped: Array<{ name: string; reason: string }>
+}
+type ReadProjectChatAttachmentsInput = {
+  projectId: string
+  relativePaths: string[]
+  allowImages?: boolean
+}
+
+type GetProjectChatThreadStatusInput = { projectId: string; threadId: string }
+type ProjectChatThreadStatus = {
+  threadId: string
+  active: boolean
+  requestId?: string
+  reportedModel: string
+  permissionMode: string
+  tools: string[]
+  skills: string[]
+  slashCommands: string[]
+  agents: string[]
+  contextUsage?: ClaudeAgentStatusContextUsage
+  lastError?: string
+  updatedAt?: number
+}
+```
+
+`ProjectChatAttachment` 故意没有 `path`；native picker 可选择任意用户确认的文件，但只返回已读取的受限内容。附件合同沿用现有产品边界：每次最多 8 个；文本仅允许 MD/Markdown/TXT，实际 UTF-8 内容最多 512 KiB；图片仅允许 PNG/JPEG/GIF/WEBP，实际解码内容最多 5 MiB；一次请求的实际总内容最多 24 MiB。`id` 最多 256 UTF-16 code units，跨平台 basename `name` 最多 255，`preview` 最多 160。IPC router 必须先按这些字符/编码长度上限做廉价拒绝，再根据 `text` 的 UTF-8 bytes 或严格 base64 解码后的 bytes 重新计算大小；base64 超过 5 MiB 可对应的最大编码长度时不得先分配解码 Buffer。不信任 renderer 传入的 `size`，并拒绝 kind/mime/content 不一致、非法 base64、超数或超量的 submit。
+
+`readProjectAttachments` 只接收相对当前 capability project root 的路径；拒绝绝对路径、`..`、NUL 与超过 8 项，Main 还必须做 realpath/symlink containment。picker/read collaborator 的结果仍须逐项投影并执行上述数量、类型和实际体积上限；不合格项只可进入不含 path 的 `skipped`。`SubmitProjectRunInput.attachments` 从 M0-05A 起改为 `ProjectChatAttachment[]`，broker 给 runner 的内部 adapter 可补空 path，不得重新信任 renderer path。
+
+model catalog 不得含 `apiKey`、`authToken`、`apiKeyUrl`、`baseUrl`、auth mode 或 env 值；agent/file DTO 不得含 `rootPath`/绝对 `path`；thread status 不得含 `cwd`、`sessionId`、`baseUrl`、`endpointHost`、`apiKeySource` 或 credential。所有名为 `relativePath` 的输出仍须通过与输入相同的 POSIX/Windows 相对路径校验，不能仅因字段名为 relative 就信任；attachment/message attachment 的 `name` 必须取跨平台 basename。`getThreadStatus` 返回的 `threadId` 必须等于请求值。router 必须对 collaborator 输出再次逐字段投影，不能假设注入实现已脱敏。
+
 IPC 业务失败必须 resolve 为 `ProjectChatResult.ok=false`，不能依赖 Electron 对 thrown `Error` 自定义字段的序列化。只有 preload/transport 本身断开时 Promise 才 reject；renderer 统一显示脱敏 fallback，不从异常字符串解析 code。
 
-`CreateProjectThreadInput` 必须包含 `projectId`、`title`、`source: 'user' | 'app-command' | 'website'`，网站来源还必须含 Main 生成/验证的 `idempotencyKey`。`SubmitProjectRunInput` 必须包含 `projectId`、`threadId`、`text`，可选附件、模型与 handoff；不得由 renderer 传 `cwd`、permissionMode 或任意 sessionId。broker 从当前 durable thread/project 与 Main 偏好解析这些字段。
+`CreateProjectThreadInput` 必须包含 `projectId`、`title`、`source: 'user' | 'app-command' | 'website'`。网站 variant 还必须含 Main 已验证的 `idempotencyKey`、`bindingId` 与 `receivedAt`；broker 用后两者形成 durable creationSource。`SubmitProjectRunInput` 必须包含 `projectId`、`threadId`、`text`，可选附件、模型与 handoff；不得由 renderer 传 `cwd`、permissionMode 或任意 sessionId。broker 从当前 durable project path、thread `sessionId` 和 thread modelPick 解析这些字段，显式 input modelPick 才覆盖 thread 当前值。
+
+```ts
+type CreateProjectThreadInput =
+  | { projectId: string; title: string; source: 'user' | 'app-command' }
+  | {
+      projectId: string
+      title: string
+      source: 'website'
+      idempotencyKey: string
+      bindingId: string
+      receivedAt: number
+    }
+```
+
+以下命令 DTO 同样冻结：
+
+```ts
+type CancelProjectRunInput = {
+  projectId: string
+  threadId: string
+  requestId: string
+  routeGeneration: number
+}
+
+type ForkProjectThreadInput = {
+  projectId: string
+  threadId: string
+  messageId: string
+  routeGeneration: number
+}
+
+type EditAndSubmitProjectRunInput = {
+  projectId: string
+  threadId: string
+  messageId: string
+  text: string
+  modelPick?: ChatModelPick
+  routeGeneration: number
+}
+
+type ArchiveProjectThreadInput = {
+  projectId: string
+  threadId: string
+  routeGeneration: number
+}
+
+type SetProjectThreadPinnedInput = {
+  projectId: string
+  threadId: string
+  pinned: boolean
+  routeGeneration: number
+}
+
+type SetProjectThreadModelInput = {
+  projectId: string
+  threadId: string
+  modelPick: ChatModelPick
+  routeGeneration: number
+}
+
+type MarkProjectFileDiffReviewedInput = {
+  projectId: string
+  threadId: string
+  changeSetId: string
+  routeGeneration: number
+}
+
+type AnswerProjectPromptInput = {
+  projectId: string
+  threadId: string
+  requestId: string
+  promptId: string
+  routeGeneration: number
+  response: ClaudePermissionResponsePayload
+}
+```
+
+`promptId` v1 取 SDK `permissionRequestId`。`ProjectChatPromptPayload` 只能由 Main 从对应 SDK event 逐字段投影；不得把完整 `ClaudeChatEvent`、任意 tool input 或未列字段原样放入 snapshot。
 
 新线程必须持久化 creation source 元数据，用于未读外部任务而非第二套任务历史：
 
@@ -191,9 +490,14 @@ type ProjectThreadCreationSource =
 ### 5.1 写入串行化与 revision
 
 - 所有 workspace mutation 进入一个 Main 串行队列；以一次读取、变换、原子保存为一个 operation。
+- 该唯一队列由 `ChatWorkspaceCoordinator.runExclusive(operation)` 持有。现有 `runChatWorkspaceOperation` 必须委托它；broker 构造时注入同一个 scheduler，并在取得锁后才允许第一次 `store.read()`，不能先读再只把 `save()` 排队。只把两个 queue chain 顺序串接不等于 single writer。
+- broker 的默认内建 queue 只用于未接 Main 的 isolated tests；production composition 必须显式注入 coordinator scheduler。注入后，broker `enqueue` 必须在调用当下直接把完整 operation 提交给 shared coordinator，不能先挂到私有 Promise chain/microtask 再延迟提交，否则随后调用的 Main operation 会越过先调用的 broker operation，形成两级队列而非唯一全局 FIFO。broker `idle()` 只追踪已直接提交的最后 operation。coordinator operation 内不得再次调用会重入同一 coordinator 的 broker public method；Main handler 要么调用 broker，要么直接运行一个 coordinator operation。
+- coordinator 不接收 renderer snapshot、不实现 workspace 业务 reducer，只负责串行调度；底层 store read/save 仍由调用方在 operation 内执行。operation throw 后必须释放队列，后续 operation 继续。
+- 已知的 `resolveProjectRuntime(..., trust=true)` 路径当前有一处逃逸的 workspace save。目录 inspect 与 trust grant 可作为锁外 preflight，但最终 durable commit 必须进入 `runChatWorkspaceOperation`：取得 coordinator 后重新读取 project/runtimeDefinitions，确认 project 仍存在且 path 与 inspect 输入一致，基于这份最新 state 重算 definition/revision，再 save + readback。runtime manager/register host 等成功副作用仍在 durable commit 返回后执行；commit 失败且本次新授 trust 时按现有语义 revoke。不得把锁外 `currentState` spread 进最终 save。
 - 每个成功 operation 使 `workspaceRevision` 严格递增 1；失败 operation 不递增。
 - `sequence` 是每个项目事件流的 Main 内存单调计数；每次广播递增 1，应用重启可从 0 重新开始。
 - `routeGeneration` 在项目删除、路径重绑、窗口 capability 重建或应用启动时变化；旧 generation 的事件、prompt 回答和 settle 结果必须拒绝。
+- generation 提升后，旧 generation run/prompt 不再出现在 snapshot，也不得继续造成 `thread-busy`；旧 request route 可暂留以返回 `stale-revision`/丢弃迟到事件，但不能污染新 generation。
 - renderer 只接受 `routeGeneration` 相同且 `sequence` 大于最后值的事件；gap 直接调用 `getSnapshot`，不能猜 patch。
 - 旧 `saveChatWorkspace(fullSnapshot)` 在 broker 切换后不得供普通 renderer 调用。迁移期调用必须带 expected revision 并在过期时返回 `stale-revision`，不得覆盖 Main 新数据。
 
@@ -220,12 +524,17 @@ export interface ClaudeChatEventSink {
 }
 ```
 
+Runner 职责只包含：
+
 - `ClaudeAgentRunner` 构造函数接收 sink，不接收 `WebContents`。
-- sink publish 异常只记录脱敏诊断，不得取消 SDK run。
+- 把标准化 SDK event 发布给 sink；sink publish 异常只记录脱敏诊断，不得取消 SDK run 或反向抛回 SDK loop。
+- SDK event/runner 不判断项目归属，不得自己决定窗口导航、项目选择或 external receipt。
+
+Broker 职责从 M0-02 才开始：
+
 - broker 维护 `requestId -> {projectId, threadId, routeGeneration}`，未知 requestId 事件丢弃并记录计数，不广播。
-- reducer 每处理一个合法事件就在同一串行队列中更新 durable transcript/run，然后广播新 snapshot。
+- reducer 只折叠 broker 已解析归属的合法事件；每次折叠在同一串行队列中更新 durable transcript/run，然后广播新 snapshot。
 - terminal 后的任何非 terminal 事件不得改写终态；重复 terminal 必须幂等。
-- SDK event 不得自己决定窗口导航、项目选择或 external receipt。
 
 ### 5.4 Prompt owner
 
@@ -237,14 +546,65 @@ type ProjectChatPromptSnapshot = {
   threadId: string
   requestId: string
   promptId: string
-  kind: 'permission' | 'question'
+  kind: ProjectChatPromptPayload['kind']
   ownerWebContentsId?: number
   createdAt: number
-  payload: RedactedPromptPayload
+  payload: ProjectChatPromptPayload
 }
 ```
 
 owner 按 `design.md §6.4` 选择。`answerPrompt` 必须同时验证 sender capability、ownerWebContentsId、project/thread/request/promptId 和 routeGeneration。第一个有效回答进入 runner 后立即清除 prompt；迟到回答返回 `prompt-not-owned`。owner 被销毁或隐藏时重新分配并广播。
+
+Broker core 的 failover seam 必须接收不可用 `webContentsId`，从候选列表删除该值再选下一项；不能把原 owner 再次分给自己。尚未分配 owner 的 prompt 不接受 renderer 回答。runner answer 失败时保留 prompt/owner/waiting phase，并返回脱敏 `internal-error`，不能假装已回答。
+
+### 5.5 Thread mutation commands
+
+M0-05B 把现有 Chat 可见的 thread 变更收进同一 broker 队列；renderer 不得发送完整 `WorkspaceThread`、`ChatState` 或 transcript array：
+
+- `forkThread` 只接收 durable source thread + 一个现有 message id。broker 从 durable transcript 复制到该 message（含该 message）为止，保留 model/modelPick，清空 session/cwd/tasks，生成新的 user-source thread；不得信任 renderer 提供 items/title/path/session。
+- `editAndSubmitRun` 只允许编辑 durable user message。broker 原子地用 trim 后非空文本替换该消息、截断其后 transcript、清空 durable session，然后调用 runner reset-thread，再以同一 user message 开始新 run；不能追加第二条重复 user message。SDK submit 失败仍保留已编辑/截断结果并追加可见失败项。
+- `archiveThread` 在 thread 有 active run/prompt 时返回 `thread-busy`，不隐式 cancel；成功只写一次 `archivedAt`。已归档 thread 不接受 submit/edit/model/review。
+- `setThreadPinned` 使用显式 `pinned: boolean`，重复调用幂等，不用 toggle 语义；`setThreadModel` 仅在非 busy 时更新 model/modelPick，实际 pick 改变时清空 durable session 并调用 runner reset-thread。`submitRun`/`editAndSubmitRun` 若携带与 durable pick 不同的显式 modelPick，必须执行同一 reset + clear-session 语义，绝不能把旧模型 session 传给新模型。
+- `markFileDiffReviewed` 只能按 durable `changeSetId` 找到对应 diff，把 status 改为 `reviewed` 并清空 detail；renderer 不传 diff/file/checkpoint。
+- 上述命令都验证 project/thread 归属及当前 `routeGeneration`；每个成功且实际改变 durable state 的命令 revision `+1` 并广播一次。幂等 no-op 返回成功但不增加 revision、不广播。reset-thread 失败必须返回脱敏 `internal-error`，且不能留下“durable session 已清但 runner 未清”的半提交；先完成可失败的 runner reset，再保存 durable mutation。
+- 普通 `submitRun` 在 durable thread 已归档时按 `thread-not-found` 拒绝。首次普通 submit 若 thread title 是冻结默认值 `新对话` 或 `New thread` 且此前没有 user message，broker 用 prompt 首个非空行生成最多 34 字符加 `...` 的标题；renderer 不再另写 title。
+
+### 5.6 Production runtime adapter 与 scoped read services
+
+M0-05D 只建立可注入、可单测的真实 Main services，仍不得注册 `project-chat:*` handler、实例化 production broker、切换 runner sink 或让 renderer 可达：
+
+- broker runner adapter 是纯委托：`submit`、`cancel`、`answerPermissionRequest` 原样调用同一 `ClaudeAgentRunner`；`resetThread(threadId)` 精确映射为 `runner.newThread(threadId)`。adapter 不拥有 request route，不消费/改写 event，也不吞异常。
+- `getModelCatalog` 每次调用 fresh-read `ClaudeAgentSettingsStore.getSnapshot()`，只逐字段投影 `settings.activeProviderId`、`settings.activeAnthropicModel` 与 provider 的 id/name/model/四档图片能力字段。即使 `configSource === 'env'`，也不创建虚构 env provider，不返回 `env` 对象中的 baseUrl/model/presence flag；绝不返回 credential、URL 或 auth mode。
+- `getAgentContext(projectId)` 与 `searchProjectFiles({projectId, query})` 每次调用先 fresh-read durable workspace，只用当前 `project.path` 调用既有 discovery/search。project 不存在、`pathMissing` 或空路径时拒绝且不调用 filesystem；成功输出只保留合同字段，丢弃 rootPath、绝对 path、instruction file content，并重新校验全部 relativePath。
+- `readProjectAttachments` 不接受绝对路径。服务本身再次执行与 router 相同的 1–8 项跨平台相对路径校验；对 root 和每个 candidate 分别 `realpath`，再用 `path.relative(realRoot, realCandidate)` 验证 candidate 等于 root 或位于 root 内。候选 realpath 失败、指向 root 外（含 symlink escape）或指向 root 本身时，该项只生成 `{name: basename, reason: 'Attachment is unavailable.'}`，不得传给 attachment reader；其它项才把 canonical absolute path 交给既有 reader。root realpath 失败则整次拒绝。reader 结果仍由 M0-05A router 做数量/MIME/真实体积/内容签名和逐字段投影；IPC 输出不含 path 或底层 reason。
+- `pickAttachments` 只委托 Main 注入的现有 dialog+reader 函数，参数只有一次冻结的 `allowImages === true`；dialog/reader 的 raw 结果必须先经过 M0-05A router projector 才能到 renderer。
+- `getThreadStatus({projectId, threadId})` 每次调用 fresh-read durable project/thread ownership，拒绝 archived/missing thread 与 missing path；只用 durable `thread.chatState.sessionId/modelPick`、durable project cwd 调用同一 runner 的 `getStatus({threadId, sessionId?, modelPick?, cwd, refresh: false})`。返回只投影 `ProjectChatThreadStatus`，且 threadId 必须与请求一致；cwd/session/baseUrl/endpoint/auth/config source/MCP/plugin 细节不得外泄。
+
+这些 services 的异常统一由现有 router `call()` 映射为脱敏 `internal-error`；不得把 filesystem、settings 或 runner 原始错误文本送给 renderer。M0-05D 不解决 runner sink/broker 的构造环、prompt owner presence、rewind、TaskHome managed run 或 feature flag composition；这些必须在后续独立任务单冻结后，才可执行 renderer cutover。
+
+### 5.7 Broker-owned file rewind
+
+Project Chat rewind 的 renderer 输入只允许 `{projectId, threadId, changeSetId, routeGeneration}`；不得包含 requestId、checkpointId、cwd、sessionId 或 modelPick。broker 在统一 workspace operation 内 fresh-read project/thread ownership 和 durable `file_diff` item，再从 durable item/thread/project 构造 runner payload：
+
+```ts
+type RewindProjectFileDiffInput = {
+  projectId: string
+  threadId: string
+  changeSetId: string
+  routeGeneration: number
+}
+
+type RewindProjectFileDiffResult = {
+  changeSetId: string
+  status: 'reverted' | 'error'
+  detail?: string
+}
+```
+
+- archived/missing thread、stale generation、active run/prompt、missing diff/checkpoint 都在调用 runner 前拒绝；已 `reverted` 为 success no-op，不 save、不广播、不再调用 runner。`reviewed`/`error` 可以重试。
+- runner rewind payload 精确取 durable diff 的 requestId/checkpointId、thread id、thread modelPick/sessionId 与 project cwd。为支持应用重启后的 durable session，Main-only runner payload 可增加 optional `sessionId`；`ClaudeAgentRunner.rewindFiles` 只在该 thread 当前 runtime state 没有 session 时接受并写入该值，renderer 的 Project Chat API 永不暴露此字段。
+- runner 返回 `ok:true/false` 都是一次已完成 rewind attempt：broker 把对应 diff 原子写成 `reverted/error`，detail 只用固定安全文案，revision `+1` 并广播一次，再返回上述 public result。runner throw/reject 返回脱敏 `internal-error` 且 durable state/revision 不变。
+- `ClaudeAgentRunner` 仍可能发布 `file_rewind_result`；旧 request 已 terminal 时该 event 按现有 fence 丢弃。broker 以 direct runner result 为本命令唯一 durable mutation，不能因同步 result + 迟到 event 双写/双广播。
 
 ## 6. Sender capability 与窗口隔离
 
@@ -266,14 +626,31 @@ type RendererCapability =
 
 Preview `WebContents` 不加载 preload、不登记 Chat capability。其 `agentos://` 导航只能进入 Main 的窄导航捕获器，不能调用任意 IPC。
 
+### 6.1 Main-owned presence 与 Prompt owner 候选
+
+Main 维护与 capability 分离但以 `webContentsId` 关联的 presence registry。renderer 只可通过 typed API 报告 `{projectId, selectedThreadId?}`；`visible`、`focused`、`webContentsId`、window kind、project-window 固定 project/generation 全由 Main/registry 提供，renderer 输入若携带这些字段必须拒绝。
+
+registry 规则：
+
+- register 后默认 `visible=false/focused=false`；Main window lifecycle 才能调用 `setWindowState(webContentsId, {visible, focused})`。hidden 必须同时清 focused；某窗口 focused 时 registry 清除其它窗口 focused，维护确定的单焦点。
+- project-window selection 的 projectId 必须等于 capability 固定 projectId；main-window 可报告任一 project。stale/unknown/unregistered capability 拒绝，不能创建隐式 presence。
+- 针对 `{projectId, threadId, routeGeneration}` 的候选顺序精确为：visible+focused 且 selection 正在显示该 thread 的窗口；同 generation、visible 的该 project Chat window；visible main window。每组去重并按最近 focus epoch、再按 webContentsId 确定排序；hidden/stale/unknown 永不返回。
+- broker 创建 prompt 时同步调用注入的 candidate resolver 并冻结 owner。presence refresh 时，只要当前 owner 仍在新候选中就保持 owner，避免单纯焦点切换搬动已打开对话框；owner hidden/destroyed/stale 或当前无 owner 时选择新的首候选。owner 改变后对受影响 project 广播 snapshot，但不改 workspace revision。
+- registry unregister 与 broker `onWebContentsUnavailable(webContentsId)` 都必须幂等；一次 unavailable 要处理该 window 拥有的全部 prompt，不只一个 promptId。候选 resolver/refresh 异常不得删除 prompt、回答 prompt 或中断 runner；最多保留当前安全 owner/无 owner并记录脱敏诊断。
+
+M0-05E 只实现 presence/owner/rewind 的 disabled seam；window lifecycle 与 production broker 的实际 wiring 留给 M0-05F。
+
 ## 7. Project Chat Window
 
 - `ProjectChatWindowManager` 使用 `Map<projectId, BrowserWindow>`；重复打开只 `show/focus`。
-- 与主窗口使用相同 renderer bundle 和 preload，入口参数只决定渲染 `ProjectChatWindowPage`，权限来自 registry。
+- 与主窗口使用相同 renderer bundle 和同一个 preload **文件**，但暴露不同 capability profile。Main 创建项目窗口时必须通过 `webPreferences.additionalArguments` 写入固定 `--agentos-window-kind=project-chat`；preload 在 M0-05 起据此只暴露 `window.projectChat`，不得暴露现有 `window.desktop` 或 `window.claudeChat`。主窗口 profile 保持既有 bridge，并在 cutover 时增加 `projectChat`。query/route 只决定渲染 `ProjectChatWindowPage`，不能选择 preload profile 或授权项目。
 - 必须保持 `contextIsolation: true`、`nodeIntegration: false`、`sandbox` 与主窗口安全基线一致。
 - BrowserWindow `close` 只保存 view state、注销订阅/owner 并销毁视图；不得调用 cancel/newThread/删除线程。
 - 窗口创建后再注册 capability，load 失败时清理 registry 与 map。
 - 项目删除/路径丢失由 snapshot 状态驱动 UI；不得自动把窗口指向其它项目。
+- `ProjectChatWindowPage` 的 `projectId` 来自 Main 创建窗口时固定的 capability/query 投影，窗口生命周期内不可更换。线程选择器只列该 snapshot 的项目内线程；新建对话必须是独立 UI action 和显式 renderer view state，不能用空 `selectedThreadId` 下拉项后立即 fallback 到最新历史线程。
+- 新建对话可在 renderer 内暂存一个 project-scoped `modelPick` 草稿。首次创建 thread 后的第一条 `submitRun` 必须显式携带该 pick，由 broker 用现有 model-change/reset/session-clear 规则与首条消息一起持久化；创建成功后清除 renderer 草稿。不得把仅更新模型按钮文案视为模型选择成功。
+- 项目窗口所需的模型目录、项目上下文/文件搜索、附件选择、状态与 rewind 必须经后续冻结的 project-scoped typed API，由 Main 从 capability 的 projectId 解析路径/线程；不得为了复用现有 Chat 而重新暴露含 credential 的 `claudeChat.getSettings` 或接受 renderer 传绝对路径的 `desktop` API。
 
 ### 7.1 View state persistence
 
@@ -288,6 +665,14 @@ type ProjectChatWindowViewState = {
   externalTaskSeenAt: number
   bounds?: { x?: number; y?: number; width: number; height: number }
   updatedAt: number
+}
+
+type SaveProjectChatWindowViewStateInput = {
+  projectId: string
+  patch: Partial<Pick<
+    ProjectChatWindowViewState,
+    'selectedThreadId' | 'draft' | 'externalTaskSeenAt' | 'bounds'
+  >>
 }
 ```
 
@@ -439,7 +824,8 @@ Coordinator 不写源文件、不创建锁、不做 optimistic version check、�
 
 - pure contract/parser：origin、deep link、ticket schema、size/time/idempotency/error mapping。
 - broker：单 writer revision、同 thread busy、跨 thread 并行、terminal fence、prompt owner failover、SDK submit failure 保留线程。
-- runner sink：事件归属、sink failure、未知/迟到 request。
+- runner sink：标准事件只发布一次，sink failure 不终止/取消 run；runner 不做 request ownership。
+- broker/reducer：事件归属、未知 request 丢弃计数、terminal/旧 generation 迟到事件 fence。
 - stores：atomic write、corrupt recovery、safeStorage unavailable、origin unique、receipt eviction/recovery。
 - window/capability：一项目一窗口、wrong project/subframe/preview sender rejection、close 不 cancel。
 - runtime coordinator：read-only 不启动、reliable tool lease、diff mutation、三条件 settle、1500/30000 timer、generation invalidation、failed/cancel no build。
@@ -455,10 +841,11 @@ Coordinator 不写源文件、不创建锁、不做 optimistic version check、�
 ## 15. 迁移与回滚
 
 1. 先引入 contract/reducer 与 runner sink，不改变 UI 行为。
-2. broker 作为唯一 runner caller，旧 `claude-chat:*` handler 内部委托 broker。
-3. 主窗口切到 snapshot 投影，禁用 renderer full workspace write。
-4. 再开放项目 Chat 窗口；通过双窗口测试后才开放 deep link。
-5. 最后接 RuntimeEditCoordinator。
+2. 实现并测试 broker core，但不接 production Main；Revision 1 保持完整路径，避免中间态双 writer。
+3. 注册 typed IPC、capability 与 broker wiring，入口保持内部关闭；旧 renderer 仍走完整 Revision 1。
+4. 主窗口在一个 cutover 中切到 snapshot 投影并禁用 renderer full workspace write；同一 cutover 后 broker 才成为 production runner caller。
+5. 再开放项目 Chat 窗口；通过双窗口测试后才开放 deep link。
+6. 最后接 RuntimeEditCoordinator。
 
 每个里程碑用 feature flag `projectChatBrokerV2` 隔离入口，但 flag 关闭只能回到完整 Revision 1 路径；不得让一部分窗口写 broker、另一部分写旧 workspace。Website Binding/receipt schema 保持可读，回滚时只关闭入口，不删除用户线程或 binding 数据。
 
@@ -472,3 +859,10 @@ Coordinator 不写源文件、不创建锁、不做 optimistic version check、�
 - 不把 HTTPS 回执失败当作 Agent run 失败或取消 run。
 - 不在 runtime settle 里解析 Bash 文本、猜 build command 或增加并发写锁。
 - 不用 work order 的局部描述覆盖本文冻结合同。
+
+## 17. WorkspaceTab → Project durable contract（M3-01）
+
+- `WorkspaceTab.projectId?: string` 是兼容读取字段；所有 Main 新建/打开的 Tab 及 lazy migration 后的 Tab 都必须写入它，JSON 与 SQLite `workspace_tabs_json` 原样 round-trip。
+- Renderer 只可调用 `openWorkspaceTabProjectChat(workspaceTabId)`；不得提交 path、runtimeDefinitionId、projectId 映射或 URL。该调用只授权主窗口 main frame、已注册 capability 与 renderer allowlist document；项目 Chat 窗口、Preview、subframe、未知 sender 一律拒绝。
+- 该 API 在唯一 `ChatWorkspaceCoordinator` operation 内 fresh-read Tab 和 RuntimeDefinition。Main 用 Runtime canonicalRoot/rootPath 与 Project path 的规范化值匹配：唯一匹配复用并回写；无匹配创建 user Project；dangling/wrong projectId 重新匹配；多个匹配失败并且不打开窗口。
+- link 保存后必须 readback 确认 `tab.projectId` 和 Project 均存在，失败不得调用 `ProjectChatWindowManager.open()`，并 best-effort 恢复未链接快照。窗口仍按最终 projectId 唯一复用，生命周期内不能换项目。

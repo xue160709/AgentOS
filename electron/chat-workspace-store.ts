@@ -9,6 +9,7 @@ import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   normalizeChatWorkspaceState,
+  normalizeProjectThreadCreationSource,
 } from '../src/chat-workspace-persistence'
 import {
   readWorkspaceRevision,
@@ -63,6 +64,7 @@ type ThreadRow = {
   model: string | null
   modelPickJson: string | null
   cwd: string | null
+  creationSourceJson: string | null
 }
 
 type WorkspaceMetaRow = {
@@ -202,7 +204,7 @@ export class ChatWorkspaceStore {
           'skill_path AS skillPath, skill_command AS skillCommand, skill_title AS skillTitle,',
           'created_at AS createdAt, updated_at AS updatedAt,',
           'pinned_at AS pinnedAt, archived_at AS archivedAt,',
-          'session_id AS sessionId, model, model_pick_json AS modelPickJson, cwd',
+          'session_id AS sessionId, model, model_pick_json AS modelPickJson, cwd, creation_source_json AS creationSourceJson',
           'FROM threads',
           'ORDER BY pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC',
         ].join(' '),
@@ -261,6 +263,7 @@ export class ChatWorkspaceStore {
           updatedAt: thread.updatedAt,
           pinnedAt: thread.pinnedAt ?? undefined,
           archivedAt: thread.archivedAt ?? undefined,
+          creationSource: normalizeProjectThreadCreationSource(safeJsonParse(thread.creationSourceJson ?? undefined, undefined)),
           chatState: this.readRolloutChatState(thread),
         })),
         sidebarPrefs: safeJsonParse(meta?.sidebarPrefsJson, undefined),
@@ -355,6 +358,7 @@ export class ChatWorkspaceStore {
           model TEXT NOT NULL DEFAULT 'Claude Agent',
           model_pick_json TEXT,
           cwd TEXT,
+          creation_source_json TEXT,
           message_count INTEGER NOT NULL DEFAULT 0,
           first_user_message TEXT NOT NULL DEFAULT '',
           preview TEXT NOT NULL DEFAULT '',
@@ -419,13 +423,13 @@ export class ChatWorkspaceStore {
         statements.push(
           `INSERT INTO threads (
              id, project_id, rollout_path, created_at, updated_at, title, pinned_at, archived_at,
-             purpose, home_plugin_slug, skill_path, skill_command, skill_title, session_id, model, model_pick_json, cwd, message_count, first_user_message, preview, response_duration_ms
+             purpose, home_plugin_slug, skill_path, skill_command, skill_title, session_id, model, model_pick_json, cwd, creation_source_json, message_count, first_user_message, preview, response_duration_ms
            )
            VALUES (
              ${sqlValue(thread.id)}, ${sqlValue(thread.projectId)}, ${sqlValue(rolloutPath)}, ${sqlValue(thread.createdAt)},
              ${sqlValue(thread.updatedAt)}, ${sqlValue(thread.title)}, ${sqlValue(thread.pinnedAt)}, ${sqlValue(thread.archivedAt)},
              ${sqlValue(thread.purpose)}, ${sqlValue(thread.homePluginSlug)}, ${sqlValue(thread.skillPath)}, ${sqlValue(thread.skillCommand)}, ${sqlValue(thread.skillTitle)},
-             ${sqlValue(thread.chatState.sessionId)}, ${sqlValue(thread.chatState.model)}, ${sqlValue(thread.chatState.modelPick ? JSON.stringify(thread.chatState.modelPick) : undefined)}, ${sqlValue(thread.chatState.cwd)},
+             ${sqlValue(thread.chatState.sessionId)}, ${sqlValue(thread.chatState.model)}, ${sqlValue(thread.chatState.modelPick ? JSON.stringify(thread.chatState.modelPick) : undefined)}, ${sqlValue(thread.chatState.cwd)}, ${sqlValue(JSON.stringify(thread.creationSource))},
              ${sqlValue(messageCount(thread.chatState.items))}, ${sqlValue(firstUser)}, ${sqlValue(preview)},
              ${sqlValue(responseDurationMs)}
            )
@@ -446,6 +450,7 @@ export class ChatWorkspaceStore {
              model = excluded.model,
              model_pick_json = excluded.model_pick_json,
              cwd = excluded.cwd,
+             creation_source_json = excluded.creation_source_json,
              message_count = excluded.message_count,
              first_user_message = excluded.first_user_message,
              preview = excluded.preview,
@@ -601,6 +606,9 @@ export class ChatWorkspaceStore {
       }
       if (columns.length > 0 && !columns.some((column) => column.name === 'model_pick_json')) {
         this.runSql('ALTER TABLE threads ADD COLUMN model_pick_json TEXT;')
+      }
+      if (columns.length > 0 && !columns.some((column) => column.name === 'creation_source_json')) {
+        this.runSql('ALTER TABLE threads ADD COLUMN creation_source_json TEXT;')
       }
     } catch {
       /* Fresh databases create the column through CREATE TABLE. */

@@ -30,7 +30,7 @@
 
 1. 注册 `agentos` scheme；统一处理 initial argv、second-instance argv、mac open-url。
 2. app ready 前 cold queue 最多 32/5min，按 action+origin+request 去重；使用注入 clock 测试。
-3. HTTPS client 固定 endpoint、独立 Main session/no cookie、无 redirect、5s connect/10s total、64KiB、JSON content type。
+3. HTTPS client 固定 endpoint、独立 Main session/no cookie、无 redirect、5s 首响应 deadline/10s total、64KiB、JSON content type。Electron 30 不暴露独立 connect 阶段；首响应 deadline 覆盖 DNS/connect/TLS/响应头等待，不得伪造 connect 事件或改用 renderer fetch。
 4. Task orchestration：binding auth → GET/validate → receipt lookup → broker thread+receipt → runner requestId → accepted → POST receipt。
 5. 回执失败不 cancel；重复相同 key 重发 terminal receipt；不同 payload conflict。
 6. 所有网络/异常日志通过 redaction helper；测试扫描 credential/task/path 不出现。
@@ -54,4 +54,4 @@ npm run build
 
 ## 停止并报告
 
-若 Electron 网络 API 不支持独立无 cookie client 或 connect timeout，先记录实际能力并修规格；不得改用 renderer fetch。
+若 Electron 网络 API 不支持独立无 cookie client，立即停止；不得改用 renderer fetch。独立 connect timeout 的能力差异已按当前 Electron 30 类型事实冻结为 5s 首响应 deadline，不再因此停止。

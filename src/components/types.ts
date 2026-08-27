@@ -53,6 +53,8 @@ export type RuntimeDefinition = {
 export type WorkspaceTab = {
   id: string
   runtimeDefinitionId: string
+  /** Durable Project backing this editable Runtime tab. Main owns and repairs this link. */
+  projectId?: string
   title: string
   createdAt: number
   updatedAt: number
@@ -158,7 +160,7 @@ export type LocalAppPreviewStatus = PreviewStatus
 export type ProjectHomeViewMode = 'overview' | 'runtime'
 
 /** 设置页侧栏路由 `#settings/<id>` / Settings sidebar route fragment `#settings/<id>` */
-export type SettingsCategoryId = 'general' | 'search' | 'mcp' | 'skills' | 'updates' | 'agent' | 'developer'
+export type SettingsCategoryId = 'general' | 'search' | 'mcp' | 'skills' | 'updates' | 'agent' | 'website-bindings' | 'developer'
 
 /** Agent Mode 首页模态设置页签 / Agent Mode home modal settings panel id */
 export type AgentSettingsPanelId = 'project' | 'context' | 'mcp' | 'general' | 'card-order' | 'skills'
@@ -337,6 +339,11 @@ export type WorkspaceSidebarPrefs = {
 }
 
 /** 工作区对话线程 / Workspace chat thread */
+export type ProjectThreadCreationSource =
+  | { kind: 'user' }
+  | { kind: 'app-command' }
+  | { kind: 'website'; bindingId: string; receivedAt: number }
+
 export type WorkspaceThread = {
   id: string
   projectId: string
@@ -354,6 +361,8 @@ export type WorkspaceThread = {
   /** 置顶权重：越大越靠前（持久化）/ Pin rank: larger sorts higher (persisted) */
   pinnedAt?: number
   archivedAt?: number
+  /** Durable source used for external-task unread accounting. */
+  creationSource: ProjectThreadCreationSource
   chatState: ChatState
 }
 

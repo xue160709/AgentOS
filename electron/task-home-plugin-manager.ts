@@ -22,7 +22,16 @@ import type {
   HomePluginTaskSkillStep,
   HomePluginTaskStopResult,
 } from '../src/desktop-types'
-import type { ClaudeAgentRunner } from './claude-agent-runner'
+
+/** Deliberately narrow: TaskHome never owns a Claude runner or Chat persistence. */
+export type TaskHomeRunPort = {
+  ensureThread(input: { projectId: string; threadId: string; title: string; purpose: 'task-run'; homePluginSlug: string }): Promise<void>
+  submit(input: {
+    projectId: string; threadId: string; title: string; purpose: 'task-run'; homePluginSlug: string
+    text: string; promptMode: 'home-plugin-task-run'; agentModeSettingsOverride: { enabled: true; todoEnabled: boolean }
+  }): Promise<{ requestId: string }>
+  cancel(input: { projectId: string; threadId: string; requestId: string }): Promise<void>
+}
 
 const HOME_PLUGIN_ROOT_DIR = '.agents/home-plugins'
 const TASK_MANIFEST_FILE = 'manifest.json'
@@ -83,7 +92,7 @@ type TaskDraftInput = {
 }
 
 type TaskManagerDeps = {
-  getRunner: () => ClaudeAgentRunner | null
+  getRunPort: () => TaskHomeRunPort | null
   getWorkspace: () => ChatWorkspaceState | null
   emitTaskEvent: (event: HomePluginTaskEvent) => void
 }
@@ -292,7 +301,8 @@ export class TaskHomePluginManager {
     }
     record.projectId = project.id
 
-    if (!this.deps.getRunner()) {
+    const runPort = this.deps.getRunPort()
+    if (!runPort) {
       return { ok: false, rootPath: resolvedProjectPath, slug: record.task.slug, message: 'Claude runner is not ready' }
     }
 
@@ -306,6 +316,12 @@ export class TaskHomePluginManager {
       homePluginSlug: record.task.slug,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+    }
+
+    try {
+      await runPort.ensureThread({ projectId: project.id, threadId, title: threadTitle, purpose: TASK_THREAD_PURPOSE, homePluginSlug: record.task.slug })
+    } catch {
+      return { ok: false, rootPath: resolvedProjectPath, slug: record.task.slug, message: 'Claude runner is not ready' }
     }
 
     record.runtime.threadId = threadId
@@ -388,8 +404,9 @@ export class TaskHomePluginManager {
 
     session.cancelled = true
     const requestId = session.record.runtime.requestId || session.activeRequestId
-    if (requestId && this.deps.getRunner()) {
-      await this.deps.getRunner()!.cancel(requestId)
+    const runPort = this.deps.getRunPort()
+    if (requestId && runPort) {
+      await runPort.cancel({ projectId: session.record.projectId, threadId: session.threadId, requestId })
     }
     session.record.runtime.status = 'cancelled'
     session.record.runtime.lastCompletedAt = new Date().toISOString()
@@ -423,9 +440,10 @@ export class TaskHomePluginManager {
       session.cancelled = true
       session.deleted = true
       const activeRequestId = session.record.runtime.requestId || session.activeRequestId
-      if (activeRequestId && this.deps.getRunner()) {
+      const runPort = this.deps.getRunPort()
+      if (activeRequestId && runPort) {
         try {
-          await this.deps.getRunner()!.cancel(activeRequestId)
+          await runPort.cancel({ projectId: session.record.projectId, threadId: session.threadId, requestId: activeRequestId })
         } catch {
           /* best-effort cancellation before removing the card files */
         }
@@ -516,8 +534,8 @@ export class TaskHomePluginManager {
     const runs = Math.max(1, Math.min(100, Math.trunc(task.runCount) || 1))
     const steps = task.mode === 'skills' ? task.skillSteps : []
     const totalSteps = task.mode === 'skills' ? Math.max(1, steps.length) : 1
-    const runner = this.deps.getRunner()
-    if (!runner) throw new Error('Claude runner is not ready')
+    const runPort = this.deps.getRunPort()
+    if (!runPort) throw new Error('Claude runner is not ready')
 
     session.record.runtime.status = 'running'
     session.record.runtime.runTotal = runs
@@ -542,7 +560,7 @@ export class TaskHomePluginManager {
           session.record.runtime.updatedAt = new Date().toISOString()
           await this.flushRuntime(record, session.threadSeed)
 
-          const outcome = await this.submitAndWait(runner, session, prompt, {
+          const outcome = await this.submitAndWait(runPort, session, prompt, {
             mode: 'home-plugin-task-run',
             todoEnabled: task.todoEnabled,
           })
@@ -563,7 +581,7 @@ export class TaskHomePluginManager {
         await this.flushRuntime(record, session.threadSeed)
 
         const prompt = buildAgentTaskPrompt(task, runIndex + 1, runs)
-        const outcome = await this.submitAndWait(runner, session, prompt, {
+        const outcome = await this.submitAndWait(runPort, session, prompt, {
           mode: 'home-plugin-task-run',
           todoEnabled: task.todoEnabled,
         })
@@ -593,23 +611,17 @@ export class TaskHomePluginManager {
   }
 
   private async submitAndWait(
-    runner: ClaudeAgentRunner,
+    runPort: TaskHomeRunPort,
     session: TaskRunSession,
     prompt: string,
     options: { mode: 'home-plugin-task-run'; todoEnabled: boolean },
   ): Promise<TaskRequestOutcome> {
     const key = session.key
-    const payload = {
-      text: prompt,
-      threadId: session.threadId,
-      cwd: session.record.projectPath,
-      promptMode: options.mode,
-      agentModeSettingsOverride: {
-        enabled: true,
-        todoEnabled: options.todoEnabled,
-      },
-    } as const
-    const { requestId } = runner.submit(payload)
+    const { requestId } = await runPort.submit({
+      projectId: session.record.projectId, threadId: session.threadId, title: session.record.runtime.threadTitle || deriveTaskThreadTitle(session.record.task),
+      purpose: TASK_THREAD_PURPOSE, homePluginSlug: session.record.task.slug, text: prompt, promptMode: options.mode,
+      agentModeSettingsOverride: { enabled: true, todoEnabled: options.todoEnabled },
+    })
     session.activeRequestId = requestId
     session.record.runtime.requestId = requestId
     session.record.runtime.status = 'running'
@@ -627,7 +639,7 @@ export class TaskHomePluginManager {
       session.settleWaiters.delete(requestId)
       this.requestToTaskKey.delete(requestId)
       try {
-        await runner.cancel(requestId)
+        await runPort.cancel({ projectId: session.record.projectId, threadId: session.threadId, requestId })
       } catch {
         /* best-effort cancellation */
       }

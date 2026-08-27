@@ -3,7 +3,7 @@
  * Desktop preference and Agent Mode shared types aligned across renderer and main.
  */
 
-import type { ChatModelPick } from './claude-chat-types'
+import type { ChatModelPick, ClaudePermissionMode } from './claude-chat-types'
 export type LocalAppInspectResult =
   | {
       ok: true
@@ -33,6 +33,8 @@ export type DesktopPreferences = {
   eyeComfortMode: boolean
   /** 缺省或未识别时按 zh 处理 / Defaults to zh when missing or unknown */
   locale?: AppUiLocale
+  /** Omission means the Main-owned Project Chat preference has not been initialized yet. */
+  chatPermissionMode?: ClaudePermissionMode
 }
 
 /** 托盘菜单动作（与 IPC 载荷一致）/ Tray menu action matching IPC payloads */

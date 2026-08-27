@@ -67,7 +67,7 @@ POST {origin}/.well-known/agentos/v1/task/{request_id}
 - `request_id` 作为一个 percent-encoded path segment；由于字符集受限，编码结果应与原值相同。
 - 只接受 TLS 证书校验成功的 HTTPS；不允许 ignore certificate errors。
 - redirect policy 固定为 `error`；301/302/303/307/308 都失败，不跟随。
-- connect timeout 5,000ms，总请求 deadline 10,000ms。
+- Electron Main `net.request` 从请求开始到首个 `response` 事件的 deadline 为 5,000ms，总请求 deadline 为 10,000ms。当前 Electron 30 `ClientRequest` 不暴露独立 DNS/connect/TLS 阶段事件或 connect-timeout 参数，因此 5,000ms 首响应 deadline 统一覆盖 DNS、连接、TLS 与响应头等待；不得伪称可单独识别 connect timeout，也不得改用 renderer fetch。
 - request/response JSON body 最大 65,536 bytes；超过上限在完整解析前中止。
 - `Content-Type` 必须是 `application/json`，允许 `; charset=utf-8`；其它类型失败。
 - JSON 顶层必须是 object；未知字段允许忽略，但冻结字段类型/上限不满足则拒绝整个 envelope。

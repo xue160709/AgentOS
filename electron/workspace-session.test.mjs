@@ -54,6 +54,7 @@ function createState() {
         title: 'New chat',
         createdAt: 1,
         updatedAt: 1,
+        creationSource: { kind: 'user' },
         chatState: { model: 'Claude Agent', items: [] },
       },
     ],
@@ -118,6 +119,7 @@ test('Workspace Session interface owns active selection and thread lifecycle inv
   assert.equal(state.activeWorkspaceTabId, '')
   assert.equal(state.activeLocalAppTabId, '')
   assert.equal(state.projects[1].updatedAt, 200)
+  assert.deepEqual(state.threads[0].creationSource, { kind: 'user' })
 
   harness.setNow(300)
   state = harness.session.archiveThread(state, 'thread-2')
@@ -130,6 +132,28 @@ test('Workspace Session interface owns active selection and thread lifecycle inv
     project: state.projects[0],
     thread: state.threads[1],
   })
+})
+
+test('Project Chat snapshot controller accepts only contiguous current-generation snapshots', () => {
+  const { ProjectChatSnapshotController, applyProjectChatSnapshot } = loadWorkspaceSession()
+  const controller = new ProjectChatSnapshotController()
+  const snapshot = (sequence, generation = 3) => ({
+    projectId: 'project-1', project: { id: 'project-1', name: 'Broker Project', pathMissing: false }, workspaceRevision: sequence,
+    sequence, routeGeneration: generation, threads: [{ id: `thread-${sequence}`, projectId: 'project-1', title: 'Thread', createdAt: 1, updatedAt: sequence, chatState: { model: 'Claude', items: [] } }],
+    runs: [], pendingPrompts: [], permissionMode: 'auto', unreadExternalTaskCount: 0,
+  })
+  controller.adopt(snapshot(5))
+  assert.equal(controller.accept({ type: 'open-project-preview', projectId: 'project-1' }), 'discarded')
+  assert.equal(controller.snapshot('project-1').sequence, 5)
+  assert.equal(controller.accept({ type: 'snapshot', projectId: 'project-1', sequence: 4, routeGeneration: 3, workspaceRevision: 4, snapshot: snapshot(4) }), 'discarded')
+  assert.equal(controller.accept({ type: 'snapshot', projectId: 'project-1', sequence: 7, routeGeneration: 3, workspaceRevision: 7, snapshot: snapshot(7) }), 'gap')
+  assert.equal(controller.snapshot('project-1').sequence, 5)
+  assert.equal(controller.accept({ type: 'snapshot', projectId: 'project-1', sequence: 6, routeGeneration: 3, workspaceRevision: 6, snapshot: snapshot(6) }), 'accepted')
+  assert.equal(controller.accept({ type: 'snapshot', projectId: 'project-1', sequence: 7, routeGeneration: 4, workspaceRevision: 7, snapshot: snapshot(7, 4) }), 'discarded')
+
+  const projected = applyProjectChatSnapshot(createState(), snapshot(6))
+  assert.equal(projected.projects[0].name, 'Broker Project')
+  assert.deepEqual(projected.threads.map((thread) => thread.id), ['thread-6'])
 })
 
 test('selecting a Workspace Tab clears the previous thread and survives active restore', () => {
@@ -171,6 +195,20 @@ test('selecting a Workspace Tab clears the previous thread and survives active r
     localAppDefinition: runtimeDefinition,
     localAppTab: workspaceTab,
   })
+})
+
+test('selecting a linked Workspace Tab synchronizes its valid Project without making it durable authority', () => {
+  const harness = createHarness()
+  const state = {
+    ...createState(),
+    activeProjectId: 'project-1',
+    runtimeDefinitions: [{ id: 'runtime-1', name: 'Runtime', rootPath: '/runtime', packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, trustStatus: 'trusted', autoStart: true, createdAt: 1, updatedAt: 1 }],
+    workspaceTabs: [{ id: 'tab-1', runtimeDefinitionId: 'runtime-1', projectId: 'project-2', title: 'Runtime', createdAt: 1, updatedAt: 1 }],
+  }
+  const selected = harness.session.selectWorkspaceTab(state, 'tab-1')
+  assert.equal(selected.activeProjectId, 'project-2')
+  assert.equal(selected.activeThreadId, '')
+  assert.equal(selected.activeWorkspaceTabId, 'tab-1')
 })
 
 test('Workspace Session restore owns active project and latest visible thread fallback', () => {
@@ -450,6 +488,7 @@ test('Workspace Session interface merges background task threads by project path
   assert.equal(thread.projectId, 'project-2')
   assert.equal(thread.purpose, 'task-run')
   assert.equal(thread.homePluginSlug, 'daily-report')
+  assert.deepEqual(thread.creationSource, { kind: 'user' })
 })
 
 test('Workspace Session can add a background thread without changing the active selection', () => {
@@ -466,6 +505,17 @@ test('Workspace Session can add a background thread without changing the active 
   assert.equal(state.activeThreadId, 'thread-1')
   assert.equal(state.threads[0].id, 'thread-background')
   assert.equal(state.threads[0].projectId, 'project-2')
+  assert.deepEqual(state.threads[0].creationSource, { kind: 'user' })
+})
+
+test('Workspace normalization assigns user creation source to old or invalid thread snapshots', () => {
+  const { normalizeChatWorkspaceState } = loadTsModule(resolve(testDir, '../src/chat-workspace-persistence.ts'))
+  const old = createState()
+  delete old.threads[0].creationSource
+  const invalid = createState()
+  invalid.threads[0].creationSource = { kind: 'website', bindingId: '', receivedAt: 'bad' }
+  assert.deepEqual(normalizeChatWorkspaceState(old).threads[0].creationSource, { kind: 'user' })
+  assert.deepEqual(normalizeChatWorkspaceState(invalid).threads[0].creationSource, { kind: 'user' })
 })
 
 test('Workspace normalization preserves a local-app-only snapshot and drops dangling local tabs', () => {
@@ -510,4 +560,19 @@ test('Workspace normalization preserves a local-app-only snapshot and drops dang
   assert.deepEqual(degraded.runtimeDefinitions, [])
   assert.deepEqual(degraded.workspaceTabs, [])
   assert.equal(degraded.activeWorkspaceTabId, '')
+})
+
+test('Workspace normalization preserves optional Workspace Tab projectId while legacy tabs remain readable', () => {
+  const { normalizeChatWorkspaceState } = loadTsModule(resolve(testDir, '../src/chat-workspace-persistence.ts'))
+  const base = createState()
+  const normalized = normalizeChatWorkspaceState({
+    ...base,
+    runtimeDefinitions: [{ id: 'runtime-1', name: 'Runtime', rootPath: '/runtime', packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, trustStatus: 'trusted', autoStart: true, createdAt: 1, updatedAt: 1 }],
+    workspaceTabs: [
+      { id: 'legacy', runtimeDefinitionId: 'runtime-1', title: 'Legacy', createdAt: 1, updatedAt: 1 },
+      { id: 'linked', runtimeDefinitionId: 'runtime-1', projectId: 'project-1', title: 'Linked', createdAt: 1, updatedAt: 1 },
+    ],
+  })
+  assert.equal(normalized.workspaceTabs.find((tab) => tab.id === 'legacy').projectId, undefined)
+  assert.equal(normalized.workspaceTabs.find((tab) => tab.id === 'linked').projectId, 'project-1')
 })

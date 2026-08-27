@@ -90,6 +90,7 @@ function createThread(id, updatedAt) {
     title: id === 'thread-new' ? 'New persisted chat' : 'Old chat',
     createdAt: updatedAt,
     updatedAt,
+    creationSource: id === 'thread-new' ? { kind: 'app-command' } : { kind: 'user' },
     chatState: {
       model: 'Claude Agent',
       items: [
@@ -106,6 +107,41 @@ function createThread(id, updatedAt) {
     },
   }
 }
+
+test('Chat Workspace Store normalizes legacy source and round-trips creation source', async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    await store.save(createWorkspaceState({ threads: [createThread('thread-new', 100), { ...createThread('thread-old', 90), creationSource: { kind: 'website', bindingId: 'binding-1', receivedAt: 88 } }] }))
+    const restored = store.read()
+    assert.deepEqual(restored.threads.map((thread) => thread.creationSource), [
+      { kind: 'app-command' }, { kind: 'website', bindingId: 'binding-1', receivedAt: 88 },
+    ])
+  })
+})
+
+test('Chat Workspace Store restores creation_source_json without JSON and normalizes null or invalid SQLite values', { skip: !hasSqlite() }, async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    await store.save(createWorkspaceState({
+      threads: [{ ...createThread('thread-old', 90), creationSource: { kind: 'website', bindingId: 'binding-sqlite', receivedAt: 88 } }],
+    }))
+    await rm(join(userDataPath, 'chat-workspace.json'))
+
+    const restored = new ChatWorkspaceStore(userDataPath).read()
+    assert.deepEqual(restored.threads[0].creationSource, { kind: 'website', bindingId: 'binding-sqlite', receivedAt: 88 })
+
+    const dbPath = join(userDataPath, 'chat-workspace.sqlite')
+    execFileSync('sqlite3', [dbPath, 'UPDATE threads SET creation_source_json = NULL;'])
+    const legacy = new ChatWorkspaceStore(userDataPath).read()
+    assert.deepEqual(legacy.threads[0].creationSource, { kind: 'user' })
+
+    execFileSync('sqlite3', [dbPath, "UPDATE threads SET creation_source_json = '{invalid';"])
+    const invalid = new ChatWorkspaceStore(userDataPath).read()
+    assert.deepEqual(invalid.threads[0].creationSource, { kind: 'user' })
+  })
+})
 
 test('Chat Workspace Store prefers newer JSON snapshot when SQLite index is stale', { skip: !hasSqlite() }, async () => {
   const { ChatWorkspaceStore } = loadChatWorkspaceStore()
@@ -179,7 +215,7 @@ test('Chat Workspace Store readback preserves neutral Workspace Tab create, open
       workspaceSchemaVersion: 3,
       runtimeDefinitions: [definition],
       workspaceTabs: [
-        { id: 'tab-a', runtimeDefinitionId: definition.id, title: 'A', createdAt: 1, updatedAt: 1 },
+        { id: 'tab-a', runtimeDefinitionId: definition.id, projectId: 'project-1', title: 'A', createdAt: 1, updatedAt: 1 },
         { id: 'tab-b', runtimeDefinitionId: definition.id, title: 'B', createdAt: 2, updatedAt: 2 },
       ],
       activeWorkspaceTabId: 'tab-a',
@@ -194,6 +230,7 @@ test('Chat Workspace Store readback preserves neutral Workspace Tab create, open
     assert.ok(created)
     assert.deepEqual(created.runtimeDefinitions.map((item) => item.id), [definition.id])
     assert.deepEqual(created.workspaceTabs.map((tab) => tab.id), ['tab-a', 'tab-b'])
+    assert.equal(created.workspaceTabs[0].projectId, 'project-1')
     assert.equal(created.activeWorkspaceTabId, 'tab-a')
 
     await store.save({

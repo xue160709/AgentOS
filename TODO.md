@@ -14,16 +14,23 @@
 - **网站协议**：[`protocol-v1.md`](changes/active/chg-20260818-agent-command-channel/protocol-v1.md)
 - **验收计划**：[`acceptance.md`](changes/active/chg-20260818-agent-command-channel/acceptance.md)；正式 GWT 唯一事实源为 [`prd/chat-agent-runtime/acceptance.md`](prd/chat-agent-runtime/acceptance.md)
 - **Terra 执行入口**：[`work-orders/README.md`](changes/active/chg-20260818-agent-command-channel/work-orders/README.md)
-- **当前状态**：Decision accepted，产品/技术/协议/Acceptance/TODO 已同步；业务代码尚未开始。权限 v1 冻结为当前 app-global 选择并迁到 Main 权威，不新增 project-level 权限。
+- **当前状态**：M0-01–M0-05D 已实现并通过独立门禁；typed IPC/capability/permission/window/view-state/runtime services 均仍是 disabled seam，尚未接入 production Main/UI。剩余前置固定为 M0-05E prompt/rewind 与 M0-05F default-off composition，之后立即执行 renderer cutover；权限 v1 为 app-global、Main 权威。
 
 #### M0：必须串行，先建立共享 Chat 事实源
 
-- [ ] `M0-01`｜共享合同、纯 reducer、Claude runner event sink。
-- [ ] `M0-02`｜Main-owned ProjectChatBroker、workspace single writer、run/prompt 路由。
-- [ ] `M0-03`｜typed IPC、sender/frame/project capability、Main app-global permission。
-- [ ] `M0-04`｜每项目唯一 Project Chat Window 与 draft/selected thread/bounds 恢复。
-- [ ] `M0-05`｜主窗口 snapshot 投影、封闭 renderer full-snapshot writer。
+- [x] `M0-01`｜共享合同、唯一纯 reducer、Claude runner event sink 与 WebContents 迁移 adapter；独立复跑 typecheck、目标测试 16/16、diff check 均 PASS。
+- [x] `M0-02`｜Main-owned ProjectChatBroker core、workspace single writer、run/prompt 路由；独立复跑 typecheck、目标测试 46/46、diff check 均 PASS，尚未 production wiring。
+- [x] `M0-03`｜typed IPC、sender/frame/project capability、Main app-global permission disabled seam；独立复跑 typecheck、目标测试 38/38、diff check 均 PASS，未注册 production handler。
+- [x] `M0-04`｜每项目唯一 Project Chat Window manager、scoped profile 参数与原子 view-state disabled seam；独立复跑 typecheck、目标测试 40/40、diff check 均 PASS。
+- [x] `M0-05A`｜收窄 project-window preload profile；补齐脱敏模型/context/文件/附件/status typed capabilities与安全 thread snapshot；独立复跑 typecheck、目标测试 38/38、diff check 均 PASS，仍未 production wiring。
+- [x] `M0-05B`｜fork/edit-resubmit/archive/pin/model/diff-review 已收进 broker intent；独立复跑 typecheck、目标测试 49/49、diff check 均 PASS，仍未 production wiring。
+- [x] `M0-05C`｜broker 与现有 Main workspace mutations 已共用唯一 operation coordinator；独立复跑目标测试 61/61、完整 Electron 199/199、typecheck 与 diff check 均 PASS，仍未 production wiring。
+- [x] `M0-05D`｜真实 runner adapter、durable scoped read services、附件 realpath/symlink containment；独立复跑目标测试 53/53、完整 Electron 204/204、typecheck 与 diff check 均 PASS，仍未 production wiring。
+- [x] `M0-05E`｜Main-owned presence/prompt owner、broker-owned rewind；Terra 回报 typecheck、目标 73/73、完整 Electron 210/210、diff check 均 PASS；按用户指示不再重复验证。
+- [ ] `M0-05F`｜default-off production composition，原子收口 TaskHome/sink/handler 与 feature flag。
+- [ ] `M0-05`｜M0-05F 后立即做主窗口 snapshot 投影、封闭 renderer full-snapshot writer。
 - [ ] `M0-06`｜完整独立项目 Chat UI、Revision 1 `agentCommandChannel` 迁移、双窗口 M0 Gate。
+- [~] `M3-01`｜Workspace Tab durable backing Project：Main-only tab-id Chat API、canonical path repair/lazy backfill、重复 root 去重与安全 sender 负例；实现与目标自动化检查已提交本轮门禁，正式验收待独立证据。
 
 #### M1：网站入口（M0 Gate 后）
 

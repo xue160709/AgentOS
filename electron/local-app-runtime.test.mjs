@@ -44,6 +44,16 @@ function definition(rootPath) {
   }
 }
 
+test('Next Turbopack config conflict retries through the scoped webpack compatibility switch', () => {
+  assert.deepEqual(runtime.runtimeDevCommandArgs([]), ['run', 'dev'])
+  assert.deepEqual(runtime.runtimeDevCommandArgs([
+    { stream: 'stdout', line: 'empty turbopack config in your Next config file', timestamp: 1 },
+  ]), ['run', 'dev'])
+  assert.deepEqual(runtime.runtimeDevCommandArgs([
+    { stream: 'stderr', line: "empty turbopack config in your Next config file (e.g. `turbopack: {}`).", timestamp: 1 },
+  ]), ['run', 'dev', '--', '--webpack'])
+})
+
 async function waitForPath(path, { present = true, timeoutMs = 5_000 } = {}) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {

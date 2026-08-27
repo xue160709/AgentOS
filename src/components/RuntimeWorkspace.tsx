@@ -2,6 +2,8 @@ import { useMemo } from 'react'
 import { useI18n } from '../i18n/i18n'
 import type { RuntimeDefinition, RuntimeSnapshot, WorkspaceTab } from './types'
 import { RuntimePreview } from './RuntimePreview'
+import { runtimeEditStatus } from './runtime-event-state'
+import type { ProjectChatRuntimeEditSnapshot } from '../project-chat-contract'
 
 export type RuntimeWorkspaceProps = {
   tab: WorkspaceTab
@@ -18,9 +20,10 @@ export type RuntimeWorkspaceProps = {
   logsOpen?: boolean
   onLogsToggle?: () => void
   showToolbar?: boolean
+  runtimeEdit?: ProjectChatRuntimeEditSnapshot
 }
 
-export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart, onStop, onReload, onRelocate, onBuild, onCancelBuild, onDevelopment, logsOpen = false, onLogsToggle, showToolbar = true }: RuntimeWorkspaceProps) {
+export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart, onStop, onReload, onRelocate, onBuild, onCancelBuild, onDevelopment, logsOpen = false, onLogsToggle, showToolbar = true, runtimeEdit }: RuntimeWorkspaceProps) {
   const { t } = useI18n()
   const status = runtime?.status ?? 'stopped'
   const staticMode = runtime?.mode ? runtime.mode === 'static' : definition.mode === 'static'
@@ -40,11 +43,12 @@ export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart,
     idle: 'runtime.runtimeStopped', ready: 'runtime.runtimeReady', stale: 'runtime.runtimeStale', build_required: 'runtime.runtimeBuildRequired', building: firstBuild ? 'runtime.runtimeFirstBuilding' : 'runtime.runtimeBuilding', build_failed: 'runtime.runtimeBuildFailed',
     preparing: 'runtime.runtimePreparing', starting: 'runtime.runtimeStarting', running: 'runtime.runtimeRunning', degraded: 'runtime.runtimeDegraded', failed: 'runtime.runtimeFailed', path_missing: 'runtime.runtimePathMissing', stopped: 'runtime.runtimeStopped',
   } as Record<string, string>)[displayStatus] ?? 'runtime.runtimeStopped')
+  const editStatus = runtimeEditStatus(runtimeEdit)
   return <section className={`runtime-workspace runtime-workspace--${displayStatus}`} data-testid="runtime-workspace" aria-labelledby="runtime-workspace-title">
     {showToolbar ? <header className="local-app-workspace__toolbar">
       <div className="local-app-workspace__toolbar-title"><strong id="runtime-workspace-title">{tab.title || definition.name}</strong><span className="local-app-workspace__path" title={definition.rootPath}>{definition.rootPath}</span></div>
       <div className="local-app-workspace__actions">
-        <span className="local-app-runtime-compact-status" data-testid="runtime-status" role="status">{label}</span>
+        <span className="local-app-runtime-compact-status" data-testid="runtime-status" role={editStatus?.alert ? 'alert' : 'status'} aria-busy={editStatus?.busy}>{editStatus?.message ?? label}</span>
         {staticMode ? <button type="button" className="btn btn-primary" data-testid="runtime-build" onClick={onBuild ?? onRetry} disabled={!canStart}>{hasLastGood ? t('runtime.rebuild') : t('runtime.build')}</button> : null}
         <button type="button" className="btn btn-toolbar" data-testid="runtime-refresh" onClick={onReload} disabled={!runtime?.readyUrl && !runtime?.previewUrl}>{t('runtime.refresh')}</button>
         <button type="button" className="btn btn-toolbar" data-testid="runtime-logs" onClick={onLogsToggle} aria-expanded={logsOpen}>{t('runtime.logs')}</button>

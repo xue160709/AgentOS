@@ -3,7 +3,6 @@
  * Main-process facade for Claude Agent SDK `query`: resume, permission gating, and IPC streaming.
  */
 
-import type { WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import {
   query,
@@ -33,6 +32,7 @@ import type {
   ClaudePermissionResponsePayload,
 } from '../src/claude-chat-types'
 import type { AgentModeProjectSettings, AgentWebSearchSettings, AppUiLocale } from '../src/desktop-types'
+import type { ClaudeChatEventSink } from '../src/project-chat-contract'
 import { buildRuntimeContext, discoverAgentContext, resolvePromptWithContext } from './agent-context'
 import {
   buildSdkEnv,
@@ -44,6 +44,7 @@ import {
 import { ClaudeChatEventCoalescer } from './claude-agent-runner/event-coalescer'
 import { resolveClaudeCodeExecutablePath } from './claude-agent-runner/executable'
 import { fileDiffFromPostToolUse } from './claude-agent-runner/file-diff'
+import type { RuntimeEditRunnerHook } from './runtime-edit-coordinator'
 import { buildSdkPromptInput, normalizeSubmitAttachments, resolveWorkspaceCwd } from './claude-agent-runner/input'
 import { buildMcpPermissionCopy, buildMcpRuntimeOptions, mergeMcpRuntimeOptions } from './claude-agent-runner/mcp'
 import { ClaudeSdkMessageRouter } from './claude-agent-runner/sdk-message-router'
@@ -126,7 +127,7 @@ type StreamBlockState = {
   inputJson: string
 }
 
-/** 驱动单次或并行 Claude Agent 请求并同步到 WebContents / Runs Claude Agent turns and mirrors state to WebContents */
+/** 驱动单次或并行 Claude Agent 请求并同步到 event sink / Runs Claude Agent turns and mirrors state to an event sink */
 export class ClaudeAgentRunner {
   private readonly activeRequests = new Map<string, ActiveRequest>()
   private readonly activeRequestIdsByThread = new Map<string, string>()
@@ -136,9 +137,10 @@ export class ClaudeAgentRunner {
   private readonly pendingPermissionRequests = new Map<string, PendingPermissionRequest>()
   private readonly eventCoalescer: ClaudeChatEventCoalescer
   private readonly messageRouter: ClaudeSdkMessageRouter
+  private runtimeEditHook?: RuntimeEditRunnerHook
 
   constructor(
-    private readonly webContents: WebContents,
+    private readonly eventSink: ClaudeChatEventSink,
     private readonly cwd: string,
     private readonly resolveConfig: (modelPick?: ChatModelPick) => ClaudeAgentResolvedConfig,
     private readonly resolveAgentModeSettings: (rootPath: string) => Promise<AgentModeProjectSettings>,
@@ -146,11 +148,16 @@ export class ClaudeAgentRunner {
     private readonly resolveUiLocale: () => AppUiLocale,
     private readonly observeEvent?: (event: ClaudeChatEvent) => void,
   ) {
-    this.eventCoalescer = new ClaudeChatEventCoalescer((event) => this.sendEventNow(event))
+    this.eventCoalescer = new ClaudeChatEventCoalescer((event) => this.publishEventNow(event))
     this.messageRouter = new ClaudeSdkMessageRouter(
       (event) => this.emit(event),
       (threadId) => this.getThreadRuntimeState(threadId),
     )
+  }
+
+  /** Main-only hook used by ProjectChatBroker's RuntimeEditCoordinator wiring. */
+  setRuntimeEditHook(hook?: RuntimeEditRunnerHook): void {
+    this.runtimeEditHook = hook
   }
 
   // --- Public API / 对外 API ---
@@ -515,6 +522,9 @@ export class ClaudeAgentRunner {
       }
     }
 
+    const threadState = this.getThreadRuntimeState(threadId)
+    const durableSessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (durableSessionId && !threadState.sessionId) threadState.sessionId = durableSessionId
     const config = this.resolveConfig(payload.modelPick)
     if (!config.apiKey && !config.authToken) {
       const result: ClaudeFileRewindResult = {
@@ -526,7 +536,6 @@ export class ClaudeAgentRunner {
       return result
     }
 
-    const threadState = this.getThreadRuntimeState(threadId)
     if (!threadState.sessionId) {
       const result: ClaudeFileRewindResult = {
         ok: false,
@@ -706,9 +715,19 @@ export class ClaudeAgentRunner {
               extraArgs: { 'replay-user-messages': null },
               forwardSubagentText: true,
               hooks: {
+                PreToolUse: [
+                  {
+                    hooks: [async (input) => this.handlePreToolUseHook(activeRequest, input)],
+                  },
+                ],
                 PostToolUse: [
                   {
                     hooks: [async (input) => this.handlePostToolUseHook(activeRequest, input)],
+                  },
+                ],
+                PostToolUseFailure: [
+                  {
+                    hooks: [async (input) => this.handlePostToolUseFailureHook(activeRequest, input)],
                   },
                 ],
                 PostCompact: [
@@ -822,11 +841,31 @@ export class ClaudeAgentRunner {
     this.emitActivity(activeRequest, 'file-checkpoint', '文件快照已创建', 'done', '可用于撤销本轮文件改动')
   }
 
+  private async handlePreToolUseHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
+    if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
+      this.runtimeEditHook?.beforeTool({
+        requestId: activeRequest.requestId,
+        toolUseId: input.tool_use_id,
+        toolName: input.tool_name,
+      })
+    }
+    return { continue: true, suppressOutput: true }
+  }
+
   private async handlePostToolUseHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
     try {
       const toolUseId = isRecord(input) && typeof input.tool_use_id === 'string' ? input.tool_use_id : ''
       if (toolUseId && activeRequest.diffedToolUseIds.has(toolUseId)) return { continue: true, suppressOutput: true }
       const file = fileDiffFromPostToolUse(input, activeRequest.cwd)
+      if (toolUseId && isRecord(input) && typeof input.tool_name === 'string') {
+        this.runtimeEditHook?.afterTool({
+          requestId: activeRequest.requestId,
+          toolUseId,
+          toolName: input.tool_name,
+          succeeded: true,
+          hasProjectDiff: Boolean(file),
+        })
+      }
       if (file) {
         if (toolUseId) activeRequest.diffedToolUseIds.add(toolUseId)
         this.emit({
@@ -838,9 +877,31 @@ export class ClaudeAgentRunner {
         })
       }
     } catch (error) {
+      if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
+        this.runtimeEditHook?.afterTool({
+          requestId: activeRequest.requestId,
+          toolUseId: input.tool_use_id,
+          toolName: input.tool_name,
+          succeeded: true,
+          hasProjectDiff: false,
+        })
+      }
       safeConsoleWarn('[ClaudeAgentRunner] failed to collect file diff', {
         requestId: activeRequest.requestId,
         error: summarizeErrorForLog(error),
+      })
+    }
+    return { continue: true, suppressOutput: true }
+  }
+
+  private async handlePostToolUseFailureHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
+    if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
+      this.runtimeEditHook?.afterTool({
+        requestId: activeRequest.requestId,
+        toolUseId: input.tool_use_id,
+        toolName: input.tool_name,
+        succeeded: false,
+        hasProjectDiff: false,
       })
     }
     return { continue: true, suppressOutput: true }
@@ -984,7 +1045,6 @@ export class ClaudeAgentRunner {
   // --- IPC emission / IPC 发送 ---
 
   private emit(event: ClaudeChatEvent): void {
-    if (this.webContents.isDestroyed()) return
     const threadId = event.threadId ?? this.activeRequests.get(event.requestId)?.threadId
     if (threadId && event.type === 'error') {
       const threadState = this.getThreadRuntimeState(threadId)
@@ -994,10 +1054,16 @@ export class ClaudeAgentRunner {
     this.eventCoalescer.emit(threadId ? { ...event, threadId } : event)
   }
 
-  private sendEventNow(event: ClaudeChatEvent): void {
-    if (this.webContents.isDestroyed()) return
+  private publishEventNow(event: ClaudeChatEvent): void {
     this.observeEvent?.(event)
-    this.webContents.send(CLAUDE_CHAT_EVENT_CHANNEL, event)
+    try {
+      this.eventSink.publish(event)
+    } catch {
+      safeConsoleWarn('Claude chat event sink publish failed', {
+        eventType: event.type,
+        requestId: event.requestId,
+      })
+    }
   }
 
   private emitFileRewindResult(requestId: string, threadId: string, result: ClaudeFileRewindResult): void {

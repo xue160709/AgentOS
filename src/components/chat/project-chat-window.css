@@ -1,0 +1,103 @@
+.project-chat-window {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-height: 100%;
+  padding: 24px;
+  color: var(--color-token-text-primary);
+  background: var(--color-token-main-surface-primary);
+}
+
+.project-chat-window__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.project-chat-window__header h1 {
+  margin: 0;
+  font-size: var(--text-heading-md);
+}
+
+.project-chat-window__hint {
+  color: var(--color-token-text-secondary);
+}
+
+.project-chat-window--ready {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-content: stretch;
+  height: 100%;
+  padding: 0;
+  gap: 0;
+}
+
+.project-chat-window--ready > .project-chat-window__header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--color-token-border-primary);
+  background: color-mix(in srgb, var(--color-token-main-surface-primary) 94%, var(--color-token-text-primary) 6%);
+}
+
+.project-chat-window__identity {
+  min-width: 0;
+}
+
+.project-chat-window__identity > p {
+  margin: 0 0 2px;
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-caption);
+}
+
+.project-chat-window__identity h1 {
+  overflow: hidden;
+  max-width: 36vw;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-chat-window__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-chat-window__thread-picker {
+  display: grid;
+  gap: 3px;
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-caption);
+}
+
+.project-chat-window__thread-picker select {
+  width: min(320px, 34vw);
+  min-height: 34px;
+}
+
+.project-chat-window__new-thread[aria-pressed='true'] {
+  background: var(--color-token-text-primary);
+  color: var(--color-token-main-surface-primary);
+}
+
+@media (max-width: 760px) {
+  .project-chat-window__header {
+    align-items: flex-start;
+  }
+
+  .project-chat-window__actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .project-chat-window__thread-picker select {
+    width: min(280px, 58vw);
+  }
+}
+
+.project-chat-window__status {
+  margin: 8px 20px 0;
+  color: var(--color-token-text-secondary);
+}
+
+.project-chat-window--ready .chat-page {
+  min-height: 0;
+}

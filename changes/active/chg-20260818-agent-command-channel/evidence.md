@@ -171,9 +171,130 @@
 - frozen defaults：网站只收 accepted/rejected；关闭独立窗口 run 继续且新任务不打断草稿/active run/prompt；静态项目成功 Agent edit settle 后自动更新已保存预览。
 - permission clarification：当前代码不是 project-level permission store。为避免无依据新增作用域，v1 冻结为 app-global、Main-authoritative、所有窗口同步、submit 时捕获，默认 `auto`。
 - spec outputs：`README.md`、`design.md`、`technical.md`、`protocol-v1.md`、`acceptance.md`。
-- execution outputs：`work-orders/` 共 13 单；M0-01–M0-06 串行，M0 Gate 后 M1/M2 可按依赖并行，每单包含精确 write allowlist、测试、完成与停工条件。
+- execution outputs：初版 `work-orders/` 共 13 单；M0 实施复核后按真实缺口插入 M0-05A–M0-05F，其中 E 已冻结、F 在 E 复核后生成，最终索引为 19 单。M0 串行，M0 Gate 后 M1/M2 可按依赖并行，每单包含精确 write allowlist、测试、完成与停工条件。
 - formal sync：`prd/chat-agent-runtime/{README,technical,acceptance}.md` 已同步 Revision 2 planned 合同；根 `TODO.md` 与 `prd/README.md` 已更新。正式 Acceptance 仍全部未执行。
 - no business code：本次只修改文档；用户已有的 `AGENTS.md` 删除和其它业务代码脏改动未被覆盖或清理。
+
+### M0-01 Terra preflight 修订
+
+- Terra 在未修改文件、未运行测试前触发停止条件：M0-01 原任务单要求覆盖“未知 request”，但 `technical.md §5.3` 把 unknown requestId ownership/丢弃/计数明确归给 M0-02 `ProjectChatBroker`。
+- 判定：Terra 停止正确；技术架构无冲突，work-order 拆分存在一条越界测试要求。
+- 修订：M0-01 只测试 runner 单次 event publish、sink failure 不终止 run，以及 caller 已解析归属后的 pure reducer terminal fence；明确禁止提前建立 request registry 或 unknown filter。
+- 修订：M0-02 新增 unknown requestId 丢弃、脱敏计数、不写 workspace、不广播的明确步骤和断言；`technical.md §5.3/§14` 同步分开 Runner 与 Broker 职责。
+- 状态：`M0-01` 仍为未开工，可在相同 work order 上重新执行；没有业务代码需要回滚。
+
+### M0-01 首轮实现复核
+
+- Terra 已实现共享合同、纯 reducer、runner event sink 与 WebContents adapter；没有提前实现 request ownership/unknown-request。
+- 独立复跑：目标 Node tests 16/16 PASS，`npm run typecheck` PASS，`git diff --check` PASS。
+- 尚未关单的合同缺口：`ProjectChatPromptSnapshot` 使用完整 raw event 且缺少 promptId/kind/owner/createdAt；cancel/answer 缺 threadId/promptId；view state 缺 schema/project/seen/updated 字段；`WebsiteBindingPublic` 字段与 §9 不一致。
+- 尚未关单的单一实现缺口：`src/components/chat/chat-run.ts` 仍保留完整 `foldChatRunEventLegacy` 与 helper 副本，不是薄 adapter，形成两套可漂移 fold 规则。
+- 裁决：M0-01 保持 in progress，不进入 M0-02；先完成精确 DTO + reducer 去重的小范围收尾，再复跑同一门禁。
+
+### M0-01 收尾复核与关单
+
+- Terra 已逐字段修正 Prompt、cancel/answer、window view state/save patch 与 WebsiteBindingPublic，并加入 compile-time exact type fixtures。
+- `src/components/chat/chat-run.ts` 只保留调用 `project-chat-reducer.ts` 的薄 `foldChatRunEventLegacy`；fold/helper 实现只存在于新 pure reducer。
+- 独立复跑：`npm run typecheck` exit 0；目标 Node tests 16/16 PASS；`git diff --check` exit 0。
+- 边界复核：未建立 requestId registry，未实现 unknown-request 过滤/计数；这些仍归 M0-02。
+- 结论：M0-01 PASS/closed；真实 Electron/Claude SDK 集成留在 M0 Gate，不影响进入 M0-02 core implementation。
+
+### M0-02 preflight allowlist 修订
+
+- Terra 在未写 M0-02 文件前停止：`WorkspaceThread.creationSource` 冻结为必填，但现有两个类型化构造点位于未授权的 `src/components/workspace-session.ts`。
+- 独立审计确认：普通 addThread 与 task-run ensure 是两个直接 `WorkspaceThread` 构造点；AppShell 的其它入口均经 WorkspaceSession，无需扩张到 React TSX。
+- 修订：M0-02 allowlist 增加 `src/components/workspace-session.ts` 与其既有测试；creation-source 联合放在 `components/types.ts`，WorkspaceSession input 可选但持久 WorkspaceThread 必填，省略归一为 user。
+- 状态：Terra 停止正确；M0-02 仍未开始写入，可按更新任务单继续。
+
+### M0-02 首轮实现复核
+
+- 已实现 broker 串行队列、revision、request route、unknown count、terminal/generation event fence、prompt registry，以及 creationSource JSON/SQLite 迁移；Terra 报告目标测试 42/42/typecheck/diff check PASS。
+- 复核发现未覆盖缺口：website create variant 缺 bindingId/receivedAt 因而 broker 永远拒绝；runner payload 未从 durable thread 带 sessionId/modelPick；Prompt owner reassign 未移除失效 owner；旧 generation run 仍显示且永久参与 thread-busy。
+- 补充风险：getSnapshot 未排入 operation queue；默认时间戳 ID 同毫秒可能碰撞；answer runner throw 会 reject 且可能缺乏稳定业务错误；现有 creationSource 测试可能由 JSON fallback 通过，未独立证明 SQLite 恢复。
+- 裁决：M0-02 保持 in progress；上述均为既有 broker/迁移合同的收尾，不扩入 M0-03 或生产 wiring。
+
+### M0-02 补单复核与关单
+
+- Terra 已补齐 website source durable metadata、durable cwd/session/model payload、submit 时 permission 捕获、Prompt owner 真正 failover、answer failure 保留 waiting 状态、route-generation 可见性/busy fence、线性化 snapshot、UUID 默认 ID，以及独立 SQLite migration/round-trip 断言。
+- 独立复跑：`npm run typecheck` exit 0；`node --test electron/project-chat-broker.test.mjs electron/chat-workspace-store.test.mjs electron/workspace-session.test.mjs electron/chat-run.test.mjs` 46/46 PASS；`git diff --check` exit 0。
+- 边界复核：`electron/main.ts`、preload、React 与旧 `claude-chat:*` production 路径未接入 broker；M0-02 仍是可注入、可测试的 broker core，不存在中间态双 writer。
+- 结论：M0-02 PASS/closed；进入 M0-03 前先把任务单中的旧 IPC 委托描述修正为“只实现 disabled seam”，production cutover 仍唯一归 M0-05。
+
+### M0-03 实现复核与关单
+
+- 已实现集中 Project Chat channel、完整 typed preload adapter、严格 `senderFrame === mainFrame`/renderer document/project/generation capability router、app-global permission missing/valid/invalid 迁移，以及在 broker queue 上不增加 workspace revision 的全项目 snapshot 广播；整个 seam 未在 `main.ts` 注册。
+- 安全复核补齐：renderer 不能伪造 `source='website'`；Prompt `promptId` 必须等于 response `permissionRequestId` 且 broker 再做防御校验；项目窗口可修改 app-global permission 但 stale generation 被拒；Binding list/revoke/permission initialize 仅 main-window capability 可用。
+- 独立复跑：`npm run typecheck` exit 0；`node --test electron/project-chat-ipc.test.mjs electron/desktop-seam.test.mjs electron/project-chat-broker.test.mjs electron/chat-run.test.mjs` 38/38 PASS；`git diff --check` exit 0。
+- 边界复核：旧 `claude-chat:*` handler 与 WebContents sink 仍完整走 Revision 1；没有 `project-chat:*` production handler、真实 BrowserWindow 或 React cutover。真实 Electron `senderFrame` 身份留 M0 Gate 验证，代码在缺失/不相等时默认拒绝。
+- 结论：M0-03 PASS/closed。M0-04 继续只建立不可达的 window/view-state seam；production Main composition 与 renderer 单 writer cutover 仍留 M0-05。
+
+### M0-04 实现复核与关单
+
+- 已实现一项目一 BrowserWindow manager、固定 `--agentos-window-kind=project-chat` preload profile 参数、同 bundle 最小页面路由、最小无 path 项目摘要，以及 schema v1 view-state 原子 store/300ms controller。
+- 生命周期复核补齐：capability 注册失败或 load reject 会 cleanup 后销毁失败窗口；close/closed/webContents destroyed 幂等 unregister、map cleanup 与单次 `onWebContentsUnavailable`，且不触发 cancel。
+- 持久化复核补齐：完整 read-merge-write 串行化，不同项目并发保存不争用 temp；copy-on-write 只在 rename 成功后更新 cache，失败后仍读取旧 durable state且可重试；draft 100,000/100,001、corrupt backup、bounds 可见性均有断言。
+- 独立复跑：`npm run typecheck` exit 0；任务单六个目标测试文件共 40/40 PASS；`git diff --check` exit 0。
+- 边界复核：`electron/main.ts`、preload、runner、ChatPage 与旧 production handlers 未改；manager 只能由测试构造，最小页面在当前 production 不可达。
+- 结论：M0-04 PASS/closed。进入 renderer cutover 前需先冻结 scoped preload 与现有 Chat 全功能所需的 project-scoped 命令/只读 DTO，并把 Main composition 与 renderer 改造拆成可回滚小单。
+
+### M0-05A 实现复核与关单
+
+- 已实现 project-window 精确 additionalArgument preload profile：项目 profile 只暴露 `projectChat`，主 profile 保留既有 `desktop`/`claudeChat` 并增加 disabled `projectChat`；query/hash 不能改变 profile。
+- 已增加六个 project-scoped typed read/selection capability 与 exhaustive channel/preload/router forwarding；router 只注入 collaborator，未在 Main 注册或实现真实 filesystem/settings/dialog 依赖。
+- attachment 边界已按实际 UTF-8/严格 base64 解码内容重算 8 个、512 KiB、5 MiB、24 MiB 限制，不信任 renderer size；加入 MIME magic、pre-decode encoded-length、id/name/preview 上限、跨平台 basename、relative path normalizer 和 Windows/POSIX traversal 负例。
+- snapshot 不再暴露 `WorkspaceThread`：getSnapshot/broadcast 共用显式 `ProjectChatThreadSnapshot` projector，移除 session/cwd/creationSource/binding/skillPath/task metadata、attachment/diff absolute path、checkpoint/internal requestId；恶意 relativePath/name 与 thread-status scope mismatch 默认失败或安全投影。
+- 独立复跑：`npm run typecheck` exit 0；`node --test electron/project-chat-ipc.test.mjs electron/project-chat-contract.test.mjs electron/project-chat-broker.test.mjs electron/desktop-seam.test.mjs` 38/38 PASS；`git diff --check` exit 0。
+- 边界复核：`electron/main.ts`、真实 runner、window manager、React、workspace store/session 与 Revision 1 production handler 未改；M0-05A 仍是 disabled seam。
+- 结论：M0-05A PASS/closed。下一单先实现 broker-owned thread mutation intents（M0-05B），不直接派发原先职责过宽的 renderer cutover。
+
+### M0-05B 实现复核与关单
+
+- 已将 fork、edit-resubmit、archive、显式 pin、model 与 diff-review 六个 durable thread mutation 收进 broker，同步贯穿冻结 contract、集中 channel、project-only preload 与 capability router；renderer 不能提交完整 thread/chat/transcript 或 authority 字段。
+- 复核修正了三个状态边界：旧 route generation prompt 不再造成当前 generation `thread-busy`；orphan thread 不能绕过 durable project ownership；已归档 source 仍可 fork，但 submit/edit/model/review 按合同拒绝。
+- reset/model 语义在 save 前完成，失败不写 store、不增 revision、不广播、不 submit；首次标题、并发 mutation、SDK submit failure、缺失 diff、`now()=0` pin 幂等和六路 IPC sender/frame/document/project/generation 隔离均有专项断言。
+- 独立复跑：`npm run typecheck` exit 0；`node --test electron/project-chat-broker.test.mjs electron/project-chat-ipc.test.mjs electron/project-chat-contract.test.mjs electron/desktop-seam.test.mjs` 49/49 PASS；`git diff --check` exit 0。
+- 边界复核：`electron/main.ts`、真实 runner、React、workspace store/session 与 Revision 1 production handler 未改；M0-05B 仍是 disabled seam。
+- 结论：M0-05B PASS/closed。下一单先让 broker 与现有 Main workspace mutations 共用唯一 operation coordinator（M0-05C），之后才允许设计 production composition/cutover。
+
+### M0-05C preflight 事实修订
+
+- Main save 调用点审计共发现七处；其中六处已在 `runChatWorkspaceOperation` 内，`resolveProjectRuntime(..., trust=true)` 的 Runtime definition save 是唯一逃逸点。
+- 原任务单若保持“main.ts 只改 wrapper/init”会按停止条件必停，且直接用锁外 `currentState` 包一层 save 仍会覆盖 coordinator 等待期间的新 workspace 事实。
+- 规格已冻结窄修复：inspect/trust grant 可锁外 preflight；最终 commit 取得唯一 coordinator 后 fresh-read project/runtimeDefinitions、重验 project path、基于最新 state 重算 definition/revision、save/readback；成功 runtime/host 副作用在 commit 后，失败的新 trust grant 维持 revoke 补偿。
+- M0-05C allowlist 只为这一已知 Main 调用点扩张；若再发现其它逃逸 save 或必须改 Runtime module/renderer，仍停止报告。
+
+### M0-05C 实现复核与关单
+
+- 新增唯一 `ChatWorkspaceCoordinator`：FIFO、同步 throw/异步 reject 原样返回且不阻塞后续，`idle()` 等待已提交 operation；Main 旧 `chatWorkspaceOperationChain` 已删除，wrapper 在 store 初始化后只委托 coordinator，初始化前明确失败。
+- broker 注入 external scheduler 时在调用当下直接提交完整 operation，不再经过私有 Promise microtask；私有 chain 仅供 isolated 默认。真实 marker 证明 broker-first 为 `broker:read → broker:save → main:mutation`，Main-first paused 时 broker 在 release 前零 read，external `idle()` 不提前。
+- external scheduler 专项覆盖 getSnapshot/create/submit/publish/broadcast；组合 state 保留 Main runtime/sidebar 与 broker thread mutation，revision 连续、广播读取 committed state。
+- `resolveProjectRuntime(..., trust=true)` 已收进唯一 writer：锁内 fresh-read project/runtimeDefinitions、path revalidation、基于最新 state 重算/save/readback；stale/save failure 补偿新 trust，runtime/host 注册在 commit 成功后。
+- source audit 使用 TypeScript AST 找到恰好七个 workspace save，并逐个验证函数祖先是 `runChatWorkspaceOperation` callback，避免字符串 `lastIndexOf` 假阳性。
+- 独立复跑：任务单目标 Node tests 61/61 PASS；`npm run test:electron` 在允许本地回环监听后 199/199 PASS；`npm run typecheck` 与 `git diff --check` exit 0。
+- 边界复核：没有注册 `project-chat:*` handler、没有实例化 production broker、没有切换 runner sink/旧 `claude-chat:*`，preload/React/Runtime module 未改。
+- 结论：M0-05C PASS/closed。原 M0-05 仍不能直接派发；先冻结 production runtime adapter、真实 scoped collaborators、prompt presence/rewind 与 Main composition 的可回滚边界。
+
+### M0-05D 派发前事实冻结
+
+- 当前 `ProjectChatScopedReadCollaborator` 只是注入 seam；Main 尚未提供真实 settings/context/search/dialog/attachment/status 实现，broker runner port 也尚未与同一 `ClaudeAgentRunner` 做 production adapter。
+- M0-05D 只补可注入真实 services：durable project/thread authority、settings/status/context/file 脱敏投影、附件 root/candidate realpath containment，以及 `resetThread -> newThread` adapter；不注册 IPC、不切 sink、不改 renderer。
+- env config 不合成虚构 model provider；model catalog 只投影 settings providers 且完全排除 env/credential/URL/auth 字段。status 只用 durable cwd/session/modelPick 并固定 `refresh:false`。
+- 本单明确不解决 sink 构造、prompt presence/rewind、TaskHome managed run 与 feature flag composition；原 M0-05 继续禁止派发。
+
+### M0-05D 实现复核与关单
+
+- 新增无状态 runner adapter，`submit/cancel/answer` exact delegate，`resetThread` 只映射同一 runner 的 `newThread`；没有 request/event ownership。
+- scoped services 每次 fresh-read durable workspace/settings；context/search/status 只返回 public DTO，status payload 只取 durable cwd/session/modelPick 并固定 `refresh:false`；settings/env credential、URL、auth 与 status runtime sentinel 不外泄。
+- attachment 在 reader 前 canonicalize root/candidate 并执行 containment；missing/root-self/symlink escape 只产生 generic skipped。复核发现并修正真实 search 返回形状与 POSIX 下 Windows separator candidate 构造，新增回归锁定。
+- 独立复跑：`npm run typecheck` PASS；任务单目标 Node tests 53/53 PASS；`npm run test:electron` 在允许本地回环监听后 204/204 PASS；`git diff --check` PASS。
+- 边界复核：Main/runner/broker/preload/React 未改，没有 IPC registration、sink composition 或 feature flag；M0-05D PASS/closed。
+
+### M0-05E 派发前事实冻结
+
+- 原 M0-05 需要 pending prompt owner 与 rewind UI，但当前 broker prompt 只提供手工候选 seam，系统没有可信 visible/focused/selected-thread presence；ProjectChatAPI 也没有 rewind，旧 UI 仍把 checkpoint/request/cwd/model 直接交给 legacy bridge。
+- 冻结 Main-owned presence：renderer 只能报告 selection，visibility/focus/capability/generation 全由 Main；owner 创建时按三段优先级选择，已显示的 visible owner 保持稳定，hide/destroy 才 failover。
+- 冻结 broker-owned rewind：renderer 只发 project/thread/changeSet/generation，broker 从 durable diff/thread/project 解析 checkpoint/request/session/model/cwd，direct result 是唯一 durable mutation，terminal emitted event 不得双写。
+- 剩余前置不再开放式增加：M0-05E 后只允许一张 M0-05F default-off production composition，再立即派发 renderer cutover。
 
 ## Revision 1：实现与自检
 

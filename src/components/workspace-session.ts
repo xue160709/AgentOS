@@ -1,4 +1,5 @@
 import type { ChatModelPick } from '../claude-chat-types'
+import type { ProjectChatClientEvent, ProjectChatSnapshot, ProjectChatThreadSnapshot, ProjectChatTranscriptItem } from '../project-chat-contract'
 import type {
   ChatState,
   ChatWorkspaceState,
@@ -6,6 +7,7 @@ import type {
   WorkspaceTab,
   TranscriptItem,
   WorkspaceProject,
+  ProjectThreadCreationSource,
   WorkspaceThread,
 } from './types'
 import { stripRuntimeProjectFields } from '../project-path'
@@ -47,6 +49,7 @@ export type AddWorkspaceThreadInput = {
   skillPath?: string
   skillCommand?: string
   skillTitle?: string
+  creationSource?: ProjectThreadCreationSource
   createdAt?: number
   activate?: boolean
 }
@@ -78,6 +81,106 @@ export type EnsureTaskRunThreadInput = {
 }
 
 const DEFAULT_SAVE_DEBOUNCE_MS = 750
+
+/**
+ * Renderer-only snapshot ordering seam. Durable Chat state stays in Main;
+ * this controller only accepts a complete broker projection or requests a
+ * fresh one when an event sequence has a gap.
+ */
+export class ProjectChatSnapshotController {
+  private readonly snapshots = new Map<string, ProjectChatSnapshot>()
+  private readonly cursors = new Map<string, { sequence: number; routeGeneration: number; workspaceRevision: number }>()
+
+  adopt(snapshot: ProjectChatSnapshot): void {
+    this.snapshots.set(snapshot.projectId, snapshot)
+    this.cursors.set(snapshot.projectId, {
+      sequence: snapshot.sequence,
+      routeGeneration: snapshot.routeGeneration,
+      workspaceRevision: snapshot.workspaceRevision,
+    })
+  }
+
+  accept(event: ProjectChatClientEvent): 'accepted' | 'gap' | 'discarded' {
+    if (event.type !== 'snapshot') return 'discarded'
+    const cursor = this.cursors.get(event.projectId)
+    if (!cursor) {
+      this.adopt(event.snapshot)
+      return 'accepted'
+    }
+    if (event.routeGeneration !== cursor.routeGeneration || event.sequence <= cursor.sequence) return 'discarded'
+    if (event.sequence !== cursor.sequence + 1) return 'gap'
+    this.adopt(event.snapshot)
+    return 'accepted'
+  }
+
+  snapshot(projectId: string): ProjectChatSnapshot | undefined { return this.snapshots.get(projectId) }
+}
+
+/** Applies a redacted broker projection without using it as a writable workspace snapshot. */
+export function applyProjectChatSnapshot(state: ChatWorkspaceState, snapshot: ProjectChatSnapshot): ChatWorkspaceState {
+  const existingProject = state.projects.find((project) => project.id === snapshot.projectId)
+  if (!existingProject) return state
+  const project = {
+    ...existingProject,
+    name: snapshot.project.name,
+    pathMissing: snapshot.project.pathMissing || undefined,
+  }
+  const projectedThreads = snapshot.threads.map(projectChatThreadToWorkspaceThread)
+  return {
+    ...state,
+    workspaceRevision: Math.max(state.workspaceRevision, snapshot.workspaceRevision),
+    projects: state.projects.map((candidate) => candidate.id === snapshot.projectId ? project : candidate),
+    threads: [...state.threads.filter((thread) => thread.projectId !== snapshot.projectId), ...projectedThreads],
+  }
+}
+
+function projectChatThreadToWorkspaceThread(thread: ProjectChatThreadSnapshot): WorkspaceThread {
+  return {
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    purpose: thread.purpose,
+    homePluginSlug: thread.homePluginSlug,
+    skillCommand: thread.skillCommand,
+    skillTitle: thread.skillTitle,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    pinnedAt: thread.pinnedAt,
+    archivedAt: thread.archivedAt,
+    creationSource: { kind: 'user' },
+    chatState: {
+      model: thread.chatState.model,
+      modelPick: thread.chatState.modelPick,
+      tasks: thread.chatState.tasks,
+      items: thread.chatState.items.map(projectChatTranscriptToWorkspaceItem),
+    },
+  }
+}
+
+function projectChatTranscriptToWorkspaceItem(item: ProjectChatTranscriptItem): TranscriptItem {
+  if (item.type === 'message') {
+    return {
+      ...item,
+      attachments: item.attachments?.map((attachment) => ({ ...attachment, path: '' })),
+    }
+  }
+  if (item.type === 'file_diff') {
+    return {
+      ...item,
+      requestId: '',
+      files: item.files.map((file) => ({
+        path: file.relativePath,
+        relativePath: file.relativePath,
+        status: file.status,
+        additions: file.additions,
+        deletions: file.deletions,
+        hunks: file.hunks,
+        truncated: file.truncated,
+      })),
+    }
+  }
+  return item
+}
 
 export function restoreWorkspaceSessionState(state: ChatWorkspaceState): ChatWorkspaceState {
   if (state.projects.length === 0) {
@@ -277,6 +380,7 @@ export class WorkspaceSession {
       skillTitle: input.skillTitle,
       createdAt: timestamp,
       updatedAt: timestamp,
+      creationSource: input.creationSource ?? { kind: 'user' },
       chatState: input.chatState,
     }
     return withActiveWorkspaceTab({
@@ -392,8 +496,16 @@ export class WorkspaceSession {
   }
 
   selectWorkspaceTab(state: ChatWorkspaceState, tabId: string): ChatWorkspaceState {
-    if (!state.workspaceTabs.some((item) => item.id === tabId)) return state
-    return withActiveWorkspaceTab({ ...state, activeThreadId: '' }, tabId)
+    const tab = state.workspaceTabs.find((item) => item.id === tabId)
+    if (!tab) return state
+    // This is renderer selection ergonomics only. Main remains the durable
+    // authority when opening a tab's Project Chat.
+    const backedProject = tab.projectId ? state.projects.find((project) => project.id === tab.projectId) : undefined
+    return withActiveWorkspaceTab({
+      ...state,
+      activeProjectId: backedProject?.id ?? state.activeProjectId,
+      activeThreadId: '',
+    }, tabId)
   }
 
   closeWorkspaceTab(state: ChatWorkspaceState, tabId: string): ChatWorkspaceState {
@@ -628,6 +740,7 @@ export class WorkspaceSession {
       homePluginSlug: input.slug,
       createdAt: input.thread.createdAt || timestamp,
       updatedAt: input.thread.updatedAt || timestamp,
+      creationSource: { kind: 'user' },
       chatState: { model: 'Claude Agent', items: [] },
     }
     return {

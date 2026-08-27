@@ -8,6 +8,7 @@ import './style.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AppShell } from './components/AppShell'
+import { ProjectChatWindowPage } from './components/chat/ProjectChatWindowPage'
 import { I18nProvider } from './i18n/i18n'
 import { applySafeAreaToDocument, installWindowSafeAreaListeners } from './window-safe-area'
 
@@ -23,11 +24,13 @@ if (windowEffects?.windowsTitlebarOverlay) {
 
 const appRoot = document.querySelector<HTMLDivElement>('#app')
 if (!appRoot) throw new Error('Missing #app root element.')
+const route = new URLSearchParams(window.location.search)
+const projectWindowProjectId = route.get('window-kind') === 'project-chat' ? route.get('projectId')?.trim() : undefined
 
 createRoot(appRoot).render(
   <StrictMode>
     <I18nProvider>
-      <AppShell />
+      {projectWindowProjectId ? <ProjectChatWindowPage projectId={projectWindowProjectId} /> : <AppShell />}
     </I18nProvider>
   </StrictMode>,
 )

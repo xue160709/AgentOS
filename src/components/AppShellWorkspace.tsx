@@ -38,6 +38,7 @@ import { useWorkspaceAgentMode } from './useWorkspaceAgentMode'
 import type { AgentModeSettingsResult, HomePluginRunItem } from '../desktop-types'
 import { projectContent } from '../project-content'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
+import type { ProjectChatSnapshot } from '../project-chat-contract'
 
 /** 右侧辅助抽屉开关与当前标签 / Auxiliary side panel open flag and active tab */
 type SidePanelState = {
@@ -109,8 +110,11 @@ type AppShellWorkspaceProps = {
   onRelocateRuntime?: () => void
   onBuildRuntime?: () => void
   onCancelBuildRuntime?: () => void
+  onDevelopmentRuntime?: () => void
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
+  projectChatSnapshot?: ProjectChatSnapshot
+  projectChatEnabled: boolean
   threads: WorkspaceThread[]
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
@@ -156,8 +160,11 @@ export function AppShellWorkspace({
   onRelocateRuntime,
   onBuildRuntime,
   onCancelBuildRuntime,
+  onDevelopmentRuntime,
   projectDefaultModelPick,
   projectHomeModelPick,
+  projectChatSnapshot,
+  projectChatEnabled,
   threads,
   projects,
   projectOrderIds,
@@ -592,6 +599,17 @@ export function AppShellWorkspace({
                 <IconInline name="undo" />
                 <span className="local-app-runtime-action__label">{t('runtime.restart')}</span>
               </button>
+              {activeStaticRuntime ? <button
+                type="button"
+                className="btn btn-ghost local-app-runtime-action"
+                data-testid="runtime-development"
+                onClick={onDevelopmentRuntime}
+                disabled={!onDevelopmentRuntime}
+                aria-label={t('runtime.developmentMode')}
+                title={t('runtime.developmentMode')}
+              >
+                <span className="local-app-runtime-action__label">{t('runtime.developmentMode')}</span>
+              </button> : null}
               <button
                 type="button"
                 className="btn btn-ghost local-app-runtime-action"
@@ -627,6 +645,7 @@ export function AppShellWorkspace({
             tab={activeWorkspaceTab}
             definition={activeRuntimeDefinition}
             runtime={activeRuntime ?? null}
+            runtimeEdit={projectChatSnapshot?.runtimeEdit}
             onRetry={onRetryRuntime ?? (() => undefined)}
             onRestart={onRestartRuntime ?? (() => undefined)}
             onStop={onStopRuntime ?? (() => undefined)}
@@ -642,6 +661,8 @@ export function AppShellWorkspace({
             activeThread={activeThread}
             projectDefaultModelPick={projectDefaultModelPick}
             projectHomeModelPick={projectHomeModelPick}
+            projectChatSnapshot={projectChatSnapshot}
+            projectChatEnabled={projectChatEnabled}
             agentStatusSnapshot={agentStatusSnapshot}
             threads={threads}
             projects={projects}
@@ -652,6 +673,7 @@ export function AppShellWorkspace({
             onForkThread={onForkThread}
             onCreateProject={onCreateProject}
             onSelectProject={onSelectProject}
+            onSelectThread={onSelectThread}
             onThreadChatStateChange={onThreadChatStateChange}
             onThreadPromptSubmit={onThreadPromptSubmit}
             onThreadRunStateChange={onThreadRunStateChange}

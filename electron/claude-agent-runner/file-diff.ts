@@ -13,16 +13,21 @@ import type {
 
 const MAX_DIFF_LINES_PER_FILE = 800
 
-/** 从 PostToolUse hook 输入中提取单文件 diff / Extract a single-file diff from PostToolUse hook input */
+/**
+ * 从成功的 PostToolUse hook 输入中提取项目根目录内的单文件 diff。
+ * The structured patch/result is the evidence; tool names and shell text are
+ * never interpreted as a write signal.
+ */
 export function fileDiffFromPostToolUse(input: unknown, cwd: string): ClaudeFileDiffFile | undefined {
   if (!isRecord(input)) return undefined
   const toolName = typeof input.tool_name === 'string' ? input.tool_name : ''
-  if (toolName !== 'Edit' && toolName !== 'Write' && toolName !== 'NotebookEdit') return undefined
 
   const toolInput = isRecord(input.tool_input) ? input.tool_input : {}
   const response = isRecord(input.tool_response) ? input.tool_response : {}
   const filePath = pickString(response.filePath, response.file_path, toolInput.file_path, toolInput.notebook_path)
   if (!filePath) return undefined
+  const relativePath = relativeToCwd(filePath, cwd)
+  if (!relativePath) return undefined
 
   const isCreate = pickString(response.type) === 'create' || response.originalFile === null
   let hunks = normalizeStructuredPatch(response.structuredPatch)
@@ -37,7 +42,7 @@ export function fileDiffFromPostToolUse(input: unknown, cwd: string): ClaudeFile
 
   return {
     path: filePath,
-    relativePath: relativeToCwd(filePath, cwd),
+    relativePath,
     status,
     additions: toFiniteNumber(gitDiff?.additions, counted.additions),
     deletions: toFiniteNumber(gitDiff?.deletions, counted.deletions),
@@ -148,10 +153,10 @@ function normalizeFileStatus(rawStatus: string, rawWriteType: string, toolName: 
   return 'unknown'
 }
 
-function relativeToCwd(filePath: string, cwd: string): string {
+function relativeToCwd(filePath: string, cwd: string): string | undefined {
   const absolutePath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath)
   const relative = path.relative(cwd, absolutePath)
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return absolutePath
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined
   return normalizePathSeparators(relative)
 }
 

@@ -73,6 +73,14 @@ import { formatBytes } from './format'
 import type { BuiltInSlashCommand, ChatModelMenuRow, ComposerSuggestion, ComposerTrigger, PermissionModeRow } from './local-types'
 import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { agentCommandChannel } from '../../agent-command-channel'
+import type {
+  ProjectChatAgentContext,
+  ProjectChatAttachment,
+  ProjectChatAttachmentSelection,
+  ProjectChatModelCatalog,
+  ProjectChatPromptSnapshot,
+  ProjectChatSnapshot,
+} from '../../project-chat-contract'
 
 const PROCESS_TRACE_TOGGLE_EVENT = 'chat-process-trace:toggle'
 const MAX_COMPOSER_SUGGESTIONS = 64
@@ -234,6 +242,8 @@ type ChatPageProps = {
   activeThread: WorkspaceThread | undefined
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
+  projectChatSnapshot?: ProjectChatSnapshot
+  projectChatEnabled: boolean
   agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
   /** 按 threadId 查找持久化 sessionId（重启后恢复 SDK）/ Threads list for resolving persisted session ids */
   threads: WorkspaceThread[]
@@ -245,6 +255,7 @@ type ChatPageProps = {
   onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
+  onSelectThread: (threadId: string) => void
   onThreadChatStateChange: (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => void
   onThreadPromptSubmit: (threadId: string, prompt: string) => void
   onThreadRunStateChange: (threadId: string, state: ThreadRunState | null) => void
@@ -267,6 +278,8 @@ type ChatPageProps = {
   onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
+  /** Project windows keep only this local view state; Chat facts remain broker snapshots. */
+  projectWindow?: { draft: string; onDraftChange: (draft: string) => void }
 }
 
 // --- Internal helpers / 模块内辅助 ---
@@ -331,6 +344,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     activeThread,
     projectDefaultModelPick,
     projectHomeModelPick,
+    projectChatSnapshot,
+    projectChatEnabled,
     agentStatusSnapshot,
     threads,
     projects,
@@ -341,6 +356,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     onForkThread,
     onCreateProject,
     onSelectProject,
+    onSelectThread,
     onThreadChatStateChange,
     onThreadPromptSubmit,
     onThreadRunStateChange,
@@ -363,6 +379,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     onOpenProjectFile,
     onRunProjectSkill,
     onStopProjectSkillRun,
+    projectWindow,
   },
   ref,
 ) {
@@ -380,6 +397,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const [modelMenuSelectionKey, setModelMenuSelectionKey] = useState('')
   const [activeModelSupportsImages, setActiveModelSupportsImages] = useState(false)
   const [claudeSettingsSnapshot, setClaudeSettingsSnapshot] = useState<ClaudeAgentSettingsSnapshot | null>(null)
+  const [projectModelCatalog, setProjectModelCatalog] = useState<ProjectChatModelCatalog | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<ClaudeChatAttachment[]>([])
   const pendingAttachmentsRef = useRef<ClaudeChatAttachment[]>([])
   const [agentContext, setAgentContext] = useState<AgentContextCatalog | null>(null)
@@ -439,6 +457,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const currentModelPickRef = useRef<ChatModelPick | undefined>(undefined)
   const inputValueRef = useRef(inputValue)
   const composerSelectionRef = useRef(composerSelection)
+  const composerAutocompleteBoxKeyRef = useRef('')
+  const projectWindowDraftLoadedRef = useRef(false)
   const speechDraftRangeRef = useRef<SpeechDraftRange | null>(null)
   const lastSpeechAppliedValueRef = useRef<string | null>(null)
   const ignoreSpeechRecognitionTextRef = useRef(false)
@@ -464,6 +484,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   )
   const hasVisibleTasks = visibleTaskItems.length > 0
   const activeUserInputPrompt = useMemo(() => {
+    if (projectChatEnabled) return projectPromptToPendingInput(projectChatSnapshot?.pendingPrompts.find((prompt) => prompt.threadId === activeThread?.id && prompt.isOwnedByCaller))
     const activeThreadId = activeThread?.id ?? activeThreadIdRef.current
     if (!activeThreadId) return null
     return (
@@ -472,7 +493,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return promptThreadId === activeThreadId
       }) ?? null
     )
-  }, [activeThread?.id, chatRun, pendingUserInputPrompts])
+  }, [activeThread?.id, chatRun, pendingUserInputPrompts, projectChatEnabled, projectChatSnapshot?.pendingPrompts])
+  const activeReadOnlyPrompt = useMemo(
+    () => projectChatEnabled ? projectChatSnapshot?.pendingPrompts.find((prompt) => prompt.threadId === activeThread?.id && !prompt.isOwnedByCaller) : undefined,
+    [activeThread?.id, projectChatEnabled, projectChatSnapshot?.pendingPrompts],
+  )
   const permissionModeRows = useMemo(() => getPermissionModeRows(t), [t])
   const permissionModeLabel = permissionModeRows.find((row) => row.mode === permissionMode)?.label ?? t('chat.permissionModeAuto')
   const speechRecognitionSupported =
@@ -645,6 +670,15 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Agent context catalog (skills/agents for slash & @) / Agent 上下文目录（斜杠与 @ 联想数据来源） ---
 
   const refreshAgentContext = useCallback(async () => {
+    if (projectChatEnabled) {
+      try {
+        const result = await window.projectChat?.getAgentContext(activeProject.id)
+        setAgentContext(result?.ok ? projectChatAgentContextToCatalog(result.value) : null)
+      } catch {
+        setAgentContext(null)
+      }
+      return
+    }
     const listAgentContext = window.desktop?.listAgentContext
     if (!listAgentContext) {
       setAgentContext(null)
@@ -657,7 +691,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     } catch {
       setAgentContext(null)
     }
-  }, [activeProject.path])
+  }, [activeProject.id, activeProject.path, projectChatEnabled])
 
   // --- Effects: desktop IPC & settings sync / 副作用：桌面 IPC 与设置 ---
 
@@ -675,15 +709,34 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   useEffect(() => {
     inputValueRef.current = inputValue
-  }, [inputValue])
+    if (!projectWindow) {
+      projectWindowDraftLoadedRef.current = false
+      return
+    }
+    if (!projectWindowDraftLoadedRef.current) {
+      projectWindowDraftLoadedRef.current = true
+      if (inputValue !== projectWindow.draft) {
+        inputValueRef.current = projectWindow.draft
+        setInputValue(projectWindow.draft)
+        setComposerSelection({ start: projectWindow.draft.length, end: projectWindow.draft.length })
+      }
+      return
+    }
+    projectWindow.onDraftChange(inputValue)
+  }, [inputValue, projectWindow?.draft, projectWindow?.onDraftChange])
 
   useEffect(() => {
     composerSelectionRef.current = composerSelection
   }, [composerSelection])
 
   useEffect(() => {
+    if (projectChatEnabled) return
     window.localStorage.setItem(PERMISSION_MODE_STORAGE_KEY, permissionMode)
-  }, [permissionMode])
+  }, [permissionMode, projectChatEnabled])
+
+  useEffect(() => {
+    if (projectChatEnabled && projectChatSnapshot) setPermissionMode(projectChatSnapshot.permissionMode)
+  }, [projectChatEnabled, projectChatSnapshot])
 
   useEffect(() => {
     globalDisplayModelRef.current = globalDisplayModel
@@ -837,6 +890,39 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     [t],
   )
 
+  const applyProjectModelCatalog = useCallback((catalog: ProjectChatModelCatalog) => {
+    const slots = {
+      primary: t('chat.modelSlotPrimary'),
+      haiku: t('chat.modelSlotHaiku'),
+      sonnet: t('chat.modelSlotSonnet'),
+      opus: t('chat.modelSlotOpus'),
+    }
+    const rows: ChatModelMenuRow[] = []
+    for (const provider of catalog.providers) {
+      const seen = new Set<string>()
+      const add = (model: string, slot: string, supportsImages: boolean, useOverlayPick: boolean) => {
+        const anthropicModel = model.trim()
+        if (!anthropicModel || seen.has(anthropicModel)) return
+        seen.add(anthropicModel)
+        rows.push({
+          pickKey: modelPickKey({ providerId: provider.id, anthropicModel }),
+          providerId: provider.id,
+          anthropicModelId: anthropicModel,
+          useOverlayPick,
+          supportsImages,
+          headline: compactModelName(anthropicModel, t),
+          metaLine: [provider.name, slot].filter(Boolean).join(' · '),
+        })
+      }
+      add(provider.model, slots.primary, provider.modelSupportsImages, false)
+      add(provider.defaultHaikuModel, slots.haiku, provider.defaultHaikuSupportsImages, true)
+      add(provider.defaultSonnetModel, slots.sonnet, provider.defaultSonnetSupportsImages, true)
+      add(provider.defaultOpusModel, slots.opus, provider.defaultOpusSupportsImages, true)
+    }
+    setProjectModelCatalog(catalog)
+    setModelMenuRows(rows)
+  }, [t])
+
   useEffect(() => {
     if (!claudeSettingsSnapshot) return
     const settings = claudeSettingsSnapshot.settings
@@ -859,6 +945,13 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }, [homeModeResetKey])
 
   useEffect(() => {
+    if (projectChatEnabled) {
+      void window.projectChat?.getModelCatalog().then((result) => {
+        if (result?.ok) applyProjectModelCatalog(result.value)
+      }).catch(() => undefined)
+      return
+    }
+    if (projectChatEnabled) return
     window.claudeChat?.getSettings().then(applyGlobalModelFromSettings).catch(() => {
       /* 浏览器独立预览可能没有 Electron 桥接 / Browser preview may run without the Electron bridge */
     })
@@ -868,7 +961,22 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
     window.addEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
     return () => window.removeEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
-  }, [applyGlobalModelFromSettings])
+  }, [applyGlobalModelFromSettings, applyProjectModelCatalog, projectChatEnabled])
+
+  useEffect(() => {
+    if (!projectChatEnabled || !projectModelCatalog) return
+    const requestedPick = activeThread?.chatState.modelPick
+    const fallback = projectModelCatalog.providers.find((provider) => provider.id === projectModelCatalog.activeProviderId)
+    const effectivePick = requestedPick ?? (fallback && projectModelCatalog.activeAnthropicModel
+      ? { providerId: fallback.id, anthropicModel: projectModelCatalog.activeAnthropicModel }
+      : undefined)
+    const row = modelRowForPick(modelMenuRows, effectivePick)
+    const displayModel = row?.anthropicModelId ?? effectivePick?.anthropicModel ?? t('chat.modelFallback')
+    currentModelPickRef.current = effectivePick
+    setModelMenuSelectionKey(effectivePick ? modelPickKey(effectivePick) : '')
+    setGlobalDisplayModel(displayModel)
+    setActiveModelSupportsImages(row?.supportsImages ?? false)
+  }, [activeThread?.chatState.modelPick, modelMenuRows, projectChatEnabled, projectModelCatalog, t])
 
   // --- Composer autocomplete: slash commands, @mentions, debounced file search / 输入框联想：斜杠、@ 与防抖文件搜索 ---
 
@@ -899,6 +1007,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
 
     const query = activeComposerTrigger.query
+    if (projectChatEnabled) {
+      let active = true
+      const timer = window.setTimeout(() => {
+        void window.projectChat?.searchProjectFiles({ projectId: activeProject.id, query }).then((result) => {
+          if (!active) return
+          setFileMentionResults(result?.ok ? result.value.map((item) => ({ ...item, path: item.relativePath })) : [])
+        }).catch(() => { if (active) setFileMentionResults([]) })
+      }, 90)
+      return () => {
+        active = false
+        window.clearTimeout(timer)
+      }
+    }
     const searchSession = projectContent.createSearchSession()
     const timer = window.setTimeout(() => {
       searchSession.search({
@@ -912,13 +1033,17 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       window.clearTimeout(timer)
       searchSession.dispose()
     }
-  }, [activeComposerTrigger, activeProject.path])
+  }, [activeComposerTrigger, activeProject.id, activeProject.path, projectChatEnabled])
 
   useLayoutEffect(() => {
     if (!composerAutocompleteOpen || !chatInputRef.current) {
-      setComposerAutocompleteBox(null)
+      composerAutocompleteBoxKeyRef.current = ''
+      setComposerAutocompleteBox((current) => current === null ? current : null)
       return
     }
+
+    if (composerAutocompleteBoxKeyRef.current === activeAutocompleteKey) return
+    composerAutocompleteBoxKeyRef.current = activeAutocompleteKey
 
     const gap = 8
     const pad = 8
@@ -935,7 +1060,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       if (left < pad) left = pad
       const bottom = window.innerHeight - r.top + gap
       const maxHeight = Math.min(maxListPx, Math.max(120, r.top - pad - gap))
-      setComposerAutocompleteBox({ left, bottom, width, maxHeight })
+      setComposerAutocompleteBox((current) =>
+        current?.left === left &&
+        current.bottom === bottom &&
+        current.width === width &&
+        current.maxHeight === maxHeight
+          ? current
+          : { left, bottom, width, maxHeight },
+      )
     }
 
     sync()
@@ -945,7 +1077,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       window.removeEventListener('resize', sync)
       document.removeEventListener('scroll', sync, true)
     }
-  }, [composerAutocompleteOpen, composerSuggestions.length])
+  }, [activeAutocompleteKey, composerAutocompleteOpen])
 
   useEffect(() => {
     if (!composerAutocompleteOpen) return
@@ -966,6 +1098,16 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (isRunningRef.current) return
     const pick = modelPickFromRow(row)
     if (activeThread?.id) {
+      if (projectChatEnabled) {
+        const result = await window.projectChat?.setThreadModel({
+          projectId: activeThread.projectId,
+          threadId: activeThread.id,
+          modelPick: pick,
+          routeGeneration: projectChatSnapshot?.routeGeneration ?? 0,
+        })
+        if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+        return
+      }
       currentModelPickRef.current = pick
       setThreadChatState(activeThread.id, (prev) => {
         const changed = !sameModelPick(prev.modelPick, pick)
@@ -989,7 +1131,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     setGlobalDisplayModel(pick.anthropicModel)
     setActiveModelSupportsImages(row.supportsImages)
     setModelPickerOpen(false)
-  }, [activeProject.id, activeThread?.id, onProjectHomeModelPickChange, setThreadChatState])
+  }, [activeProject.id, activeThread?.id, activeThread?.projectId, onProjectHomeModelPickChange, onStatusChange, projectChatEnabled, projectChatSnapshot?.routeGeneration, setThreadChatState, t])
 
   useLayoutEffect(() => {
     if (!modelPickerOpen || !modelPopoverAnchorRef.current) {
@@ -1162,7 +1304,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     return () => {
       if (frame) window.cancelAnimationFrame(frame)
     }
-  }, [activeThread?.id, activeProject.id, applyGlobalModelFromSettings, restoreThreadScrollTop])
+  }, [activeThread?.id, activeProject.id, applyGlobalModelFromSettings, projectChatEnabled, restoreThreadScrollTop])
 
   const suppressTranscriptResizeStick = useCallback((durationMs = 320) => {
     suppressTranscriptResizeStickRef.current = true
@@ -1396,11 +1538,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   )
 
   useEffect(() => {
+    if (projectChatEnabled) return
     const unsub = window.claudeChat?.onEvent((ev) => handleClaudeEvent(ev))
     return () => {
       unsub?.()
     }
-  }, [handleClaudeEvent])
+  }, [handleClaudeEvent, projectChatEnabled])
 
   // --- `submitPrompt`: optimistic user row, pending id → real `requestId`, bridge errors / 发送：乐观用户消息、pending id 对齐真实 requestId、桥接错误处理 ---
 
@@ -1420,6 +1563,37 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     const isLocalCompactCommand = text.toLowerCase() === '/compact' && attachmentsForSubmit.length === 0
     const projectForSubmit =
       target?.project ?? (activeThread ? projects.find((project) => project.id === activeThread.projectId) : undefined) ?? activeProject
+
+    if (projectChatEnabled) {
+      const api = window.projectChat
+      if (!api) return false
+      if (projectForSubmit.pathMissing) {
+        onStatusChange(t('shell.projectPathMissingSubmitBlocked'))
+        return false
+      }
+      let threadId = target?.threadId ?? activeThread?.id
+      const creatingThread = !threadId
+      const modelPickForSubmit = target?.modelPick ?? (creatingThread ? newThreadModelPick ?? currentModelPickRef.current : undefined)
+      if (!threadId) {
+        const created = await api.createThread({ projectId: projectForSubmit.id, title: '新对话', source: 'user' })
+        if (!created.ok) { onStatusChange(created.error.message); return false }
+        threadId = created.value.threadId
+        onSelectThread(threadId)
+      }
+      const result = await api.submitRun({
+        projectId: projectForSubmit.id,
+        threadId,
+        text,
+        attachments: attachmentsForSubmit.map(projectChatAttachmentFromComposer),
+        modelPick: modelPickForSubmit,
+      })
+      if (!result.ok) {
+        onStatusChange(result.error.code === 'thread-busy' ? '当前对话正在处理中，请等待完成后再发送。' : result.error.message)
+        return false
+      }
+      if (!target?.preserveComposerDraft) clearComposerDraft()
+      return true
+    }
 
     if (projectForSubmit.pathMissing) {
       onStatusChange(t('shell.projectPathMissingSubmitBlocked'))
@@ -1531,6 +1705,10 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const forkMessage = useCallback(
     (messageId: string) => {
       if (!activeThread) return
+      if (projectChatEnabled) {
+        void window.projectChat?.forkThread({ projectId: activeThread.projectId, threadId: activeThread.id, messageId, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+        return
+      }
       const items = chatItems
       if (items.length === 0) return
       const idx = items.findIndex((item) => item.type === 'message' && item.id === messageId)
@@ -1539,7 +1717,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       const title = activeThread.title
       onForkThread(activeProject.id, forkedItems, title, activeThread.chatState.model, activeThread.chatState.modelPick)
     },
-    [activeProject.id, activeThread, chatItems, onForkThread, t],
+    [activeProject.id, activeThread, chatItems, onForkThread, projectChatEnabled, projectChatSnapshot?.routeGeneration, t],
   )
 
   const editUserMessage = (messageId: string, text: string) => {
@@ -1549,6 +1727,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
     const threadId = activeThreadIdRef.current
     if (!threadId) return
+
+    if (projectChatEnabled) {
+      void window.projectChat?.editAndSubmitRun({ projectId: activeProject.id, threadId, messageId, text: nextText, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+      return
+    }
 
     const projectForSubmit =
       activeThread ? projects.find((project) => project.id === activeThread.projectId) ?? activeProject : activeProject
@@ -1722,6 +1905,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Cancel streaming + answer permission / tool questions from modal / 停止生成；在弹窗中应答权限或工具提问 ---
 
   const cancelActiveRequest = async () => {
+    if (projectChatEnabled) return
     const requestId = chatRun.runStateForThread(activeThread?.id ?? activeThreadIdRef.current)?.requestId
     if (!requestId || isPendingRequestId(requestId) || !window.claudeChat) return
     await window.claudeChat.cancel(requestId)
@@ -1730,6 +1914,21 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const resolveActiveUserInputPrompt = async (decision: UserInputDecision) => {
     const prompt = activeUserInputPrompt
     if (!prompt) return
+
+    if (projectChatEnabled) {
+      const activePrompt = projectChatSnapshot?.pendingPrompts.find((item) => item.promptId === prompt.permissionRequestId)
+      if (!activePrompt?.isOwnedByCaller) return
+      const result = await window.projectChat?.answerPrompt({
+        projectId: activePrompt.projectId,
+        threadId: activePrompt.threadId,
+        requestId: activePrompt.requestId,
+        promptId: activePrompt.promptId,
+        routeGeneration: projectChatSnapshot?.routeGeneration ?? 0,
+        response: { permissionRequestId: prompt.permissionRequestId, ...decision },
+      })
+      if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+      return
+    }
 
     setPendingUserInputPrompts((prev) => prev.filter((item) => item.permissionRequestId !== prompt.permissionRequestId))
     const transition = chatRun.resumeAfterPrompt(
@@ -1772,6 +1971,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }
 
   const addComposerAttachments = async () => {
+    if (projectChatEnabled) {
+      if (isRunningRef.current) return
+      try {
+        const result = await window.projectChat?.pickAttachments({ allowImages: activeModelSupportsImages })
+        if (!result) {
+          onStatusChange(t('chat.attachmentPickerUnavailable'))
+          return
+        }
+        applyComposerAttachmentResult(projectChatAttachmentSelectionToComposerResult(result))
+      } catch {
+        onStatusChange(t('chat.attachmentPickerUnavailable'))
+      }
+      return
+    }
     const pickChatAttachments = window.desktop?.pickChatAttachments
     if (!pickChatAttachments || isRunningRef.current) {
       if (!pickChatAttachments) onStatusChange(t('chat.attachmentPickerUnavailable'))
@@ -1782,6 +1995,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }
 
   const addComposerAttachmentPaths = async (filePaths: string[]) => {
+    if (projectChatEnabled) {
+      // Native drops disclose absolute paths.  Project windows intentionally
+      // accept only the scoped picker or in-memory clipboard attachments.
+      if (filePaths.length > 0) onStatusChange(t('chat.attachmentPickerUnavailable'))
+      return
+    }
     const readChatAttachments = window.desktop?.readChatAttachments
     if (!readChatAttachments || isRunningRef.current || filePaths.length === 0) {
       if (!readChatAttachments) onStatusChange(t('chat.attachmentPickerUnavailable'))
@@ -2036,6 +2255,22 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const handleSendClick = (event: React.MouseEvent) => {
     if (!isRunning) return
     event.preventDefault()
+    if (projectChatEnabled) {
+      const run = activeThread ? projectChatSnapshot?.runs.find((candidate) => candidate.threadId === activeThread.id && candidate.phase !== 'succeeded' && candidate.phase !== 'failed' && candidate.phase !== 'cancelled') : undefined
+      if (!run) {
+        onStatusChange('当前对话正在处理中，请等待完成后再发送。')
+        return
+      }
+      void window.projectChat?.cancelRun({
+        projectId: run.projectId,
+        threadId: run.threadId,
+        requestId: run.requestId,
+        routeGeneration: projectChatSnapshot?.routeGeneration ?? 0,
+      }).then((result) => {
+        if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+      }).catch(() => onStatusChange(t('chat.errorGeneric')))
+      return
+    }
     void cancelActiveRequest()
   }
 
@@ -2179,6 +2414,10 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const reviewFileChanges = useCallback(
     (item: ChatFileDiffItem) => {
       const threadId = item.threadId?.trim() || activeThreadIdRef.current
+      if (projectChatEnabled) {
+        void window.projectChat?.markFileDiffReviewed({ projectId: activeProject.id, threadId, changeSetId: item.changeSetId, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+        return
+      }
       setThreadChatState(threadId, (prev) => {
         const idx = prev.items.findIndex((it) => it.type === 'file_diff' && it.changeSetId === item.changeSetId)
         if (idx < 0) return prev
@@ -2188,12 +2427,17 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return { ...prev, items: next }
       })
     },
-    [setThreadChatState],
+    [activeProject.id, projectChatEnabled, projectChatSnapshot?.routeGeneration, setThreadChatState],
   )
 
   const rewindFileChanges = useCallback(
     async (item: ChatFileDiffItem) => {
       const threadId = item.threadId?.trim() || activeThreadIdRef.current
+      if (projectChatEnabled) {
+        const result = await window.projectChat?.rewindFileDiff({ projectId: activeProject.id, threadId, changeSetId: item.changeSetId, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+        if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.fileDiffUnavailable'))
+        return
+      }
       const owningThread = threads.find((thread) => thread.id === threadId)
       const projectForThread = owningThread
         ? projects.find((project) => project.id === owningThread.projectId) ?? activeProject
@@ -2216,7 +2460,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         setThreadChatState(threadId, (prev) => updateFileDiffStatus(prev, item.changeSetId, 'error', result.message || t('chat.fileDiffUnavailable')))
       }
     },
-    [activeProject, projects, setThreadChatState, t, threads],
+    [activeProject, onStatusChange, projectChatEnabled, projectChatSnapshot?.routeGeneration, projects, setThreadChatState, t, threads],
   )
 
   const composerContextUsage = useMemo(() => {
@@ -2248,12 +2492,25 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     onStatusChange(t('chat.contextCompactUnavailableStatus'))
   }, [onStatusChange, t])
 
+  const selectPermissionMode = useCallback((value: ClaudePermissionMode | ((previous: ClaudePermissionMode) => ClaudePermissionMode)) => {
+    const mode = typeof value === 'function' ? value(permissionMode) : value
+    if (!projectChatEnabled) {
+      setPermissionMode(mode)
+      return
+    }
+    void window.projectChat?.setPermissionMode(mode).then((result) => {
+      if (result?.ok) setPermissionMode(result.value)
+      else onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+    }).catch(() => onStatusChange(t('chat.errorGeneric')))
+  }, [onStatusChange, permissionMode, projectChatEnabled, t])
+
   // --- Composer subtree (props-only; layout lives in `Composer.tsx`) / Composer 子树（仅传参；布局在 Composer 组件内）---
 
   const composer = (
     <Composer
       inputValue={inputValue}
       isRunning={isRunning}
+      disabled={activeProject.pathMissing}
       activeModelSupportsImages={activeModelSupportsImages}
       pendingAttachments={pendingAttachments}
       permissionMode={permissionMode}
@@ -2282,7 +2539,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       modelPickerRef={modelPickerRef}
       modelPopoverAnchorRef={modelPopoverAnchorRef}
       modelPopoverSurfaceRef={modelPopoverSurfaceRef}
-      setPermissionMode={setPermissionMode}
+      setPermissionMode={selectPermissionMode}
       setPermissionModeOpen={setPermissionModeOpen}
       setModelPickerOpen={setModelPickerOpen}
       setComposerSuggestionIndex={setComposerSuggestionIndex}
@@ -2319,6 +2576,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Main render: active thread transcript vs empty “start” surface / 主渲染：有消息走会话轨，否则走起始视图 ---
 
   const showThreadView =
+    Boolean(projectWindow) ||
     hasMessages ||
     activeThread?.purpose === 'home-plugin-customization' ||
     activeThread?.purpose === 'home-plugin-card-customization' ||
@@ -2394,6 +2652,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       {activeUserInputPrompt ? (
         <AgentInputPromptModal prompt={activeUserInputPrompt} onResolve={(decision) => void resolveActiveUserInputPrompt(decision)} />
       ) : null}
+      {activeReadOnlyPrompt ? <p className="chat-prompt-readonly" role="status">此请求正在其他窗口等待处理。</p> : null}
     </section>
   )
 })
@@ -2614,6 +2873,47 @@ function toChatMessageAttachment(attachment: ClaudeChatAttachment): ChatMessageA
     preview: attachment.preview,
     dataUrl: attachment.dataUrl,
   }
+}
+
+function projectChatAttachmentFromComposer(attachment: ClaudeChatAttachment): ProjectChatAttachment {
+  return attachment.kind === 'image'
+    ? { id: attachment.id, kind: 'image', name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, base64: attachment.base64, preview: attachment.preview, dataUrl: attachment.dataUrl }
+    : { id: attachment.id, kind: 'text', name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, text: attachment.text, preview: attachment.preview }
+}
+
+function projectChatAttachmentSelectionToComposerResult(result: import('../../project-chat-contract').ProjectChatResult<ProjectChatAttachmentSelection>): ClaudeChatAttachmentPickerResult {
+  if (!result.ok) return { ok: false, message: result.error.message }
+  return {
+    ok: true,
+    attachments: result.value.attachments.map((attachment) => ({ ...attachment, path: '' })),
+    skipped: result.value.skipped.map((item) => ({ ...item, path: '' })),
+  }
+}
+
+function projectChatAgentContextToCatalog(context: ProjectChatAgentContext): AgentContextCatalog {
+  return {
+    ok: true,
+    rootPath: '',
+    instructionFiles: [],
+    skills: context.skills.map((skill) => ({ ...skill, path: skill.relativePath })),
+    agents: context.agents.map((agent) => ({ ...agent, path: agent.relativePath })),
+  }
+}
+
+function projectPromptToPendingInput(prompt: ProjectChatPromptSnapshot | undefined): PendingUserInputPrompt | null {
+  if (!prompt) return null
+  return prompt.payload.kind === 'permission'
+    ? {
+        type: 'permission_request', requestId: prompt.requestId, threadId: prompt.threadId,
+        permissionRequestId: prompt.payload.permissionRequestId, toolUseId: prompt.payload.toolUseId,
+        toolName: prompt.payload.toolName, title: prompt.payload.title, displayName: prompt.payload.displayName,
+        description: prompt.payload.description, inputPreview: prompt.payload.inputPreview,
+      }
+    : {
+        type: 'ask_user_question', requestId: prompt.requestId, threadId: prompt.threadId,
+        permissionRequestId: prompt.payload.permissionRequestId, toolUseId: prompt.payload.toolUseId,
+        questions: prompt.payload.questions,
+      }
 }
 
 function updateFileDiffStatus(

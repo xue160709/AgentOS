@@ -1,10 +1,20 @@
 import type { RuntimeEvent, RuntimeSnapshot } from './types'
+import type { ProjectChatRuntimeEditSnapshot } from '../project-chat-contract'
 
 export const RUNTIME_EVENT_BATCH_WINDOW_MS = 75
 export const MAX_RUNTIME_LOG_LINES = 160
 export const MAX_QUEUED_RUNTIME_LOG_EVENTS = 160
 
 export type RuntimeStateMap = Record<string, RuntimeSnapshot>
+
+/** One shared, user-facing projection of Main's edit-session snapshot. */
+export function runtimeEditStatus(edit?: ProjectChatRuntimeEditSnapshot): { message: string; alert?: true; busy?: true } | null {
+  if (!edit) return null
+  if (edit.failedOrCancelledAfterMutation) return { message: '存在未完成修改，预览未更新', alert: true }
+  if (edit.buildOperationId || edit.settleOperationId) return { message: '修改完成，正在保存最新预览', busy: true }
+  if (edit.activeAgentLeaseCount > 0) return { message: `正在修改项目 · ${Math.max(1, edit.potentialRunCount)} 个会话`, busy: true }
+  return null
+}
 
 /**
  * Runtime log events are high-frequency and do not need to make the shell

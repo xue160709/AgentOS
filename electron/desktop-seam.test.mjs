@@ -40,6 +40,63 @@ test('Desktop interface does not leak generic IPC primitives', () => {
   assert.match(desktopInterface, /export type DesktopAPI/)
 })
 
+test('Project Chat production composition is Main-only and preserves legacy rollback handlers', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const runner = readFileSync(resolve(root, 'electron/claude-agent-runner.ts'), 'utf8')
+
+  assert.match(main, /const PROJECT_CHAT_BROKER_V2_ENABLED = projectChatBrokerV2Enabled\(process\.env\)/)
+  assert.match(main, /createProjectChatIpcRouter|RendererCapabilityRegistry|ProjectChatBroker/)
+  assert.match(main, /ipcMain\.handle\('claude-chat:submit',[\s\S]{0,120}getClaudeAgentRunner\(\)\.submit\(payload\)/)
+  assert.match(main, /ipcMain\.handle\('claude-chat:cancel',[\s\S]{0,120}getClaudeAgentRunner\(\)\.cancel\(requestId\)/)
+  assert.match(main, /ipcMain\.handle\('claude-chat:new-thread',[\s\S]{0,120}getClaudeAgentRunner\(\)\.newThread\(threadId\)/)
+  assert.match(main, /ipcMain\.handle\('claude-chat:answer-permission-request',[\s\S]{0,140}getClaudeAgentRunner\(\)\.answerPermissionRequest\(payload\)/)
+  assert.match(main, /new ClaudeAgentRunner\(\s*claudeChatEventMultiplexer/)
+  assert.doesNotMatch(runner, /requestId\s*->\s*\{/)
+})
+
+test('Main uses one workspace coordinator and locks the Runtime trust commit before fresh read/save', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  assert.match(main, /import \{ ChatWorkspaceCoordinator \} from '\.\/chat-workspace-coordinator'/)
+  assert.match(main, /chatWorkspaceCoordinator = new ChatWorkspaceCoordinator\(\)/)
+  assert.match(main, /if \(!chatWorkspaceCoordinator\) throw new Error\('Chat workspace coordinator is not ready\.'\)/)
+  assert.match(main, /return chatWorkspaceCoordinator\.runExclusive\(operation\)/)
+  assert.doesNotMatch(main, /chatWorkspaceOperationChain/)
+  const trustStart = main.indexOf('const resolveProjectRuntime')
+  const trustEnd = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.ensureProjectRuntime', trustStart)
+  const trust = main.slice(trustStart, trustEnd)
+  assert.ok(trust.indexOf('await runChatWorkspaceOperation') < trust.indexOf('await getChatWorkspaceStore().save(proposed)'))
+  assert.ok(trust.indexOf('const lockedState = getChatWorkspaceStore().read()') < trust.indexOf('await getChatWorkspaceStore().save(proposed)'))
+  assert.match(trust, /lockedProject\.path !== project\.path/)
+  assert.match(trust, /if \(!committed\.ok\) \{[\s\S]{0,180}localAppTrustStore\?\.revoke\(inspected\.canonicalRoot\)/)
+  const source = ts.createSourceFile('main.ts', main, ts.ScriptTarget.ES2020, true)
+  const saves = []
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'save' && ts.isCallExpression(node.expression.expression) && ts.isIdentifier(node.expression.expression.expression) && node.expression.expression.expression.text === 'getChatWorkspaceStore') saves.push(node)
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  assert.equal(saves.length, 7)
+  for (const save of saves) {
+    let parent = save.parent; let wrapped = false
+    while (parent) {
+      if ((ts.isArrowFunction(parent) || ts.isFunctionExpression(parent)) && ts.isCallExpression(parent.parent) && ts.isIdentifier(parent.parent.expression) && parent.parent.expression.text === 'runChatWorkspaceOperation' && parent.parent.arguments.includes(parent)) { wrapped = true; break }
+      parent = parent.parent
+    }
+    assert.equal(wrapped, true, 'every workspace save is inside a runChatWorkspaceOperation callback')
+  }
+})
+
+test('runtime scoped services remain authority-free while Main composes them', () => {
+  const service = readFileSync(resolve(root, 'electron/project-chat-runtime-services.ts'), 'utf8')
+  const presence = readFileSync(resolve(root, 'electron/project-chat-presence.ts'), 'utf8')
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  assert.doesNotMatch(service, /\bipcMain\b|\bBrowserWindow\b|from ['"]\.\/main['"]|process\.env|\bwindow\b/)
+  assert.doesNotMatch(presence, /\bipcMain\b|\bBrowserWindow\b|from ['"]\.\/main['"]|process\.env/)
+  assert.match(main, /createProjectChatScopedReadCollaborator|createProjectChatBrokerRunnerAdapter|ProjectChatPresenceRegistry/)
+  assert.match(main, /queueMicrotask\(\(\) => projectChatBroker\?\.broadcastProjectSnapshot/)
+  assert.match(main, /type: 'open-project-preview', projectId/)
+})
+
 test('Desktop seam contract drives preload forwarding and main registration', () => {
   const {
     DESKTOP_EVENT_CHANNELS,
@@ -99,6 +156,9 @@ test('Static build keeps last-good Preview alive and cancellation uses the build
   const shellWorkspace = readFileSync(resolve(root, 'src/components/AppShellWorkspace.tsx'), 'utf8')
   assert.match(shellWorkspace, /data-testid=\{activeRuntimeStatus === 'building' \? 'runtime-cancel-build' : 'runtime-build'\}/)
   assert.match(shellWorkspace, /!activeRuntime\?\.readyUrl && !activeRuntime\?\.previewUrl/)
+  assert.match(shellWorkspace, /\{activeStaticRuntime \? <button[\s\S]*?data-testid="runtime-development"[\s\S]*?onClick=\{onDevelopmentRuntime\}/)
+  const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
+  assert.match(appShell, /onDevelopmentRuntime=\{activeRuntimeDefinition \? \(\) => startLocalAppDevelopment\(activeRuntimeDefinition\.id\) : undefined\}/)
   const projectHome = readFileSync(resolve(root, 'src/components/chat/ProjectHomeRuntimeView.tsx'), 'utf8')
   assert.match(projectHome, /project-runtime-cancel-build/)
   assert.match(projectHome, /onCancelBuild \?\? controller\.onStop/)

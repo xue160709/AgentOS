@@ -7,6 +7,7 @@
 
 import type { ClaudeChatAPI } from '../src/claude-chat-types'
 import type { DesktopAPI } from '../src/desktop-api'
+import type { ProjectChatAPI } from '../src/project-chat-contract'
 
 declare global {
   namespace NodeJS {
@@ -34,6 +35,7 @@ declare global {
   interface Window {
     claudeChat?: ClaudeChatAPI
     desktop?: DesktopAPI
+    projectChat?: ProjectChatAPI
   }
 }
 

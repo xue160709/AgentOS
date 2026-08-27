@@ -38,6 +38,7 @@ const SETTINGS_SIDEBAR_NAV_BASE: {
   { id: 'mcp', labelKey: 'settingsCategory.mcp', icon: 'server' },
   { id: 'skills', labelKey: 'settingsCategory.general', icon: 'chip' },
   { id: 'agent', labelKey: 'settingsCategory.agentMode', icon: 'agent' },
+  { id: 'website-bindings', labelKey: 'settingsCategory.websiteBindings', icon: 'server' },
   { id: 'updates', labelKey: 'settingsCategory.updates', icon: 'refresh' },
 ]
 
@@ -73,6 +74,7 @@ export function settingsWorkspaceTitleKey(category: SettingsCategoryId): string 
   if (category === 'updates') return 'shell.workspaceSettingsUpdates'
   if (category === 'developer') return 'shell.workspaceSettingsDeveloper'
   if (category === 'agent') return 'shell.workspaceSettingsAgentMode'
+  if (category === 'website-bindings') return 'settingsCategory.websiteBindings'
   return 'shell.workspaceSettingsModels'
 }
 
@@ -108,5 +110,6 @@ export function settingsCategoryFromLocation(): SettingsCategoryId {
   if (sub === 'updates') return 'updates'
   if (sub === 'developer' && isDeveloperSettingsEnabled()) return 'developer'
   if (sub === 'agent') return 'agent'
+  if (sub === 'website-bindings') return 'website-bindings'
   return DEFAULT_SETTINGS_CATEGORY
 }

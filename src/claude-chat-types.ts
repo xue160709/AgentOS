@@ -561,6 +561,8 @@ export type ClaudeFileRewindPayload = {
   changeSetId?: string
   checkpointId: string
   cwd?: string
+  /** Main-only durable session restore for broker rewind; Project Chat renderer never supplies this. */
+  sessionId?: string
 }
 
 /** 回滚文件变更的结果 / Result of rewinding file changes */

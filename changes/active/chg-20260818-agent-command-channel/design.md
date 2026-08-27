@@ -48,6 +48,13 @@
 - 同一项目的普通 Chat、网站任务和手动实时预览共享一个 RuntimeInstance。
 - 同一项目多个会话可以并行；v1 不提供写入锁、冲突合并或 per-run worktree。
 
+### 3.5 Workspace Tab backing Project（M3-01）
+
+- 每个可编辑的 `WorkspaceTab` 必须 durable 绑定一个 Project；Tab 的 Chat 永远打开该 backing Project，绝不沿用上一次选择的 active Project。
+- 在 Workspace Tab Runtime 页面，入口文案为“打开 `<Tab 标题>` Chat”；项目页面仍打开当前项目 Chat。
+- 同一目录的多个 Workspace Tab 共享同一个 Project。旧 Tab 首次打开 Chat 时补写关联，重启后保持。
+- Tab 关联错误、项目已删除或路径不匹配时，AgentOS 按 Tab Runtime 目录安全修复；存在多个同目录 Project 而无法唯一确定时显示明确错误，不猜测当前项目。
+
 ## 4. 首次连接旅程
 
 ```text
@@ -135,9 +142,13 @@ ELSE 保持当前线程、草稿和焦点，只增加“新任务”徽标
 
 窗口标题固定为“`<项目名> · Chat · AgentOS`”。
 
+窗口在创建时绑定唯一 `projectId`，生命周期内不可切换项目。顶部只提供该项目的历史对话选择，并以独立的“新建对话”动作进入项目内新对话草稿；“新对话”不得作为会被历史线程自动回退覆盖的下拉占位项。
+
 ### 6.2 视图状态
 
 - 主窗口与项目 Chat 窗口分别保留自己的当前线程和 Composer 草稿。
+- 项目窗口进入“新建对话”后，在首次提交成功创建 durable thread 前保持显式新建态；历史 snapshot 到达不能自动选择旧线程覆盖该状态。
+- 新建态选择的模型是该新线程的草稿事实。首次提交必须把该 `modelPick` 交给 broker，与首条消息在同一 `submitRun` operation 中保存；UI 不得只更新模型标签而丢弃实际选择。
 - 项目 Chat 窗口的当前线程、草稿和窗口 bounds 持久化，关闭并重新打开后恢复；应用重启后也恢复。
 - 关闭项目 Chat 窗口只关闭视图和订阅，不取消 Run、不删除线程、不清空草稿。
 - 项目被删除后窗口显示“项目已移除”，禁用提交并提供关闭窗口。

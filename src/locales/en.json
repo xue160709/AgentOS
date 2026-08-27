@@ -178,6 +178,7 @@
     "quit": "Quit"
   },
   "settingsCategory": {
+    "websiteBindings": "Website connections",
     "models": "Models",
     "search": "Search",
     "mcp": "MCP",

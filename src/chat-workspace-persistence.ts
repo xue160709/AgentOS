@@ -22,6 +22,7 @@ import type {
   RuntimeDefinition,
   WorkspaceTab,
   WorkspaceProject,
+  ProjectThreadCreationSource,
   WorkspaceSidebarPrefs,
   WorkspaceThread,
 } from './components/types'
@@ -325,6 +326,7 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
         updatedAt: toFiniteNumber(thread.updatedAt, Date.now()),
         pinnedAt: toOptionalFiniteNumber(thread.pinnedAt),
         archivedAt: toOptionalFiniteNumber(thread.archivedAt),
+        creationSource: normalizeProjectThreadCreationSource(thread.creationSource),
         chatState: normalizeStoredChatState(thread.chatState),
       },
     ]
@@ -414,6 +416,9 @@ function normalizeWorkspaceTabs(value: unknown, definitionIds: Set<string>): Wor
     return [{
       id: item.id,
       runtimeDefinitionId,
+      // Legacy tabs intentionally remain unlinked until Main lazy-backfills
+      // them through the Workspace Tab Chat operation.
+      projectId: typeof item.projectId === 'string' && item.projectId.trim() ? item.projectId.trim() : undefined,
       title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : 'Runtime',
       createdAt: toFiniteNumber(item.createdAt, Date.now()),
       updatedAt: toFiniteNumber(item.updatedAt, Date.now()),
@@ -741,6 +746,21 @@ function normalizeThreadPurpose(value: unknown): WorkspaceThread['purpose'] {
     value === 'skill-run'
     ? value
     : undefined
+}
+
+export function normalizeProjectThreadCreationSource(value: unknown): ProjectThreadCreationSource {
+  if (!isRecord(value)) return { kind: 'user' }
+  if (value.kind === 'app-command') return { kind: 'app-command' }
+  if (
+    value.kind === 'website' &&
+    typeof value.bindingId === 'string' &&
+    value.bindingId.trim() &&
+    typeof value.receivedAt === 'number' &&
+    Number.isFinite(value.receivedAt)
+  ) {
+    return { kind: 'website', bindingId: value.bindingId.trim(), receivedAt: value.receivedAt }
+  }
+  return { kind: 'user' }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -38,7 +38,7 @@ import { defaultThreadTitleSet, getInitialLocale, translate, useI18n } from '../
 import { IconInline } from '../icon-inline'
 import type { DesktopPreferences, HomePluginRunItem, HomePluginTaskEvent } from '../desktop-types'
 import type { RuntimeCreationResult, RuntimeInspectResult, WorkspaceTabResult, RuntimeRelocationResult } from '../desktop-api'
-import type { ChatModelPick, ClaudeAgentModelProvider, ClaudeAgentProviderAuthMode, ClaudeAgentSettingsSnapshot } from '../claude-chat-types'
+import type { ChatModelPick, ClaudeAgentModelProvider, ClaudeAgentProviderAuthMode, ClaudeAgentSettingsSnapshot, ClaudePermissionMode } from '../claude-chat-types'
 import {
   LOCAL_PROVIDER_PRESET_CATALOG,
   localizeProviderPresetName,
@@ -46,7 +46,7 @@ import {
   type ProviderPreset,
 } from '../model-provider-presets'
 import { providerHasCredential, resolveEffectiveModelPick, sameModelPick, validateModelPick } from '../model-pick'
-import { agentCommandChannel } from '../agent-command-channel'
+import { agentCommandChannel, createProjectChatAgentCommandRuntime } from '../agent-command-channel'
 import type {
   AppViewId,
   ChatState,
@@ -70,12 +70,22 @@ import { AppShellWorkspace } from './AppShellWorkspace'
 import { type ChatPageHandle } from './chat/ChatPage'
 import { configureProjectHomeRuntime, type ProjectHomeRuntimeContext } from './chat/ChatStartView'
 import { WorkspaceSession } from './workspace-session'
+import { ProjectChatSnapshotController, applyProjectChatSnapshot } from './workspace-session'
+import type { ProjectChatSnapshot } from '../project-chat-contract'
 import { RuntimeOnboardingDialog } from './RuntimeOnboardingDialog'
+import { AgentOSPairingDialog } from './AgentOSPairingDialog'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
 import { applyRuntimeEvents, RuntimeEventBatcher } from './runtime-event-state'
 
 const INITIAL_PROVIDER_SKIP_VALUE = '__skip'
 const INITIAL_PROVIDER_CUSTOM_VALUE = '__custom'
+
+function readLegacyProjectChatPermissionMode(): ClaudePermissionMode | undefined {
+  const value = window.localStorage.getItem('codex-ui-template:claude-permission-mode')
+  return value === 'plan' || value === 'auto' || value === 'default' || value === 'acceptEdits' || value === 'bypassPermissions'
+    ? value
+    : undefined
+}
 
 function mergeAcceptedRuntime(
   current: Record<string, RuntimeSnapshot>,
@@ -274,6 +284,9 @@ export function AppShell() {
   const [projectHomeDraftModelPicks, setProjectHomeDraftModelPicks] = useState<Record<string, ChatModelPick>>({})
   const [threadRunStates, setThreadRunStates] = useState<Record<string, ThreadRunState>>({})
   const [threadCompletionStates, setThreadCompletionStates] = useState<Record<string, ThreadCompletionState>>({})
+  const [projectChatSnapshots, setProjectChatSnapshots] = useState<Record<string, ProjectChatSnapshot>>({})
+  const [projectChatEnabled, setProjectChatEnabled] = useState(false)
+  const [pendingPairing, setPendingPairing] = useState<import('../project-chat-contract').AgentOSPairingPrompt | null>(null)
   const [selectedProjectSkill, setSelectedProjectSkill] = useState<SelectedProjectSkill | null>(null)
   const [hiddenSkillPathsByProject, setHiddenSkillPathsByProject] = useState<Record<string, string[]>>(() =>
     readHiddenSkillPathsMap(),
@@ -288,6 +301,8 @@ export function AppShell() {
   const initialModelTouchedRef = useRef(false)
 
   const chatRef = useRef<ChatPageHandle>(null)
+  const projectChatSnapshotControllerRef = useRef(new ProjectChatSnapshotController())
+  const projectChatPermissionInitializedRef = useRef(false)
   const workspaceSessionRef = useRef<WorkspaceSession | null>(null)
   if (!workspaceSessionRef.current) {
     workspaceSessionRef.current = new WorkspaceSession({
@@ -392,6 +407,7 @@ export function AppShell() {
   const activeThread = activeWorkspace.thread
   const activeWorkspaceTab = activeWorkspace.workspaceTab
   const activeRuntimeDefinition = activeWorkspace.runtimeDefinition
+  const activeProjectChatSnapshot = activeProject ? projectChatSnapshots[activeProject.id] : undefined
   const projectHomeModelPick = activeProject
     ? projectHomeDraftModelPicks[activeProject.id] ?? projectDefaultModelPick
     : undefined
@@ -400,6 +416,78 @@ export function AppShell() {
     () => activeProject ? createId('project-mount') : '',
     [activeProject?.id, activeProject?.path],
   )
+
+  const acceptProjectChatSnapshot = useCallback((snapshot: ProjectChatSnapshot) => {
+    projectChatSnapshotControllerRef.current.adopt(snapshot)
+    setProjectChatSnapshots((current) => ({ ...current, [snapshot.projectId]: snapshot }))
+    setChatWorkspace((current) => current ? applyProjectChatSnapshot(current, snapshot) : current)
+    setThreadRunStates((current) => {
+      const next = { ...current }
+      for (const thread of snapshot.threads) delete next[thread.id]
+      for (const run of snapshot.runs) {
+        if (run.phase === 'succeeded' || run.phase === 'failed' || run.phase === 'cancelled') continue
+        next[run.threadId] = {
+          requestId: run.requestId,
+          status: run.phase === 'waiting_answer' ? 'asking' : run.phase === 'waiting_permission' ? 'waiting' : 'running',
+          startedAt: run.startedAt,
+          updatedAt: run.finishedAt ?? run.startedAt,
+        }
+      }
+      return next
+    })
+    for (const run of snapshot.runs) {
+      const status = run.phase === 'waiting_permission'
+        ? 'waiting'
+        : run.phase === 'waiting_answer'
+          ? 'asking'
+          : run.phase === 'submitting' || run.phase === 'running'
+            ? 'running'
+            : run.phase
+      agentCommandChannel.reportThreadStatus(run.threadId, status, run.error?.code)
+    }
+  }, [])
+
+  const refreshProjectChatSnapshot = useCallback(async (projectId: string) => {
+    const api = window.projectChat
+    if (!api) return false
+    try {
+      const result = await api.getSnapshot(projectId)
+      if (!result.ok) return false
+      setProjectChatEnabled(true)
+      acceptProjectChatSnapshot(result.value)
+      if (!projectChatPermissionInitializedRef.current) {
+        projectChatPermissionInitializedRef.current = true
+        const legacy = readLegacyProjectChatPermissionMode()
+        const initialized = await api.initializePermissionMode(legacy)
+        if (initialized.ok) window.localStorage.removeItem('codex-ui-template:claude-permission-mode')
+      }
+      return true
+    } catch {
+      return false
+    }
+  }, [acceptProjectChatSnapshot])
+
+  useEffect(() => {
+    if (!activeProject?.id) return
+    void refreshProjectChatSnapshot(activeProject.id)
+  }, [activeProject?.id, refreshProjectChatSnapshot])
+
+  useEffect(() => {
+    const api = window.projectChat
+    if (!api) return
+    return api.onEvent((event) => {
+      if (event.type === 'agentos-pairing') { setPendingPairing(event.pairing); return }
+      if (event.type === 'open-project-preview') {
+        setChatWorkspace((current) => current ? workspaceSession.setProjectHomeViewMode(current, event.projectId, 'runtime') : current)
+        selectProject(event.projectId)
+        return
+      }
+      if (event.type === 'open-project-path-recovery') { selectProject(event.projectId); return }
+      const outcome = projectChatSnapshotControllerRef.current.accept(event)
+      if (outcome === 'accepted') acceptProjectChatSnapshot(event.snapshot)
+      else if (outcome === 'gap') void refreshProjectChatSnapshot(event.projectId)
+    })
+  }, [acceptProjectChatSnapshot, refreshProjectChatSnapshot])
 
   useEffect(() => {
     const project = activeProject
@@ -586,6 +674,7 @@ export function AppShell() {
       mountId: projectRuntimeState.mountId,
       definition: projectRuntimeState.definition,
       runtime: projectRuntimeState.runtime,
+      runtimeEdit: activeProjectChatSnapshot?.runtimeEdit,
       trustRequired: projectRuntimeState.trustRequired,
       logsOpen: projectRuntimeState.logsOpen,
       viewMode: projectHomeViewMode,
@@ -1021,8 +1110,9 @@ export function AppShell() {
   // --- Autosave through Workspace Session / 通过 Workspace Session 自动保存 ---
   useEffect(() => {
     if (!chatWorkspace) return
+    if (projectChatEnabled) return
     workspaceSession.stage(chatWorkspace)
-  }, [chatWorkspace, workspaceSession])
+  }, [chatWorkspace, projectChatEnabled, workspaceSession])
 
   useEffect(() => {
     return () => {
@@ -1074,6 +1164,23 @@ export function AppShell() {
   const createThreadInProject = useCallback(
     (projectId?: string, options: CreateWorkspaceThreadOptions = {}) => {
       const activate = options.activate !== false
+      if (projectChatEnabled) {
+        const targetProjectId = projectId ?? activeProject?.id
+        if (!targetProjectId || !window.projectChat) return undefined
+        void window.projectChat.createThread({
+          projectId: targetProjectId,
+          title: options.title?.trim() || t('thread.newThreadTitle'),
+          source: 'user',
+        }).then((result) => {
+          if (!result.ok) { setHeaderStatus(result.error.message); return }
+          if (activate) {
+            updateChatWorkspace((state) => workspaceSession.selectThread(state, result.value.threadId))
+            goHome()
+            requestAnimationFrame(() => void chatRef.current?.focusComposer())
+          }
+        }).catch(() => setHeaderStatus(t('chat.errorGeneric')))
+        return undefined
+      }
       if (activate) setSelectedProjectSkill(null)
       const threadId = createId('thread')
       const draftProjectId = projectId ?? activeProject?.id
@@ -1101,7 +1208,7 @@ export function AppShell() {
       }
       return threadId
     },
-    [activeProject?.id, goHome, projectDefaultModelPick, projectHomeDraftModelPicks, setProjectHomeDraftModelPick, updateChatWorkspace, t, workspaceSession],
+    [activeProject?.id, goHome, projectChatEnabled, projectDefaultModelPick, projectHomeDraftModelPicks, setProjectHomeDraftModelPick, updateChatWorkspace, t, workspaceSession],
   )
 
   useEffect(() => {
@@ -1109,9 +1216,11 @@ export function AppShell() {
     return agentCommandChannel.configure({
       projectId: activeProject.id,
       defaultNavigation: 'stay',
-      runtime: {
+      runtime: projectChatEnabled && window.projectChat
+        ? createProjectChatAgentCommandRuntime(window.projectChat, (threadId) => selectThread(threadId))
+        : {
         createThread: ({ projectId, threadTitle }) =>
-          createThreadInProject(projectId, { activate: false, title: threadTitle }),
+          createThreadInProject(projectId, { activate: false, title: threadTitle }) ?? '',
         submitPrompt: async ({ projectId, threadId, prompt }) => {
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
           return Boolean(await chatRef.current?.submitPromptInThread(projectId, threadId, prompt, {
@@ -1122,7 +1231,18 @@ export function AppShell() {
         openThread: (threadId) => selectThread(threadId),
       },
     })
-  }, [activeProject?.id, createThreadInProject, selectThread])
+  }, [activeProject?.id, createThreadInProject, projectChatEnabled, selectThread])
+
+  useEffect(() => {
+    const openProjectChatWindow = (event: Event) => {
+      const projectId = (event as CustomEvent<{ projectId?: unknown }>).detail?.projectId
+      const targetProjectId = typeof projectId === 'string' && projectId.trim() ? projectId.trim() : activeProject?.id
+      if (!targetProjectId) return
+      void window.projectChat?.openProjectWindow(targetProjectId)
+    }
+    window.addEventListener('agentos:open-project-chat-window', openProjectChatWindow)
+    return () => window.removeEventListener('agentos:open-project-chat-window', openProjectChatWindow)
+  }, [activeProject?.id])
 
   const forkThreadInProject = useCallback(
     (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => {
@@ -2634,6 +2754,25 @@ export function AppShell() {
           splitterRef={sidebarSplitterRef}
           onSplitterPointerDown={handleSidebarPointerDown}
         />
+        {projectChatEnabled && activeWorkspaceTab && activeRuntimeDefinition ? (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-label={`打开 ${activeWorkspaceTab.title} Chat`}
+            onClick={() => void window.projectChat?.openWorkspaceTabProjectChat(activeWorkspaceTab.id)}
+          >
+            打开 {activeWorkspaceTab.title} Chat
+          </button>
+        ) : projectChatEnabled && activeProject ? (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-label="打开项目 Chat 窗口"
+            onClick={() => void window.projectChat?.openProjectWindow(activeProject.id)}
+          >
+            打开项目 Chat 窗口
+          </button>
+        ) : null}
         <AppShellWorkspace
           workspaceTitle={workspaceTitle}
           headerStatus={headerStatus}
@@ -2651,8 +2790,11 @@ export function AppShell() {
           onRelocateRuntime={activeRuntimeDefinition ? () => void relocateLocalApp(activeRuntimeDefinition.id) : undefined}
           onBuildRuntime={activeRuntimeDefinition ? () => buildLocalApp(activeRuntimeDefinition.id) : undefined}
           onCancelBuildRuntime={activeRuntimeDefinition ? () => cancelLocalAppBuild(activeRuntimeDefinition.id, runtimeStates[activeRuntimeDefinition.id]?.buildId) : undefined}
+          onDevelopmentRuntime={activeRuntimeDefinition ? () => startLocalAppDevelopment(activeRuntimeDefinition.id) : undefined}
           projectDefaultModelPick={projectDefaultModelPick}
           projectHomeModelPick={projectHomeModelPick}
+          projectChatSnapshot={activeProjectChatSnapshot}
+          projectChatEnabled={projectChatEnabled}
           threads={chatWorkspace.threads}
           projects={chatWorkspace.projects}
           projectOrderIds={chatWorkspace.sidebarPrefs.projectOrderIds}
@@ -2690,6 +2832,7 @@ export function AppShell() {
           onOpenExisting={(definition) => void openExistingLocalApp(definition)}
           onTrust={(definition) => void trustAndCreateLocalApp(definition)}
         />
+        <AgentOSPairingDialog pairing={pendingPairing} projects={chatWorkspace.projects} />
       </div>
     </div>
   )

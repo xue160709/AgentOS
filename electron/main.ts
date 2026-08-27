@@ -3,8 +3,8 @@
  * Electron main entry: window lifecycle, tray menu, IPC bridges, and Claude Agent runner.
  */
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, shell, Tray, WebContentsView } from 'electron'
-import { fileURLToPath } from 'node:url'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, safeStorage, session, shell, Tray, WebContentsView } from 'electron'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import zh from '../src/locales/zh.json'
@@ -29,10 +29,28 @@ import { ensureAgentModeFiles, getAgentModeStatus, setAgentModeState } from './a
 import { AgentModeSettingsStore, getDefaultWebSearchSettings, normalizeAgentMcpServers, normalizeWebSearchSettings } from './agent-mode-settings-store'
 import { discoverAgentContext, searchAgentKnowledge } from './agent-context'
 import { ClaudeAgentRunner } from './claude-agent-runner'
+import { createClaudeChatWebContentsSink } from './claude-chat-web-contents-sink'
+import { ClaudeChatEventMultiplexer } from './claude-chat-event-multiplexer'
+import { createProjectChatProductionComposition, projectChatBrokerV2Enabled } from './project-chat-composition'
+import { ProjectChatBroker } from './project-chat-broker'
+import { RendererCapabilityRegistry, ProjectChatPermissionService, createProjectChatCapabilityBroadcaster, createProjectChatIpcRouter } from './project-chat-ipc'
+import { createProjectChatBrokerRunnerAdapter, createProjectChatScopedReadCollaborator } from './project-chat-runtime-services'
+import { ProjectChatPresenceRegistry } from './project-chat-presence'
+import { ProjectChatWindowManager } from './project-chat-window-manager'
+import { ProjectChatViewStateStore } from './project-chat-view-state-store'
+import { AgentOSDeepLinkQueue, parseAgentOSDeepLink } from './agentos-deep-link'
+import { AgentOSTicketClient, createDeadlineBoundAgentOSTicketTransport, type AgentOSTicketTransport } from './agentos-ticket-client'
+import { AgentOSExternalTaskService } from './agentos-external-task'
+import { WebsiteBindingStore } from './website-binding-store'
+import { ExternalTaskReceiptStore } from './external-task-receipt-store'
+import { AgentOSPairingService } from './agentos-pairing'
 import { probeMcpServer } from './claude-agent-runner/mcp-probe'
 import { testWebSearchProviderSettings } from './claude-agent-runner/web-search'
 import { ClaudeAgentSettingsStore } from './claude-agent-settings'
 import { ChatWorkspaceStore } from './chat-workspace-store'
+import { ChatWorkspaceCoordinator } from './chat-workspace-coordinator'
+import { ensureWorkspaceTabProject } from './workspace-tab-project'
+import { openWorkspaceTabProjectChat } from './workspace-tab-project-chat'
 import { DesktopPreferencesStore } from './desktop-preferences-store'
 import { loadMainProcessEnv } from './env-loader'
 import { deleteProjectHomePlugin, runProjectHomePlugin, saveProjectHomePluginLayout, saveProjectHomePluginOrder } from './home-plugin-runner'
@@ -58,13 +76,16 @@ import { getMainWindowBackgroundColor, getMainWindowChromeOptions } from './wind
 import {
   LocalAppRuntimeManager,
   LocalAppTrustStore,
+  RuntimeEditRuntimeBridge,
   inspectLocalAppDirectory,
   canonicalizeLocalAppRoot,
 } from './local-app-runtime/index'
 import { LocalAppPreviewManager } from './local-app-runtime/preview'
-import type { StaticPreviewSessionRegistrar } from './local-app-runtime/preview'
-import { resolveStaticRequest, STATIC_PREVIEW_SCHEME } from './local-app-runtime/static'
+import type { PreviewSessionSnapshot, StaticPreviewSessionRegistrar } from './local-app-runtime/preview'
+import type { AgentOSPairingResponse } from '../src/project-chat-contract'
+import { fingerprintStaticSource, resolveStaticRequest, STATIC_PREVIEW_SCHEME } from './local-app-runtime/static'
 import type { StaticPreviewRegistry } from './local-app-runtime/static'
+import { RuntimeEditCoordinator } from './runtime-edit-coordinator'
 import type { Session } from 'electron'
 import type { RuntimeDefinition, RuntimeEvent, RuntimeSnapshot, WorkspaceTab } from '../src/components/types'
 import type { LocalAppDefinition, LocalAppRuntimeSnapshot } from '../src/components/types'
@@ -112,11 +133,14 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 const APP_NAME = 'AgentOS'
+// Read exactly once in Main. Renderer and persisted preferences have no say in this switch.
+const PROJECT_CHAT_BROKER_V2_ENABLED = projectChatBrokerV2Enabled(process.env)
 
 // Must be declared before app.ready. Renderer pages never receive a path or
 // command; the opaque host is resolved only by this Main-owned registry.
 protocol.registerSchemesAsPrivileged([
   { scheme: STATIC_PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false, stream: true } },
+  { scheme: 'agentos', privileges: { standard: true, secure: true } },
 ])
 
 const TRAY_LOCALE_BUNDLE = { zh, en } as const
@@ -127,19 +151,28 @@ let tray: Tray | null = null
 let isQuitting = false
 let currentTrayLocale: TrayLocale = 'zh'
 let claudeAgentRunner: ClaudeAgentRunner | null = null
+let claudeChatEventMultiplexer: ClaudeChatEventMultiplexer | null = null
+let projectChatBroker: ProjectChatBroker | null = null
+let projectChatCompositionDispose: (() => void) | null = null
 let claudeAgentSettingsStore: ClaudeAgentSettingsStore | null = null
 let agentModeSettingsStore: AgentModeSettingsStore | null = null
 let chatWorkspaceStore: ChatWorkspaceStore | null = null
+let chatWorkspaceCoordinator: ChatWorkspaceCoordinator | null = null
 let desktopPreferencesStore: DesktopPreferencesStore | null = null
 let taskHomePluginManager: TaskHomePluginManager | null = null
 let speechRecognitionService: MacSpeechRecognitionService | null = null
-let chatWorkspaceOperationChain: Promise<void> = Promise.resolve()
 let claudeSettingsOperationChain: Promise<void> = Promise.resolve()
 let localAppRuntimeManager: LocalAppRuntimeManager | null = null
+let runtimeEditCoordinator: RuntimeEditCoordinator | null = null
 let localAppTrustStore: LocalAppTrustStore | null = null
 let localAppPreviewManager: LocalAppPreviewManager | null = null
 let localAppQuitCleanup: Promise<void> | null = null
 let staticPreviewSessionRegistrar: StaticPreviewSessionRegistrar | null = null
+const agentOSDeepLinkQueue = new AgentOSDeepLinkQueue()
+let agentOSExternalTaskService: AgentOSExternalTaskService | null = null
+let websiteBindingStore: WebsiteBindingStore | null = null
+let agentOSPairingService: AgentOSPairingService | null = null
+let externalTaskWindowHooks: { beforeCreate(projectId: string): Promise<{ exists: boolean; idle: boolean }>; accepted(projectId: string, threadId: string, receivedAt: number, before: unknown): Promise<void> } | null = null
 
 type ProjectRuntimeHostRegistration = {
   projectId: string
@@ -213,6 +246,8 @@ const isDevRuntime = Boolean(VITE_DEV_SERVER_URL) || !app.isPackaged
 process.env.AGENTOS_DEV_RUNTIME = isDevRuntime ? '1' : '0'
 
 app.setName(APP_NAME)
+// Packaging declares the same scheme; this keeps development launches routable.
+app.setAsDefaultProtocolClient('agentos')
 
 const CHAT_ATTACHMENT_MAX_FILES = 8
 const CHAT_TEXT_ATTACHMENT_MAX_BYTES = 512 * 1024
@@ -337,12 +372,14 @@ function createWindow() {
         timestamp: Date.now(),
       })
     },
+    onAgentOSDeepLink: enqueueAgentOSPreviewDeepLink,
   })
 
   attachExternalLinkHandlers(win.webContents)
 
+  claudeChatEventMultiplexer = new ClaudeChatEventMultiplexer()
   claudeAgentRunner = new ClaudeAgentRunner(
-    win.webContents,
+    claudeChatEventMultiplexer,
     process.env.APP_ROOT,
     (modelPick) => getClaudeAgentSettingsStore().resolve(modelPick),
     (rootPath) => getAgentModeSettingsStore().resolve(rootPath),
@@ -351,14 +388,22 @@ function createWindow() {
       return result.ok ? result.settings : getDefaultWebSearchSettings()
     },
     () => normalizeUiLocale(getDesktopPreferencesStore().read().locale),
-    (event) => taskHomePluginManager?.handleClaudeEvent(event),
+    () => undefined,
   )
 
   taskHomePluginManager = new TaskHomePluginManager({
-    getRunner: () => claudeAgentRunner,
+    getRunPort: taskHomeRunPort,
     getWorkspace: () => chatWorkspaceStore?.read() ?? null,
     emitTaskEvent: sendTaskHomePluginEvent,
   })
+  if (PROJECT_CHAT_BROKER_V2_ENABLED) {
+    installProjectChatProductionComposition()
+  } else {
+    claudeChatEventMultiplexer.setSinks([
+      createClaudeChatWebContentsSink(win.webContents),
+      { publish: (event) => taskHomePluginManager?.handleClaudeEvent(event) },
+    ])
+  }
   void taskHomePluginManager.refreshFromWorkspace()
 
   win.on('close', (event) => {
@@ -380,8 +425,13 @@ function createWindow() {
   }
 
   win.on('closed', () => {
+    void agentOSPairingService?.cancelAll()
+    projectChatCompositionDispose?.()
+    projectChatCompositionDispose = null
     speechRecognitionService?.dispose()
     claudeAgentRunner = null
+    claudeChatEventMultiplexer = null
+    projectChatBroker = null
     taskHomePluginManager = null
     speechRecognitionService = null
   })
@@ -445,12 +495,196 @@ function getSpeechRecognitionService() {
 }
 
 function runChatWorkspaceOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const next = chatWorkspaceOperationChain.then(operation, operation)
-  chatWorkspaceOperationChain = next.then(
-    () => undefined,
-    () => undefined,
-  )
-  return next
+  if (!chatWorkspaceCoordinator) throw new Error('Chat workspace coordinator is not ready.')
+  return chatWorkspaceCoordinator.runExclusive(operation)
+}
+
+function nextWorkspaceProjectId(projects: readonly { id: string }[]): string {
+  const existing = new Set(projects.map((project) => project.id))
+  let id = ''
+  do {
+    id = `project-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  } while (existing.has(id))
+  return id
+}
+
+async function workspaceProjectPathsForCanonicalMatch(projects: readonly { id: string; path: string }[]): Promise<Map<string, string>> {
+  const roots = await Promise.all(projects.map(async (project) => [
+    project.id,
+    await canonicalizeLocalAppRoot(project.path).catch(() => path.resolve(project.path)),
+  ] as const))
+  return new Map(roots)
+}
+
+/** A memory-only Main network partition; no renderer can use this session. */
+function createAgentOSTicketTransport(): AgentOSTicketTransport {
+  const ticketSession = session.fromPartition('agentos-ticket-v1')
+  return createDeadlineBoundAgentOSTicketTransport((input) => net.request({ method: input.method, url: input.url, headers: input.headers, session: ticketSession, redirect: input.redirect, credentials: input.credentials }))
+}
+
+function enqueueAgentOSDeepLink(raw: unknown): void {
+  const parsed = parseAgentOSDeepLink(raw)
+  if (!parsed.ok) return
+  if (!agentOSDeepLinkQueue.enqueue(parsed.value)) return
+  void drainAgentOSDeepLinks()
+}
+
+/**
+ * Preview has no preload or IPC capability. Its only allowed protocol handoff
+ * is guarded by the exact active PreviewSession/runtime generation before and
+ * after the synchronous shared parser/queue call.
+ */
+function enqueueAgentOSPreviewDeepLink(raw: string, preview: PreviewSessionSnapshot): void {
+  if (!isCurrentPreviewSession(preview)) return
+  enqueueAgentOSDeepLink(raw)
+  // Queue insertion is synchronous; this postcondition prevents any future
+  // work in this seam from observing a destroyed or replacement generation.
+  if (!isCurrentPreviewSession(preview)) return
+}
+
+function isCurrentPreviewSession(preview: PreviewSessionSnapshot): boolean {
+  const current = localAppPreviewManager?.get(preview.previewId)
+  return current === preview && current.runtimeId === preview.runtimeId && current.generation === preview.generation && current.status !== 'closed'
+}
+
+async function drainAgentOSDeepLinks(): Promise<void> {
+  const service = agentOSExternalTaskService
+  if (!service) return
+  for (const link of agentOSDeepLinkQueue.drain()) {
+    if (link.action === 'task') await service.handle(link)
+    if (link.action === 'pair') await agentOSPairingService?.enqueue(link)
+  }
+}
+
+function initializeAgentOSExternalTasks(): void {
+  if (!projectChatBroker || agentOSExternalTaskService) return
+  const userDataPath = app.getPath('userData')
+  agentOSExternalTaskService = new AgentOSExternalTaskService({
+    bindings: websiteBindingStore ??= new WebsiteBindingStore({ userDataPath, safeStorage }),
+    receipts: new ExternalTaskReceiptStore({ userDataPath }),
+    tickets: new AgentOSTicketClient(createAgentOSTicketTransport()), broker: projectChatBroker,
+    beforeCreate: ({ projectId }) => externalTaskWindowHooks?.beforeCreate(projectId),
+    accepted: ({ projectId, threadId, receivedAt, before }) => externalTaskWindowHooks?.accepted(projectId, threadId, receivedAt, before),
+  })
+  agentOSPairingService ??= new AgentOSPairingService({
+    tickets: new AgentOSTicketClient(createAgentOSTicketTransport()), bindings: websiteBindingStore,
+    projects: async () => chatWorkspaceStore?.read()?.projects.map((project) => ({ id: project.id, pathMissing: project.pathMissing })) ?? [],
+    publish: (pairing) => {
+      if (pairing) showMainWindow()
+      if (win && !win.isDestroyed()) win.webContents.send('project-chat:event', { type: 'agentos-pairing', pairing })
+    },
+  })
+  void drainAgentOSDeepLinks()
+}
+
+/** Main supplies real Electron primitives; the composition transaction owns all enabled wiring. */
+function installProjectChatProductionComposition(): void {
+  if (!PROJECT_CHAT_BROKER_V2_ENABLED || !win || !claudeAgentRunner || !chatWorkspaceStore || !claudeChatEventMultiplexer || projectChatBroker) return
+  const mainWindow = win; const runner = claudeAgentRunner; const workspace = chatWorkspaceStore
+  const capabilities = new RendererCapabilityRegistry(); const presence = new ProjectChatPresenceRegistry()
+  const broadcaster = createProjectChatCapabilityBroadcaster(capabilities, (webContentsId, event) => {
+    const target = BrowserWindow.getAllWindows().map((item) => item.webContents).find((contents) => contents.id === webContentsId)
+    if (target && !target.isDestroyed()) target.send('project-chat:event', event)
+  })
+  const broker = new ProjectChatBroker({ store: workspace, runner: createProjectChatBrokerRunnerAdapter(runner), runExclusive: (operation) => runChatWorkspaceOperation(async () => operation()), permissionMode: () => getDesktopPreferencesStore().read().chatPermissionMode ?? 'auto', promptOwnerCandidates: (input) => presence.ownerCandidates(input), broadcast: broadcaster, runtimeEditCoordinator: runtimeEditCoordinator ?? undefined })
+  const scopedRead = createProjectChatScopedReadCollaborator({
+    workspace, settings: getClaudeAgentSettingsStore(), runner, discoverAgentContext, searchProjectFiles: async (rootPath, query) => searchProjectFiles(rootPath, query),
+    pickAttachments: async (allowImages) => { const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] }); return result.canceled ? { attachments: [], skipped: [] } : readChatAttachments(result.filePaths, allowImages) },
+    readAttachments: readChatAttachments, realpath: (input) => fs.realpath(input),
+  })
+  const rendererEntry = VITE_DEV_SERVER_URL ?? pathToFileURL(path.join(RENDERER_DIST, 'index.html')).toString()
+  const viewStateStore = new ProjectChatViewStateStore({ userDataPath: app.getPath('userData') })
+  const composition = createProjectChatProductionComposition({
+    multiplexer: claudeChatEventMultiplexer,
+    legacySinks: [createClaudeChatWebContentsSink(mainWindow.webContents), { publish: (event) => taskHomePluginManager?.handleClaudeEvent(event as never) }],
+    broker, taskHomeSink: { publish: (event) => taskHomePluginManager?.handleClaudeEvent(event as never) }, capabilities, presence, mainWindow,
+    registrar: { handle: (channel, handler) => ipcMain.handle(channel, handler as (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown), removeHandler: (channel) => ipcMain.removeHandler(channel) },
+    createCollaborator: (lifecycle) => {
+      const manager = new ProjectChatWindowManager({
+        createWindow: (options) => new BrowserWindow(options), rendererEntry, preloadPath: path.join(__dirname, 'preload.mjs'), capabilities,
+        routeGenerationOf: (projectId) => broker.routeGenerationOf(projectId), viewStateStore,
+        resolveProjectName: (projectId) => workspace.read()?.projects.find((project) => project.id === projectId)?.name ?? projectId,
+        onWebContentsUnavailable: (webContentsId) => { void broker.onWebContentsUnavailable(webContentsId) },
+        onCapabilityRegistered: lifecycle.onCapabilityRegistered, onWindowState: lifecycle.onWindowState, onWindowCleanup: lifecycle.onWindowCleanup,
+      })
+      externalTaskWindowHooks = {
+        beforeCreate: async (projectId) => {
+          const existing = manager.get(projectId)
+          if (!existing || existing.isDestroyed()) return { exists: false, idle: true }
+          const [view, snapshot] = await Promise.all([viewStateStore.get(projectId), broker.getSnapshot(projectId)])
+          await broker.refreshExternalUnread(projectId, view.externalTaskSeenAt)
+          const active = snapshot.ok && snapshot.value.runs.some((run) => !['succeeded', 'failed', 'cancelled'].includes(run.phase))
+          const prompt = snapshot.ok && snapshot.value.pendingPrompts.length > 0
+          return { exists: true, idle: !view.draft && !active && !prompt }
+        },
+        accepted: async (projectId, threadId, receivedAt, before) => {
+          const eligible = !before || (typeof before === 'object' && before !== null && (before as { idle?: boolean }).idle)
+          if (!eligible) return
+          await manager.open(projectId)
+          await viewStateStore.save({ projectId, patch: { selectedThreadId: threadId, externalTaskSeenAt: receivedAt } })
+          await broker.refreshExternalUnread(projectId, receivedAt)
+        },
+      }
+      return {
+        openProjectWindow: async (projectId: string) => { await manager.open(projectId); return { ok: true as const, value: undefined } },
+        openWorkspaceTabProjectChat: async (workspaceTabId: string) => {
+          return runChatWorkspaceOperation(() => openWorkspaceTabProjectChat(workspaceTabId, {
+            store: workspace,
+            canonicalizePath: canonicalizeLocalAppRoot,
+            createProjectId: () => nextWorkspaceProjectId(workspace.read()?.projects ?? []),
+            now: Date.now,
+            openProjectWindow: async (projectId) => { await manager.open(projectId) },
+          }))
+        },
+        openProjectPreview: async (projectId: string) => {
+          const snapshot = await broker.getSnapshot(projectId)
+          if (!snapshot.ok) return snapshot
+          if (snapshot.value.project.pathMissing) return { ok: false as const, error: { code: 'project-path-missing' as const, message: 'Project path is unavailable.', retryable: false } }
+          showMainWindow()
+          mainWindow.webContents.send('project-chat:event', { type: 'open-project-preview', projectId })
+          return { ok: true as const, value: undefined }
+        },
+        openProjectPathRecovery: async (projectId: string) => {
+          const snapshot = await broker.getSnapshot(projectId)
+          if (!snapshot.ok) return snapshot
+          showMainWindow(); mainWindow.webContents.send('project-chat:event', { type: 'open-project-path-recovery', projectId })
+          return { ok: true as const, value: undefined }
+        },
+        getWindowViewState: async (projectId: string) => ({ ok: true as const, value: await viewStateStore.get(projectId) }),
+        saveWindowViewState: async (input: { projectId: string; patch: Parameters<typeof viewStateStore.save>[0]['patch'] }) => ({ ok: true as const, value: await viewStateStore.save(input) }),
+        listWebsiteBindings: async () => ({ ok: true as const, value: await (websiteBindingStore ??= new WebsiteBindingStore({ userDataPath: app.getPath('userData'), safeStorage })).list() }),
+        revokeWebsiteBinding: async (bindingId: string) => {
+          const result = await (websiteBindingStore ??= new WebsiteBindingStore({ userDataPath: app.getPath('userData'), safeStorage })).revoke(bindingId)
+          return result.ok ? { ok: true as const, value: undefined } : { ok: false as const, error: { code: result.error.code, message: 'Unable to revoke website binding.', retryable: false } }
+        },
+        respondToWebsitePairing: async (input: AgentOSPairingResponse) => {
+          const result = await agentOSPairingService?.respond(input)
+          return result?.status === 'accepted' ? { ok: true as const, value: undefined } : { ok: false as const, error: { code: 'internal-error' as const, message: 'Pairing was rejected.', retryable: false } }
+        },
+      }
+    },
+    createHandlers: (collaborator) => createProjectChatIpcRouter({ broker, capabilities, rendererEntries: [rendererEntry], permissionService: new ProjectChatPermissionService(getDesktopPreferencesStore()), scopedRead, presence, collaborator }).handlers,
+  })
+  projectChatBroker = composition.broker
+  projectChatCompositionDispose = composition.dispose
+}
+
+function taskHomeRunPort() {
+  const broker = projectChatBroker
+  if (PROJECT_CHAT_BROKER_V2_ENABLED && broker) {
+    return {
+      async ensureThread(input: { projectId: string; threadId: string; title: string; purpose: 'task-run'; homePluginSlug: string }) { const result = await broker.ensureManagedThread(input); if (!result.ok) throw new Error(result.error.code) },
+      async submit(input: Parameters<ProjectChatBroker['submitManagedRun']>[0]) { const result = await broker.submitManagedRun(input); if (!result.ok) throw new Error(result.error.code); return result.value },
+      async cancel(input: { projectId: string; threadId: string; requestId: string }) { const result = await broker.cancelManagedRun(input); if (!result.ok) throw new Error(result.error.code) },
+    }
+  }
+  const runner = claudeAgentRunner
+  if (!runner) return null
+  return {
+    async ensureThread() {},
+    async submit(input: { text: string; threadId: string; promptMode: 'home-plugin-task-run'; agentModeSettingsOverride: { enabled: true; todoEnabled: boolean } }) { return runner.submit({ text: input.text, threadId: input.threadId, promptMode: input.promptMode, agentModeSettingsOverride: input.agentModeSettingsOverride }) },
+    async cancel(input: { requestId: string }) { await runner.cancel(input.requestId) },
+  }
 }
 
 function runClaudeSettingsOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -513,6 +747,14 @@ function sendRuntimeEvent(event: RuntimeEvent): void {
 function readRuntimeDefinition(runtimeDefinitionId: string): RuntimeDefinition | null {
   const state = chatWorkspaceStore?.read()
   return state?.runtimeDefinitions.find((definition) => definition.id === runtimeDefinitionId) ?? null
+}
+
+function readProjectRuntimeDefinition(projectId: string): RuntimeDefinition | null {
+  const state = chatWorkspaceStore?.read()
+  const project = state?.projects.find((item) => item.id === projectId)
+  if (!project || project.pathMissing) return null
+  const projectRoot = path.resolve(project.path)
+  return state?.runtimeDefinitions.find((definition) => definition.trustStatus === 'trusted' && path.resolve(definition.canonicalRoot ?? definition.rootPath) === projectRoot) ?? null
 }
 
 async function assertRuntimeTrust(definition: RuntimeDefinition): Promise<string> {
@@ -658,7 +900,13 @@ function applyLoginItemSettingsOnStartup(prefs: DesktopPreferences) {
 }
 
 if (gotSingleInstanceLock) {
-  app.on('second-instance', () => {
+  for (const argument of process.argv) enqueueAgentOSDeepLink(argument)
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    enqueueAgentOSDeepLink(url)
+  })
+  app.on('second-instance', (_event, argv) => {
+    for (const argument of argv) enqueueAgentOSDeepLink(argument)
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore()
       win.show()
@@ -684,6 +932,7 @@ if (gotSingleInstanceLock) {
   })
 
   app.on('before-quit', (event) => {
+    void agentOSPairingService?.cancelAll()
     if (localAppQuitCleanup) return
     event.preventDefault()
     void prepareForAppQuit().finally(() => app.quit())
@@ -701,6 +950,7 @@ if (gotSingleInstanceLock) {
     })
     agentModeSettingsStore = new AgentModeSettingsStore(userDataPath)
     chatWorkspaceStore = new ChatWorkspaceStore(userDataPath)
+    chatWorkspaceCoordinator = new ChatWorkspaceCoordinator()
     localAppTrustStore = new LocalAppTrustStore(userDataPath)
     localAppRuntimeManager = new LocalAppRuntimeManager({
       preparationRecordPath: path.join(userDataPath, 'local-app-preparation.json'),
@@ -735,6 +985,22 @@ if (gotSingleInstanceLock) {
           timestamp: event.timestamp,
         })
       },
+    })
+    runtimeEditCoordinator = new RuntimeEditCoordinator({
+      fingerprint: async (projectId) => {
+        const definition = readProjectRuntimeDefinition(projectId)
+        if (!definition) throw new Error('project-runtime-unavailable')
+        const inspected = await inspectLocalAppDirectory(definition.rootPath)
+        if (!inspected.ok || inspected.mode !== 'static' || !inspected.agentos) throw new Error('static-runtime-unavailable')
+        return fingerprintStaticSource(inspected.canonicalRoot, inspected.agentos)
+      },
+      intent: async (intent) => {
+        const manager = localAppRuntimeManager
+        const coordinator = runtimeEditCoordinator
+        if (!manager || !coordinator) return
+        await new RuntimeEditRuntimeBridge({ coordinator, manager, resolveDefinition: readProjectRuntimeDefinition }).handle(intent)
+      },
+      onSnapshot: (snapshot) => { queueMicrotask(() => projectChatBroker?.broadcastProjectSnapshot(snapshot.projectId)) },
     })
     const staticRegistry = localAppRuntimeManager.getStaticPreviewRegistry()
     const staticSessionHosts = new WeakMap<Session, string>()
@@ -916,10 +1182,20 @@ if (gotSingleInstanceLock) {
           let tabCollision = 1
           while (tabIds.has(tabId)) tabId = `${tabIdBase}-${tabCollision++}`
           const tab: WorkspaceTab = { id: tabId, runtimeDefinitionId: definition.id, title: rawTitle.trim(), createdAt: now, updatedAt: now }
+          const projectRoots = await workspaceProjectPathsForCanonicalMatch(current.projects)
+          const linked = ensureWorkspaceTabProject({
+            workspace: { ...current, runtimeDefinitions: [definition, ...current.runtimeDefinitions.filter((item) => item.id !== definition.id)], workspaceTabs: [tab, ...current.workspaceTabs] },
+            workspaceTabId: tab.id,
+            canonicalRoot: inspected.canonicalRoot,
+            now,
+            createProjectId: () => nextWorkspaceProjectId(current.projects),
+            projectPathForMatch: (project) => projectRoots.get(project.id) ?? project.path,
+          })
+          if (!linked.ok) return { ok: false, code: linked.code, message: linked.message }
           const proposed = withNextWorkspaceRevision({
-            ...current,
-            runtimeDefinitions: [definition, ...current.runtimeDefinitions.filter((item) => item.id !== definition.id)],
-            workspaceTabs: [tab, ...current.workspaceTabs],
+            ...linked.workspace,
+            activeProjectId: linked.project.id,
+            activeThreadId: '',
             activeWorkspaceTabId: tab.id,
           }, workspaceRevisionOf(current))
           await trustStore.load()
@@ -929,8 +1205,8 @@ if (gotSingleInstanceLock) {
             await getChatWorkspaceStore().save(proposed)
             const persisted = getChatWorkspaceStore().read()
             const persistedDefinition = persisted?.runtimeDefinitions.find((item) => item.id === definition.id)
-            const persistedTab = persisted?.workspaceTabs.find((item) => item.id === tab.id && item.runtimeDefinitionId === definition.id)
-            if (!persisted || !persistedDefinition || !persistedTab || persisted.activeWorkspaceTabId !== tab.id) throw new Error('runtime-workspace-tab-readback-failed')
+            const persistedTab = persisted?.workspaceTabs.find((item) => item.id === tab.id && item.runtimeDefinitionId === definition.id && item.projectId === linked.project.id)
+            if (!persisted || !persistedDefinition || !persistedTab || persisted.activeWorkspaceTabId !== tab.id || persisted.activeProjectId !== linked.project.id) throw new Error('runtime-workspace-tab-readback-failed')
           } catch {
             if (!wasTrusted) await trustStore.revoke(inspected.canonicalRoot).catch(() => undefined)
             return { ok: false, code: 'workspace-save-failed', message: 'Runtime 工作区保存失败，请重试' }
@@ -970,13 +1246,23 @@ if (gotSingleInstanceLock) {
           let tabCollision = 1
           while (tabIds.has(tabId)) tabId = `${tabIdBase}-${tabCollision++}`
           const tab: WorkspaceTab = { id: tabId, runtimeDefinitionId: definition.id, title: definition.name, createdAt: now, updatedAt: now }
-          const proposed = withNextWorkspaceRevision({ ...current, workspaceTabs: [tab, ...current.workspaceTabs], activeWorkspaceTabId: tab.id }, workspaceRevisionOf(current))
+          const projectRoots = await workspaceProjectPathsForCanonicalMatch(current.projects)
+          const linked = ensureWorkspaceTabProject({
+            workspace: { ...current, workspaceTabs: [tab, ...current.workspaceTabs] },
+            workspaceTabId: tab.id,
+            canonicalRoot,
+            now,
+            createProjectId: () => nextWorkspaceProjectId(current.projects),
+            projectPathForMatch: (project) => projectRoots.get(project.id) ?? project.path,
+          })
+          if (!linked.ok) return { ok: false, code: linked.code, message: linked.message }
+          const proposed = withNextWorkspaceRevision({ ...linked.workspace, activeProjectId: linked.project.id, activeThreadId: '', activeWorkspaceTabId: tab.id }, workspaceRevisionOf(current))
           try {
             await getChatWorkspaceStore().save(proposed)
             const persisted = getChatWorkspaceStore().read()
             const persistedDefinition = persisted?.runtimeDefinitions.find((item) => item.id === definition.id)
-            const persistedTab = persisted?.workspaceTabs.find((item) => item.id === tab.id && item.runtimeDefinitionId === definition.id)
-            if (!persisted || !persistedDefinition || !persistedTab || persisted.activeWorkspaceTabId !== tab.id) throw new Error('runtime-workspace-tab-readback-failed')
+            const persistedTab = persisted?.workspaceTabs.find((item) => item.id === tab.id && item.runtimeDefinitionId === definition.id && item.projectId === linked.project.id)
+            if (!persisted || !persistedDefinition || !persistedTab || persisted.activeWorkspaceTabId !== tab.id || persisted.activeProjectId !== linked.project.id) throw new Error('runtime-workspace-tab-readback-failed')
             return { ok: true, workspace: persisted, definition: persistedDefinition, tab: persistedTab }
           } catch {
             return { ok: false, code: 'workspace-save-failed', message: 'Runtime 工作区保存失败，请重试' }
@@ -1084,37 +1370,48 @@ if (gotSingleInstanceLock) {
         }
         return { ok: true, status: 'trust_required', projectId: project.id, mountId: normalizedMountId, definition: existing, runtime: existing ? localAppRuntimeManager?.get(existing.id) ?? null : null }
       }
-      const now = Date.now()
-      const definition: LocalAppDefinition = existing
-        ? { ...existing, rootPath: inspected.rootPath, canonicalRoot: inspected.canonicalRoot, name: existing.name || project.name, mode: inspected.mode, agentos: inspected.agentos, trustStatus: 'trusted', updatedAt: now }
-        : {
-            id: `runtime-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-            name: project.name || inspected.name,
-            rootPath: inspected.rootPath,
-            canonicalRoot: inspected.canonicalRoot,
-            packageManager: 'npm',
-            devCommand: { executable: 'npm', args: ['run', 'dev'] },
-            mode: inspected.mode,
-            agentos: inspected.agentos,
-            trustStatus: 'trusted',
-            autoStart: false,
-            createdAt: now,
-            updatedAt: now,
-          }
       const wasTrusted = localAppTrustStore?.isTrusted(inspected.canonicalRoot) === true
       try {
         await localAppTrustStore?.grant(inspected.canonicalRoot)
-        const proposed = withNextWorkspaceRevision({
-          ...currentState,
-          runtimeDefinitions: [definition, ...currentState.runtimeDefinitions.filter((item) => item.id !== definition.id)],
-        }, workspaceRevisionOf(currentState))
-        await getChatWorkspaceStore().save(proposed)
-        const persisted = getChatWorkspaceStore().read()
-        const savedDefinition = persisted?.runtimeDefinitions.find((item) => item.id === definition.id)
-        if (!persisted || !savedDefinition || savedDefinition.trustStatus !== 'trusted') throw new Error('project-runtime-readback-failed')
-        localAppRuntimeManager?.register(savedDefinition)
-        await registerProjectRuntimeHost({ projectId: project.id, mountId: normalizedMountId, canonicalRoot: inspected.canonicalRoot, runtimeDefinitionId: savedDefinition.id })
-        return { ok: true, status: 'ready', projectId: project.id, mountId: normalizedMountId, definition: savedDefinition, runtime: localAppRuntimeManager?.get(savedDefinition.id) ?? null }
+        const committed = await runChatWorkspaceOperation(async () => {
+          const lockedState = getChatWorkspaceStore().read()
+          const lockedProject = lockedState?.projects.find((item) => item.id === project.id)
+          if (!lockedState || !lockedProject || lockedProject.path !== project.path) return { ok: false as const, code: 'stale-project', message: '项目已切换，请重试' }
+          const lockedExisting = lockedState.runtimeDefinitions.find((item) => item.rootPath === inspected.rootPath || item.canonicalRoot === inspected.canonicalRoot)
+          const now = Date.now()
+          const definition: LocalAppDefinition = lockedExisting
+            ? { ...lockedExisting, rootPath: inspected.rootPath, canonicalRoot: inspected.canonicalRoot, name: lockedExisting.name || lockedProject.name, mode: inspected.mode, agentos: inspected.agentos, trustStatus: 'trusted', updatedAt: now }
+            : {
+                id: `runtime-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+                name: lockedProject.name || inspected.name,
+                rootPath: inspected.rootPath,
+                canonicalRoot: inspected.canonicalRoot,
+                packageManager: 'npm',
+                devCommand: { executable: 'npm', args: ['run', 'dev'] },
+                mode: inspected.mode,
+                agentos: inspected.agentos,
+                trustStatus: 'trusted',
+                autoStart: false,
+                createdAt: now,
+                updatedAt: now,
+              }
+          const proposed = withNextWorkspaceRevision({
+            ...lockedState,
+            runtimeDefinitions: [definition, ...lockedState.runtimeDefinitions.filter((item) => item.id !== definition.id)],
+          }, workspaceRevisionOf(lockedState))
+          await getChatWorkspaceStore().save(proposed)
+          const persisted = getChatWorkspaceStore().read()
+          const savedDefinition = persisted?.runtimeDefinitions.find((item) => item.id === definition.id)
+          if (!persisted || !savedDefinition || savedDefinition.trustStatus !== 'trusted') throw new Error('project-runtime-readback-failed')
+          return { ok: true as const, definition: savedDefinition }
+        })
+        if (!committed.ok) {
+          if (!wasTrusted) await localAppTrustStore?.revoke(inspected.canonicalRoot).catch(() => undefined)
+          return committed
+        }
+        localAppRuntimeManager?.register(committed.definition)
+        await registerProjectRuntimeHost({ projectId: project.id, mountId: normalizedMountId, canonicalRoot: inspected.canonicalRoot, runtimeDefinitionId: committed.definition.id })
+        return { ok: true, status: 'ready', projectId: project.id, mountId: normalizedMountId, definition: committed.definition, runtime: localAppRuntimeManager?.get(committed.definition.id) ?? null }
       } catch {
         if (!wasTrusted) await localAppTrustStore?.revoke(inspected.canonicalRoot).catch(() => undefined)
         return { ok: false, code: 'workspace-save-failed', message: 'Runtime 信任保存失败，请重试' }
@@ -1703,6 +2000,7 @@ if (gotSingleInstanceLock) {
       await shell.openExternal(rawUrl)
     })
     createWindow()
+    initializeAgentOSExternalTasks()
     ensureTray()
     appUpdaterService.scheduleUpdateChecks()
   })

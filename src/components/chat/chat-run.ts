@@ -3,18 +3,14 @@
  */
 
 import type { ClaudeChatEvent } from '../../claude-chat-types'
+import {
+  foldChatRunEvent as foldProjectChatRunEvent,
+  type ChatRunEventFoldContext,
+} from '../../project-chat-reducer'
 import type {
-  ChatActivityItem,
-  ChatContextCompactionItem,
-  ChatFileDiffItem,
   ChatMessageItem,
   ChatState,
-  ChatTaskItem,
-  ChatTaskState,
-  ChatThinkingItem,
-  ChatToolItem,
   ThreadRunState,
-  TranscriptItem,
 } from '../types'
 
 export type ChatRunPrompt =
@@ -243,7 +239,7 @@ export class ChatRun {
     if (event.type === 'session_start') {
       this.attachRunningState(transition, threadId, event.requestId, 'running', now)
       transition.updateState = (prev) =>
-        foldChatRunEvent(prev, event, { fallbackModel: context.fallbackModel, now })
+        foldProjectChatRunEvent(prev, event, { fallbackModel: context.fallbackModel, now })
       return transition
     }
 
@@ -252,7 +248,7 @@ export class ChatRun {
       const assistantMessageId = this.requestAssistantMessageIds.get(event.requestId)
       const requestStartedAt = this.requestStartedAt.get(event.requestId) ?? now
       transition.updateState = (prev) =>
-        foldChatRunEvent(prev, event, { assistantMessageId, requestStartedAt, now })
+        foldProjectChatRunEvent(prev, event, { assistantMessageId, requestStartedAt, now })
       this.requestAssistantMessageIds.set(event.requestId, event.messageId)
       return transition
     }
@@ -267,7 +263,7 @@ export class ChatRun {
       event.type === 'file_diff'
     ) {
       this.attachRunningState(transition, threadId, event.requestId, 'running', now)
-      transition.updateState = (prev) => foldChatRunEvent(prev, event, { now })
+      transition.updateState = (prev) => foldProjectChatRunEvent(prev, event, { now })
       return transition
     }
 
@@ -277,7 +273,7 @@ export class ChatRun {
       event.type === 'tool_done' ||
       event.type === 'file_rewind_result'
     ) {
-      transition.updateState = (prev) => foldChatRunEvent(prev, event, { now })
+      transition.updateState = (prev) => foldProjectChatRunEvent(prev, event, { now })
       return transition
     }
 
@@ -297,7 +293,7 @@ export class ChatRun {
       if (event.status === 'running') {
         this.attachRunningState(transition, threadId, event.requestId, 'running', now)
       }
-      transition.updateState = (prev) => foldChatRunEvent(prev, event, { now })
+      transition.updateState = (prev) => foldProjectChatRunEvent(prev, event, { now })
       return transition
     }
 
@@ -305,7 +301,7 @@ export class ChatRun {
       if (event.status === 'running') {
         this.attachRunningState(transition, threadId, event.requestId, 'running', now)
       }
-      transition.updateState = (prev) => foldChatRunEvent(prev, event, { now })
+      transition.updateState = (prev) => foldProjectChatRunEvent(prev, event, { now })
       return transition
     }
 
@@ -313,7 +309,7 @@ export class ChatRun {
       const requestStartedAt = this.requestStartedAt.get(event.requestId) ?? now
       const assistantMessageId = this.requestAssistantMessageIds.get(event.requestId)
       transition.updateState = (prev) =>
-        foldChatRunEvent(prev, event, {
+        foldProjectChatRunEvent(prev, event, {
           assistantMessageId,
           requestStartedAt,
           now,
@@ -543,574 +539,12 @@ function appendAssistantErrorMessage(
   }
 }
 
-type ChatRunEventFoldContext = {
-  now?: number
-  requestStartedAt?: number
-  assistantMessageId?: string
-  fallbackModel?: string
-  stoppedBody?: string
-}
-
-function foldChatRunEvent(
+export function foldChatRunEventLegacy(
   prev: ChatState,
   event: ClaudeChatEvent,
   context: ChatRunEventFoldContext = {},
 ): ChatState {
-  const now = context.now ?? Date.now()
-  const requestStartedAt = context.requestStartedAt ?? now
-
-  if (event.type === 'session_start') {
-    return {
-      ...prev,
-      sessionId: event.sessionId,
-      model: event.model || context.fallbackModel || prev.model,
-      cwd: event.cwd,
-    }
-  }
-
-  if (event.type === 'assistant_delta') {
-    const messageId = event.messageId
-    const existingIndex = prev.items.findIndex((item) => item.type === 'message' && item.id === messageId)
-    if (existingIndex >= 0) {
-      const item = prev.items[existingIndex] as ChatMessageItem
-      return {
-        ...prev,
-        items: replaceAt(prev.items, existingIndex, {
-          ...item,
-          content: item.content + event.text,
-          status: 'streaming',
-          startedAt: item.startedAt ?? requestStartedAt,
-        }),
-      }
-    }
-
-    const pendingIndex = prev.items.findIndex(
-      (item) =>
-        item.type === 'message' &&
-        item.id === context.assistantMessageId &&
-        item.role === 'assistant',
-    )
-    if (pendingIndex >= 0) {
-      const item = prev.items[pendingIndex] as ChatMessageItem
-      return {
-        ...prev,
-        items: replaceAt(prev.items, pendingIndex, {
-          ...item,
-          id: messageId,
-          content: item.content + event.text,
-          status: 'streaming',
-          startedAt: item.startedAt ?? requestStartedAt,
-        }),
-      }
-    }
-
-    if (!event.text) return prev
-    const message: ChatMessageItem = {
-      type: 'message',
-      id: messageId,
-      role: 'assistant',
-      content: event.text,
-      status: 'streaming',
-      createdAt: requestStartedAt,
-      startedAt: requestStartedAt,
-    }
-    return { ...prev, items: [...prev.items, message] }
-  }
-
-  if (event.type === 'thinking_start') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'thinking' && item.thinkingId === event.thinkingId,
-    )
-    if (index >= 0) {
-      const item = prev.items[index] as ChatThinkingItem
-      return {
-        ...prev,
-        items: replaceAt(prev.items, index, {
-          ...item,
-          requestId: item.requestId ?? event.requestId,
-          status: 'running',
-        }),
-      }
-    }
-    const row: ChatThinkingItem = {
-      type: 'thinking',
-      id: event.thinkingId,
-      requestId: event.requestId,
-      thinkingId: event.thinkingId,
-      title: event.title,
-      content: '',
-      status: 'running',
-    }
-    return { ...prev, items: [...prev.items, row] }
-  }
-
-  if (event.type === 'thinking_delta') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'thinking' && item.thinkingId === event.thinkingId,
-    )
-    if (index >= 0) {
-      const item = prev.items[index] as ChatThinkingItem
-      return {
-        ...prev,
-        items: replaceAt(prev.items, index, {
-          ...item,
-          requestId: item.requestId ?? event.requestId,
-          content: item.content + event.text,
-          status: 'running',
-        }),
-      }
-    }
-    const row: ChatThinkingItem = {
-      type: 'thinking',
-      id: event.thinkingId,
-      requestId: event.requestId,
-      thinkingId: event.thinkingId,
-      title: 'Think',
-      content: event.text,
-      status: 'running',
-    }
-    return { ...prev, items: [...prev.items, row] }
-  }
-
-  if (event.type === 'thinking_done') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'thinking' && item.thinkingId === event.thinkingId,
-    )
-    if (index < 0) return prev
-    const item = prev.items[index] as ChatThinkingItem
-    return {
-      ...prev,
-      items: replaceAt(prev.items, index, {
-        ...item,
-        requestId: item.requestId ?? event.requestId,
-        status: 'done',
-      }),
-    }
-  }
-
-  if (event.type === 'tool_start') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'tool' && item.toolUseId === event.toolUseId,
-    )
-    if (index >= 0) {
-      const item = prev.items[index] as ChatToolItem
-      return {
-        ...prev,
-        items: replaceAt(prev.items, index, {
-          ...item,
-          requestId: item.requestId ?? event.requestId,
-          inputPreview: event.inputPreview || item.inputPreview,
-          status: 'running',
-        }),
-      }
-    }
-    const row: ChatToolItem = {
-      type: 'tool',
-      id: `tool-${event.toolUseId}`,
-      requestId: event.requestId,
-      toolUseId: event.toolUseId,
-      name: event.name,
-      inputPreview: event.inputPreview,
-      status: 'running',
-    }
-    return { ...prev, items: [...prev.items, row] }
-  }
-
-  if (event.type === 'tool_update') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'tool' && item.toolUseId === event.toolUseId,
-    )
-    if (index < 0) return prev
-    const item = prev.items[index] as ChatToolItem
-    return {
-      ...prev,
-      items: replaceAt(prev.items, index, {
-        ...item,
-        requestId: item.requestId ?? event.requestId,
-        inputPreview: event.inputPreview ?? item.inputPreview,
-        detail: event.detail ?? item.detail,
-      }),
-    }
-  }
-
-  if (event.type === 'tool_done') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'tool' && item.toolUseId === event.toolUseId,
-    )
-    if (index < 0) return prev
-    const item = prev.items[index] as ChatToolItem
-    return {
-      ...prev,
-      items: replaceAt(prev.items, index, {
-        ...item,
-        requestId: item.requestId ?? event.requestId,
-        status: event.status,
-        detail: event.detail ?? item.detail,
-      }),
-    }
-  }
-
-  if (event.type === 'task_create') return applyTaskCreateEvent(prev, event, now)
-  if (event.type === 'task_update') return applyTaskUpdateEvent(prev, event, now)
-  if (event.type === 'task_list') return applyTaskListEvent(prev, event, now)
-
-  if (event.type === 'agent_activity') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'activity' && item.id === event.activityId,
-    )
-    if (index >= 0) {
-      const item = prev.items[index] as ChatActivityItem
-      return {
-        ...prev,
-        items: replaceAt(prev.items, index, {
-          ...item,
-          requestId: item.requestId ?? event.requestId,
-          title: event.title,
-          status: event.status,
-          detail: event.detail,
-          preview: event.preview ?? item.preview,
-        }),
-      }
-    }
-    const row: ChatActivityItem = {
-      type: 'activity',
-      id: event.activityId,
-      requestId: event.requestId,
-      title: event.title,
-      status: event.status,
-      detail: event.detail,
-      preview: event.preview,
-    }
-    return { ...prev, items: [...prev.items, row] }
-  }
-
-  if (event.type === 'context_compaction') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'context_compaction' && item.id === event.compactionId,
-    )
-    if (index >= 0) {
-      const item = prev.items[index] as ChatContextCompactionItem
-      return {
-        ...prev,
-        items: replaceAt(prev.items, index, {
-          ...item,
-          requestId: item.requestId ?? event.requestId,
-          status: event.status,
-          trigger: event.trigger ?? item.trigger,
-          preTokens: event.preTokens ?? item.preTokens,
-          postTokens: event.postTokens ?? item.postTokens,
-          durationMs: event.durationMs ?? item.durationMs,
-          preservedMessageCount: event.preservedMessageCount ?? item.preservedMessageCount,
-          summary: event.summary ?? item.summary,
-          error: event.error ?? item.error,
-          updatedAt: now,
-        }),
-      }
-    }
-    const row: ChatContextCompactionItem = {
-      type: 'context_compaction',
-      id: event.compactionId,
-      requestId: event.requestId,
-      status: event.status,
-      trigger: event.trigger ?? 'unknown',
-      preTokens: event.preTokens,
-      postTokens: event.postTokens,
-      durationMs: event.durationMs,
-      preservedMessageCount: event.preservedMessageCount,
-      summary: event.summary,
-      error: event.error,
-      createdAt: now,
-      updatedAt: now,
-    }
-    return { ...prev, items: [...prev.items, row] }
-  }
-
-  if (event.type === 'file_diff') {
-    const index = prev.items.findIndex(
-      (item) => item.type === 'file_diff' && item.changeSetId === event.changeSetId,
-    )
-    if (index >= 0) {
-      const item = prev.items[index] as ChatFileDiffItem
-      return {
-        ...prev,
-        items: replaceAt(prev.items, index, {
-          ...item,
-          threadId: item.threadId ?? event.threadId,
-          checkpointId: event.checkpointId ?? item.checkpointId,
-          files: mergeDiffFiles(item.files, event.files),
-          status: item.status === 'reverted' ? item.status : 'captured',
-          detail: undefined,
-        }),
-      }
-    }
-    const row: ChatFileDiffItem = {
-      type: 'file_diff',
-      id: event.changeSetId,
-      requestId: event.requestId,
-      threadId: event.threadId,
-      changeSetId: event.changeSetId,
-      checkpointId: event.checkpointId,
-      files: event.files,
-      status: 'captured',
-    }
-    return { ...prev, items: [...prev.items, row] }
-  }
-
-  if (event.type === 'file_rewind_result') {
-    const index = prev.items.findIndex(
-      (item) =>
-        item.type === 'file_diff' &&
-        (!event.changeSetId || item.changeSetId === event.changeSetId),
-    )
-    if (index < 0) return prev
-    const item = prev.items[index] as ChatFileDiffItem
-    return {
-      ...prev,
-      items: replaceAt(prev.items, index, {
-        ...item,
-        status: event.status === 'reverted' ? 'reverted' : 'error',
-        detail: event.detail ?? item.detail,
-      }),
-    }
-  }
-
-  if (event.type === 'result') {
-    const items = completeAssistantMessage(
-      prev.items,
-      event.requestId,
-      context.assistantMessageId,
-      event.result,
-      'done',
-      requestStartedAt,
-      now,
-    )
-    return { ...prev, sessionId: event.sessionId, items }
-  }
-
-  if (event.type === 'error') {
-    const items = completeAssistantMessage(
-      prev.items,
-      event.requestId,
-      context.assistantMessageId,
-      event.message,
-      'error',
-      requestStartedAt,
-      now,
-    )
-    const shouldClearSession =
-      event.code === 'sdk_error' &&
-      event.message.includes('No conversation found with session ID')
-    return {
-      ...prev,
-      sessionId: shouldClearSession ? undefined : prev.sessionId,
-      items,
-    }
-  }
-
-  if (event.type === 'cancelled') {
-    const items = completeAssistantMessage(
-      prev.items,
-      event.requestId,
-      context.assistantMessageId,
-      context.stoppedBody ?? '',
-      'cancelled',
-      requestStartedAt,
-      now,
-    )
-    return { ...prev, items }
-  }
-
-  return prev
-}
-
-function completeAssistantMessage(
-  items: TranscriptItem[],
-  requestId: string,
-  assistantMessageId: string | undefined,
-  fallbackContent: string,
-  status: ChatMessageItem['status'],
-  requestStartedAt: number,
-  completedAt: number,
-): TranscriptItem[] {
-  const expectedId = `assistant-${requestId}`
-  let found = false
-  const mapped = items.map((item): TranscriptItem => {
-    if (item.type !== 'message' || item.role !== 'assistant') return item
-    if (item.id !== expectedId && item.id !== assistantMessageId) return item
-    found = true
-    const content = !item.content.trim() ? fallbackContent : item.content
-    const startedAt = item.startedAt ?? requestStartedAt
-    return {
-      ...item,
-      content,
-      status,
-      startedAt,
-      completedAt,
-      durationMs: Math.max(0, completedAt - startedAt),
-    }
-  })
-  if (found || !fallbackContent.trim()) return mapped
-  return [
-    ...mapped,
-    {
-      type: 'message',
-      id: expectedId,
-      role: 'assistant',
-      content: fallbackContent,
-      status,
-      createdAt: requestStartedAt,
-      startedAt: requestStartedAt,
-      completedAt,
-      durationMs: Math.max(0, completedAt - requestStartedAt),
-    },
-  ]
-}
-
-function applyTaskCreateEvent(
-  prev: ChatState,
-  event: Extract<ClaudeChatEvent, { type: 'task_create' }>,
-  now: number,
-): ChatState {
-  const tasks = taskStateForRequest(prev, event.requestId, true, now)
-  const taskId = event.taskId || `pending:${event.toolUseId}`
-  const index = tasks.items.findIndex(
-    (task) => task.id === taskId || task.toolUseId === event.toolUseId,
-  )
-  const current = index >= 0 ? tasks.items[index] : undefined
-  const nextTask: ChatTaskItem = {
-    id: taskId,
-    toolUseId: event.toolUseId,
-    subject: event.subject || current?.subject || taskId,
-    description: event.description ?? current?.description,
-    activeForm: event.activeForm ?? current?.activeForm,
-    status: current?.status ?? 'pending',
-    owner: current?.owner,
-    blocks: current?.blocks,
-    blockedBy: current?.blockedBy,
-    metadata: event.metadata ?? current?.metadata,
-    createdAt: current?.createdAt ?? now,
-    updatedAt: now,
-    order: current?.order ?? tasks.items.length,
-  }
-  const items = index >= 0 ? replaceAt(tasks.items, index, nextTask) : [...tasks.items, nextTask]
-  return { ...prev, tasks: { ...tasks, updatedAt: now, items: sortTasks(items) } }
-}
-
-function applyTaskUpdateEvent(
-  prev: ChatState,
-  event: Extract<ClaudeChatEvent, { type: 'task_update' }>,
-  now: number,
-): ChatState {
-  const tasks = taskStateForRequest(prev, event.requestId, false, now)
-  const index = tasks.items.findIndex((task) => task.id === event.taskId)
-  const current = index >= 0 ? tasks.items[index] : undefined
-  const nextTask: ChatTaskItem = {
-    id: event.taskId,
-    toolUseId: current?.toolUseId ?? event.toolUseId,
-    subject: event.subject ?? current?.subject ?? event.taskId,
-    description: event.description ?? current?.description,
-    activeForm: event.activeForm ?? current?.activeForm,
-    status: event.status ?? current?.status ?? 'pending',
-    owner: event.owner ?? current?.owner,
-    blocks: mergeStringLists(current?.blocks, event.blocks),
-    blockedBy: mergeStringLists(current?.blockedBy, event.blockedBy),
-    metadata: event.metadata ?? current?.metadata,
-    createdAt: current?.createdAt ?? now,
-    updatedAt: now,
-    order: current?.order ?? tasks.items.length,
-  }
-  const items = index >= 0 ? replaceAt(tasks.items, index, nextTask) : [...tasks.items, nextTask]
-  return { ...prev, tasks: { ...tasks, updatedAt: now, items: sortTasks(items) } }
-}
-
-function applyTaskListEvent(
-  prev: ChatState,
-  event: Extract<ClaudeChatEvent, { type: 'task_list' }>,
-  now: number,
-): ChatState {
-  const existing = prev.tasks?.requestId === event.requestId ? prev.tasks.items : []
-  const existingById = new Map(existing.map((task) => [task.id, task]))
-  const items = event.tasks.map((task, index): ChatTaskItem => {
-    const current = existingById.get(task.taskId)
-    return {
-      id: task.taskId,
-      toolUseId: current?.toolUseId,
-      subject: task.subject,
-      description: task.description ?? current?.description,
-      activeForm: task.activeForm ?? current?.activeForm,
-      status: task.status ?? current?.status ?? 'pending',
-      owner: task.owner ?? current?.owner,
-      blocks: task.blocks ?? current?.blocks,
-      blockedBy: task.blockedBy ?? current?.blockedBy,
-      metadata: task.metadata ?? current?.metadata,
-      createdAt: current?.createdAt ?? now,
-      updatedAt: now,
-      order: current?.order ?? index,
-    }
-  })
-  return {
-    ...prev,
-    tasks: { requestId: event.requestId, updatedAt: now, items: sortTasks(items) },
-  }
-}
-
-function taskStateForRequest(
-  prev: ChatState,
-  requestId: string,
-  resetOnNewRequest: boolean,
-  now: number,
-): ChatTaskState {
-  if (!prev.tasks) return { requestId, updatedAt: now, items: [] }
-  if (
-    resetOnNewRequest &&
-    prev.tasks.requestId &&
-    prev.tasks.requestId !== requestId
-  ) {
-    return { requestId, updatedAt: now, items: [] }
-  }
-  return { ...prev.tasks, requestId, items: [...prev.tasks.items] }
-}
-
-function replaceAt<T>(items: T[], index: number, item: T): T[] {
-  const next = [...items]
-  next[index] = item
-  return next
-}
-
-function mergeStringLists(
-  current: string[] | undefined,
-  incoming: string[] | undefined,
-): string[] | undefined {
-  if (!incoming || incoming.length === 0) return current
-  return [...new Set([...(current ?? []), ...incoming])]
-}
-
-function sortTasks(items: ChatTaskItem[]): ChatTaskItem[] {
-  return [...items].sort((a, b) => a.order - b.order || a.createdAt - b.createdAt)
-}
-
-function mergeDiffFiles(
-  existing: ChatFileDiffItem['files'],
-  incoming: ChatFileDiffItem['files'],
-): ChatFileDiffItem['files'] {
-  const next = [...existing]
-  for (const file of incoming) {
-    const index = next.findIndex((candidate) => candidate.path === file.path)
-    if (index < 0) {
-      next.push(file)
-      continue
-    }
-    const previous = next[index]
-    next[index] = {
-      ...previous,
-      status: previous.status === 'added' ? previous.status : file.status,
-      additions: previous.additions + file.additions,
-      deletions: previous.deletions + file.deletions,
-      hunks: [...previous.hunks, ...file.hunks],
-      truncated: previous.truncated || file.truncated || undefined,
-    }
-  }
-  return next
+  return foldProjectChatRunEvent(prev, event, context)
 }
 
 function isPendingRequestId(requestId: string): boolean {

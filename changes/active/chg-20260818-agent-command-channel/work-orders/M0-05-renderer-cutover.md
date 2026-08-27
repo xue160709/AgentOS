@@ -6,7 +6,7 @@
 
 ## 依赖
 
-- `M0-04` 完成。
+- `M0-05F` default-off production composition 完成；此前本任务单禁止直接派发。
 - M0 前四单测试全绿。
 
 ## Write allowlist
