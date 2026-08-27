@@ -126,6 +126,7 @@ export type RuntimePreviewHost =
   | { kind: 'workspace-tab'; workspaceTabId: string; runtimeDefinitionId: string }
   | { kind: 'project-home'; projectId: string; mountId: string; runtimeDefinitionId: string }
 export type RuntimePreviewResult = LocalAppPreviewResult
+export type RuntimePreviewNavigationState = { previewId: string; canGoBack: boolean; canGoForward: boolean }
 export type ProjectRuntimeResult =
   | { ok: true; status: 'ready' | 'trust_required'; projectId: string; mountId: string; definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null }
   | { ok: false; message: string; code?: string }
@@ -271,10 +272,14 @@ export type DesktopAPI = {
   /** Explicit opt-in development mode for static definitions. */
   startRuntimeDevelopment?: (runtimeDefinitionId: string, consumerId?: string) => Promise<RuntimeSnapshot>
   createRuntimePreview?: (host: RuntimePreviewHost) => Promise<RuntimePreviewResult>
+  getRuntimePreviewContentHeight?: (previewId: string) => Promise<number | null>
+  getRuntimePreviewNavigationState?: (previewId: string) => Promise<RuntimePreviewNavigationState | null>
   setRuntimePreviewBounds?: (previewId: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>
   setRuntimePreviewVisible?: (previewId: string, visible: boolean) => Promise<boolean>
+  navigateRuntimePreview?: (previewId: string, direction: 'back' | 'forward') => Promise<boolean>
   reloadRuntimePreview?: (previewId: string) => Promise<boolean>
   closeRuntimePreview?: (previewId: string) => Promise<boolean>
+  onRuntimePreviewNavigationState?: (handler: (state: RuntimePreviewNavigationState) => void) => () => void
   onRuntimeEvent?: (handler: (event: RuntimeEvent) => void) => () => void
   ensureProjectRuntime?: (projectId: string, mountId: string) => Promise<ProjectRuntimeResult>
   trustProjectRuntime?: (projectId: string, mountId: string) => Promise<ProjectRuntimeResult>

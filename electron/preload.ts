@@ -41,7 +41,7 @@ import type {
   ClaudeChatAttachmentPickerResult,
   ClaudeChatAPI,
 } from '../src/claude-chat-types'
-import type { DesktopAPI, LocalAppCloseTabResult, LocalAppCreationResult, LocalAppDefinitionResult, LocalAppOpenTabResult, LocalAppPreviewResult, LocalAppRelocationResult, ProjectRuntimeResult, RuntimeCreationResult, RuntimeDefinitionResult, RuntimeInspectResult, RuntimePreviewHost, RuntimePreviewResult, WorkspaceTabCloseResult, WorkspaceTabResult } from '../src/desktop-api'
+import type { DesktopAPI, LocalAppCloseTabResult, LocalAppCreationResult, LocalAppDefinitionResult, LocalAppOpenTabResult, LocalAppPreviewResult, LocalAppRelocationResult, ProjectRuntimeResult, RuntimeCreationResult, RuntimeDefinitionResult, RuntimeInspectResult, RuntimePreviewHost, RuntimePreviewNavigationState, RuntimePreviewResult, WorkspaceTabCloseResult, WorkspaceTabResult } from '../src/desktop-api'
 import type { LocalAppRuntimeEvent, LocalAppRuntimeSnapshot, RuntimeEvent, RuntimeSnapshot } from '../src/components/types'
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
 import {
@@ -315,17 +315,31 @@ const desktopAdapter = {
   createRuntimePreview(host: RuntimePreviewHost) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createRuntimePreview, host) as Promise<RuntimePreviewResult>
   },
+  getRuntimePreviewContentHeight(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewContentHeight, previewId) as Promise<number | null>
+  },
+  getRuntimePreviewNavigationState(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewNavigationState, previewId) as Promise<RuntimePreviewNavigationState | null>
+  },
   setRuntimePreviewBounds(previewId: string, bounds: { x: number; y: number; width: number; height: number }) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewBounds, previewId, bounds) as Promise<boolean>
   },
   setRuntimePreviewVisible(previewId: string, visible: boolean) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewVisible, previewId, visible) as Promise<boolean>
   },
+  navigateRuntimePreview(previewId: string, direction: 'back' | 'forward') {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.navigateRuntimePreview, previewId, direction) as Promise<boolean>
+  },
   reloadRuntimePreview(previewId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.reloadRuntimePreview, previewId) as Promise<boolean>
   },
   closeRuntimePreview(previewId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeRuntimePreview, previewId) as Promise<boolean>
+  },
+  onRuntimePreviewNavigationState(handler: (state: RuntimePreviewNavigationState) => void) {
+    const listener = (_event: IpcRendererEvent, state: RuntimePreviewNavigationState) => handler(state)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onRuntimePreviewNavigationState, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onRuntimePreviewNavigationState, listener)
   },
   onRuntimeEvent(handler: (event: RuntimeEvent) => void) {
     const listener = (_event: IpcRendererEvent, event: RuntimeEvent) => handler(event)

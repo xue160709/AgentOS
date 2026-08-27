@@ -11,6 +11,8 @@ import type { ThreadRunState, TranscriptItem, WorkspaceProject, WorkspaceThread 
 import { ProjectChatSnapshotController } from '../workspace-session'
 import { ChatPage } from './ChatPage'
 import { runtimeEditStatus } from '../runtime-event-state'
+import { useI18n } from '../../i18n/i18n'
+import { IconInline } from '../../icon-inline'
 import './project-chat-window.css'
 
 type WindowPageState =
@@ -37,6 +39,7 @@ const inactiveAgentMode: WorkspaceAgentModeState = {
 
 /** The window owns only view state; all Chat facts are broker snapshots. */
 export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
+  const { t } = useI18n()
   const [state, setState] = useState<WindowPageState>({ kind: 'loading' })
   const [viewState, setViewState] = useState<ProjectChatWindowViewState>({ ...EMPTY_VIEW_STATE, projectId })
   const [selectedThreadId, setSelectedThreadId] = useState<string | undefined>()
@@ -159,9 +162,9 @@ export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
   }, [projectId, queueViewState, selectThread, snapshot])
   const projectWindow = useMemo(() => ({ draft: viewState.draft, onDraftChange }), [onDraftChange, viewState.draft])
 
-  if (state.kind === 'loading') return <main className="project-chat-window" aria-label="项目对话"><p>正在加载项目对话…</p></main>
-  if (state.kind === 'removed') return <main className="project-chat-window" aria-label="项目对话"><p role="alert">项目已移除</p><CloseButton /></main>
-  if (state.kind === 'error' || !snapshot) return <main className="project-chat-window" aria-label="项目对话"><p role="alert">项目对话暂不可用</p><CloseButton /></main>
+  if (state.kind === 'loading') return <main className="project-chat-window" aria-label={t('projectChatWindow.aria')}><p>{t('projectChatWindow.loading')}</p></main>
+  if (state.kind === 'removed') return <main className="project-chat-window" aria-label={t('projectChatWindow.aria')}><p role="alert">{t('projectChatWindow.removed')}</p></main>
+  if (state.kind === 'error' || !snapshot) return <main className="project-chat-window" aria-label={t('projectChatWindow.aria')}><p role="alert">{t('projectChatWindow.unavailable')}</p></main>
 
   const project = projectFromSnapshot(snapshot)
   const threads = snapshot.threads.map(threadFromSnapshot)
@@ -170,19 +173,32 @@ export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
   const runtimeStatus = runtimeEditStatus(snapshot.runtimeEdit)
 
   return (
-    <main className="project-chat-window project-chat-window--ready" aria-label={`${project.name} 对话`}>
+    <main className="project-chat-window project-chat-window--ready" aria-label={t('projectChatWindow.projectAria', { project: project.name })}>
       <header className="project-chat-window__header">
-        <div className="project-chat-window__identity"><p>项目专属 Chat</p><h1>{project.name}</h1>{project.pathMissing ? <p role="alert">项目路径不可用，请在主窗口处理。<button type="button" onClick={() => void window.projectChat?.openProjectPathRecovery(projectId)}>在主窗口处理项目路径</button></p> : null}</div>
+        <div className="project-chat-window__identity">
+          <span className="project-chat-window__identity-icon" aria-hidden="true"><IconInline name="message" /></span>
+          <span className="project-chat-window__identity-copy">
+            <h1 title={project.name}>{project.name}</h1>
+            <span>{t('projectChatWindow.chatSuffix')}</span>
+          </span>
+          {project.pathMissing ? <p role="alert">{t('projectChatWindow.pathMissing')}<button type="button" onClick={() => void window.projectChat?.openProjectPathRecovery(projectId)}>{t('projectChatWindow.recoverPath')}</button></p> : null}
+        </div>
         <div className="project-chat-window__actions">
-          <label className="project-chat-window__thread-picker"><span>项目对话</span><select value={isNewThread ? '' : selectedThreadId ?? ''} onChange={(event) => selectThread(event.target.value)}><option value="" disabled>{threads.length ? '选择对话' : '暂无对话'}</option>{threads.filter((thread) => !thread.archivedAt).map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select></label>
-          <button type="button" className="project-chat-window__new-thread" aria-pressed={isNewThread} onClick={beginNewThread}>新建对话</button>
-          <button type="button" onClick={() => void window.projectChat?.openProjectPreview(projectId)}>查看预览</button>
-          <CloseButton />
+          <label className="project-chat-window__thread-picker">
+            <span className="sr-only">{t('projectChatWindow.thread')}</span>
+            <IconInline name="message" className="project-chat-window__thread-icon" />
+            <select aria-label={t('projectChatWindow.thread')} value={isNewThread ? '' : selectedThreadId ?? ''} onChange={(event) => selectThread(event.target.value)}><option value="" disabled>{threads.length ? t('projectChatWindow.chooseThread') : t('projectChatWindow.noThreads')}</option>{threads.filter((thread) => !thread.archivedAt).map((thread) => <option key={thread.id} value={thread.id}>{thread.title}</option>)}</select>
+            <IconInline name="chevron" className="project-chat-window__thread-chevron" />
+          </label>
+          <span className="project-chat-window__action-divider" aria-hidden="true" />
+          <button type="button" className="btn project-chat-window__new-thread" aria-pressed={isNewThread} onClick={beginNewThread}><IconInline name="plus" />{t('projectChatWindow.newThread')}</button>
         </div>
       </header>
-      {runtimeStatus ? <p className="project-chat-window__status" role={runtimeStatus.alert ? 'alert' : 'status'} aria-busy={runtimeStatus.busy}>{runtimeStatus.message}</p> : null}
-      {snapshot.unreadExternalTaskCount ? <button type="button" aria-label={`新任务，${snapshot.unreadExternalTaskCount} 条`} onClick={openUnreadExternal}>新任务（{snapshot.unreadExternalTaskCount}）</button> : null}
-      {status ? <p className="project-chat-window__status" role="status">{status}</p> : null}
+      <div className="project-chat-window__notices" aria-live="polite">
+        {runtimeStatus ? <p className="project-chat-window__status" role={runtimeStatus.alert ? 'alert' : 'status'} aria-busy={runtimeStatus.busy}>{runtimeStatus.message}</p> : null}
+        {snapshot.unreadExternalTaskCount ? <button type="button" className="project-chat-window__unread" aria-label={`新任务，${snapshot.unreadExternalTaskCount} 条`} onClick={openUnreadExternal}>新任务（{snapshot.unreadExternalTaskCount}）</button> : null}
+        {status ? <p className="project-chat-window__status" role="status">{status}</p> : null}
+      </div>
       <ChatPage
         hidden={false} activeProject={project} activeThread={activeThread} projectChatSnapshot={snapshot} projectChatEnabled agentStatusSnapshot={null}
         threads={threads} projects={[project]} projectOrderIds={[projectId]} threadRunStates={runStatesFromSnapshot(snapshot)} onStatusChange={setStatus}
@@ -225,5 +241,3 @@ function runStatesFromSnapshot(snapshot: ProjectChatSnapshot): Record<string, Th
   }
   return states
 }
-
-function CloseButton() { return <button type="button" onClick={() => window.close()}>关闭窗口</button> }

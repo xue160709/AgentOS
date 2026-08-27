@@ -144,6 +144,40 @@ test('Preview manager reuses the same tab session and closes it by tab without t
   assert.equal(closeCount, 1)
 })
 
+test('Preview navigation moves only when browser history allows it', async () => {
+  let backCount = 0
+  let forwardCount = 0
+  let canGoBack = false
+  let canGoForward = true
+  const navigationStates = []
+  const contents = new EventEmitter()
+  contents.setWindowOpenHandler = () => undefined
+  contents.loadURL = async () => undefined
+  contents.close = () => undefined
+  contents.canGoBack = () => canGoBack
+  contents.canGoForward = () => canGoForward
+  contents.goBack = () => { backCount += 1 }
+  contents.goForward = () => { forwardCount += 1 }
+  contents.session = { setPermissionRequestHandler: () => undefined }
+  const view = { webContents: contents, setBounds: () => undefined, setVisible: () => undefined }
+  const manager = new preview.LocalAppPreviewManager({
+    window: { contentView: { addChildView: () => undefined, removeChildView: () => undefined } },
+    createView: () => view,
+    onNavigationState: (state) => navigationStates.push(state),
+  })
+  await manager.create('preview-history', 'tab-history', 'local-app-1', { runtimeId: 'runtime-1', generation: 1, readyUrl: 'http://127.0.0.1:3001/' })
+  assert.equal(manager.navigate('preview-history', 'back'), false)
+  assert.equal(manager.navigate('preview-history', 'forward'), true)
+  canGoBack = true
+  canGoForward = false
+  contents.emit('did-navigate-in-page')
+  assert.deepEqual(navigationStates.at(-1), { previewId: 'preview-history', canGoBack: true, canGoForward: false })
+  assert.equal(manager.navigate('preview-history', 'back'), true)
+  assert.equal(manager.navigate('preview-history', 'forward'), false)
+  assert.equal(backCount, 1)
+  assert.equal(forwardCount, 1)
+})
+
 test('Preview reload reports loading then ready and clears degraded state', async () => {
   const events = []
   const contents = new EventEmitter()
@@ -173,6 +207,24 @@ test('Preview reload reports loading then ready and clears degraded state', asyn
 test('Preview bounds conversion clamps invalid viewport coordinates', () => {
   assert.deepEqual(preview.previewBoundsFromRect({ left: -10, top: 12, width: 320, height: 180 }), { x: 0, y: 12, width: 320, height: 180 })
   assert.deepEqual(preview.previewBoundsFromRect({ left: Number.NaN, top: Number.POSITIVE_INFINITY, width: -1, height: 0 }), { x: 0, y: 0, width: 0, height: 0 })
+})
+
+test('Preview content height is measured and normalized for native bounds', async () => {
+  const contents = new EventEmitter()
+  contents.setWindowOpenHandler = () => undefined
+  contents.loadURL = async () => undefined
+  contents.executeJavaScript = async () => 812.25
+  contents.close = () => undefined
+  contents.session = { setPermissionRequestHandler: () => undefined }
+  const view = { webContents: contents, setBounds: () => undefined, setVisible: () => undefined }
+  const manager = new preview.LocalAppPreviewManager({
+    window: { contentView: { addChildView: () => undefined, removeChildView: () => undefined } },
+    createView: () => view,
+  })
+  await manager.create('preview-height', 'tab-height', 'local-app-1', { runtimeId: 'runtime-1', generation: 1, readyUrl: 'http://127.0.0.1:3001/' })
+  assert.equal(await manager.getContentHeight('preview-height'), 813)
+  assert.equal(preview.normalizePreviewContentHeight(Number.NaN), null)
+  assert.equal(preview.normalizePreviewContentHeight(40_000), 32_767)
 })
 
 test('Preview callbacks from an old generation cannot overwrite a replacement', async () => {

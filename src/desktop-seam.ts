@@ -92,8 +92,11 @@ export const DESKTOP_INVOKE_CHANNELS = {
   cancelRuntimeBuild: 'desktop:runtime:build-cancel',
   startRuntimeDevelopment: 'desktop:runtime:start-development',
   createRuntimePreview: 'desktop:runtime-preview:create',
+  getRuntimePreviewContentHeight: 'desktop:runtime-preview:content-height',
+  getRuntimePreviewNavigationState: 'desktop:runtime-preview:navigation-state',
   setRuntimePreviewBounds: 'desktop:runtime-preview:bounds',
   setRuntimePreviewVisible: 'desktop:runtime-preview:visible',
+  navigateRuntimePreview: 'desktop:runtime-preview:navigate',
   reloadRuntimePreview: 'desktop:runtime-preview:reload',
   closeRuntimePreview: 'desktop:runtime-preview:close',
   ensureProjectRuntime: 'desktop:project-runtime:ensure',
@@ -128,6 +131,7 @@ export const DESKTOP_EVENT_CHANNELS = {
   onAppUpdaterState: 'app-updater:event',
   onLocalAppRuntimeEvent: 'desktop:runtime:event',
   onRuntimeEvent: 'desktop:runtime:event',
+  onRuntimePreviewNavigationState: 'desktop:runtime-preview:navigation-state-changed',
 } as const satisfies Record<DesktopEventCapability, string>
 
 export const DESKTOP_SEAM_CAPABILITIES = [

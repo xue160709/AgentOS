@@ -118,7 +118,7 @@ test('Desktop seam contract drives preload forwarding and main registration', ()
 
   for (const capability of Object.keys(DESKTOP_INVOKE_CHANNELS)) {
     assert.match(preload, new RegExp(`DESKTOP_INVOKE_CHANNELS\\.${capability}\\b`), `preload forwards ${capability}`)
-    if (capability !== 'getAppVersion' && !['inspectLocalAppDirectory', 'trustLocalAppDirectory', 'createLocalApp', 'openLocalAppTab', 'closeLocalAppTab', 'relocateLocalApp', 'revokeLocalAppTrust', 'getLocalAppRuntime', 'startLocalAppRuntime', 'stopLocalAppRuntime', 'releaseLocalAppRuntime', 'restartLocalAppRuntime', 'buildLocalAppRuntime', 'cancelLocalAppRuntimeBuild', 'createLocalAppPreview', 'setLocalAppPreviewBounds', 'setLocalAppPreviewVisible', 'reloadLocalAppPreview', 'closeLocalAppPreview', 'inspectRuntimeDirectory', 'trustRuntimeDirectory', 'createWorkspaceTab', 'openWorkspaceTab', 'closeWorkspaceTab', 'renameWorkspaceTab', 'relocateRuntime', 'revokeRuntimeTrust', 'getRuntime', 'startRuntime', 'stopRuntime', 'releaseRuntime', 'restartRuntime', 'buildRuntime', 'cancelRuntimeBuild', 'startRuntimeDevelopment', 'createRuntimePreview', 'setRuntimePreviewBounds', 'setRuntimePreviewVisible', 'reloadRuntimePreview', 'closeRuntimePreview', 'ensureProjectRuntime', 'trustProjectRuntime'].includes(capability)) {
+    if (capability !== 'getAppVersion' && !['inspectLocalAppDirectory', 'trustLocalAppDirectory', 'createLocalApp', 'openLocalAppTab', 'closeLocalAppTab', 'relocateLocalApp', 'revokeLocalAppTrust', 'getLocalAppRuntime', 'startLocalAppRuntime', 'stopLocalAppRuntime', 'releaseLocalAppRuntime', 'restartLocalAppRuntime', 'buildLocalAppRuntime', 'cancelLocalAppRuntimeBuild', 'createLocalAppPreview', 'setLocalAppPreviewBounds', 'setLocalAppPreviewVisible', 'reloadLocalAppPreview', 'closeLocalAppPreview', 'inspectRuntimeDirectory', 'trustRuntimeDirectory', 'createWorkspaceTab', 'openWorkspaceTab', 'closeWorkspaceTab', 'renameWorkspaceTab', 'relocateRuntime', 'revokeRuntimeTrust', 'getRuntime', 'startRuntime', 'stopRuntime', 'releaseRuntime', 'restartRuntime', 'buildRuntime', 'cancelRuntimeBuild', 'startRuntimeDevelopment', 'createRuntimePreview', 'setRuntimePreviewBounds', 'setRuntimePreviewVisible', 'navigateRuntimePreview', 'reloadRuntimePreview', 'closeRuntimePreview', 'ensureProjectRuntime', 'trustProjectRuntime'].includes(capability)) {
       assert.match(registrationSource, new RegExp(`DESKTOP_INVOKE_CHANNELS\\.${capability}\\b`), `main registers ${capability}`)
     }
   }
@@ -154,9 +154,12 @@ test('Static build keeps last-good Preview alive and cancellation uses the build
   assert.doesNotMatch(workspace, /\['build_required', 'build_failed', 'stale'\]/)
   assert.match(workspace, /hasLastGood \? t\('runtime\.rebuild'\) : t\('runtime\.build'\)/)
   const shellWorkspace = readFileSync(resolve(root, 'src/components/AppShellWorkspace.tsx'), 'utf8')
-  assert.match(shellWorkspace, /data-testid=\{activeRuntimeStatus === 'building' \? 'runtime-cancel-build' : 'runtime-build'\}/)
-  assert.match(shellWorkspace, /!activeRuntime\?\.readyUrl && !activeRuntime\?\.previewUrl/)
-  assert.match(shellWorkspace, /\{activeStaticRuntime \? <button[\s\S]*?data-testid="runtime-development"[\s\S]*?onClick=\{onDevelopmentRuntime\}/)
+  assert.match(shellWorkspace, /data-testid="runtime-open-chat-window"/)
+  assert.doesNotMatch(shellWorkspace, /data-testid="runtime-build"/)
+  const sidebar = readFileSync(resolve(root, 'src/components/AppShellSidebar.tsx'), 'utf8')
+  assert.match(sidebar, /id: 'runtime-tab-development'[\s\S]*?onDevelopmentWorkspaceRuntime\(tab\)/)
+  assert.match(sidebar, /id: 'runtime-tab-build'[\s\S]*?onBuildWorkspaceRuntime\(tab\)/)
+  assert.match(sidebar, /id: 'runtime-tab-refresh'[\s\S]*?onRefreshWorkspaceRuntime\(tab\)/)
   const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
   assert.match(appShell, /onDevelopmentRuntime=\{activeRuntimeDefinition \? \(\) => startLocalAppDevelopment\(activeRuntimeDefinition\.id\) : undefined\}/)
   const projectHome = readFileSync(resolve(root, 'src/components/chat/ProjectHomeRuntimeView.tsx'), 'utf8')

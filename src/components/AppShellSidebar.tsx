@@ -29,6 +29,7 @@ import type {
   ThreadRunState,
   WorkspaceProject,
   WorkspaceThread,
+  RuntimeDefinition,
   RuntimeSnapshot,
   WorkspaceTab,
 } from './types'
@@ -43,6 +44,8 @@ type ContextMenuItem = {
   label: string
   danger?: boolean
   disabled?: boolean
+  accent?: boolean
+  separatorBefore?: boolean
   onSelect: () => void
 }
 
@@ -71,12 +74,20 @@ type AppShellSidebarProps = {
   canForward: boolean
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   workspaceTabs: WorkspaceTab[]
+  runtimeDefinitions: RuntimeDefinition[]
   activeWorkspaceTabId: string
   runtimeStates: Record<string, RuntimeSnapshot>
   onNewRuntime: (event?: ReactMouseEvent<HTMLElement>) => void | Promise<void>
   onSelectWorkspaceTab: (tabId: string) => void
   onCloseWorkspaceTab: (tabId: string) => void
   onRenameWorkspaceTab?: (tabId: string, title: string) => void | Promise<boolean>
+  onOpenWorkspaceTabChat: (tabId: string) => void
+  onBuildWorkspaceRuntime: (tab: WorkspaceTab) => void
+  onRefreshWorkspaceRuntime: (tab: WorkspaceTab) => void
+  onDevelopmentWorkspaceRuntime: (tab: WorkspaceTab) => void
+  onViewWorkspaceRuntime: (tab: WorkspaceTab) => void
+  onRestartWorkspaceRuntime: (tab: WorkspaceTab) => void
+  onStopWorkspaceRuntime: (tab: WorkspaceTab) => void
   onOpenSearch: () => void
   onOpenSettingsCategory: (category: SettingsCategoryId) => void
   onSelectProject: (projectId: string) => void
@@ -118,12 +129,20 @@ export function AppShellSidebar({
   canForward,
   onCreateProject,
   workspaceTabs,
+  runtimeDefinitions,
   activeWorkspaceTabId,
   runtimeStates,
   onNewRuntime,
   onSelectWorkspaceTab,
   onCloseWorkspaceTab,
   onRenameWorkspaceTab,
+  onOpenWorkspaceTabChat,
+  onBuildWorkspaceRuntime,
+  onRefreshWorkspaceRuntime,
+  onDevelopmentWorkspaceRuntime,
+  onViewWorkspaceRuntime,
+  onRestartWorkspaceRuntime,
+  onStopWorkspaceRuntime,
   onOpenSearch,
   onOpenSettingsCategory,
   onSelectProject,
@@ -221,11 +240,25 @@ export function AppShellSidebar({
     event.preventDefault()
     event.stopPropagation()
     const rect = event.currentTarget.getBoundingClientRect()
+    const runtime = runtimeStates[tab.runtimeDefinitionId]
+    const definition = runtimeDefinitions.find((item) => item.id === tab.runtimeDefinitionId)
+    const isBuilding = runtime?.status === 'building' || runtime?.buildStatus === 'building'
+    const isDevelopment = runtime?.mode === 'development' || runtime?.status === 'development'
+    const canRestart = Boolean(runtime && ['running', 'development', 'degraded', 'failed', 'stopped'].includes(runtime.status))
+    const canStop = Boolean(runtime && ['preparing', 'starting', 'running', 'development', 'degraded'].includes(runtime.status))
     openRuntimeMenu(event.currentTarget as HTMLElement, {
       x: event.clientX || rect.left,
       y: event.clientY || rect.bottom,
       items: [
-        { id: 'runtime-tab-rename', label: t('runtime.rename'), onSelect: () => beginRuntimeTabRename(tab) },
+        { id: 'runtime-tab-open', label: t('runtime.openWorkbench'), onSelect: () => { closeContextMenu(); onSelectWorkspaceTab(tab.id) } },
+        { id: 'runtime-tab-chat', label: t('runtime.openChatWindow'), onSelect: () => { closeContextMenu(); onOpenWorkspaceTabChat(tab.id) } },
+        { id: 'runtime-tab-development', label: isDevelopment ? t('runtime.developmentModeActive') : t('runtime.enterDevelopmentMode'), accent: !isDevelopment, disabled: isDevelopment, separatorBefore: true, onSelect: () => { closeContextMenu(); onDevelopmentWorkspaceRuntime(tab) } },
+        { id: 'runtime-tab-build', label: isBuilding ? t('runtime.cancel') : t('runtime.rebuild'), disabled: definition?.mode !== 'static' && runtime?.mode !== 'static', onSelect: () => { closeContextMenu(); onBuildWorkspaceRuntime(tab) } },
+        { id: 'runtime-tab-refresh', label: t('runtime.refresh'), disabled: !runtime?.readyUrl && !runtime?.previewUrl, onSelect: () => { closeContextMenu(); onRefreshWorkspaceRuntime(tab) } },
+        { id: 'runtime-tab-view-runtime', label: t('runtime.viewRuntime'), separatorBefore: true, onSelect: () => { closeContextMenu(); onViewWorkspaceRuntime(tab) } },
+        { id: 'runtime-tab-restart', label: t('runtime.restart'), disabled: !canRestart, onSelect: () => { closeContextMenu(); onRestartWorkspaceRuntime(tab) } },
+        { id: 'runtime-tab-stop', label: t('runtime.stop'), disabled: !canStop, onSelect: () => { closeContextMenu(); onStopWorkspaceRuntime(tab) } },
+        { id: 'runtime-tab-rename', label: t('runtime.rename'), separatorBefore: true, onSelect: () => beginRuntimeTabRename(tab) },
         { id: 'runtime-tab-close', label: t('runtime.close'), danger: true, onSelect: () => { closeContextMenu(); onCloseWorkspaceTab(tab.id) } },
       ],
     })
@@ -679,9 +712,10 @@ export function AppShellSidebar({
                               }
                             }}
                           >
-                            <IconInline name="folder" />
-                            <span><strong>{tab.title}</strong><small>{localAppStatusLabel(t, runtime?.status ?? 'stopped')}</small></span>
+                            <IconInline name="laptop" />
+                            <span><strong>{tab.title}</strong>{workbenchStatusLabel(t, runtime?.status) ? <small>{workbenchStatusLabel(t, runtime?.status)}</small> : null}</span>
                           </button>}
+                          {!editing ? <button type="button" className="runtime-tab-menu-trigger" aria-label={t('runtime.workbenchMenu', { title: tab.title })} title={t('runtime.workbenchMenu', { title: tab.title })} onClick={(event) => openRuntimeTabMenu(event, tab)}><IconInline name="moreHorizontal" /></button> : null}
                           {editing && runtimeTabRenameError ? <small className="runtime-tab-rename-error">{runtimeTabRenameError}</small> : null}
                         </div>
                       })}
@@ -1120,7 +1154,7 @@ export function AppShellSidebar({
               type="button"
               role="menuitem"
               disabled={item.disabled}
-              className={`app-sidebar-context-menu__item${item.danger ? ' is-danger' : ''}`}
+              className={`app-sidebar-context-menu__item${item.danger ? ' is-danger' : ''}${item.accent ? ' is-accent' : ''}${item.separatorBefore ? ' has-separator' : ''}`}
               data-testid={item.id === 'runtime-tab-rename' ? 'runtime-tab-menu-rename' : item.id === 'runtime-tab-close' ? 'runtime-tab-menu-close' : undefined}
               onClick={(event) => {
                 event.stopPropagation()
@@ -1159,21 +1193,11 @@ function formatThreadTime(timestamp: number, locale: AppLocale, t: (path: string
   return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric' }).format(timestamp)
 }
 
-function localAppStatusLabel(t: (path: string) => string, status: RuntimeSnapshot['status']): string {
-  const labels: Record<RuntimeSnapshot['status'], string> = {
-    ready: 'runtime.runtimeReady',
-    stale: 'runtime.runtimeStale',
-    build_required: 'runtime.runtimeBuildRequired',
-    building: 'runtime.runtimeBuilding',
-    build_failed: 'runtime.runtimeBuildFailed',
-    development: 'runtime.runtimeRunning',
-    preparing: 'runtime.runtimePreparing',
-    starting: 'runtime.runtimeStarting',
-    running: 'runtime.runtimeRunning',
-    degraded: 'runtime.runtimeDegraded',
-    failed: 'runtime.runtimeFailed',
-    path_missing: 'runtime.runtimePathMissing',
-    stopped: 'runtime.runtimeStopped',
-  }
-  return t(labels[status])
+function workbenchStatusLabel(t: (path: string) => string, status?: RuntimeSnapshot['status']): string {
+  if (!status || status === 'ready' || status === 'running') return ''
+  if (status === 'development') return t('runtime.developmentModeActive')
+  if (status === 'preparing' || status === 'starting' || status === 'building') return t('runtime.workbenchUpdating')
+  if (status === 'stale' || status === 'build_required') return t('runtime.workbenchUpdateAvailable')
+  if (status === 'failed' || status === 'build_failed' || status === 'degraded' || status === 'path_missing') return t('runtime.workbenchUpdateFailed')
+  return t('runtime.runtimeStopped')
 }

@@ -75,6 +75,7 @@ import type { ProjectChatSnapshot } from '../project-chat-contract'
 import { RuntimeOnboardingDialog } from './RuntimeOnboardingDialog'
 import { AgentOSPairingDialog } from './AgentOSPairingDialog'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
+import { RuntimeDetailsDialog } from './RuntimeDetailsDialog'
 import { applyRuntimeEvents, RuntimeEventBatcher } from './runtime-event-state'
 
 const INITIAL_PROVIDER_SKIP_VALUE = '__skip'
@@ -269,6 +270,7 @@ export function AppShell() {
   const [workspaceSaveError, setWorkspaceSaveError] = useState('')
   const [workspaceSaveRetrying, setWorkspaceSaveRetrying] = useState(false)
   const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeSnapshot>>({})
+  const [runtimeDetailsTabId, setRuntimeDetailsTabId] = useState<string | null>(null)
   const [projectRuntimeState, setProjectRuntimeState] = useState<{ definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null; trustRequired: boolean; mountId: string; logsOpen: boolean }>({ runtime: null, trustRequired: true, mountId: '', logsOpen: false })
   const restoredLocalAppsRef = useRef<Set<string>>(new Set())
   const localAppDialogOpenRef = useRef(false)
@@ -407,6 +409,10 @@ export function AppShell() {
   const activeThread = activeWorkspace.thread
   const activeWorkspaceTab = activeWorkspace.workspaceTab
   const activeRuntimeDefinition = activeWorkspace.runtimeDefinition
+  const runtimeDetailsTab = chatWorkspace?.workspaceTabs.find((item) => item.id === runtimeDetailsTabId)
+  const runtimeDetailsDefinition = runtimeDetailsTab
+    ? chatWorkspace?.runtimeDefinitions.find((item) => item.id === runtimeDetailsTab.runtimeDefinitionId)
+    : undefined
   const activeProjectChatSnapshot = activeProject ? projectChatSnapshots[activeProject.id] : undefined
   const projectHomeModelPick = activeProject
     ? projectHomeDraftModelPicks[activeProject.id] ?? projectDefaultModelPick
@@ -1574,8 +1580,15 @@ export function AppShell() {
       persistChatWorkspaceStateToLocalStorage(result.workspace)
       if (window.desktop.startRuntime) {
         try {
-          const runtime = await window.desktop.startRuntime(result.definition.id, 'user', `tab:${result.tab.id}`)
+          let runtime = await window.desktop.startRuntime(result.definition.id, 'user', `tab:${result.tab.id}`)
           setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
+          if (result.definition.mode === 'static' && (runtime.status === 'build_required' || runtime.buildStatus === 'build_required') && window.desktop.buildRuntime) {
+            const buildResult = await window.desktop.buildRuntime(result.definition.id)
+            if (buildResult.runtime) {
+              runtime = buildResult.runtime
+              setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
+            }
+          }
         } catch (error) {
           setRuntimeStates((current) => mergeAcceptedRuntime(current, {
             runtimeDefinitionId: result.definition.id,
@@ -1615,6 +1628,14 @@ export function AppShell() {
 
   const openExistingLocalApp = useCallback(async (definition: RuntimeDefinition) => {
     if (!chatWorkspace) return
+    const existingWorkbench = chatWorkspace.workspaceTabs.find((item) => item.runtimeDefinitionId === definition.id)
+    if (existingWorkbench) {
+      localAppFocusTabIdRef.current = existingWorkbench.id
+      setLocalAppChooserOpen(false)
+      setLocalAppInspect(null)
+      selectWorkspaceTab(existingWorkbench.id)
+      return
+    }
     if (!window.desktop?.openWorkspaceTab || !window.desktop?.getChatWorkspace) {
       setLocalAppDialogError(t('runtime.workspaceSaveFailed'))
       return
@@ -1659,7 +1680,7 @@ export function AppShell() {
     } finally {
       setLocalAppDialogBusy(false)
     }
-  }, [chatWorkspace, setChatWorkspace, startLocalApp, t, workspaceSession])
+  }, [chatWorkspace, selectWorkspaceTab, setChatWorkspace, startLocalApp, t, workspaceSession])
 
   const stopLocalApp = useCallback((localAppId: string) => {
     const request = window.desktop?.stopRuntime?.(localAppId, 'user')
@@ -1690,8 +1711,8 @@ export function AppShell() {
     }).catch(() => undefined)
   }, [])
 
-  const startLocalAppDevelopment = useCallback((localAppId: string) => {
-    const tab = chatWorkspace?.workspaceTabs.find((item) => item.runtimeDefinitionId === localAppId && item.id === chatWorkspace.activeWorkspaceTabId)
+  const startLocalAppDevelopment = useCallback((localAppId: string, workspaceTabId?: string) => {
+    const tab = chatWorkspace?.workspaceTabs.find((item) => item.runtimeDefinitionId === localAppId && item.id === (workspaceTabId ?? chatWorkspace.activeWorkspaceTabId))
     const request = window.desktop?.startRuntimeDevelopment?.(localAppId, tab ? `tab:${tab.id}` : undefined)
     void request?.then((runtime) => setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))).catch(() => undefined)
   }, [chatWorkspace])
@@ -1759,6 +1780,11 @@ export function AppShell() {
   const reloadLocalAppPreview = useCallback((tabId: string, localAppId: string) => {
     const runtime = runtimeStates[localAppId]
     if (runtime) void window.desktop?.reloadRuntimePreview?.(`preview-${tabId}-${runtime.generation}`)
+  }, [runtimeStates])
+
+  const navigateLocalAppPreview = useCallback((tabId: string, localAppId: string, direction: 'back' | 'forward') => {
+    const runtime = runtimeStates[localAppId]
+    if (runtime) void window.desktop?.navigateRuntimePreview?.(`preview-${tabId}-${runtime.generation}`, direction)
   }, [runtimeStates])
 
   const relocateLocalApp = useCallback(async (localAppId: string) => {
@@ -2728,12 +2754,27 @@ export function AppShell() {
           canForward={canForward}
           onCreateProject={createProject}
           workspaceTabs={chatWorkspace.workspaceTabs}
+          runtimeDefinitions={chatWorkspace.runtimeDefinitions}
           activeWorkspaceTabId={chatWorkspace.activeWorkspaceTabId}
           runtimeStates={runtimeStates}
           onNewRuntime={openLocalAppEntry}
           onSelectWorkspaceTab={selectWorkspaceTab}
           onCloseWorkspaceTab={closeLocalAppTab}
           onRenameWorkspaceTab={renameLocalAppTab}
+          onOpenWorkspaceTabChat={(tabId) => void window.projectChat?.openWorkspaceTabProjectChat(tabId)}
+          onBuildWorkspaceRuntime={(tab) => {
+            const runtime = runtimeStates[tab.runtimeDefinitionId]
+            if (runtime?.status === 'building' || runtime?.buildStatus === 'building') cancelLocalAppBuild(tab.runtimeDefinitionId, runtime.buildId)
+            else buildLocalApp(tab.runtimeDefinitionId)
+          }}
+          onRefreshWorkspaceRuntime={(tab) => {
+            selectWorkspaceTab(tab.id)
+            requestAnimationFrame(() => requestAnimationFrame(() => reloadLocalAppPreview(tab.id, tab.runtimeDefinitionId)))
+          }}
+          onDevelopmentWorkspaceRuntime={(tab) => startLocalAppDevelopment(tab.runtimeDefinitionId, tab.id)}
+          onViewWorkspaceRuntime={(tab) => setRuntimeDetailsTabId(tab.id)}
+          onRestartWorkspaceRuntime={(tab) => restartLocalApp(tab.runtimeDefinitionId)}
+          onStopWorkspaceRuntime={(tab) => stopLocalApp(tab.runtimeDefinitionId)}
           onOpenSearch={() => window.dispatchEvent(new CustomEvent('agentos:open-search', { detail: { scope: 'all' } }))}
           onOpenSettingsCategory={openSettingsCategory}
           onSelectProject={selectProject}
@@ -2754,25 +2795,6 @@ export function AppShell() {
           splitterRef={sidebarSplitterRef}
           onSplitterPointerDown={handleSidebarPointerDown}
         />
-        {projectChatEnabled && activeWorkspaceTab && activeRuntimeDefinition ? (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            aria-label={`打开 ${activeWorkspaceTab.title} Chat`}
-            onClick={() => void window.projectChat?.openWorkspaceTabProjectChat(activeWorkspaceTab.id)}
-          >
-            打开 {activeWorkspaceTab.title} Chat
-          </button>
-        ) : projectChatEnabled && activeProject ? (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            aria-label="打开项目 Chat 窗口"
-            onClick={() => void window.projectChat?.openProjectWindow(activeProject.id)}
-          >
-            打开项目 Chat 窗口
-          </button>
-        ) : null}
         <AppShellWorkspace
           workspaceTitle={workspaceTitle}
           headerStatus={headerStatus}
@@ -2787,10 +2809,12 @@ export function AppShell() {
           onRestartRuntime={activeRuntimeDefinition ? () => restartLocalApp(activeRuntimeDefinition.id) : undefined}
           onStopRuntime={activeRuntimeDefinition ? () => stopLocalApp(activeRuntimeDefinition.id) : undefined}
           onReloadRuntime={activeWorkspaceTab && activeRuntimeDefinition ? () => reloadLocalAppPreview(activeWorkspaceTab.id, activeRuntimeDefinition.id) : undefined}
+          onNavigateRuntime={activeWorkspaceTab && activeRuntimeDefinition ? (direction) => navigateLocalAppPreview(activeWorkspaceTab.id, activeRuntimeDefinition.id, direction) : undefined}
           onRelocateRuntime={activeRuntimeDefinition ? () => void relocateLocalApp(activeRuntimeDefinition.id) : undefined}
           onBuildRuntime={activeRuntimeDefinition ? () => buildLocalApp(activeRuntimeDefinition.id) : undefined}
           onCancelBuildRuntime={activeRuntimeDefinition ? () => cancelLocalAppBuild(activeRuntimeDefinition.id, runtimeStates[activeRuntimeDefinition.id]?.buildId) : undefined}
           onDevelopmentRuntime={activeRuntimeDefinition ? () => startLocalAppDevelopment(activeRuntimeDefinition.id) : undefined}
+          onOpenRuntimeChatWindow={projectChatEnabled && activeWorkspaceTab ? () => void window.projectChat?.openWorkspaceTabProjectChat(activeWorkspaceTab.id) : undefined}
           projectDefaultModelPick={projectDefaultModelPick}
           projectHomeModelPick={projectHomeModelPick}
           projectChatSnapshot={activeProjectChatSnapshot}
@@ -2833,6 +2857,7 @@ export function AppShell() {
           onTrust={(definition) => void trustAndCreateLocalApp(definition)}
         />
         <AgentOSPairingDialog pairing={pendingPairing} projects={chatWorkspace.projects} />
+        {runtimeDetailsTab && runtimeDetailsDefinition ? <RuntimeDetailsDialog tab={runtimeDetailsTab} definition={runtimeDetailsDefinition} runtime={runtimeStates[runtimeDetailsDefinition.id] ?? null} onClose={() => setRuntimeDetailsTabId(null)} /> : null}
       </div>
     </div>
   )

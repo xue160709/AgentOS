@@ -52,10 +52,10 @@ export function RuntimeOnboardingDialog({ inspect, existingDefinitions = [], cho
   if (!inspect && !chooserOpen) return null
   if (!inspect) return <div className="local-app-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}>
     <section ref={dialogRef} className="local-app-dialog" data-testid="runtime-chooser" role="dialog" aria-modal="true" aria-labelledby="runtime-dialog-title">
-      <h2 id="runtime-dialog-title">{t('runtime.openExisting')}</h2>
+      <h2 id="runtime-dialog-title">{t('runtime.newWorkbench')}</h2>
       {error ? <p role="alert" className="local-app-dialog__error">{error}</p> : null}
       <div className="local-app-existing-list">{existingDefinitions.map((definition) => <button key={definition.id} type="button" className="local-app-existing-item" onClick={() => onOpenExisting?.(definition)} disabled={busy}><strong>{definition.name}</strong><span title={definition.rootPath}>{definition.rootPath}</span></button>)}</div>
-      <footer className="local-app-dialog__actions"><button type="button" className="btn btn-ghost" onClick={onCancel}>{t('runtime.cancel')}</button><button type="button" className="btn btn-primary" data-testid="runtime-choose-new" onClick={onChooseNew} disabled={busy}>{t('runtime.newTab')}</button></footer>
+      <footer className="local-app-dialog__actions"><button type="button" className="btn btn-ghost" onClick={onCancel}>{t('runtime.cancel')}</button><button type="button" className="btn btn-primary" data-testid="runtime-choose-new" onClick={onChooseNew} disabled={busy}>{t('runtime.chooseOtherProject')}</button></footer>
     </section>
   </div>
   const definition: RuntimeDefinition | null = inspect.ok ? {
@@ -65,10 +65,9 @@ export function RuntimeOnboardingDialog({ inspect, existingDefinitions = [], cho
   } : null
   return <div className="local-app-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}>
     <section ref={dialogRef} className="local-app-dialog" data-testid="runtime-onboarding" role="dialog" aria-modal="true" aria-labelledby="runtime-dialog-title">
-      <h2 id="runtime-dialog-title">{t('runtime.projectRuntime')}</h2>
+      <h2 id="runtime-dialog-title">{t('runtime.createWorkbench')}</h2>
       {error ? <p role="alert" className="local-app-dialog__error">{error}</p> : null}
       {inspect.ok ? <>
-        <label className="local-app-dialog__field"><span>{t('runtime.tabTitle')}</span><input data-testid="runtime-tab-title-input" value={title} maxLength={64} onChange={(event) => setTitle(event.target.value)} /></label>
         <dl className="local-app-dialog__details"><div><dt>{t('runtime.directory')}</dt><dd title={inspect.canonicalRoot}>{inspect.canonicalRoot}</dd></div><div><dt>{t('runtime.command')}</dt><dd><code>{inspect.mode === 'static' ? 'npm run build' : 'npm run dev'}</code></dd></div></dl>
       </> : <p role="alert">{inspect.message || t('runtime.invalid')}</p>}
       <footer className="local-app-dialog__actions"><button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>{t('runtime.cancel')}</button><button type="button" className="btn btn-primary" data-testid="runtime-trust-confirm" disabled={!definition || !definition.name || busy} onClick={() => { if (definition) onTrust(definition) }}>{busy ? t('runtime.connecting') : t('runtime.trust')}</button></footer>

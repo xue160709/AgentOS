@@ -3,22 +3,26 @@ import { useI18n } from '../i18n/i18n'
 import type { RuntimePreviewHost } from '../desktop-api'
 import type { PreviewStatus, RuntimeSnapshot } from './types'
 
-export type RuntimePreviewProps = { host: RuntimePreviewHost; runtime: RuntimeSnapshot | null; active: boolean; testId?: string }
+export type RuntimePreviewProps = { host: RuntimePreviewHost; runtime: RuntimeSnapshot | null; active: boolean; autoHeight?: boolean; testId?: string }
 
-export function runtimePreviewBoundsFromRect(rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>) {
-  return { x: Math.max(0, Number.isFinite(rect.left) ? rect.left : 0), y: Math.max(0, Number.isFinite(rect.top) ? rect.top : 0), width: Math.max(0, Number.isFinite(rect.width) ? rect.width : 0), height: Math.max(0, Number.isFinite(rect.height) ? rect.height : 0) }
+export function runtimePreviewBoundsFromRect(rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>, allowOffscreen = false) {
+  const left = Number.isFinite(rect.left) ? rect.left : 0
+  const top = Number.isFinite(rect.top) ? rect.top : 0
+  return { x: allowOffscreen ? left : Math.max(0, left), y: allowOffscreen ? top : Math.max(0, top), width: Math.max(0, Number.isFinite(rect.width) ? rect.width : 0), height: Math.max(0, Number.isFinite(rect.height) ? rect.height : 0) }
 }
 
-export function RuntimePreview({ host, runtime, active, testId = 'runtime-preview' }: RuntimePreviewProps) {
+export function RuntimePreview({ host, runtime, active, autoHeight = false, testId = 'runtime-preview' }: RuntimePreviewProps) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
   const previewIdRef = useRef<string | null>(null)
   const requestRef = useRef(0)
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus>('idle')
+  const [contentHeight, setContentHeight] = useState<number | null>(null)
   useEffect(() => {
     const request = ++requestRef.current
     let cancelled = false
     const previous = previewIdRef.current
+    setContentHeight(null)
     if (previous) void window.desktop?.setRuntimePreviewVisible?.(previous, false)
     previewIdRef.current = null
     const staticReady = runtime?.mode === 'static' && runtime.status !== 'stopped' && Boolean(runtime.previewUrl) && ['ready', 'stale', 'building', 'build_failed'].includes(runtime.buildStatus ?? runtime.status)
@@ -45,17 +49,36 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
     }
   }, [active, host.kind, host.kind === 'project-home' ? host.projectId : host.workspaceTabId, host.kind === 'project-home' ? host.mountId : host.runtimeDefinitionId, host.runtimeDefinitionId, runtime?.generation, runtime?.readyUrl, runtime?.previewUrl, runtime?.mode])
   useEffect(() => {
+    const previewId = previewIdRef.current
+    if (!autoHeight || previewStatus !== 'ready' || !previewId || !window.desktop?.getRuntimePreviewContentHeight) return
+    let cancelled = false
+    let measuring = false
+    const measure = async () => {
+      if (measuring) return
+      measuring = true
+      try {
+        const height = await window.desktop?.getRuntimePreviewContentHeight?.(previewId)
+        if (!cancelled && height) setContentHeight((current) => current === height ? current : height)
+      } finally {
+        measuring = false
+      }
+    }
+    void measure()
+    const interval = window.setInterval(() => { void measure() }, 750)
+    return () => { cancelled = true; window.clearInterval(interval) }
+  }, [autoHeight, previewStatus])
+  useEffect(() => {
     const element = hostRef.current
     const previewId = previewIdRef.current
     if (!element || !previewId || !window.desktop?.setRuntimePreviewBounds || !window.desktop.setRuntimePreviewVisible) return
-    const sync = () => { void window.desktop?.setRuntimePreviewBounds?.(previewId, runtimePreviewBoundsFromRect(element.getBoundingClientRect())); void window.desktop?.setRuntimePreviewVisible?.(previewId, active) }
+    const sync = () => { void window.desktop?.setRuntimePreviewBounds?.(previewId, runtimePreviewBoundsFromRect(element.getBoundingClientRect(), autoHeight)); void window.desktop?.setRuntimePreviewVisible?.(previewId, active) }
     sync()
     const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null
     observer?.observe(element)
     window.addEventListener('resize', sync)
     window.addEventListener('scroll', sync, true)
     return () => { observer?.disconnect(); window.removeEventListener('resize', sync); window.removeEventListener('scroll', sync, true); void window.desktop?.setRuntimePreviewVisible?.(previewId, false) }
-  }, [active, previewStatus])
+  }, [active, autoHeight, previewStatus])
   const staticLifecycleStatus = runtime?.mode === 'static' && !['stopped', 'failed', 'path_missing'].includes(runtime.status)
     ? runtime.buildStatus ?? runtime.status
     : runtime?.status
@@ -81,5 +104,5 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
                       : staticLifecycleStatus === 'failed' ? t('runtime.runtimeFailed')
                         : staticLifecycleStatus === 'path_missing' ? t('runtime.runtimePathMissing')
                           : t('runtime.runtimeStopped')
-  return <div ref={hostRef} className={`runtime-preview-host is-${previewStatus}`} data-testid={testId} role="region" aria-label={status}>{previewStatus !== 'ready' ? <div className="local-app-preview-placeholder" role="status"><strong>{status}</strong><span>{runtime?.detail ?? t('runtime.preview')}</span></div> : null}</div>
+  return <div ref={hostRef} className={`runtime-preview-host is-${previewStatus}`} style={autoHeight && contentHeight ? { height: `${contentHeight}px` } : undefined} data-testid={testId} role="region" aria-label={status}>{previewStatus !== 'ready' ? <div className="local-app-preview-placeholder" role="status"><strong>{status}</strong><span>{runtime?.detail ?? t('runtime.preview')}</span></div> : null}</div>
 }

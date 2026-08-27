@@ -21,6 +21,8 @@ export type PreviewSessionSnapshot = {
   detail?: string
 }
 
+export type PreviewNavigationState = { previewId: string; canGoBack: boolean; canGoForward: boolean }
+
 export type PreviewViewFactory = (options: {
   webPreferences: {
     nodeIntegration: false
@@ -45,6 +47,7 @@ export type LocalAppPreviewManagerOptions = {
   createView: PreviewViewFactory
   registerStaticPreviewSession?: StaticPreviewSessionRegistrar
   onEvent?: (snapshot: PreviewSessionSnapshot) => void
+  onNavigationState?: (state: PreviewNavigationState) => void
   onAgentOSDeepLink?: PreviewAgentOSDeepLinkHandler
 }
 
@@ -60,6 +63,7 @@ export class LocalAppPreviewManager {
   private readonly createView: PreviewViewFactory
   private readonly registerStaticPreviewSession?: StaticPreviewSessionRegistrar
   private readonly onEvent?: (snapshot: PreviewSessionSnapshot) => void
+  private readonly onNavigationState?: (state: PreviewNavigationState) => void
   private readonly onAgentOSDeepLink?: PreviewAgentOSDeepLinkHandler
   private readonly previews = new Map<string, ActivePreview>()
 
@@ -68,6 +72,7 @@ export class LocalAppPreviewManager {
     this.createView = options.createView
     this.registerStaticPreviewSession = options.registerStaticPreviewSession
     this.onEvent = options.onEvent
+    this.onNavigationState = options.onNavigationState
     this.onAgentOSDeepLink = options.onAgentOSDeepLink
   }
 
@@ -196,10 +201,51 @@ export class LocalAppPreviewManager {
     return true
   }
 
+  async getContentHeight(previewId: string): Promise<number | null> {
+    const active = this.previews.get(previewId)
+    if (!active || active.snapshot.status === 'closed') return null
+    try {
+      const height = await active.view.webContents.executeJavaScript(`(() => {
+        const root = document.documentElement
+        const body = document.body
+        return Math.max(
+          root ? root.scrollHeight : 0,
+          root ? root.offsetHeight : 0,
+          body ? body.scrollHeight : 0,
+          body ? body.offsetHeight : 0
+        )
+      })()`, true)
+      if (!this.isActive(active)) return null
+      return normalizePreviewContentHeight(height)
+    } catch {
+      return null
+    }
+  }
+
   setVisible(previewId: string, visible: boolean): boolean {
     const active = this.previews.get(previewId)
     if (!active) return false
     active.view.setVisible?.(visible)
+    if (visible) this.emitNavigationState(active)
+    return true
+  }
+
+  getNavigationState(previewId: string): PreviewNavigationState | null {
+    const active = this.previews.get(previewId)
+    return active && active.snapshot.status !== 'closed' ? this.navigationState(active) : null
+  }
+
+  navigate(previewId: string, direction: 'back' | 'forward'): boolean {
+    const active = this.previews.get(previewId)
+    if (!active || active.snapshot.status === 'closed') return false
+    const contents = active.view.webContents
+    if (direction === 'back') {
+      if (!contents.canGoBack()) return false
+      contents.goBack()
+      return true
+    }
+    if (!contents.canGoForward()) return false
+    contents.goForward()
     return true
   }
 
@@ -237,6 +283,7 @@ export class LocalAppPreviewManager {
     try { this.window.contentView.removeChildView(active.view) } catch { /* window may already be destroyed */ }
     try { active.view.webContents.close() } catch { /* contents may already be gone */ }
     this.onEvent?.(active.snapshot)
+    this.onNavigationState?.({ previewId, canGoBack: false, canGoForward: false })
     return true
   }
 
@@ -293,7 +340,10 @@ export class LocalAppPreviewManager {
         active.snapshot = { ...active.snapshot, status: 'ready', detail: undefined }
         this.onEvent?.(active.snapshot)
       }
+      this.emitNavigationState(active)
     })
+    contents.on('did-navigate', () => this.emitNavigationState(active))
+    contents.on('did-navigate-in-page', () => this.emitNavigationState(active))
     contents.on('did-fail-load', (_event, _code, description) => {
       if (this.previews.get(active.snapshot.previewId) !== active || active.snapshot.status === 'closed') return
       active.snapshot = { ...active.snapshot, status: 'degraded', detail: description || '预览连接中断' }
@@ -321,6 +371,19 @@ export class LocalAppPreviewManager {
 
   private isActive(active: ActivePreview): boolean {
     return this.previews.get(active.snapshot.previewId) === active && active.snapshot.status !== 'closed'
+  }
+
+  private navigationState(active: ActivePreview): PreviewNavigationState {
+    const contents = active.view.webContents
+    return {
+      previewId: active.snapshot.previewId,
+      canGoBack: typeof contents.canGoBack === 'function' && contents.canGoBack(),
+      canGoForward: typeof contents.canGoForward === 'function' && contents.canGoForward(),
+    }
+  }
+
+  private emitNavigationState(active: ActivePreview): void {
+    if (this.isActive(active)) this.onNavigationState?.(this.navigationState(active))
   }
 }
 
@@ -356,6 +419,13 @@ function normalizeStaticPreviewUrl(raw: string): string | null {
 
 function validBounds(bounds: PreviewBounds): boolean {
   return [bounds.x, bounds.y, bounds.width, bounds.height].every((value) => Number.isFinite(value)) && bounds.width >= 0 && bounds.height >= 0
+}
+
+/** Keep native view bounds finite while allowing normal documents to grow naturally. */
+export function normalizePreviewContentHeight(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.min(32_767, Math.ceil(value))
+    : null
 }
 
 /** Convert a renderer host's viewport rect into safe WebContentsView bounds. */

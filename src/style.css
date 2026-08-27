@@ -1453,6 +1453,19 @@ html[data-windows-titlebar-overlay='true'] .app-workspace-header {
   max-width: 42ch;
 }
 
+.runtime-preview-navigation {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.runtime-preview-navigation .btn {
+  width: var(--size-chrome-control);
+  min-width: var(--size-chrome-control);
+  padding: 0;
+}
+
 .app-workspace-drag-gap {
   flex: 1;
   align-self: stretch;
@@ -10574,6 +10587,32 @@ html[data-window-effects='mac-vibrancy'] .app-shell-empty {
 .runtime-tabs-list { display: grid; gap: 2px; }
 .runtime-tab-row { position: relative; min-width: 0; }
 .runtime-tab-select { width: 100%; min-width: 0; }
+.runtime-tab-menu-trigger {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-token-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%);
+}
+.runtime-tab-row:hover .runtime-tab-menu-trigger,
+.runtime-tab-row:focus-within .runtime-tab-menu-trigger,
+.runtime-tab-row.is-active .runtime-tab-menu-trigger { opacity: 1; }
+.runtime-tab-menu-trigger:hover { color: var(--color-token-text-primary); background: var(--color-token-list-hover-background); }
+.runtime-tab-menu-trigger:focus-visible { outline: 2px solid var(--color-token-focus-border); outline-offset: 1px; }
+.runtime-tab-row:has(.runtime-tab-menu-trigger) .runtime-tab-select { padding-right: 36px; }
+.app-sidebar-context-menu__item.has-separator { margin-top: 4px; border-top: 1px solid var(--color-token-border-light); border-radius: 0 0 var(--radius-md) var(--radius-md); padding-top: 8px; }
+.app-sidebar-context-menu__item.is-accent { color: var(--blue-600); font-weight: var(--font-weight-semibold); }
 .runtime-tab-title-input {
   width: 100%;
   min-width: 0;
@@ -10652,7 +10691,7 @@ html[data-window-effects='mac-vibrancy'] .app-shell-empty {
 }
 .project-runtime-page__preview {
   display: flex;
-  min-height: 360px;
+  min-height: 320px;
   overflow: hidden;
   border: 1px solid var(--color-token-border-light);
   border-radius: var(--radius-md);
@@ -10661,7 +10700,7 @@ html[data-window-effects='mac-vibrancy'] .app-shell-empty {
 .project-runtime-page__preview .runtime-preview-host {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 0;
+  min-height: 320px;
 }
 .runtime-preview-host { width: 100%; height: 100%; min-height: 320px; }
 .project-runtime-page details {
@@ -10671,6 +10710,36 @@ html[data-window-effects='mac-vibrancy'] .app-shell-empty {
   border-radius: var(--radius-sm);
 }
 .project-runtime-page pre { max-height: 180px; overflow: auto; margin: 8px 0 0; white-space: pre-wrap; }
+
+.runtime-chat-window-action { width: auto; min-width: max-content; padding-inline: calc(var(--spacing) * 2); gap: 6px; }
+.runtime-details-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-layer-modal);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--gray-1000) 34%, transparent);
+}
+.runtime-details-dialog {
+  width: min(680px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--color-token-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-token-main-surface-primary);
+  box-shadow: 0 24px 80px color-mix(in srgb, var(--gray-1000) 24%, transparent);
+}
+.runtime-details-dialog__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.runtime-details-dialog__header span { color: var(--color-token-text-secondary); font-size: var(--text-xs); }
+.runtime-details-dialog__header h2 { margin: 3px 0 0; font-size: var(--text-heading-md); }
+.runtime-details-dialog__facts { display: grid; gap: 10px; margin: 20px 0; }
+.runtime-details-dialog__facts > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; }
+.runtime-details-dialog__facts dt { color: var(--color-token-text-secondary); }
+.runtime-details-dialog__facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.runtime-details-dialog__logs h3 { margin: 0 0 8px; font-size: var(--text-sm); }
+.runtime-details-dialog__logs pre { min-height: 120px; max-height: 320px; overflow: auto; margin: 0; padding: 12px; border-radius: var(--radius-md); color: var(--color-token-text-primary); background: var(--color-token-main-surface-secondary); white-space: pre-wrap; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 @container app-workspace-header (max-width: 520px) {
   .local-app-runtime-title {

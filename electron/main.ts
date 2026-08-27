@@ -349,8 +349,9 @@ function createWindow() {
     ...getMainWindowChromeOptions(process.platform, nativeTheme.shouldUseDarkColors),
   })
 
+  const previewWindow = win
   localAppPreviewManager = new LocalAppPreviewManager({
-    window: win,
+    window: previewWindow,
     createView: ({ webPreferences }) => new WebContentsView({ webPreferences }),
     registerStaticPreviewSession: (session, previewUrl) => {
       if (!staticPreviewSessionRegistrar) throw new Error('static-preview-session-handler-unavailable')
@@ -371,6 +372,9 @@ function createWindow() {
         phase: 'preview',
         timestamp: Date.now(),
       })
+    },
+    onNavigationState: (state) => {
+      if (!previewWindow.isDestroyed()) previewWindow.webContents.send(DESKTOP_EVENT_CHANNELS.onRuntimePreviewNavigationState, state)
     },
     onAgentOSDeepLink: enqueueAgentOSPreviewDeepLink,
   })
@@ -1749,6 +1753,14 @@ if (gotSingleInstanceLock) {
       }
       return { ok: false, message: snapshot.detail ?? '预览加载失败' }
     })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewContentHeight, (_event, rawPreviewId: unknown) => {
+      return typeof rawPreviewId === 'string'
+        ? localAppPreviewManager?.getContentHeight(rawPreviewId) ?? null
+        : null
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewNavigationState, (_event, rawPreviewId: unknown) => {
+      return typeof rawPreviewId === 'string' ? localAppPreviewManager?.getNavigationState(rawPreviewId) ?? null : null
+    })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewBounds, (_event, rawPreviewId: unknown, rawBounds: unknown) => {
       if (typeof rawPreviewId !== 'string' || !isRecord(rawBounds)) return false
       const bounds = {
@@ -1762,6 +1774,11 @@ if (gotSingleInstanceLock) {
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewVisible, (_event, rawPreviewId: unknown, visible: unknown) => {
       return typeof rawPreviewId === 'string' && typeof visible === 'boolean'
         ? localAppPreviewManager?.setVisible(rawPreviewId, visible) ?? false
+        : false
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.navigateRuntimePreview, (_event, rawPreviewId: unknown, direction: unknown) => {
+      return typeof rawPreviewId === 'string' && (direction === 'back' || direction === 'forward')
+        ? localAppPreviewManager?.navigate(rawPreviewId, direction) ?? false
         : false
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.reloadRuntimePreview, (_event, rawPreviewId: unknown) => {
