@@ -112,6 +112,16 @@ type SearchDocumentRow = {
   rank?: number
 }
 
+function snapshotCursorAtLeast(
+  snapshot: Pick<ChatWorkspaceSnapshot, 'savedAt' | 'revision'>,
+  cursor: Pick<ChatWorkspaceSnapshot, 'savedAt' | 'revision'>,
+): boolean {
+  if (snapshot.revision !== undefined && cursor.revision !== undefined && snapshot.revision !== cursor.revision) {
+    return snapshot.revision > cursor.revision
+  }
+  return (snapshot.savedAt ?? 0) >= (cursor.savedAt ?? 0)
+}
+
 /**
  * Codex-like chat workspace persistence.
  *
@@ -125,6 +135,7 @@ export class ChatWorkspaceStore {
   private readonly sessionsDir: string
   private readonly historySearchIndex: HistorySearchIndex
   private sqliteAvailable: boolean | null = null
+  private currentState: ChatWorkspaceState | null = null
 
   constructor(userDataPath: string) {
     this.filePath = path.join(userDataPath, WORKSPACE_FILE_NAME)
@@ -140,8 +151,13 @@ export class ChatWorkspaceStore {
   }
 
   read(): ChatWorkspaceState | null {
-    const fromDb = this.readFromDatabase()
     const fromJson = this.readJsonSnapshot()
+    // The JSON mirror is a complete snapshot. In the common case it has the
+    // same revision as SQLite, so compare only the tiny SQLite cursor first
+    // and avoid spawning several sqlite3 processes plus reading every rollout.
+    const databaseCursor = fromJson ? this.readDatabaseCursor() : null
+    const jsonIsCurrent = Boolean(fromJson && databaseCursor && snapshotCursorAtLeast(fromJson, databaseCursor))
+    const fromDb = jsonIsCurrent ? null : this.readFromDatabase()
     const selected = resolveChatWorkspaceSnapshot([
       // SQLite carries the same logical savedAt as the JSON mirror. File mtime
       // is deliberately not used for snapshot freshness: WAL/checkpoint and
@@ -149,7 +165,31 @@ export class ChatWorkspaceStore {
       fromDb,
       fromJson,
     ])
-    return selected ? migrateLegacySeedProjects(selected.state) : null
+    const state = selected ? migrateLegacySeedProjects(selected.state) : null
+    this.currentState = state
+    return state
+  }
+
+  private readDatabaseCursor(): Pick<ChatWorkspaceSnapshot, 'savedAt' | 'revision'> | null {
+    if (!existsSync(this.dbPath) || !this.canUseSqlite()) return null
+    try {
+      const row = this.selectJson<{ savedAt: number | null; revision: number | null }>(
+        'SELECT saved_at AS savedAt, workspace_revision AS revision FROM workspace_meta WHERE id = 1',
+      )[0]
+      return row ? { savedAt: row.savedAt ?? undefined, revision: row.revision ?? undefined } : null
+    } catch {
+      // Legacy schemas are upgraded by the full database reader below.
+      return null
+    }
+  }
+
+  /**
+   * Return the last state already read or committed by Main without touching
+   * SQLite or rollout files. Runtime/Preview hot paths use this projection;
+   * durable mutation paths still call read() under the workspace coordinator.
+   */
+  current(): ChatWorkspaceState | null {
+    return this.currentState
   }
 
   async save(state: unknown): Promise<ChatWorkspaceState> {
@@ -176,6 +216,7 @@ export class ChatWorkspaceStore {
     if (!databaseSaved && !jsonSaved) {
       throw new Error('workspace-save-failed')
     }
+    this.currentState = toSave
     return toSave
   }
 

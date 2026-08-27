@@ -45,6 +45,7 @@ export type PreviewAgentOSDeepLinkHandler = (rawUrl: string, session: PreviewSes
 export type LocalAppPreviewManagerOptions = {
   window: BrowserWindow
   createView: PreviewViewFactory
+  loadTimeoutMs?: number
   registerStaticPreviewSession?: StaticPreviewSessionRegistrar
   onEvent?: (snapshot: PreviewSessionSnapshot) => void
   onNavigationState?: (state: PreviewNavigationState) => void
@@ -58,6 +59,8 @@ type ActivePreview = {
   capturedAgentOSUrls: Set<string>
 }
 
+const DEFAULT_PREVIEW_LOAD_TIMEOUT_MS = 30_000
+
 export class LocalAppPreviewManager {
   private readonly window: BrowserWindow
   private readonly createView: PreviewViewFactory
@@ -65,6 +68,7 @@ export class LocalAppPreviewManager {
   private readonly onEvent?: (snapshot: PreviewSessionSnapshot) => void
   private readonly onNavigationState?: (state: PreviewNavigationState) => void
   private readonly onAgentOSDeepLink?: PreviewAgentOSDeepLinkHandler
+  private readonly loadTimeoutMs: number
   private readonly previews = new Map<string, ActivePreview>()
 
   constructor(options: LocalAppPreviewManagerOptions) {
@@ -74,6 +78,7 @@ export class LocalAppPreviewManager {
     this.onEvent = options.onEvent
     this.onNavigationState = options.onNavigationState
     this.onAgentOSDeepLink = options.onAgentOSDeepLink
+    this.loadTimeoutMs = Math.max(1, options.loadTimeoutMs ?? DEFAULT_PREVIEW_LOAD_TIMEOUT_MS)
   }
 
   get(previewId: string): PreviewSessionSnapshot | null {
@@ -88,7 +93,15 @@ export class LocalAppPreviewManager {
   }
 
   isCurrent(previewId: string, snapshot: PreviewSessionSnapshot): boolean {
-    return this.previews.get(previewId)?.snapshot === snapshot
+    const current = this.previews.get(previewId)?.snapshot
+    return Boolean(
+      current &&
+      current.previewId === snapshot.previewId &&
+      current.tabId === snapshot.tabId &&
+      current.localAppId === snapshot.localAppId &&
+      current.runtimeId === snapshot.runtimeId &&
+      current.generation === snapshot.generation,
+    )
   }
 
   async closeIfCurrent(previewId: string, snapshot: PreviewSessionSnapshot): Promise<boolean> {
@@ -101,6 +114,7 @@ export class LocalAppPreviewManager {
     tabId: string,
     localAppId: string,
     runtime: { runtimeId: string; generation: number; readyUrl?: string; previewUrl?: string },
+    options: { waitForLoad?: boolean } = {},
   ): Promise<PreviewSessionSnapshot> {
     const staticPreviewUrl = normalizeStaticPreviewUrl(runtime.previewUrl ?? '')
     const readyUrl = normalizeLoopbackUrl(runtime.readyUrl ?? '') ?? staticPreviewUrl
@@ -179,8 +193,24 @@ export class LocalAppPreviewManager {
     this.window.contentView.addChildView(view)
     view.setVisible?.(false)
     this.onEvent?.(active.snapshot)
+    const load = this.load(active, readyUrl)
+    if (options.waitForLoad === false) {
+      void load
+      return active.snapshot
+    }
+    return load
+  }
+
+  private async load(active: ActivePreview, readyUrl: string): Promise<PreviewSessionSnapshot> {
+    const { previewId } = active.snapshot
+    let timeout: ReturnType<typeof setTimeout> | undefined
     try {
-      await view.webContents.loadURL(readyUrl)
+      await Promise.race([
+        active.view.webContents.loadURL(readyUrl),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('preview-load-timeout')), this.loadTimeoutMs)
+        }),
+      ])
       if (this.previews.get(previewId) !== active) return active.snapshot
       if (active.snapshot.status !== 'ready') {
         active.snapshot = { ...active.snapshot, status: 'ready', detail: undefined }
@@ -188,8 +218,19 @@ export class LocalAppPreviewManager {
       }
     } catch (error) {
       if (this.previews.get(previewId) !== active) return active.snapshot
-      active.snapshot = { ...active.snapshot, status: 'failed', detail: error instanceof Error ? error.message : '预览加载失败' }
+      if (error instanceof Error && error.message === 'preview-load-timeout') {
+        try { active.view.webContents.stop() } catch { /* test doubles may not implement stop */ }
+      }
+      active.snapshot = {
+        ...active.snapshot,
+        status: 'failed',
+        detail: error instanceof Error && error.message === 'preview-load-timeout'
+          ? '预览加载超时，请重试'
+          : error instanceof Error ? error.message : '预览加载失败',
+      }
       this.onEvent?.(active.snapshot)
+    } finally {
+      if (timeout) clearTimeout(timeout)
     }
     return active.snapshot
   }
@@ -199,27 +240,6 @@ export class LocalAppPreviewManager {
     if (!active || !validBounds(bounds)) return false
     active.view.setBounds(bounds)
     return true
-  }
-
-  async getContentHeight(previewId: string): Promise<number | null> {
-    const active = this.previews.get(previewId)
-    if (!active || active.snapshot.status === 'closed') return null
-    try {
-      const height = await active.view.webContents.executeJavaScript(`(() => {
-        const root = document.documentElement
-        const body = document.body
-        return Math.max(
-          root ? root.scrollHeight : 0,
-          root ? root.offsetHeight : 0,
-          body ? body.scrollHeight : 0,
-          body ? body.offsetHeight : 0
-        )
-      })()`, true)
-      if (!this.isActive(active)) return null
-      return normalizePreviewContentHeight(height)
-    } catch {
-      return null
-    }
   }
 
   setVisible(previewId: string, visible: boolean): boolean {
@@ -419,13 +439,6 @@ function normalizeStaticPreviewUrl(raw: string): string | null {
 
 function validBounds(bounds: PreviewBounds): boolean {
   return [bounds.x, bounds.y, bounds.width, bounds.height].every((value) => Number.isFinite(value)) && bounds.width >= 0 && bounds.height >= 0
-}
-
-/** Keep native view bounds finite while allowing normal documents to grow naturally. */
-export function normalizePreviewContentHeight(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.min(32_767, Math.ceil(value))
-    : null
 }
 
 /** Convert a renderer host's viewport rect into safe WebContentsView bounds. */

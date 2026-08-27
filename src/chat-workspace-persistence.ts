@@ -62,6 +62,23 @@ export function createDefaultSidebarPrefs(): WorkspaceSidebarPrefs {
   return { collapsed: false, collapsedProjectIds: [], projectOrderIds: [] }
 }
 
+const WORKSPACE_LOAD_DEADLINE_MS = 3_000
+const PROJECT_PATH_VALIDATION_DEADLINE_MS = 1_500
+
+async function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
 // --- Persistence IO / 持久化读写 ---
 
 /** 合并 Electron 与本地缓存加载工作区 / Load workspace preferring Electron then local fallback */
@@ -70,7 +87,10 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
 
   if (typeof window !== 'undefined' && window.desktop?.getChatWorkspace) {
     try {
-      const raw = await window.desktop.getChatWorkspace()
+      const raw = await withDeadline(window.desktop.getChatWorkspace(), WORKSPACE_LOAD_DEADLINE_MS)
+      if (raw === undefined) {
+        return finalizeChatWorkspaceState(fromLocal?.state ?? createDefaultChatWorkspaceState())
+      }
       if (raw != null) {
         const selected = resolveChatWorkspaceSnapshot([
           createChatWorkspaceSnapshot(raw, 'desktop-mirror'),
@@ -78,14 +98,14 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
         ])
         const finalized = await finalizeChatWorkspaceState(selected?.state ?? normalizeChatWorkspaceState(raw))
         if (selected === fromLocal && window.desktop.saveChatWorkspace) {
-          await window.desktop.saveChatWorkspace(finalized)
+          await withDeadline(window.desktop.saveChatWorkspace(finalized), WORKSPACE_LOAD_DEADLINE_MS)
         }
         return finalized
       }
       if (fromLocal) {
         const finalized = await finalizeChatWorkspaceState(fromLocal.state)
         if (window.desktop.saveChatWorkspace) {
-          await window.desktop.saveChatWorkspace(finalized)
+          await withDeadline(window.desktop.saveChatWorkspace(finalized), WORKSPACE_LOAD_DEADLINE_MS)
         }
         return finalized
       }
@@ -108,7 +128,7 @@ export async function finalizeChatWorkspaceState(state: ChatWorkspaceState): Pro
   if (changed && typeof window !== 'undefined' && window.desktop?.saveChatWorkspace) {
     try {
       next = withNextWorkspaceRevision(next, workspaceRevisionOf(state))
-      await window.desktop.saveChatWorkspace(next)
+      await withDeadline(window.desktop.saveChatWorkspace(next), WORKSPACE_LOAD_DEADLINE_MS)
     } catch {
       /* ignore */
     }
@@ -127,7 +147,11 @@ async function annotateProjectPathAvailability(state: ChatWorkspaceState): Promi
   }
 
   try {
-    const availability = await validate(state.projects.map((project) => project.path))
+    const availability = await withDeadline(
+      validate(state.projects.map((project) => project.path)),
+      PROJECT_PATH_VALIDATION_DEADLINE_MS,
+    )
+    if (!availability) return state
     return {
       ...state,
       projects: state.projects.map((project) => ({

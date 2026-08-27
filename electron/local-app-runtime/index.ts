@@ -605,27 +605,30 @@ export class LocalAppRuntimeSupervisor {
     options: RuntimeStartOptions = {},
   ): Promise<LocalAppRuntimeSnapshot> {
     const existing = this.runtimes.get(definition.id)
+    const requestedConsumers = [...consumerIds]
+    if (existing) {
+      for (const consumerId of requestedConsumers) existing.consumerIds.add(consumerId)
+    }
     // A mode transition may leave the stopped predecessor in the map while
     // its bounded teardown promise is still draining. Reuse that transition
     // instead of starting a second supervisor for the same definition id.
     if (existing?.snapshot.status === 'stopped' && existing.operation) return existing.operation
     if (!definition.mode && !definition.agentos) {
       if (existing?.operation || existing?.buildOperation) return existing.operation ?? existing.buildOperation!
-      return this.detectModeAndStart(definition, consumerIds, options)
+      return this.detectModeAndStart(definition, requestedConsumers, options)
     }
     if (definition.mode === 'static') {
       if (existing && existing.snapshot.mode === 'static' && existing.snapshot.status !== 'stopped') {
-        for (const consumerId of consumerIds) existing.consumerIds.add(consumerId)
         if (existing.operation) return existing.operation
         if (existing.buildOperation) return existing.buildOperation
         return Promise.resolve(existing.snapshot)
       }
-      if (existing) return this.transitionRuntime(existing, definition, () => this.startStaticTracked(definition, consumerIds, options))
-      return this.startStaticTracked(definition, consumerIds, options)
+      if (existing) return this.transitionRuntime(existing, definition, () => this.startStaticTracked(definition, requestedConsumers, options))
+      return this.startStaticTracked(definition, requestedConsumers, options)
     }
     if (existing?.snapshot.mode === 'static' && existing.snapshot.status !== 'stopped') {
       const developmentDefinition = definition.mode === 'development' ? definition : { ...definition, mode: 'development' as const }
-      return this.transitionRuntime(existing, developmentDefinition, () => this.start(developmentDefinition, consumerIds, options))
+      return this.transitionRuntime(existing, developmentDefinition, () => this.start(developmentDefinition, requestedConsumers, options))
     }
     if (existing?.operation) return existing.operation
     if (existing?.snapshot.status === 'running' || existing?.snapshot.status === 'starting' || existing?.snapshot.status === 'preparing') {
@@ -638,7 +641,7 @@ export class LocalAppRuntimeSupervisor {
       snapshot: { ...this.createSnapshot(definition.id, generation, 'preparing'), mode: 'development' },
       controller: new AbortController(),
       logs: [],
-      consumerIds: new Set(consumerIds),
+      consumerIds: new Set(requestedConsumers),
     }
     this.runtimes.set(definition.id, runtime)
     const operation = this.startRuntime(runtime).finally(() => {

@@ -749,12 +749,12 @@ function sendRuntimeEvent(event: RuntimeEvent): void {
 }
 
 function readRuntimeDefinition(runtimeDefinitionId: string): RuntimeDefinition | null {
-  const state = chatWorkspaceStore?.read()
+  const state = chatWorkspaceStore?.current() ?? chatWorkspaceStore?.read()
   return state?.runtimeDefinitions.find((definition) => definition.id === runtimeDefinitionId) ?? null
 }
 
 function readProjectRuntimeDefinition(projectId: string): RuntimeDefinition | null {
-  const state = chatWorkspaceStore?.read()
+  const state = chatWorkspaceStore?.current() ?? chatWorkspaceStore?.read()
   const project = state?.projects.find((item) => item.id === projectId)
   if (!project || project.pathMissing) return null
   const projectRoot = path.resolve(project.path)
@@ -1351,12 +1351,12 @@ if (gotSingleInstanceLock) {
       if (typeof projectId !== 'string' || !projectId.trim()) return { ok: false, code: 'invalid-project', message: '项目无效' }
       const normalizedMountId = typeof mountId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(mountId.trim()) ? mountId.trim() : ''
       if (!normalizedMountId) return { ok: false, code: 'invalid-mount', message: 'Runtime 挂载标识无效' }
-      const state = getChatWorkspaceStore().read()
+      const state = getChatWorkspaceStore().current() ?? getChatWorkspaceStore().read()
       const project = state?.projects.find((item) => item.id === projectId.trim())
       if (!state || !project) return { ok: false, code: 'project-missing', message: '项目不存在' }
       const inspected = await inspectLocalAppDirectory(project.path)
       if (!inspected.ok) return { ok: false, code: inspected.code, message: inspected.message }
-      const latestState = getChatWorkspaceStore().read()
+      const latestState = getChatWorkspaceStore().current()
       const latestProject = latestState?.projects.find((item) => item.id === project.id)
       if (!latestState || !latestProject || latestProject.path !== project.path) return { ok: false, code: 'stale-project', message: '项目已切换，请重试' }
       const currentState = latestState
@@ -1714,7 +1714,7 @@ if (gotSingleInstanceLock) {
       const rawRuntimeDefinitionId = host ? host.runtimeDefinitionId : rawAppId
       if (typeof rawTabId !== 'string' || typeof rawRuntimeDefinitionId !== 'string') return { ok: false, message: 'Runtime 预览视图无效' }
       if (isProjectHost && !projectHost) return { ok: false, message: 'Runtime 挂载视图已失效' }
-      const authoritativeBefore = chatWorkspaceStore?.read()
+      const authoritativeBefore = chatWorkspaceStore?.current() ?? chatWorkspaceStore?.read()
       const tab = !isProjectHost ? authoritativeBefore?.workspaceTabs.find((item) => item.id === rawTabId) : undefined
       const project = isProjectHost && projectHost
         ? authoritativeBefore?.projects.find((item) => item.id === projectHost.projectId)
@@ -1733,8 +1733,17 @@ if (gotSingleInstanceLock) {
       const previewId = `preview-${rawTabId}-${runtime.generation}`
       const existing = localAppPreviewManager.getForTab(rawTabId)
       if (existing && existing.previewId !== previewId) await localAppPreviewManager.closeForTab(rawTabId)
-      const snapshot = await localAppPreviewManager.create(previewId, rawTabId, rawRuntimeDefinitionId, runtime)
-      const authoritative = chatWorkspaceStore?.read()
+      // Publish the native view immediately. Loading completion/failure is
+      // delivered through the Runtime event stream, so this IPC cannot hang
+      // behind a page that never finishes loading.
+      const snapshot = await localAppPreviewManager.create(
+        previewId,
+        rawTabId,
+        rawRuntimeDefinitionId,
+        runtime,
+        { waitForLoad: false },
+      )
+      const authoritative = chatWorkspaceStore?.current()
       const currentTab = !isProjectHost ? authoritative?.workspaceTabs.find((item) => item.id === rawTabId) : undefined
       const currentProject = isProjectHost && projectHost ? authoritative?.projects.find((item) => item.id === projectHost.projectId) : undefined
       const currentDefinition = authoritative?.runtimeDefinitions.find((item) => item.id === rawRuntimeDefinitionId)
@@ -1752,11 +1761,6 @@ if (gotSingleInstanceLock) {
         return { ok: true, previewId, status: snapshot.status, detail: snapshot.detail }
       }
       return { ok: false, message: snapshot.detail ?? '预览加载失败' }
-    })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewContentHeight, (_event, rawPreviewId: unknown) => {
-      return typeof rawPreviewId === 'string'
-        ? localAppPreviewManager?.getContentHeight(rawPreviewId) ?? null
-        : null
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewNavigationState, (_event, rawPreviewId: unknown) => {
       return typeof rawPreviewId === 'string' ? localAppPreviewManager?.getNavigationState(rawPreviewId) ?? null : null

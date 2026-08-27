@@ -315,9 +315,6 @@ const desktopAdapter = {
   createRuntimePreview(host: RuntimePreviewHost) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createRuntimePreview, host) as Promise<RuntimePreviewResult>
   },
-  getRuntimePreviewContentHeight(previewId: string) {
-    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewContentHeight, previewId) as Promise<number | null>
-  },
   getRuntimePreviewNavigationState(previewId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewNavigationState, previewId) as Promise<RuntimePreviewNavigationState | null>
   },

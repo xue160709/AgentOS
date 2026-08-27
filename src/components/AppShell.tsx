@@ -498,7 +498,9 @@ export function AppShell() {
   useEffect(() => {
     const project = activeProject
     const request = ++projectRuntimeRequestRef.current
-    if (!project || !projectRuntimeMountId || !window.desktop?.ensureProjectRuntime) {
+    // Runtime inspection can touch the filesystem and workspace store. Only
+    // pay that cost when the Runtime tab is actually visible.
+    if (!project || activeThread?.id || projectHomeViewMode !== 'runtime' || !projectRuntimeMountId || !window.desktop?.ensureProjectRuntime) {
       setProjectRuntimeState({ runtime: null, trustRequired: true, mountId: projectRuntimeMountId, logsOpen: false })
       return
     }
@@ -514,7 +516,7 @@ export function AppShell() {
       setProjectRuntimeState((current) => ({ ...current, definition: result.definition, runtime: result.runtime, trustRequired: result.status === 'trust_required', mountId: result.mountId }))
     }).catch(() => undefined)
     return () => { cancelled = true }
-  }, [activeProject?.id, projectRuntimeMountId])
+  }, [activeProject?.id, activeThread?.id, projectHomeViewMode, projectRuntimeMountId])
 
   useEffect(() => {
     const definition = projectRuntimeState.definition
@@ -602,29 +604,17 @@ export function AppShell() {
     const project = activeProject
     const definition = projectRuntimeState.definition
     const mountId = projectRuntimeState.mountId
-    if (!project || activeThread?.id || projectHomeViewMode !== 'runtime' || !definition || projectRuntimeState.trustRequired || !mountId || mountId !== projectRuntimeMountId || !window.desktop?.startRuntime || !window.desktop?.ensureProjectRuntime) return
+    if (!project || activeThread?.id || projectHomeViewMode !== 'runtime' || !definition || projectRuntimeState.trustRequired || !mountId || mountId !== projectRuntimeMountId || !window.desktop?.startRuntime) return
     const request = projectRuntimeRequestRef.current
     let cancelled = false
-    let consumerId = `project-home:${project.id}:${mountId}`
-    void window.desktop.ensureProjectRuntime(project.id, mountId).then((ensured) => {
-      const stale = cancelled || request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id || !ensured.ok || ensured.projectId !== project.id || ensured.mountId !== mountId
-      if (stale) {
-        if (ensured.ok && ensured.definition) void window.desktop?.releaseRuntime?.(ensured.definition.id, consumerId)
-        return null
-      }
-      if (ensured.status === 'trust_required' || !ensured.definition) return null
-      consumerId = `project-home:${ensured.projectId}:${ensured.mountId}`
-      const startRuntime = window.desktop?.startRuntime
-      if (!startRuntime) return null
-      return startRuntime(ensured.definition.id, 'restore', consumerId).then((runtime) => ({ runtime, runtimeDefinitionId: ensured.definition?.id ?? definition.id }))
-    }).then((started) => {
-      if (!started) return
+    const consumerId = `project-home:${project.id}:${mountId}`
+    void window.desktop.startRuntime(definition.id, 'restore', consumerId).then((runtime) => {
       const stale = cancelled || request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id
       if (stale) {
-        void window.desktop?.releaseRuntime?.(started.runtimeDefinitionId, consumerId)
+        void window.desktop?.releaseRuntime?.(definition.id, consumerId)
         return
       }
-      setProjectRuntimeState((current) => ({ ...current, runtime: started.runtime }))
+      setProjectRuntimeState((current) => ({ ...current, runtime }))
     }).catch(() => {
       if (cancelled || request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id) {
         void window.desktop?.releaseRuntime?.(definition.id, consumerId)
@@ -1859,14 +1849,24 @@ export function AppShell() {
 
   useEffect(() => {
     if (!chatWorkspace || !window.desktop?.startRuntime) return
+    const pending: Array<{ definitionId: string; tabId: string }> = []
     for (const definition of chatWorkspace.runtimeDefinitions) {
       if (!definition.autoStart || definition.trustStatus !== 'trusted') continue
       for (const tab of chatWorkspace.workspaceTabs.filter((item) => item.runtimeDefinitionId === definition.id)) {
         if (restoredLocalAppsRef.current.has(tab.id)) continue
         restoredLocalAppsRef.current.add(tab.id)
-        void startLocalApp(definition.id, 'restore', tab.id)
+        pending.push({ definitionId: definition.id, tabId: tab.id })
       }
     }
+    // Starting several npm processes at once makes the active tab slower and
+    // can saturate disk/CPU. Restore the visible tab first, then warm the rest
+    // sequentially in the background.
+    pending.sort((left, right) => Number(right.tabId === chatWorkspace.activeWorkspaceTabId) - Number(left.tabId === chatWorkspace.activeWorkspaceTabId))
+    void (async () => {
+      for (const item of pending) {
+        await startLocalApp(item.definitionId, 'restore', item.tabId)
+      }
+    })()
   }, [chatWorkspace, startLocalApp])
 
   const updateInitialModelField = useCallback(

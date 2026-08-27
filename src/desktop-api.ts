@@ -272,7 +272,6 @@ export type DesktopAPI = {
   /** Explicit opt-in development mode for static definitions. */
   startRuntimeDevelopment?: (runtimeDefinitionId: string, consumerId?: string) => Promise<RuntimeSnapshot>
   createRuntimePreview?: (host: RuntimePreviewHost) => Promise<RuntimePreviewResult>
-  getRuntimePreviewContentHeight?: (previewId: string) => Promise<number | null>
   getRuntimePreviewNavigationState?: (previewId: string) => Promise<RuntimePreviewNavigationState | null>
   setRuntimePreviewBounds?: (previewId: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>
   setRuntimePreviewVisible?: (previewId: string, visible: boolean) => Promise<boolean>

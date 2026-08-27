@@ -209,24 +209,6 @@ test('Preview bounds conversion clamps invalid viewport coordinates', () => {
   assert.deepEqual(preview.previewBoundsFromRect({ left: Number.NaN, top: Number.POSITIVE_INFINITY, width: -1, height: 0 }), { x: 0, y: 0, width: 0, height: 0 })
 })
 
-test('Preview content height is measured and normalized for native bounds', async () => {
-  const contents = new EventEmitter()
-  contents.setWindowOpenHandler = () => undefined
-  contents.loadURL = async () => undefined
-  contents.executeJavaScript = async () => 812.25
-  contents.close = () => undefined
-  contents.session = { setPermissionRequestHandler: () => undefined }
-  const view = { webContents: contents, setBounds: () => undefined, setVisible: () => undefined }
-  const manager = new preview.LocalAppPreviewManager({
-    window: { contentView: { addChildView: () => undefined, removeChildView: () => undefined } },
-    createView: () => view,
-  })
-  await manager.create('preview-height', 'tab-height', 'local-app-1', { runtimeId: 'runtime-1', generation: 1, readyUrl: 'http://127.0.0.1:3001/' })
-  assert.equal(await manager.getContentHeight('preview-height'), 813)
-  assert.equal(preview.normalizePreviewContentHeight(Number.NaN), null)
-  assert.equal(preview.normalizePreviewContentHeight(40_000), 32_767)
-})
-
 test('Preview callbacks from an old generation cannot overwrite a replacement', async () => {
   const events = []
   const views = []
@@ -301,4 +283,56 @@ test('Closing a tab while create is loading leaves no delayed Preview session', 
   resolveLoad()
   await pending
   assert.equal(manager.get('preview-delayed-close'), null)
+})
+
+test('Preview can publish loading immediately and reports readiness asynchronously', async () => {
+  let resolveLoad
+  const events = []
+  const contents = new EventEmitter()
+  contents.setWindowOpenHandler = () => undefined
+  contents.loadURL = () => new Promise((resolve) => { resolveLoad = resolve })
+  contents.close = () => undefined
+  contents.stop = () => undefined
+  contents.session = { setPermissionRequestHandler: () => undefined }
+  const manager = new preview.LocalAppPreviewManager({
+    window: { contentView: { addChildView: () => undefined, removeChildView: () => undefined } },
+    createView: () => ({ webContents: contents, setBounds: () => undefined, setVisible: () => undefined }),
+    onEvent: (snapshot) => events.push(snapshot.status),
+  })
+
+  const snapshot = await manager.create(
+    'preview-background',
+    'tab-background',
+    'local-app-1',
+    { runtimeId: 'runtime-1', generation: 1, readyUrl: 'http://127.0.0.1:3001/' },
+    { waitForLoad: false },
+  )
+  assert.equal(snapshot.status, 'loading')
+  resolveLoad()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(manager.get('preview-background').status, 'ready')
+  assert.equal(manager.isCurrent('preview-background', snapshot), true)
+  assert.deepEqual(events, ['loading', 'ready'])
+})
+
+test('Preview load timeout becomes a recoverable failed state', async () => {
+  let stopped = false
+  const contents = new EventEmitter()
+  contents.setWindowOpenHandler = () => undefined
+  contents.loadURL = () => new Promise(() => undefined)
+  contents.close = () => undefined
+  contents.stop = () => { stopped = true }
+  contents.session = { setPermissionRequestHandler: () => undefined }
+  const manager = new preview.LocalAppPreviewManager({
+    window: { contentView: { addChildView: () => undefined, removeChildView: () => undefined } },
+    createView: () => ({ webContents: contents, setBounds: () => undefined, setVisible: () => undefined }),
+    loadTimeoutMs: 5,
+  })
+
+  const snapshot = await manager.create('preview-timeout', 'tab-timeout', 'local-app-1', {
+    runtimeId: 'runtime-1', generation: 1, readyUrl: 'http://127.0.0.1:3001/',
+  })
+  assert.equal(snapshot.status, 'failed')
+  assert.match(snapshot.detail, /超时/)
+  assert.equal(stopped, true)
 })

@@ -92,7 +92,6 @@ export const DESKTOP_INVOKE_CHANNELS = {
   cancelRuntimeBuild: 'desktop:runtime:build-cancel',
   startRuntimeDevelopment: 'desktop:runtime:start-development',
   createRuntimePreview: 'desktop:runtime-preview:create',
-  getRuntimePreviewContentHeight: 'desktop:runtime-preview:content-height',
   getRuntimePreviewNavigationState: 'desktop:runtime-preview:navigation-state',
   setRuntimePreviewBounds: 'desktop:runtime-preview:bounds',
   setRuntimePreviewVisible: 'desktop:runtime-preview:visible',

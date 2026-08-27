@@ -607,9 +607,10 @@ export function AppShellWorkspace({
             logsOpen={localAppLogsOpen}
             onLogsToggle={() => setLocalAppLogsOpen((open) => !open)}
             showToolbar={false}
-          /> : <ChatPage
+          /> : null}
+          <ChatPage
             ref={chatRef}
-            hidden={activeViewId !== 'home'}
+            hidden={activeViewId !== 'home' || isRuntimeActive}
             activeProject={activeProject}
             activeThread={activeThread}
             projectDefaultModelPick={projectDefaultModelPick}
@@ -649,7 +650,7 @@ export function AppShellWorkspace({
             onOpenProjectFile={openProjectFilePreview}
             onRunProjectSkill={onRunProjectSkill}
             onStopProjectSkillRun={onStopProjectSkillRun}
-          />}
+          />
           {!isRuntimeActive ? <DocsPage hidden={activeViewId !== 'docs'} /> : null}
           {!isRuntimeActive ? <SettingsPage
             hidden={activeViewId !== 'settings'}

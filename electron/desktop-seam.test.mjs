@@ -281,13 +281,14 @@ test('Local App relocation gates the Main revision after renderer flush and retu
   assert.match(flow, /setChatWorkspace\(result\.workspace\)/)
 })
 
-test('Main Preview creation revalidates the authoritative tab and Runtime after native loading', () => {
+test('Main Preview creation returns before native loading and revalidates from the in-memory authority', () => {
   const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
   const start = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.createRuntimePreview')
   const end = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewBounds', start)
   const handler = main.slice(start, end)
-  assert.ok(handler.indexOf('await localAppPreviewManager.create(') < handler.indexOf('const authoritative = chatWorkspaceStore?.read()'))
-  assert.ok(handler.indexOf('const authoritative = chatWorkspaceStore?.read()') < handler.indexOf('closeIfCurrent'))
+  assert.match(handler, /waitForLoad: false/)
+  assert.ok(handler.indexOf('await localAppPreviewManager.create(') < handler.indexOf('const authoritative = chatWorkspaceStore?.current()'))
+  assert.ok(handler.indexOf('const authoritative = chatWorkspaceStore?.current()') < handler.indexOf('closeIfCurrent'))
   assert.match(handler, /currentTab\.runtimeDefinitionId === rawRuntimeDefinitionId/)
   assert.match(handler, /currentRuntime\.generation === runtime\.generation/)
   assert.match(handler, /registeredProjectRuntimeHost\(projectHost\.projectId, projectHost\.mountId/)
