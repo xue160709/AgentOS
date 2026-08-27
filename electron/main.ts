@@ -166,6 +166,7 @@ let speechRecognitionService: MacSpeechRecognitionService | null = null
 let claudeSettingsOperationChain: Promise<void> = Promise.resolve()
 let localAppRuntimeManager: LocalAppRuntimeManager | null = null
 let runtimeEditCoordinator: RuntimeEditCoordinator | null = null
+let runtimeEditRuntimeBridge: RuntimeEditRuntimeBridge | null = null
 let localAppTrustStore: LocalAppTrustStore | null = null
 let localAppPreviewManager: LocalAppPreviewManager | null = null
 let localAppQuitCleanup: Promise<void> | null = null
@@ -1005,13 +1006,11 @@ if (gotSingleInstanceLock) {
         return fingerprintStaticSource(inspected.canonicalRoot, inspected.agentos)
       },
       intent: async (intent) => {
-        const manager = localAppRuntimeManager
-        const coordinator = runtimeEditCoordinator
-        if (!manager || !coordinator) return
-        await new RuntimeEditRuntimeBridge({ coordinator, manager, resolveDefinition: readProjectRuntimeDefinition }).handle(intent)
+        await runtimeEditRuntimeBridge?.handle(intent)
       },
       onSnapshot: (snapshot) => { queueMicrotask(() => projectChatBroker?.broadcastProjectSnapshot(snapshot.projectId)) },
     })
+    runtimeEditRuntimeBridge = new RuntimeEditRuntimeBridge({ coordinator: runtimeEditCoordinator, manager: localAppRuntimeManager, resolveDefinition: readProjectRuntimeDefinition })
     const staticRegistry = localAppRuntimeManager.getStaticPreviewRegistry()
     const staticSessionHosts = new WeakMap<Session, string>()
     const staticSessionRegistrations = new WeakMap<Session, Promise<void>>()

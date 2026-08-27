@@ -35,6 +35,7 @@ function bridgeHarness(inspected) {
   const calls = []
   const manager = {
     register: (definition) => calls.push(['register', definition]),
+    stopOwnedDevelopmentRuntimes: async (root) => { calls.push(['stop-owned-development', root]) },
     start: async (id, consumer) => { calls.push(['start', id, consumer]); return {} },
     release: async (id, consumer) => { calls.push(['release', id, consumer]); return null },
     build: async (id) => { calls.push(['build', id]); return {} },
@@ -48,13 +49,25 @@ function bridgeHarness(inspected) {
   return { calls, bridge: new RuntimeEditRuntimeBridge({ coordinator, manager, resolveDefinition: () => definition, inspect: async () => inspected }) }
 }
 
-test('Runtime edit bridge uses dev only for a declared static+dev Runtime and keeps the consumer scoped to a lease', async () => {
-  const { bridge, calls } = bridgeHarness({ ok: true, rootPath: '/project', canonicalRoot: '/project', name: 'project', hasLockfile: false, nodeModulesPresent: true, hasDevScript: true, mode: 'static', agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'dist', entryFile: 'index.html' } })
-  await bridge.handle({ type: 'agent-lease-acquired', projectId: 'project-1', requestId: 'run-1', toolUseId: 'tool-1', editGeneration: 1 })
-  await bridge.handle({ type: 'agent-lease-released', projectId: 'project-1', requestId: 'run-1', toolUseId: 'tool-1', editGeneration: 1 })
-  assert.equal(calls[0][0], 'register')
-  assert.equal(calls[0][1].mode, 'development')
-  assert.deepEqual(calls.slice(1), [
+test('Runtime edit bridge switches a static workbench to a clean dev runtime and scopes it to the edit lease', async () => {
+  const staticWithDev = bridgeHarness({ ok: true, rootPath: '/project', canonicalRoot: '/project', name: 'project', hasLockfile: false, nodeModulesPresent: true, hasDevScript: true, mode: 'static', agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'dist', entryFile: 'index.html' } })
+  await staticWithDev.bridge.handle({ type: 'agent-lease-acquired', projectId: 'project-1', requestId: 'run-1', toolUseId: 'tool-1', editGeneration: 1 })
+  await staticWithDev.bridge.handle({ type: 'agent-lease-released', projectId: 'project-1', requestId: 'run-1', toolUseId: 'tool-1', editGeneration: 1 })
+  assert.equal(staticWithDev.calls[0][0], 'stop-owned-development')
+  assert.equal(staticWithDev.calls[1][0], 'register')
+  assert.equal(staticWithDev.calls[1][1].mode, 'development')
+  assert.equal(staticWithDev.calls[1][1].agentos, undefined)
+  assert.deepEqual(staticWithDev.calls.slice(2), [
+    ['start', 'runtime-1', 'runtime-edit:project-1:run-1:tool-1'],
+    ['release', 'runtime-1', 'runtime-edit:project-1:run-1:tool-1'],
+  ])
+
+  const development = bridgeHarness({ ok: true, rootPath: '/project', canonicalRoot: '/project', name: 'project', hasLockfile: false, nodeModulesPresent: true, hasDevScript: true, mode: 'development' })
+  await development.bridge.handle({ type: 'agent-lease-acquired', projectId: 'project-1', requestId: 'run-1', toolUseId: 'tool-1', editGeneration: 1 })
+  await development.bridge.handle({ type: 'agent-lease-released', projectId: 'project-1', requestId: 'run-1', toolUseId: 'tool-1', editGeneration: 1 })
+  assert.equal(development.calls[0][0], 'register')
+  assert.equal(development.calls[0][1].mode, 'development')
+  assert.deepEqual(development.calls.slice(1), [
     ['start', 'runtime-1', 'runtime-edit:project-1:run-1:tool-1'],
     ['release', 'runtime-1', 'runtime-edit:project-1:run-1:tool-1'],
   ])

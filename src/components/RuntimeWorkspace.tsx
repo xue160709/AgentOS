@@ -43,7 +43,10 @@ export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart,
     idle: 'runtime.runtimeStopped', ready: 'runtime.runtimeReady', stale: 'runtime.runtimeStale', build_required: 'runtime.runtimeBuildRequired', building: firstBuild ? 'runtime.runtimeFirstBuilding' : 'runtime.runtimeBuilding', build_failed: 'runtime.runtimeBuildFailed',
     preparing: 'runtime.runtimePreparing', starting: 'runtime.runtimeStarting', running: 'runtime.runtimeRunning', degraded: 'runtime.runtimeDegraded', failed: 'runtime.runtimeFailed', path_missing: 'runtime.runtimePathMissing', stopped: 'runtime.runtimeStopped',
   } as Record<string, string>)[displayStatus] ?? 'runtime.runtimeStopped')
-  const editStatus = runtimeEditStatus(runtimeEdit)
+  const runtimeNeedsRecovery = ['failed', 'build_failed', 'path_missing', 'stopped'].includes(displayStatus)
+  // A terminal Runtime failure is more important than an in-flight Chat edit;
+  // never leave the workbench saying “正在更新” after its process has failed.
+  const editStatus = runtimeNeedsRecovery ? null : runtimeEditStatus(runtimeEdit)
   return <section className={`runtime-workspace runtime-workspace--${displayStatus}`} data-testid="runtime-workspace" aria-labelledby="runtime-workspace-title">
     {showToolbar ? <header className="local-app-workspace__toolbar">
       <div className="local-app-workspace__toolbar-title"><strong id="runtime-workspace-title">{tab.title || definition.name}</strong><span className="local-app-workspace__path" title={definition.rootPath}>{definition.rootPath}</span></div>

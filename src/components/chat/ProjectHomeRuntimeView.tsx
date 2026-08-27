@@ -40,7 +40,8 @@ export function ProjectHomeRuntimeView({ controller }: { controller: ProjectHome
   const canRestart = Boolean(definition) && (staticMode ? status === 'stopped' || ['ready', 'stale', 'build_failed'].includes(displayStatus) : ['running', 'degraded', 'failed', 'stopped'].includes(status))
   const isBuilding = staticMode && displayStatus === 'building'
   const hasLastGood = Boolean(runtime?.artifactId && runtime?.previewUrl)
-  const editStatus = runtimeEditStatus(controller.runtimeEdit)
+  const runtimeNeedsRecovery = ['failed', 'build_failed', 'path_missing', 'stopped'].includes(displayStatus)
+  const editStatus = runtimeNeedsRecovery ? null : runtimeEditStatus(controller.runtimeEdit)
   const logs = runtime?.logs?.slice(-20) ?? []
   return <section className="project-runtime-page" data-testid="project-runtime-page" aria-labelledby="project-runtime-title">
     <header className="project-runtime-page__header"><div><p className="eyebrow">{t('runtime.projectRuntime')}</p><h2 id="project-runtime-title">{project.name}</h2><p>{definition?.rootPath ?? project.path}</p></div><div className="project-runtime-page__actions"><span data-testid="project-runtime-status" role={editStatus?.alert ? 'alert' : 'status'} aria-busy={editStatus?.busy}>{editStatus?.message ?? (trustRequired ? t('runtime.trustRequired') : label)}</span>{staticMode ? <button type="button" className="btn btn-primary" data-testid="project-runtime-build" onClick={controller.onBuild ?? controller.onStart} disabled={displayStatus === 'building'}>{hasLastGood ? t('runtime.rebuild') : t('runtime.build')}</button> : <button type="button" className="btn btn-primary" data-testid="project-runtime-start" onClick={controller.onStart}>{t('runtime.start')}</button>}<button type="button" className="btn btn-toolbar" data-testid="project-runtime-open-tab" onClick={controller.onOpenTab}>{t('runtime.openTab')}</button></div></header>

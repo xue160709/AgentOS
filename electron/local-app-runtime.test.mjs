@@ -159,7 +159,7 @@ setInterval(() => {}, 1000)
 }
 
 async function cleanupChild(child) {
-  if (!child || child.exitCode !== null) return
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
   child.kill('SIGTERM')
   await once(child, 'exit').catch(() => undefined)
 }
@@ -329,6 +329,29 @@ test('IPC disconnect only cleans the bridge-owned npm subtree and leaves an exte
   } finally {
     await cleanupOwnedRuntimeFixture(supervisor, bridgeChildren, ownedPids)
     await cleanupChild(external)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('development takeover terminates only the process holding this project Next lock', {
+  skip: process.platform === 'win32' || spawnSync('lsof', ['-v'], { stdio: 'ignore' }).error ? 'lsof unavailable' : false,
+}, async () => {
+  const root = mkdtempSync(`${tmpdir()}/local-app-runtime-next-lock-`)
+  const lockDir = resolve(root, '.next', 'dev')
+  const lockPath = resolve(lockDir, 'lock')
+  mkdirSync(lockDir, { recursive: true })
+  writeFileSync(lockPath, '')
+  const lockOwner = spawn(process.execPath, ['-e', `require('node:fs').openSync(${JSON.stringify(lockPath)}, 'r'); setInterval(() => {}, 1000)`], { stdio: 'ignore' })
+  const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: root, stdio: 'ignore' })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const terminated = await runtime.terminateNextDevLockOwners(root)
+    assert.deepEqual(terminated, [lockOwner.pid])
+    await waitForPidGone(lockOwner.pid)
+    assert.doesNotThrow(() => process.kill(unrelated.pid, 0))
+  } finally {
+    await cleanupChild(lockOwner)
+    await cleanupChild(unrelated)
     rmSync(root, { recursive: true, force: true })
   }
 })

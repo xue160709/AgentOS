@@ -107,6 +107,8 @@ export type RuntimeSupervisorOptions = {
   staticPreviewRegistry?: StaticPreviewRegistry
   validateStaticOutput?: RuntimeStaticOutputValidator
   fingerprintStaticSource?: RuntimeStaticSourceFingerprinter
+  /** Exact project-lock takeover used before starting a development runtime. */
+  terminateConflictingDevProcesses?: (canonicalRoot: string) => Promise<number[]>
   userDataPath?: string
   onEvent?: (event: LocalAppRuntimeEvent) => void
 }
@@ -425,9 +427,11 @@ export async function inspectLocalAppDirectory(rootPath: string): Promise<LocalA
  * Runtime remains the sole owner of dev processes, builds and last-good.
  */
 export class RuntimeEditRuntimeBridge {
+  private readonly activeDevelopmentConsumers = new Set<string>()
+
   constructor(private readonly options: {
     coordinator: Pick<RuntimeEditCoordinator, 'beginBuild' | 'completeBuild'>
-    manager: Pick<LocalAppRuntimeManager, 'register' | 'start' | 'release' | 'build' | 'cancelBuild'>
+    manager: Pick<LocalAppRuntimeManager, 'register' | 'start' | 'release' | 'build' | 'cancelBuild' | 'stopOwnedDevelopmentRuntimes'>
     resolveDefinition: (projectId: string) => LocalAppDefinition | null
     inspect?: (rootPath: string) => Promise<LocalAppInspectResult>
   }) {}
@@ -446,8 +450,7 @@ export class RuntimeEditRuntimeBridge {
       return
     }
     if (intent.type === 'agent-lease-released') {
-      const definition = this.options.resolveDefinition(intent.projectId)
-      if (definition) await this.options.manager.release(definition.id, editConsumerId(intent.projectId, intent.requestId, intent.toolUseId))
+      await this.releaseTemporaryDevelopment(intent.projectId, editConsumerId(intent.projectId, intent.requestId, intent.toolUseId))
       return
     }
     if (intent.type !== 'settle') return
@@ -472,14 +475,29 @@ export class RuntimeEditRuntimeBridge {
     const definition = this.options.resolveDefinition(projectId)
     if (!definition) return
     const inspected = await (this.options.inspect ?? inspectLocalAppDirectory)(definition.rootPath)
-    // A development-only Runtime is already a valid managed dev Runtime. A
-    // static Runtime may use one only when its package declares dev explicitly.
+    // Editing a static workbench intentionally transitions it to its declared
+    // npm development script so the page can update live. Static projects
+    // without a dev script remain on their last-good artifact.
     if (!inspected.ok || (inspected.mode === 'static' && !inspected.hasDevScript)) return
+    if (inspected.mode === 'static') {
+      // Another workbench may already own npm run dev for this project under a
+      // different durable definition. Stop that AgentOS-owned instance before
+      // registering the temporary development definition.
+      await this.options.manager.stopOwnedDevelopmentRuntimes(inspected.canonicalRoot)
+    }
     const developmentDefinition: LocalAppDefinition = inspected.mode === 'static'
       ? { ...definition, mode: 'development', agentos: undefined }
       : { ...definition, mode: 'development' }
     this.options.manager.register(developmentDefinition)
     await this.options.manager.start(definition.id, consumerId)
+    this.activeDevelopmentConsumers.add(consumerId)
+  }
+
+  private async releaseTemporaryDevelopment(projectId: string, consumerId: string): Promise<void> {
+    if (!this.activeDevelopmentConsumers.delete(consumerId)) return
+    const definition = this.options.resolveDefinition(projectId)
+    if (!definition) return
+    await this.options.manager.release(definition.id, consumerId)
   }
 }
 
@@ -558,6 +576,7 @@ export class LocalAppRuntimeSupervisor {
   private readonly staticPreviewRegistry: StaticPreviewRegistry
   private readonly validateStaticOutputImpl: RuntimeStaticOutputValidator
   private readonly fingerprintStaticSourceImpl: RuntimeStaticSourceFingerprinter
+  private readonly terminateConflictingDevProcesses: (canonicalRoot: string) => Promise<number[]>
   private preparationRecordLoaded = false
   private preparationRecordLoadPromise: Promise<void> | null = null
   private preparationRecordSavePromise: Promise<void> = Promise.resolve()
@@ -580,6 +599,7 @@ export class LocalAppRuntimeSupervisor {
     this.staticPreviewRegistry = options.staticPreviewRegistry ?? new StaticPreviewRegistry()
     this.validateStaticOutputImpl = options.validateStaticOutput ?? ((projectRoot, declaration) => validateStaticOutput(projectRoot, declaration))
     this.fingerprintStaticSourceImpl = options.fingerprintStaticSource ?? ((projectRoot, declaration) => fingerprintStaticSource(projectRoot, declaration))
+    this.terminateConflictingDevProcesses = options.terminateConflictingDevProcesses ?? terminateNextDevLockOwners
     this.onEvent = options.onEvent
   }
 
@@ -1127,6 +1147,11 @@ export class LocalAppRuntimeSupervisor {
     try {
       await this.prepareDependencies(runtime, inspected)
       if (runtime.controller.signal.aborted) return runtime.snapshot
+      const terminatedPids = await this.terminateConflictingDevProcesses(inspected.canonicalRoot)
+      if (runtime.controller.signal.aborted) return runtime.snapshot
+      if (terminatedPids.length > 0) {
+        this.captureLog(runtime, 'stdout', `已接管开发模式：停止旧开发进程 ${terminatedPids.join(', ')}`)
+      }
       runtime.snapshot = { ...runtime.snapshot, status: 'starting', phase: 'start', updatedAt: this.now(), logs: this.recentLogs(runtime) }
       this.emit(runtime, 'status')
       let lastError = 'readiness_timeout'
@@ -1537,6 +1562,19 @@ export class LocalAppRuntimeManager {
     return this.supervisor.cancelBuild(this.ownerId(localAppId), buildId)
   }
 
+  /** Stop only AgentOS-owned development processes for the same project root. */
+  async stopOwnedDevelopmentRuntimes(rootPath: string): Promise<void> {
+    const comparableRoot = runtimeComparableRoot(rootPath)
+    const ownerIds = new Set<string>()
+    for (const [definitionId, definition] of this.definitions) {
+      if (runtimeComparableRoot(definition.canonicalRoot ?? definition.rootPath) !== comparableRoot) continue
+      const ownerId = this.ownerId(definitionId)
+      const snapshot = this.supervisor.snapshot(ownerId)
+      if (snapshot?.mode === 'development' && snapshot.status !== 'stopped') ownerIds.add(ownerId)
+    }
+    await Promise.all([...ownerIds].map((ownerId) => this.supervisor.stop(ownerId, 'user')))
+  }
+
   getStaticPreviewRegistry(): StaticPreviewRegistry {
     return this.supervisor.getStaticPreviewRegistry()
   }
@@ -1559,11 +1597,61 @@ export class LocalAppRuntimeManager {
 }
 
 function runtimeDedupeKey(definition: LocalAppDefinition): string {
-  const normalized = (definition.canonicalRoot ?? definition.rootPath).replace(/\\/g, '/').replace(/\/+$/, '')
-  const comparable = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+  const comparable = runtimeComparableRoot(definition.canonicalRoot ?? definition.rootPath)
   return definition.mode === 'static'
     ? `${comparable}|static|${definition.agentos?.outputRoot ?? ''}|${definition.agentos?.entryFile ?? ''}`
     : `${comparable}|npm run dev`
+}
+
+function runtimeComparableRoot(rootPath: string): string {
+  const normalized = rootPath.replace(/\\/g, '/').replace(/\/+$/, '')
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+/**
+ * Next.js keeps an exclusive project lock while `next dev` is alive. If an
+ * earlier terminal, IDE, or AgentOS process still owns that exact lock, the
+ * replacement exits with code 1. Resolve only the PIDs holding this project's
+ * lock; never scan or kill processes merely because their cwd/command matches.
+ */
+export async function terminateNextDevLockOwners(canonicalRoot: string): Promise<number[]> {
+  if (process.platform === 'win32') return []
+  const lockPath = path.join(canonicalRoot, '.next', 'dev', 'lock')
+  if (!existsSync(lockPath)) return []
+  const pids = await openFileOwnerPids(lockPath)
+  const terminated: number[] = []
+  for (const pid of pids) {
+    if (pid <= 0 || pid === process.pid) continue
+    try { process.kill(pid, 'SIGTERM') } catch { continue }
+    if (!await waitForPidExit(pid, LOCAL_APP_RUNTIME_DEFAULTS.termTimeoutMs)) {
+      try { process.kill(pid, 'SIGKILL') } catch { /* process exited after the timeout */ }
+      await waitForPidExit(pid, LOCAL_APP_RUNTIME_DEFAULTS.killTimeoutMs)
+    }
+    terminated.push(pid)
+  }
+  return terminated
+}
+
+async function openFileOwnerPids(filePath: string): Promise<number[]> {
+  return new Promise((resolve) => {
+    let output = ''
+    let settled = false
+    const child = spawn('lsof', ['-t', filePath], { shell: false, stdio: ['ignore', 'pipe', 'ignore'] })
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve([...new Set(output.split(/\s+/).map(Number).filter((pid) => Number.isInteger(pid) && pid > 0))])
+    }
+    const timeout = setTimeout(() => {
+      try { child.kill('SIGTERM') } catch { /* lsof already exited */ }
+      finish()
+    }, 1_000)
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => { output += chunk })
+    child.once('error', finish)
+    child.once('exit', finish)
+  })
 }
 
 export async function terminateProcessTree(
