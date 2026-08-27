@@ -1,0 +1,3 @@
+export const RUNTIME_PREVIEW_RESIZE_EVENT = 'agentos:runtime-preview-resize'
+
+export type RuntimePreviewResizeEvent = CustomEvent<{ active: boolean }>

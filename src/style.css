@@ -10757,6 +10757,30 @@ html[data-window-effects='mac-vibrancy'] .app-shell-empty {
 .runtime-preview-resizer__handle.is-width::after { top: 50%; left: 4px; width: 3px; height: 48px; transform: translateY(-50%); }
 .runtime-preview-resizer__handle.is-height { grid-column: 1; grid-row: 2; cursor: ns-resize; }
 .runtime-preview-resizer__handle.is-height::after { top: 4px; left: 50%; width: 48px; height: 3px; transform: translateX(-50%); }
+.runtime-preview-resizer__handle.is-height-rail {
+  position: sticky;
+  top: 72px;
+  z-index: 3;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+  display: grid;
+  width: 12px;
+  height: 56px;
+  margin-top: 72px;
+  place-items: center;
+  cursor: ns-resize;
+  color: var(--color-token-text-secondary);
+  background: var(--color-token-main-surface-secondary);
+  box-shadow: 0 0 0 1px var(--color-token-border-light);
+}
+.runtime-preview-resizer__handle.is-height-rail::after { display: none; }
+.runtime-preview-resizer__handle.is-height-rail:hover,
+.runtime-preview-resizer__handle.is-height-rail:focus-visible,
+.runtime-preview-resizer.is-resizing .runtime-preview-resizer__handle.is-height-rail {
+  color: var(--blue-500);
+  background: color-mix(in srgb, var(--blue-500) 12%, var(--color-token-main-surface-secondary));
+}
 .runtime-preview-resizer__handle.is-both {
   grid-column: 2;
   grid-row: 2;

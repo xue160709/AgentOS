@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../i18n/i18n'
 import type { RuntimePreviewLayoutSize } from '../desktop-api'
+import { RUNTIME_PREVIEW_RESIZE_EVENT } from '../runtime-preview-events'
 
 const DEFAULT_HEIGHT = 960
 const MIN_WIDTH = 480
@@ -41,12 +42,16 @@ export function ResizableRuntimePreview({ projectId, children }: { projectId: st
     sizeRef.current = next
     setSizeState(next)
   }
+  const setNativePreviewResizeActive = (active: boolean) => {
+    window.dispatchEvent(new CustomEvent(RUNTIME_PREVIEW_RESIZE_EVENT, { detail: { active } }))
+  }
   currentProjectRef.current = projectId
 
   useEffect(() => {
     const request = ++loadRequestRef.current
     saveRequestRef.current += 1
     if (keyboardSaveRef.current !== null) { window.clearTimeout(keyboardSaveRef.current); keyboardSaveRef.current = null }
+    if (dragRef.current) setNativePreviewResizeActive(false)
     dragRef.current = null
     pendingSizeRef.current = null
     setDragging(null)
@@ -67,6 +72,7 @@ export function ResizableRuntimePreview({ projectId, children }: { projectId: st
     if (frameRequestRef.current !== null) window.cancelAnimationFrame(frameRequestRef.current)
     if (keyboardSaveRef.current !== null) window.clearTimeout(keyboardSaveRef.current)
     if (statusTimerRef.current !== null) window.clearTimeout(statusTimerRef.current)
+    if (dragRef.current) setNativePreviewResizeActive(false)
     dragRef.current = null
     document.documentElement.classList.remove('is-resizing-runtime-preview')
     window.removeEventListener('pointermove', onWindowPointerMove)
@@ -131,6 +137,7 @@ export function ResizableRuntimePreview({ projectId, children }: { projectId: st
     }
     pendingSizeRef.current = null
     setSize(next)
+    setNativePreviewResizeActive(false)
     void persist(next)
   }
 
@@ -152,6 +159,7 @@ export function ResizableRuntimePreview({ projectId, children }: { projectId: st
     event.currentTarget.setPointerCapture(event.pointerId)
     loadRequestRef.current += 1
     dragRef.current = { axis, startX: event.clientX, startY: event.clientY, startWidth: rect.width, startHeight: rect.height, maxWidth: availableWidth() }
+    setNativePreviewResizeActive(true)
     setDragging(axis)
     setSaveStatus('idle')
     document.documentElement.classList.add('is-resizing-runtime-preview')
@@ -215,6 +223,7 @@ export function ResizableRuntimePreview({ projectId, children }: { projectId: st
     <div className="runtime-preview-resizer__viewport">{children}</div>
     <button type="button" className="runtime-preview-resizer__handle is-width" aria-label={t('runtime.resizePreviewWidth')} onPointerDown={(event) => startDrag('width', event)} onKeyDown={(event) => resizeFromKeyboard('width', event)} />
     <button type="button" className="runtime-preview-resizer__handle is-height" aria-label={t('runtime.resizePreviewHeight')} onPointerDown={(event) => startDrag('height', event)} onKeyDown={(event) => resizeFromKeyboard('height', event)} />
+    <button type="button" className="runtime-preview-resizer__handle is-height-rail" aria-label={t('runtime.resizePreviewHeight')} onPointerDown={(event) => startDrag('height', event)} onKeyDown={(event) => resizeFromKeyboard('height', event)}><span aria-hidden>↕</span></button>
     <button type="button" className="runtime-preview-resizer__handle is-both" aria-label={t('runtime.resizePreviewBoth')} title={t('runtime.resetPreviewSizeHint')} onPointerDown={(event) => startDrag('both', event)} onKeyDown={(event) => resizeFromKeyboard('both', event)} onDoubleClick={() => void reset()}><span aria-hidden>↘</span></button>
     {(dragging || saveStatus !== 'idle') ? <div className={`runtime-preview-resizer__status is-${saveStatus}`} role={saveStatus === 'failed' ? 'alert' : 'status'}>{saveStatus === 'failed' ? t('runtime.previewSizeSaveFailed') : saveStatus === 'saving' ? t('runtime.previewSizeSaving') : label}</div> : null}
   </div>

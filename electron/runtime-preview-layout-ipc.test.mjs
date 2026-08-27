@@ -21,3 +21,16 @@ test('runtime preview layout IPC is narrow, main-window-only, and forwarded by p
   assert.match(main, /event\.sender\.id === win\.webContents\.id/)
   assert.match(main, /event\.senderFrame === event\.sender\.mainFrame/)
 })
+
+test('runtime preview resize suspends the native view until the drag completes', () => {
+  const resizer = readFileSync(resolve(root, 'src/components/ResizableRuntimePreview.tsx'), 'utf8')
+  const preview = readFileSync(resolve(root, 'src/components/RuntimePreview.tsx'), 'utf8')
+  const events = readFileSync(resolve(root, 'src/runtime-preview-events.ts'), 'utf8')
+  assert.match(events, /agentos:runtime-preview-resize/)
+  assert.match(resizer, /setNativePreviewResizeActive\(true\)/)
+  assert.match(resizer, /setNativePreviewResizeActive\(false\)/)
+  assert.match(resizer, /is-height-rail/)
+  assert.match(preview, /setRuntimePreviewVisible\?\.\(previewId, false\)/)
+  assert.match(preview, /if \(!resizeActive\).*setRuntimePreviewVisible/)
+  assert.match(preview, /requestAnimationFrame\(\(\) => \{ resumeFrame = null; sync\(\) \}\)/)
+})
