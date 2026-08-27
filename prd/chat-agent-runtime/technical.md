@@ -1,5 +1,24 @@
 # 聊天与 Agent 运行时技术文档
 
+## Revision 2 计划合同（Accepted / Planned）
+
+Revision 2 将 renderer-local Chat 写入路径迁移为 Main-owned `ProjectChatBroker`。该计划尚未落地；完整冻结合同见 [`../../changes/active/chg-20260818-agent-command-channel/technical.md`](../../changes/active/chg-20260818-agent-command-channel/technical.md)，网站线协议见同目录 `protocol-v1.md`。
+
+计划新增的关键边界：
+
+| 边界 | 冻结决定 |
+| --- | --- |
+| 事实源 | Main 串行写 thread/transcript/run/session/diff/workspace revision；renderer 只消费完整项目 snapshot |
+| Runner | `ClaudeAgentRunner` 通过 event sink 向 broker 发事件，不直接持有单个 renderer `WebContents` |
+| 并发 | 同 thread active 时第二次 submit 返回 `thread-busy`，不隐式取消；不同 thread 可并行 |
+| 窗口 | 每项目一个 BrowserWindow，固定 project capability；关闭视图不 cancel run |
+| IPC | `window.projectChat` typed bridge；Main 校验 sender、main frame、renderer URL 与固定 project capability |
+| 权限 | app-global Main preference，缺省 `auto`；submit 线性化时捕获，网站协议无权限字段 |
+| 网站 | safeStorage 加密 Binding credential；fixed HTTPS well-known Ticket；accepted 只表示 thread durable + runner 返回 requestId |
+| Runtime | 可靠 before-tool lease/actual diff 才记 mutation；三条件 settle，1,500ms stable / 30,000ms max；旧 generation 不切 last-good |
+
+迁移必须按 `M0 contracts/broker/window` → `M1 binding/deep-link` 与 `M2 runtime settle` 执行。M0 完成前不得让旧 renderer writer 与 broker 同时写 workspace；Revision 2 完成后，下面“同一线程新请求会取消前一个活跃请求”的 as-built 行为将改为 `thread-busy`。
+
 ## 代码入口
 
 | 路径 | 作用 |

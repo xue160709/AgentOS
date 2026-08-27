@@ -12,7 +12,7 @@ AgentOS 是面向本地项目与长期任务的 Electron 桌面 Agent 工作台�
 | --- | --- | --- | --- |
 | 产品总览 | 已实现，正式验收通过 | `agentos/README.md` | `agentos/technical.md` |
 | 工作区与会话 | 已实现，正式验收通过 | `workspace-session/README.md` | `workspace-session/technical.md` |
-| 聊天与 Agent 运行时 | 已实现，正式验收通过 | `chat-agent-runtime/README.md` | `chat-agent-runtime/technical.md` |
+| 聊天与 Agent 运行时 | 当前能力已实现并正式验收通过；Revision 2 已确认、待开发 | `chat-agent-runtime/README.md` | `chat-agent-runtime/technical.md` |
 | 本地文件上下文 | 已实现，正式验收通过 | `file-context/README.md` | `file-context/technical.md` |
 | 模型与 Provider 设置 | 已实现，正式验收通过 | `model-settings/README.md` | `model-settings/technical.md` |
 | 持久化 | 已实现，正式验收通过 | `persistence/README.md` | `persistence/technical.md` |
@@ -24,7 +24,8 @@ AgentOS 是面向本地项目与长期任务的 Electron 桌面 Agent 工作台�
 
 ## 当前重点
 
-- `chg-20260825-local-app-tabs-runtime` Revision 2 已实现并通过第三轮独立 Development Check：用户层已收敛为 Workspace Tab/Runtime，并新增项目首页独立 Runtime 页；正式 `project-verify` 尚未执行。
+- `chg-20260818-agent-command-channel` Revision 2 已完成产品、技术、网站协议、Acceptance 计划和 Terra work orders 冻结；业务实现尚未开始，下一步是串行完成 M0 Main-owned Chat broker 与独立项目 Chat 窗口。
+- `chg-20260825-local-app-tabs-runtime` 已按用户指示关闭并归档；关闭不等于正式验收，已知 GUI/Development Check 缺口保留在归档证据与根 TODO。
 - 根 `TODO.md` 当前以后续正式 Acceptance 与真实 Electron 证据为入口；既有模块的正式验收事实继续以各自 `acceptance.md` 为准。
 - 全量正式验收已执行并回写 `acceptance.md`：当前仅剩 `desktop-shell-settings-release` 的 close-to-tray、macOS 语音授权成功、macOS 语音权限拒绝 3 项人工确认。
 - 交互流程复查未发现新的阻断级状态机缺陷；剩余工作是把 Composer 语音/提交、权限弹窗、Generative UI、状态面板跳转、项目首页任务卡等全页面点击路径沉淀成可重复 E2E 脚本证据。

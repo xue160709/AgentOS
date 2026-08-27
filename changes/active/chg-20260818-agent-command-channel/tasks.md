@@ -18,7 +18,7 @@ not_needed:
   - quality_verifier: "语义冻结和实现完成后再进入风险检查；用户尚未发起正式验收"
 confirmation: user_confirmed_discovery
 acceptance_requested: false
-coverage_gate: in_progress
+coverage_gate: ready_for_implementation
 ---
 
 # Revision 2 Tasks
@@ -39,10 +39,26 @@ coverage_gate: in_progress
 - [x] `DISC-ARCH-02` owner: technical_architect｜依赖：`DISC-PM-02`｜执行：response_only｜已返回 Main broker、deep link/ticket、binding、跨窗口 fence、Runtime settle、平台打包与回滚架构草案。
 - [x] `DISC-MERGE-02` owner: main_agent｜依赖：`DISC-UX-02`、`DISC-ARCH-02`｜写入：`proposal.md`、`evidence.md`｜已合并 Decision Brief，解决网站 issuer、窗口打断、双结果状态和单 writer 边界。
 - [x] `TRIM-CONCURRENCY-02` owner: user + main_agent｜依赖：`DISC-MERGE-CONCURRENCY-02`｜写入：`proposal.md`、`evidence.md`｜用户确认删除并发写入安全合同；已移除 `MutationCoordinator`、path lock、版本校验、写后校验、冲突重放与变化归因，收口前置条件压缩为三条，保留“多会话可并行”与“未终态不显示预览已更新”。
-- [ ] `CONFIRM-02` owner: user｜依赖：`DISC-MERGE-02`｜执行：conversation｜确认或修订 Decision Brief；确认前不进入正式产品合同和业务实现。
-- [ ] `SYNC-02` owner: main_agent｜依赖：`CONFIRM-02`｜写入：`prd/**`、`TODO.md`、change package｜使用 update-prd 同步已确认范围、Acceptance 和实现计划。
-- [ ] `DEV-02` owner: implementation_engineer｜依赖：`SYNC-02`｜写入：待架构确认后的精确 allowlist｜实现独立窗口、项目级会话协调、配对/ticket 入口及 Runtime 衔接。
-- [ ] `CHECK-02` owner: quality_verifier｜依赖：`DEV-02`｜执行：V3 风险检查；仅在用户另行明确授权时进入正式验收。
+- [x] `CONFIRM-02` owner: user｜依赖：`DISC-MERGE-02`｜执行：conversation｜2026-08-27 用户要求先基于事实统一，并直接产出可交付 Terra 的 spec/TODO；Decision Brief 与三个建议默认选择据此转为 accepted。
+- [x] `SPEC-02` owner: main_agent｜依赖：`CONFIRM-02`｜写入：change package｜已冻结 `design.md`、`technical.md`、`protocol-v1.md`、`acceptance.md`，明确产品行为、数据/IPC/状态机、网站线协议、错误码和门禁。
+- [x] `SYNC-02` owner: main_agent｜依赖：`SPEC-02`｜写入：`prd/**`、`TODO.md`、change package｜已同步 Revision 2 planned 状态、正式 GWT、根 TODO 与 Terra work orders；未写业务代码。
+- [x] `PLAN-TERRA-02` owner: main_agent｜依赖：`SPEC-02`｜写入：`work-orders/**`｜已拆成 13 个串行/依赖明确的 work order，每单含 read/write allowlist、步骤、测试、完成/停止条件。
+
+### Revision 2 实现 Work Orders（均未开工）
+
+- [ ] `M0-01` owner: implementation_engineer｜依赖：`SYNC-02`｜任务单：`work-orders/M0-01-contracts-runner-sink.md`｜共享合同、纯 reducer、runner event sink。
+- [ ] `M0-02` owner: implementation_engineer｜依赖：`M0-01`｜任务单：`work-orders/M0-02-main-chat-broker.md`｜Main broker、single writer、run/prompt 路由。
+- [ ] `M0-03` owner: implementation_engineer｜依赖：`M0-02`｜任务单：`work-orders/M0-03-ipc-permission-capability.md`｜typed IPC、sender capability、app-global permission。
+- [ ] `M0-04` owner: implementation_engineer｜依赖：`M0-03`｜任务单：`work-orders/M0-04-project-chat-window.md`｜每项目唯一窗口与 view state。
+- [ ] `M0-05` owner: implementation_engineer｜依赖：`M0-04`｜任务单：`work-orders/M0-05-renderer-cutover.md`｜主窗口 snapshot 投影、封闭 renderer durable writer。
+- [ ] `M0-06` owner: implementation_engineer｜依赖：`M0-05`｜任务单：`work-orders/M0-06-project-window-command-channel.md`｜完整项目窗口、Revision 1 通道迁移；完成后执行 M0 Gate。
+- [ ] `M1-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：`work-orders/M1-01-binding-protocol-stores.md`｜protocol parser、Binding/receipt stores。
+- [ ] `M1-02` owner: implementation_engineer｜依赖：`M1-01`｜任务单：`work-orders/M1-02-deep-link-ticket.md`｜cold/warm deep link、HTTPS Ticket、外部任务提交。
+- [ ] `M1-03` owner: implementation_engineer｜依赖：`M1-02`｜任务单：`work-orders/M1-03-pairing-settings-focus.md`｜配对/连接管理 UI 与新任务焦点规则。
+- [ ] `M1A-01` owner: implementation_engineer｜依赖：`M1-02`｜任务单：`work-orders/M1A-01-preview-capture.md`｜Preview 窄捕获与安全隔离。
+- [ ] `M2-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：`work-orders/M2-01-runtime-edit-coordinator.md`｜edit lease、mutation、settle generation。
+- [ ] `M2-02` owner: implementation_engineer｜依赖：`M2-01`｜任务单：`work-orders/M2-02-runtime-ui-integration.md`｜接入 Runtime/last-good 与状态 UI。
+- [ ] `CHECK-02` owner: quality_verifier｜依赖：`M1-03`、`M1A-01`、`M2-02`｜任务单：`work-orders/CHECK-02-development-check.md`｜执行独立 Development Check；仅在用户另行明确授权时进入正式验收。
 
 ## Revision 1 已完成基线
 

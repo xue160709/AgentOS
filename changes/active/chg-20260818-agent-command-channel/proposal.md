@@ -1,11 +1,11 @@
 ---
 change_id: chg-20260818-agent-command-channel
 revision: 2
-decision: draft
+decision: accepted
 delivery: in_progress
 owner: main_agent
 confirmation_source: explicit_user_statement
-confirmed_scope: "2026-08-26：独立项目 Chat 窗口、网站与项目一对一绑定、授权网站可直接新建会话、agentos deep link + HTTPS 一次性 ticket、沿用当前权限；2026-08-27：静态项目只在修改期间自动进入实时预览，修改任务结束后自动生成已保存预览，日常界面隐藏开发模式与重启；同一项目允许多个 Agent 会话并行修改，禁止静默后写覆盖；2026-08-27（后续修订）：用户决定 v1 不实现写入协调机制，同文件竞争交给 Agent SDK `Edit` 匹配失败与项目自身版本控制兜底"
+confirmed_scope: "2026-08-26：独立项目 Chat 窗口、网站与项目一对一绑定、授权网站可直接新建会话、agentos deep link + HTTPS 一次性 ticket、沿用当前权限；2026-08-27：静态项目只在修改期间自动进入实时预览，修改任务结束后自动生成已保存预览，日常界面隐藏开发模式与重启；同一项目允许多个 Agent 会话并行修改；后续修订为 v1 不实现写入协调机制；2026-08-27 用户要求基于事实统一并产出可交付 Terra 的 spec/TODO，Decision Brief 与三个建议默认选择据此转为 accepted"
 ---
 
 # Agent 指令通道与独立项目 Chat 窗口
@@ -23,12 +23,12 @@ confirmed_scope: "2026-08-26：独立项目 Chat 窗口、网站与项目一对�
 - 来源同时包括 AgentOS 内嵌页面与普通系统浏览器页面。
 - 网站先发起配对，AgentOS 由用户确认；一个网站只绑定一个本地项目。
 - 已授权网站可直接发起任务；每次外部任务都创建一个新的普通会话，之后可在 AgentOS 中继续修改。
-- 协议不携带、不选择也不提升权限；任务运行时直接沿用用户当时为该项目选择的权限模式。
+- 协议不携带、不选择也不提升权限；v1 沿用当前应用级权限选择，由 Main 持久化并在任务提交时捕获。
 - 第一版使用 `agentos://` 负责配对或唤醒，HTTPS 一次性 ticket 负责承载任务；自定义协议 URL 不承载 prompt、项目路径、session、凭据或权限。
 
-### Decision Brief（待用户确认）
+### Decision Brief（已确认）
 
-以下为 `product_manager`、`experience_designer` 与 technical-architecture draft 合并后的 `agent_proposal`。用户确认前不写入正式 PRD、Acceptance 或业务代码。
+以下 Decision Brief 已在 2026-08-27 用户要求“基于事实统一并产出 spec 和 TODO”后冻结。正式产品、技术、协议、验收和执行任务分别见 `design.md`、`technical.md`、`protocol-v1.md`、`acceptance.md` 与 `work-orders/`；业务代码仍未实现。
 
 #### 1. 产品对象与唯一事实源
 
@@ -145,7 +145,7 @@ Runtime Rev5 的“普通后续源码变化 stale + 手动更新”继续成立�
 - 未绑定、配对拒绝、ticket 过期/已使用、来源不符、项目丢失或绑定撤销时都不创建会话，也不尝试其它项目。
 - HTTPS 暂时不可用且 ticket 尚未消费时可安全重试；SDK 已启动但回执失败时，通过幂等键返回原 `commandId/threadId`，不能创建第二个会话。
 - thread 必须先持久化再提交 SDK；创建后提交失败则保留可见失败会话。app 重启不承诺恢复 live run，但已持久化 thread/session 可继续。
-- 协议不能回答权限请求或 Agent 提问。任务在线性化提交点读取项目当前权限模式，本次 run 固定使用该模式。
+- 协议不能回答权限请求或 Agent 提问。任务在线性化提交点读取 Main 当前应用级权限模式，本次 run 固定使用该模式。
 - Preview 保持 sandbox、无 Node/Electron bridge；新增的只是 Main 对特定 `agentos://` 导航的窄捕获与来源校验。
 - IPC 校验 sender、frame URL、窗口登记、项目能力与 generation；日志不记录 prompt、路径、绑定凭据或 ticket body。
 
@@ -164,7 +164,7 @@ Runtime Rev5 的“普通后续源码变化 stale + 手动更新”继续成立�
 2. v1 网站只接收 `accepted/rejected`，不接收运行过程或最终结果。
 3. 关闭独立 Chat 窗口后任务继续；外部新任务不打断当前草稿、权限请求或运行中会话。
 
-这三项最符合“降低小白成本、复用现有 Chat、保持协议简单”的目标，作为本轮唯一待用户确认的合同组合。
+这三项已作为 Revision 2 的冻结默认合同。
 
 ### 非目标与硬边界
 
@@ -185,7 +185,7 @@ Runtime Rev5 的“普通后续源码变化 stale + 手动更新”继续成立�
 1. 先冻结产品对象、授权边界和成功/失败语义。
 2. 再设计独立窗口、配对和外部任务的完整状态流。
 3. 再确定主进程 broker、deep link、HTTPS ticket、跨窗口会话与 Runtime 的技术契约。
-4. 用户确认 Decision Brief 后，才同步 PRD、Acceptance、TODO 并进入实现。
+4. Decision Brief 已确认，PRD、Acceptance、TODO 与 Terra work orders 已同步；下一步按 M0→M1/M2 顺序实现。
 
 ## Revision 1：已实现基线
 

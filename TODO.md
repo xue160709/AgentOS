@@ -6,7 +6,43 @@
 
 ## 1. 活跃变更
 
-### 1.1 Workspace Tab 与可复用 Runtime（Revision 5）— 已关闭
+### 1.1 Agent 指令通道与独立项目 Chat 窗口（Revision 2）— Spec 已冻结，待开发
+
+- **Change**：[`chg-20260818-agent-command-channel`](changes/active/chg-20260818-agent-command-channel/proposal.md)
+- **产品规格**：[`design.md`](changes/active/chg-20260818-agent-command-channel/design.md)
+- **技术规格**：[`technical.md`](changes/active/chg-20260818-agent-command-channel/technical.md)
+- **网站协议**：[`protocol-v1.md`](changes/active/chg-20260818-agent-command-channel/protocol-v1.md)
+- **验收计划**：[`acceptance.md`](changes/active/chg-20260818-agent-command-channel/acceptance.md)；正式 GWT 唯一事实源为 [`prd/chat-agent-runtime/acceptance.md`](prd/chat-agent-runtime/acceptance.md)
+- **Terra 执行入口**：[`work-orders/README.md`](changes/active/chg-20260818-agent-command-channel/work-orders/README.md)
+- **当前状态**：Decision accepted，产品/技术/协议/Acceptance/TODO 已同步；业务代码尚未开始。权限 v1 冻结为当前 app-global 选择并迁到 Main 权威，不新增 project-level 权限。
+
+#### M0：必须串行，先建立共享 Chat 事实源
+
+- [ ] `M0-01`｜共享合同、纯 reducer、Claude runner event sink。
+- [ ] `M0-02`｜Main-owned ProjectChatBroker、workspace single writer、run/prompt 路由。
+- [ ] `M0-03`｜typed IPC、sender/frame/project capability、Main app-global permission。
+- [ ] `M0-04`｜每项目唯一 Project Chat Window 与 draft/selected thread/bounds 恢复。
+- [ ] `M0-05`｜主窗口 snapshot 投影、封闭 renderer full-snapshot writer。
+- [ ] `M0-06`｜完整独立项目 Chat UI、Revision 1 `agentCommandChannel` 迁移、双窗口 M0 Gate。
+
+#### M1：网站入口（M0 Gate 后）
+
+- [ ] `M1-01`｜严格 protocol parser、safeStorage Binding、幂等 receipt stores。
+- [ ] `M1-02`｜mac/argv cold-warm deep link、固定 HTTPS Ticket、accepted/rejected 回执与提交线性化。
+- [ ] `M1-03`｜配对对话框、Settings 网站连接、新任务不打断/徽标规则。
+- [ ] `M1A-01`｜Preview 窄 deep-link 捕获；保持无 preload/Node/Chat IPC。
+
+#### M2：Agent 修改期 Runtime 收口（M0 Gate 后，可与 M1 前半并行）
+
+- [ ] `M2-01`｜可靠 before-tool lease/actual Diff、potential runs、三条件 settle、generation fence。
+- [ ] `M2-02`｜接入现有 Runtime：静态自动 build/last-good、development-only、失败/取消回退与双 Host 状态。
+
+#### 验证门禁
+
+- [ ] `CHECK-02`｜全部 work order 完成后执行独立 Development Check；必须覆盖单 writer、同 thread busy、secret/IPC/deep-link 安全负例、幂等、窗口关闭、prompt owner、Runtime generation/last-good 和现有 Chat/Runtime 回归。
+- [ ] 正式 Acceptance｜仅在用户另行授权后逐条验证 `ATDD-CHAT-201`–`ATDD-A11Y-201`；Development Check PASS 不自动等于正式验收。
+
+### 1.2 Workspace Tab 与可复用 Runtime（Revision 5）— 已关闭
 
 - **Change**：[`chg-20260825-local-app-tabs-runtime`](changes/archive/2026/chg-20260825-local-app-tabs-runtime/proposal.md)（已归档）
 - **PRD**：[`prd/local-app-runtime/README.md`](prd/local-app-runtime/README.md)

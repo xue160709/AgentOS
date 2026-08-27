@@ -30,7 +30,7 @@
 - task_mapping: `DISC-PM-02 -> DISC-UX-02 + DISC-ARCH-02 -> DISC-MERGE-02 -> CONFIRM-02`
 - deviation: `technical_architect` 因子线程上限复用已完成的 `protocol_scheme_consult` 线程，并按 technical-architect 方法与交付模板补全；不新增写入者。
 - merge_owner: main_agent
-- final_status: WAITING_USER_CONFIRMATION
+- final_status_at_that_stage: WAITING_USER_CONFIRMATION
 
 ### `DISC-PM-02` 产品范围草案
 
@@ -65,7 +65,7 @@
 
 ### `DISC-MERGE-02`
 
-- 状态：完成，Decision Brief 已写入 `proposal.md`，但仍是 `decision: draft`。
+- 当时状态：完成，Decision Brief 已写入 `proposal.md`，当时仍是 `decision: draft`；后续由 `SPEC-02` 冻结为 accepted。
 - 合并裁决：选择网站自有 HTTPS origin 的固定 well-known endpoint，避免本地 HTTPS 服务或可注入 issuer URL；新增绑定凭据不属于权限，且不出现在协议 URL。
 - 合并裁决：用户看到的最小词汇固定为“实时预览 / 已保存预览 / 更新预览”；Agent 与 Preview 使用两个独立结果。
 - 待确认组合：自动更新已保存预览；v1 网站只收接受/拒绝；关闭窗口继续任务且外部任务不抢当前焦点。
@@ -91,7 +91,7 @@
 - task_mapping: `CONFIRM-CONCURRENCY-02 -> DISC-UX-CONCURRENCY-02 + DISC-ARCH-CONCURRENCY-02 -> DISC-MERGE-CONCURRENCY-02`
 - deviation: `technical_architect` 继续复用既有协议架构线程，补充 Runtime 状态契约；两项均为 response_only，无新增 writer。
 - merge_owner: main_agent
-- final_status: DESIGN_MERGED; CHANGE_DECISION_REMAINS_DRAFT
+- final_status_at_that_stage: DESIGN_MERGED; CHANGE_DECISION_REMAINS_DRAFT
 
 ### `DISC-UX-RUNTIME-02`
 
@@ -160,7 +160,20 @@
 - 残留风险（已接受）：`Write` 全量覆盖同一文件时可能静默丢失另一会话的改动。判定为可接受，依据是发生频率低、失败可见（`git diff`）、可一条命令还原；已核实 `/Volumes/macOS/Github/homepage` 与 `/Volumes/macOS/Github/codenow.wiki` 均为 git 仓库。
 - 保留的必要约束及其成本：收口前必须确认该项目下没有其它活跃 write-capable run，否则会在源码只改了一半时自动 build 并宣称“预览已更新”。该约束只需活跃 run 计数，不需要协调器。
 - 重新启用条件：出现真实的丢改动案例（用户可复述、且能定位到并发写入）。届时优先评估最小手段（例如仅对 `Write` 全量覆盖做单文件版本校验），而不是恢复整节合同。
-- 未同步正式 PRD / Acceptance / TODO；`tasks.md` 中 `DISC-UX-CONCURRENCY-02`、`DISC-ARCH-CONCURRENCY-02`、`DISC-MERGE-CONCURRENCY-02` 作为历史事实保持已完成，不回改。
+- 当时未同步正式 PRD / Acceptance / TODO；后续 `SYNC-02` 已同步。`tasks.md` 中 `DISC-UX-CONCURRENCY-02`、`DISC-ARCH-CONCURRENCY-02`、`DISC-MERGE-CONCURRENCY-02` 作为历史事实保持已完成，不回改。
+
+## `CONFIRM-02` / `SPEC-02` / `SYNC-02`（2026-08-27）
+
+- trigger：用户连续要求“先基于事实来统一”“怎么把 spec 写清楚，因为要让 terra 来开发”，随后明确要求“那你来出 spec 和 TODO”。
+- interpretation：接受已合并 Decision Brief 与三个建议默认合同，并授权产出开发规格/TODO；不构成业务代码实现或正式验收授权。
+- current decision：`proposal.md decision=accepted`；`coverage_gate=ready_for_implementation`；delivery 仍为 in_progress。
+- fact audit：确认当前 `agent-command-channel` 位于 renderer、`claude-chat:*` IPC 直接调用一个绑定主窗口 WebContents 的 runner、同 thread 新 submit 会取消旧 run、权限模式在 Chat renderer 本地持久化、second-instance 尚未解析 deep link。Revision 2 规格以这些 as-built 差距为迁移起点。
+- frozen defaults：网站只收 accepted/rejected；关闭独立窗口 run 继续且新任务不打断草稿/active run/prompt；静态项目成功 Agent edit settle 后自动更新已保存预览。
+- permission clarification：当前代码不是 project-level permission store。为避免无依据新增作用域，v1 冻结为 app-global、Main-authoritative、所有窗口同步、submit 时捕获，默认 `auto`。
+- spec outputs：`README.md`、`design.md`、`technical.md`、`protocol-v1.md`、`acceptance.md`。
+- execution outputs：`work-orders/` 共 13 单；M0-01–M0-06 串行，M0 Gate 后 M1/M2 可按依赖并行，每单包含精确 write allowlist、测试、完成与停工条件。
+- formal sync：`prd/chat-agent-runtime/{README,technical,acceptance}.md` 已同步 Revision 2 planned 合同；根 `TODO.md` 与 `prd/README.md` 已更新。正式 Acceptance 仍全部未执行。
+- no business code：本次只修改文档；用户已有的 `AGENTS.md` 删除和其它业务代码脏改动未被覆盖或清理。
 
 ## Revision 1：实现与自检
 
