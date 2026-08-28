@@ -229,6 +229,7 @@ test('Chat Workspace Store readback preserves neutral Workspace Tab create, open
     const created = store.read()
     assert.ok(created)
     assert.deepEqual(created.runtimeDefinitions.map((item) => item.id), [definition.id])
+    assert.deepEqual(created.runtimeDefinitions[0].owner, { kind: 'workspace' })
     assert.deepEqual(created.workspaceTabs.map((tab) => tab.id), ['tab-a', 'tab-b'])
     assert.equal(created.workspaceTabs[0].projectId, 'project-1')
     assert.equal(created.activeWorkspaceTabId, 'tab-a')
@@ -265,6 +266,25 @@ test('Chat Workspace Store readback preserves neutral Workspace Tab create, open
     assert.equal(renamed.workspaceTabs[0].title, 'Renamed')
     assert.equal(renamed.activeWorkspaceTabId, 'tab-b')
     assert.equal(renamed.workspaceRevision, 13)
+  })
+})
+
+test('Chat Workspace Store preserves project Runtime owner while removing a project-owned Workspace Tab reference', async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    const projectRuntime = {
+      id: 'project-runtime', owner: { kind: 'project', projectId: 'project-1' }, name: 'Project Runtime', rootPath: '/project/.agentos', canonicalRoot: '/project/.agentos',
+      packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, trustStatus: 'trusted', autoStart: false, createdAt: 1, updatedAt: 1,
+    }
+    await store.save({
+      ...createWorkspaceState(), workspaceRevision: 1, runtimeDefinitions: [projectRuntime],
+      workspaceTabs: [{ id: 'invalid-project-tab', runtimeDefinitionId: projectRuntime.id, title: 'Invalid', createdAt: 1, updatedAt: 1 }],
+    })
+    const restored = store.read()
+    assert.ok(restored)
+    assert.deepEqual(restored.runtimeDefinitions[0].owner, { kind: 'project', projectId: 'project-1' })
+    assert.deepEqual(restored.workspaceTabs, [])
   })
 })
 

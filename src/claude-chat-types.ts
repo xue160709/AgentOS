@@ -8,6 +8,10 @@
 /** 用户发送对话的载荷 / Payload when submitting a user chat message */
 export type ClaudeChatSubmitPayload = {
   text: string
+  /** Main-authoritative project identity used by the Project Chat broker. */
+  projectId?: string
+  /** Main-only capability bit. Legacy/main-window chat payloads are stripped of it. */
+  projectRuntimePrompt?: boolean
   attachments?: ClaudeChatAttachment[]
   threadId?: string
   /** 本次请求使用的线程级模型选择 / Per-thread model pick for this request */

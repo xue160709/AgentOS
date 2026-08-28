@@ -462,6 +462,7 @@ export class WorkspaceSession {
 
   /** Add a trusted definition and its first view atomically after user confirmation. */
   addRuntime(state: ChatWorkspaceState, input: AddRuntimeInput): ChatWorkspaceState {
+    if (input.definition.owner?.kind === 'project') return state
     if (state.runtimeDefinitions.some((item) => item.id === input.definition.id)) return state
     const timestamp = input.definition.createdAt || this.now()
     const definition = {
@@ -487,7 +488,7 @@ export class WorkspaceSession {
   }
 
   addWorkspaceTab(state: ChatWorkspaceState, tab: WorkspaceTab, activate = true): ChatWorkspaceState {
-    if (!state.runtimeDefinitions.some((item) => item.id === tab.runtimeDefinitionId)) return state
+    if (!state.runtimeDefinitions.some((item) => item.id === tab.runtimeDefinitionId && item.owner?.kind !== 'project')) return state
     if (state.workspaceTabs.some((item) => item.id === tab.id)) return state
     return withActiveWorkspaceTab({
       ...state,
@@ -560,10 +561,14 @@ export class WorkspaceSession {
     if (state.projects.length <= 1) return state
     if (!state.projects.some((project) => project.id === projectId)) return state
     const projects = state.projects.filter((project) => project.id !== projectId)
+    const projectHomeViewModes = { ...(state.projectHomeViewModes ?? {}) }
+    delete projectHomeViewModes[projectId]
     return {
       ...state,
       projects,
       threads: state.threads.filter((thread) => thread.projectId !== projectId),
+      runtimeDefinitions: (state.runtimeDefinitions ?? []).filter((definition) => definition.owner?.kind !== 'project' || definition.owner.projectId !== projectId),
+      projectHomeViewModes,
       activeProjectId: state.activeProjectId === projectId ? projects[0]?.id ?? '' : state.activeProjectId,
       activeThreadId: state.activeProjectId === projectId ? '' : state.activeThreadId,
       sidebarPrefs: {

@@ -3,6 +3,46 @@
 > 唯一验收事实源。当前为 2026-06-23 as-built 初始 PRD 同步；由 project-verify 逐条执行并回写实现状态。
 > 对应 TODO：§14 产品 PRD 初始化与后续差距。
 
+## 项目 `.agentos` Runtime prompt（Change revision 3：已实现 / 待正式 GUI 验收）
+
+> Revision 3 自动化 Development Check 已单独通过；真实 GUI 验收尚未执行，自动化结果不替代正式 Acceptance。
+
+### 需求：仅合格的独立项目 Chat / Main 编排获得 Runtime 目录约束
+
+#### `ATDD-PROJECT-RUNTIME-201` 场景：独立项目 Chat 普通/编辑重提注入固定路径
+
+- GIVEN Main 已从权威项目记录解析有效 `projectId` 与项目根目录
+- WHEN 用户从该独立项目 Chat 窗口提交普通请求或编辑重提
+- THEN Main 以 `<project>/.agentos/` 构造并稳定追加 system prompt；该 prompt 仅约束项目 Runtime 网页的实现
+- AND runner cwd 保持项目根；runtimeRoot 与 prompt eligibility 分别由 Main 的权威项目路径、sender capability 派生，renderer 不得传入 root、prompt scope 或等价标记
+- AND prompt 要求 Agent 读取当前项目已有内容和数据，以 Next.js、React、TypeScript 在 `.agentos/` 构建数据可视化工作台，配置静态导出，在 `.agentos/` 执行 `npm install` 后执行 `npm run build`，并验证成功生成 `out/index.html`；不得以 Python、Flask 或 Streamlit 实现 Runtime
+
+#### `ATDD-PROJECT-RUNTIME-202` 场景：主窗口、受管来源与非项目均不注入
+
+- GIVEN 请求来自主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目，或项目路径已失效
+- WHEN Main 构造 Agent request
+- THEN request 不含 `.agentos` Runtime system prompt，也不从 Workspace 目录推导项目 Runtime 根
+
+#### `ATDD-PROJECT-RUNTIME-204` 场景：创建按钮编排独立窗口与线程
+
+- GIVEN 项目 Runtime 处于 `not_initialized`，且调用 sender 具有 main-window capability
+- WHEN 用户点击「让 Agent 创建 Runtime 网页」
+- THEN Main 打开或聚焦对应项目唯一的独立 Chat 窗口，在其中自动创建并选中线程并提交创建 Runtime 网页请求
+- AND 主窗口不创建或选中空对话；按钮 IPC 以外的 sender capability 均被拒绝
+
+#### `ATDD-PROJECT-RUNTIME-205` 场景：伪造 prompt scope / runtimeRoot 不改变资格
+
+- GIVEN renderer 在请求 payload 中附加 `runtimeRoot`、prompt scope 或等价字段
+- WHEN Main 处理提交
+- THEN Main 忽略或拒绝这些调用方字段，并只按权威项目路径与 sender capability / 专用编排决定实际根目录及是否注入
+
+#### `ATDD-PROJECT-RUNTIME-203` 场景：写错项目根只提示
+
+- GIVEN 项目 run 结束后 `.agentos/` 仍不存在，且项目根出现新的 `package.json`、`index.html` 或 `src` 疑似网页工程迹象
+- WHEN 项目 Runtime 页面刷新状态
+- THEN 页面提示 Runtime 网页可能写在项目根并显示 `<project>/.agentos/` 目标路径
+- AND 系统不移动、复制、删除文件，不自动重试 Agent，也不把该提示写成 Agent run 失败
+
 ## Revision 2（Accepted / Planned，未实现）
 
 > 规格来源：`changes/active/chg-20260818-agent-command-channel/`。下列场景已冻结但全部尚未开发/验收；不得把 Revision 1 的通过证据复用为 Revision 2 通过证据。

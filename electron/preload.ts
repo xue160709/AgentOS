@@ -511,6 +511,9 @@ const projectChatAdapter: ProjectChatAPI = {
   openProjectWindow(projectId: string) {
     return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openProjectWindow, projectId)
   },
+  startProjectRuntimeChat(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.startProjectRuntimeChat, projectId)
+  },
   openWorkspaceTabProjectChat(workspaceTabId: string) {
     return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openWorkspaceTabProjectChat, workspaceTabId)
   },

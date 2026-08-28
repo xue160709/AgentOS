@@ -2606,6 +2606,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           onUserMessageEditDismissed={notifyUserMessageEditDismissed}
           onReviewFileChanges={reviewFileChanges}
           onRewindFileChanges={rewindFileChanges}
+          rewindUsesBrokerLookup={projectChatEnabled}
         />
       ) : (
         <ChatStartView

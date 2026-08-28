@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { once } from 'node:events'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -52,6 +52,18 @@ test('Next Turbopack config conflict retries through the scoped webpack compatib
   assert.deepEqual(runtime.runtimeDevCommandArgs([
     { stream: 'stderr', line: "empty turbopack config in your Next config file (e.g. `turbopack: {}`).", timestamp: 1 },
   ]), ['run', 'dev', '--', '--webpack'])
+})
+
+test('Project Runtime root is derived from the project and rejects a canonical symlink escape', () => {
+  const projectRoot = mkdtempSync(`${tmpdir()}/project-runtime-root-`)
+  const outsideRoot = mkdtempSync(`${tmpdir()}/project-runtime-outside-`)
+  const runtimeLink = resolve(projectRoot, '.agentos')
+  symlinkSync(outsideRoot, runtimeLink, 'dir')
+
+  assert.equal(runtime.projectRuntimeRoot(projectRoot), runtimeLink)
+  assert.equal(runtime.isContainedInProject(realpathSync(projectRoot), realpathSync(runtimeLink)), false)
+  const canonicalProjectRoot = realpathSync(projectRoot)
+  assert.equal(runtime.isContainedInProject(canonicalProjectRoot, resolve(canonicalProjectRoot, '.agentos-real')), true)
 })
 
 async function waitForPath(path, { present = true, timeoutMs = 5_000 } = {}) {

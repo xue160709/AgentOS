@@ -1,11 +1,27 @@
 # Workspace Runtime 技术文档
 
+## 项目专属 `.agentos` Runtime（Change revision 3：Current / as-built）
+
+| 边界 | 冻结决定 |
+| --- | --- |
+| 路径 | Main 用 `projectRuntimeRoot(project.path)` 计算固定 `<project>/.agentos/`；所有发现、构建、Preview 与 fingerprint 均使用此根，项目根不是 fallback。 |
+| owner / host | `owner={kind:'project', projectId}` 只可由匹配项目的 `project-home` 使用；`owner={kind:'workspace'}` 只可由 `workspace-tab` 使用。旧无 owner 数据按 workspace 迁移。 |
+| 目录与信任 | 缺失返回 `not_initialized` 且不 spawn；`inspectLocalAppDirectory()` 返回 canonical root 后，必须确认仍包含于项目 realpath，symlink escape 拒绝。目录出现后仍走显式信任。 |
+| 产物 | build/dev cwd、静态 output containment 和 source fingerprint 以 canonical `.agentos` 为边界；immutable last-good 的原子切换、失败回退和 generation fence 继续生效。 |
+| Workspace | Workspace Runtime 继续使用用户显式目录，不读取、不发现 `.agentos/`。 |
+
+创建入口的专用 IPC 仅 main-window capability 可调用。Main 以目标项目打开或聚焦唯一独立 Chat 窗口，在该窗口创建并选中线程、提交 Runtime 网页创建请求；主窗口不得产生空对话副作用。Runtime prompt 资格只来自独立项目 Chat sender capability 的普通提交/编辑重提，或该 Main-owned 编排。主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目和路径失效请求不注入。renderer 不得传递 `runtimeRoot`、prompt scope 或等价资格字段；Main 从权威项目路径派生 root，并从 capability / 编排派生 eligibility。
+
+Runtime prompt 与创建按钮的中英文请求都明确要求：先只读分析当前项目文件夹已有内容和数据，以 Next.js、React、TypeScript 在 `.agentos/` 内构建数据可视化工作台，配置静态导出，在 `.agentos/` 执行 `npm install` 后执行 `npm run build`，并以成功生成 `out/index.html` 为完成条件；不得以 Python、Flask、Streamlit 或其它 Python 方案实现或启动 Runtime。
+
+`not_initialized` 的 UI 创建入口不创建目录、不猜框架、不运行 npm。项目页不得提供进入 Workspace Tab 的控制器；`workspaceTabs` 也不得持久化 project-owned Definition。
+
 ## Revision 5 Planned：自动首次构建与静态能力声明
 
 - 静态能力仍只由 Main 严格解析 `package.json.agentos`；未声明项目不做框架启发式猜测。声明通过且目录已获信任后，首次 `start` 若既无 last-good、也无可安全导入的现有 output，则在同一 Definition 的受控 build queue 中自动执行固定 `npm run build`。
 - 自动首次构建复用现有 buildId/operationId、串行锁、最小环境、`shell: false`、进程树回收、输出校验与 last-good 原子 pointer；Renderer 不新增命令、cwd、outputRoot 或 URL 输入。
 - 首次构建的 build 事件必须与手动重建走同一 Main-authoritative snapshot。首次无产物失败回到 `build_failed`，已有产物失败保留 Preview；两种情况都不隐式进入 development。
-- AppShell 的 Tab host 与 project-home host 只通过 runtimeId/generation 合并 Main 事件；`RuntimePreview` 的本地加载状态不得覆盖 Runtime 状态，只能补充“正在打开/预览失败”。
+- Workspace Tab 与 project-home 分别消费各自 owner 的 Main 事件；`RuntimePreview` 的本地加载状态不得覆盖 Runtime 状态，只能补充“正在打开/预览失败”。
 - homepage 增加受控静态声明，Next.js 使用静态 export；所有运行时 cookie/Route Handler 依赖迁移为构建期或客户端能力，构建须产出 `out/index.html`，并保留现有中英文与书籍访问路径。
 
 状态：Planned / 未实现；实现完成后再以代码和验证事实同步为 Current。
@@ -49,8 +65,8 @@
 
 - durable schema 升级到 v3：`runtimeDefinitions`、`workspaceTabs`、`activeWorkspaceTabId`、`projectHomeViewModes`；读取时一次性兼容 Revision 1 的 `localAppDefinitions/localAppTabs/activeLocalAppTabId`，保留 id、用户标题、信任和活动选择，损坏信任降为 revoked；新写入只使用中性字段。
 - 领域与 typed Desktop Seam 使用 `RuntimeDefinition / WorkspaceTab / Runtime*` 中性命名。旧 `localApp*` 仅允许留在迁移读取、历史文档或内部物理目录，不再出现在用户界面。
-- Runtime 继续按 `canonicalRoot + command` 去重。consumer 使用 `tab:<workspaceTabId>` 与 `project-home:<projectId>:<mountId>`，项目首页不得通过创建隐藏 Tab 获得 Runtime。
-- Preview host 为判别联合：`workspace-tab` host 校验权威 Tab，`project-home` host 校验项目、mount 和对应 Definition；异步创建后再次校验 host、runtime generation 与 consumer，失效结果必须关闭。
+- Workspace Runtime 按其 `canonicalRoot + command` 去重；Project Runtime 按 `projectId` 的 canonical `.agentos` 根解析，两个 owner 域不得合并 consumer。项目首页不得创建隐藏 Tab 获得 Runtime。
+- Preview host 为判别联合：`workspace-tab` 校验权威 Tab 与 workspace owner；`project-home` 校验项目、mount、project owner 与相同 `projectId`；异步创建后再次校验 host、runtime generation 与 consumer，失效结果必须关闭。
 - `ProjectHomeSurface.tsx` 保持不变；新的 Runtime 页面由独立 `ProjectHomeRuntimeView.tsx` 承载，`ChatStartView.tsx` 只负责页级视图切换。
 
 实现已完成并通过第三轮独立 Development Check。类型检查、构建、diff check 通过；定向测试 57/58 通过，唯一失败为受限沙箱的 loopback `listen EPERM`。以下内容是 Revision 1 历史基线，保留用于迁移与回归对照。
@@ -280,9 +296,8 @@ Onboarding dialog 打开后通过 `requestAnimationFrame` 聚焦第一个有效�
 
 下列能力不是当前实现，不得从现有接口或 `sandbox: true` 推断出来：
 
-- `LATER-01`：项目首页复用同一 Runtime，形成左 Preview、右 Claude Agent SDK 的开发工作台；
-- `LATER-02`：Claude Agent SDK 通过通用 SandboxBroker 读写项目、安装依赖和控制进程；
-- `LATER-03`：选择并验证生产级跨平台 Sandbox Provider。必须先完成项目外文件、网络、环境变量和子进程逃逸验证，才能声明强隔离。
+- `LATER-01`：Claude Agent SDK 通过通用 SandboxBroker 读写项目、安装依赖和控制进程；
+- `LATER-02`：选择并验证生产级跨平台 Sandbox Provider。必须先完成项目外文件、网络、环境变量和子进程逃逸验证，才能声明强隔离。
 
 当前风险：自动依赖准备和 `npm run dev` 会执行用户显式信任目录中的脚本并可能访问网络；本地进程仍可能读取宿主文件、环境或创建子进程。canonical path、最小 env、loopback Preview 和 Electron renderer sandbox 只能缩小误用面，不能替代 OS sandbox。跨平台 process-tree、WebContentsView 布局/权限和真实失败目录的正式 GUI 证据仍需独立验证。
 

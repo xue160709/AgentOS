@@ -4,6 +4,46 @@
 >
 > 项目首页 Claude 分栏、Agent 沙箱工具代理和生产级 OS Sandbox Provider 不属于本切片通过条件。
 
+## 项目专属 `.agentos` Runtime（Change revision 3：已实现 / 待正式 GUI 验收）
+
+> Revision 3 自动化 Development Check 已单独通过；真实 GUI 正式验收尚未执行，自动化结果不替代正式 Acceptance。
+
+### C-016：Project Runtime 固定根目录与 owner
+
+- GIVEN 一个项目页面请求 Runtime
+- WHEN Main 解析该项目的 Runtime
+- THEN 只检查 `<project>/.agentos/package.json`，创建/恢复的 Definition 为 `owner=project` 且只绑定该 `projectId`，Preview host 为 `project-home`
+- AND 项目根目录 `package.json` 不参与发现、构建、fingerprint 或 fallback；`workspaceTabs` 不可引用该 Definition
+
+### C-017：Workspace Runtime 保持显式目录域
+
+- GIVEN 用户从 Workspace Tab 绑定或恢复 Runtime
+- WHEN Main 解析其 Definition
+- THEN 该 Definition 为 `owner=workspace`，只使用用户显式目录；不会发现、创建或加载任何项目 `.agentos/`
+- AND 旧无 owner Definition 迁移为 workspace-owned，不按路径猜测、不移动或删除文件
+
+### C-018：未初始化、信任与 symlink 边界
+
+- GIVEN `<project>/.agentos/` 缺失，或它 realpath 后逃逸项目根目录
+- WHEN 打开项目 Runtime 页面
+- THEN 缺失时返回 `not_initialized`、不 spawn，并显示目标路径和「让 Agent 创建 Runtime 网页」入口；escape 时拒绝且不 spawn
+- AND 创建入口只接受 main-window capability，打开/聚焦对应独立项目 Chat 窗口并在其中创建、选中线程和提交请求；主窗口不创建或选中空对话。目录首次出现后仍须显式信任，Main 不创建空工程、不猜框架、不运行 npm
+
+### C-019：构建失败与静态产物边界
+
+- GIVEN 已信任的 project-owned `.agentos` Runtime 有有效静态声明和 last-good，或新一轮 build 失败/迟到
+- WHEN Main 构建、切换或恢复 Preview
+- THEN build cwd、静态输出 containment 与 fingerprint 均以 canonical `.agentos` 为边界；成功才原子切换 last-good
+- AND 失败/取消/旧 generation 保留旧 last-good，不改变 Agent run 的终态
+
+### C-020：最小项目聊天 Runtime prompt scope 与落点反馈
+
+- GIVEN 独立项目 Chat 窗口普通提交/编辑重提，Main-owned 创建按钮编排，或主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目/路径失效项目提交
+- WHEN Main 构造 request append system prompt
+- THEN 仅独立项目 Chat 的普通/编辑重提及 Main-owned 创建按钮编排注入绝对 `<project>/.agentos` 路径，并只约束 Runtime 网页的文件、资源、依赖和构建配置；Agent cwd 仍为项目根
+- AND 创建 Runtime 时必须读取项目根已有内容和数据，以 Next.js、React、TypeScript 构建数据可视化工作台，在 `.agentos/` 执行 `npm install` 后执行 `npm run build`，并静态导出 `out/index.html`；不得用 Python、Flask 或 Streamlit 作为 Runtime 实现
+- AND Main 依据 IPC sender capability / 专用编排判定 eligibility，并由权威项目路径派生实际 runtimeRoot；renderer 不得提交 root、prompt-scope 或等价标记。其它请求不注入该约束；若合格 run 后 `.agentos/` 仍不存在但项目根出现新的疑似网页工程迹象，页面只提示目标路径，不移动、复制、删除或自动重试
+
 ## Revision 5 验收增量（Planned / 未实现）
 
 > 本节取代 C-010 中“无产物显示 build_required 并等待用户构建”的首次导入语义；Revision 4 的 last-good、stale、失败回退、安全协议和显式开发模式继续成立。
@@ -39,7 +79,7 @@
 系统 SHALL 在已有安全 last-good 产物时直接显示页面，不启动 npm、Node/Next server、不分配 loopback 端口，也不等待 HTTP readiness。
 
 - GIVEN 已信任的静态 Runtime 存在最后一次成功构建
-- WHEN 用户打开/恢复 Workspace Tab 或项目首页 Runtime host
+- WHEN 用户打开/恢复 Workspace Tab
 - THEN 页面从 Main 管理的静态产物立即加载，状态为 ready 或 stale；打开路径不 spawn 项目进程，stale 检查不阻塞首屏
 
 > 实现状态：🟡 已实现，待正式验收｜Development Check：PASS｜建议 selectors：`runtime-mode-static`, `runtime-build-status`, `runtime-preview`｜
@@ -98,15 +138,15 @@ Revision 1 的 10/16 历史正式结果继续保留。以下确认项用于本�
 
 > 实现状态：🟡 已实现，待正式验收｜Development Check：PASS｜建议 selectors：`project-home-view-tabs`, `project-home-view-tab-overview`, `project-home-view-tab-runtime`, `project-home-overview-panel`, `project-home-runtime-panel`｜
 
-### C-009：Runtime 多 host 与 Preview 生命周期
+### C-009：Workspace Runtime 多视图与 Preview 生命周期（历史范围收窄）
 
-系统 SHALL 允许 Workspace Tab host 与 project-home host 复用同一受管 Runtime，同时拥有独立 PreviewSession 与 consumer；释放一个 host 不得影响仍在使用的另一个 host。
+系统 SHALL 允许同一 workspace-owned Definition 的多个 Workspace Tab 复用受管 Runtime，同时拥有独立 PreviewSession 与 consumer；释放一个视图不得影响仍在使用的另一个视图。项目 Runtime 不属于本条。
 
-- GIVEN 同一项目同时由侧栏 Tab 和项目首页 Runtime 页承载
-- WHEN 任一 host 刷新、切换、关闭或卸载，或 Runtime 重启产生新 generation
-- THEN 只处理对应 host 的 Preview/consumer；另一个 host 保持可用；最后一个 consumer 释放后才回收进程；旧 mount/generation 结果不能覆盖当前视图
+- GIVEN 同一 workspace-owned Definition 被两个侧栏 Tab 使用
+- WHEN 任一视图刷新、切换、关闭或卸载，或 Runtime 重启产生新 generation
+- THEN 只处理对应视图的 Preview/consumer；另一个视图保持可用；最后一个 consumer 释放后才回收进程；旧 mount/generation 结果不能覆盖当前视图
 
-> 实现状态：🟡 已实现，待正式验收｜Development Check：PASS｜建议 selectors：`project-runtime-page`, `project-runtime-status`, `project-runtime-preview`, `project-runtime-start`, `project-runtime-open-tab`, `project-runtime-refresh`, `project-runtime-logs`, `project-runtime-restart`, `project-runtime-stop`｜
+> 实现状态：🟡 历史 Workspace 范围待正式验收；本条不证明 C-016～C-020。建议 selectors：`runtime-tab`, `runtime-preview`｜
 
 ## 追踪矩阵
 

@@ -92,6 +92,7 @@ export function LocalAppOnboardingDialog({ inspect, existingDefinitions = [], ch
   const definition: LocalAppDefinition | null = canTrust
     ? {
         id: '',
+        owner: { kind: 'workspace' },
         name: inspect.name,
         rootPath: inspect.rootPath,
         canonicalRoot: inspect.canonicalRoot,

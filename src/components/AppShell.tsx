@@ -77,6 +77,7 @@ import { AgentOSPairingDialog } from './AgentOSPairingDialog'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
 import { RuntimeDetailsDialog } from './RuntimeDetailsDialog'
 import { applyRuntimeEvents, RuntimeEventBatcher } from './runtime-event-state'
+import { projectContent } from '../project-content'
 
 const INITIAL_PROVIDER_SKIP_VALUE = '__skip'
 const INITIAL_PROVIDER_CUSTOM_VALUE = '__custom'
@@ -271,7 +272,8 @@ export function AppShell() {
   const [workspaceSaveRetrying, setWorkspaceSaveRetrying] = useState(false)
   const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeSnapshot>>({})
   const [runtimeDetailsTabId, setRuntimeDetailsTabId] = useState<string | null>(null)
-  const [projectRuntimeState, setProjectRuntimeState] = useState<{ definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null; trustRequired: boolean; mountId: string; logsOpen: boolean }>({ runtime: null, trustRequired: true, mountId: '', logsOpen: false })
+  const [projectRuntimeState, setProjectRuntimeState] = useState<{ definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null; status: 'not_initialized' | 'trust_required' | 'ready'; runtimeRoot: string; misplacedRuntime?: boolean; trustRequired: boolean; mountId: string; logsOpen: boolean }>({ runtime: null, status: 'not_initialized', runtimeRoot: '', trustRequired: false, mountId: '', logsOpen: false })
+  const [projectRuntimeRefreshNonce, setProjectRuntimeRefreshNonce] = useState(0)
   const restoredLocalAppsRef = useRef<Set<string>>(new Set())
   const localAppDialogOpenRef = useRef(false)
   const localAppEntryRef = useRef<HTMLElement | null>(null)
@@ -489,6 +491,7 @@ export function AppShell() {
         return
       }
       if (event.type === 'open-project-path-recovery') { selectProject(event.projectId); return }
+      if (event.type === 'select-thread') return
       const outcome = projectChatSnapshotControllerRef.current.accept(event)
       if (outcome === 'accepted') acceptProjectChatSnapshot(event.snapshot)
       else if (outcome === 'gap') void refreshProjectChatSnapshot(event.projectId)
@@ -501,22 +504,37 @@ export function AppShell() {
     // Runtime inspection can touch the filesystem and workspace store. Only
     // pay that cost when the Runtime tab is actually visible.
     if (!project || activeThread?.id || projectHomeViewMode !== 'runtime' || !projectRuntimeMountId || !window.desktop?.ensureProjectRuntime) {
-      setProjectRuntimeState({ runtime: null, trustRequired: true, mountId: projectRuntimeMountId, logsOpen: false })
+      setProjectRuntimeState({ runtime: null, status: 'not_initialized', runtimeRoot: project ? `${project.path}/.agentos` : '', trustRequired: false, mountId: projectRuntimeMountId, logsOpen: false })
       return
     }
     let cancelled = false
     void window.desktop.ensureProjectRuntime(project.id, projectRuntimeMountId).then((result) => {
-      const stale = cancelled || request !== projectRuntimeRequestRef.current || !result.ok || result.projectId !== project.id || result.mountId !== projectRuntimeMountId
+      if (!result.ok) {
+        if (!cancelled && request === projectRuntimeRequestRef.current) setWorkspaceSaveError(result.message)
+        return
+      }
+      const stale = cancelled || request !== projectRuntimeRequestRef.current || result.projectId !== project.id || result.mountId !== projectRuntimeMountId
       if (stale) {
-        if (result.ok && result.definition) {
+        if (result.definition) {
           void window.desktop?.releaseRuntime?.(result.definition.id, `project-home:${result.projectId}:${result.mountId}`)
         }
         return
       }
-      setProjectRuntimeState((current) => ({ ...current, definition: result.definition, runtime: result.runtime, trustRequired: result.status === 'trust_required', mountId: result.mountId }))
+      setProjectRuntimeState((current) => ({ ...current, definition: result.definition, runtime: result.runtime, status: result.status, runtimeRoot: result.runtimeRoot, misplacedRuntime: result.misplacedRuntime, trustRequired: result.status === 'trust_required', mountId: result.mountId }))
     }).catch(() => undefined)
     return () => { cancelled = true }
-  }, [activeProject?.id, activeThread?.id, projectHomeViewMode, projectRuntimeMountId])
+  }, [activeProject?.id, activeThread?.id, projectHomeViewMode, projectRuntimeMountId, projectRuntimeRefreshNonce])
+
+  useEffect(() => {
+    const project = activeProject
+    if (!project || activeThread?.id || projectHomeViewMode !== 'runtime') return
+    return projectContent.subscribe(project.path, (event) => {
+      const relativePath = event.relativePath?.replaceAll('\\', '/') ?? ''
+      if (!relativePath || relativePath === '.agentos' || relativePath.startsWith('.agentos/')) {
+        setProjectRuntimeRefreshNonce((value) => value + 1)
+      }
+    })
+  }, [activeProject?.id, activeProject?.path, activeThread?.id, projectHomeViewMode])
 
   useEffect(() => {
     const definition = projectRuntimeState.definition
@@ -565,7 +583,7 @@ export function AppShell() {
       setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.workspaceSaveFailed'))
       return null
     }
-    setProjectRuntimeState((current) => ({ ...current, definition: result.definition, runtime: result.runtime, trustRequired: false, mountId }))
+    setProjectRuntimeState((current) => ({ ...current, definition: result.definition, runtime: result.runtime, status: result.status, runtimeRoot: result.runtimeRoot, misplacedRuntime: result.misplacedRuntime, trustRequired: false, mountId }))
     return result.definition
   }, [activeProject, projectRuntimeMountId, setChatWorkspace, t])
 
@@ -626,42 +644,6 @@ export function AppShell() {
     }
   }, [activeProject?.id, activeThread?.id, projectHomeViewMode, projectRuntimeMountId, projectRuntimeState.definition?.id, projectRuntimeState.mountId, projectRuntimeState.trustRequired])
 
-  const openProjectRuntimeTab = useCallback(async () => {
-    const project = activeProject
-    if (!project || projectRuntimeState.mountId !== projectRuntimeMountId || !window.desktop?.openWorkspaceTab || !window.desktop.getChatWorkspace) return
-    const definition = await ensureTrustedProjectRuntime()
-    const request = projectRuntimeRequestRef.current
-    if (!definition || request !== projectRuntimeRequestRef.current) return
-    const authoritative = await window.desktop.getChatWorkspace()
-    if (!authoritative) return
-    if (request !== projectRuntimeRequestRef.current || activeProject?.id !== project.id || projectRuntimeMountId !== projectRuntimeState.mountId) return
-    const result = await window.desktop.openWorkspaceTab(definition.id, workspaceRevisionOf(authoritative))
-    if (!result.ok) { setWorkspaceSaveError(result.message); return }
-    if (request !== projectRuntimeRequestRef.current || activeProject?.id !== project.id || projectRuntimeMountId !== projectRuntimeState.mountId) {
-      await window.desktop.closeWorkspaceTab?.(result.tab.id)
-      return
-    }
-    flushSync(() => setChatWorkspace(result.workspace))
-    persistChatWorkspaceStateToLocalStorage(result.workspace)
-    if (window.desktop.startRuntime) {
-      try {
-        const runtime = await window.desktop.startRuntime(definition.id, 'user', `tab:${result.tab.id}`)
-        if (request !== projectRuntimeRequestRef.current || activeProject?.id !== project.id || projectRuntimeMountId !== projectRuntimeState.mountId) {
-          await window.desktop.releaseRuntime?.(definition.id, `tab:${result.tab.id}`)
-          await window.desktop.closeWorkspaceTab?.(result.tab.id)
-          return
-        }
-        setProjectRuntimeState((current) => ({ ...current, runtime }))
-      } catch {
-        if (request !== projectRuntimeRequestRef.current || activeProject?.id !== project.id || projectRuntimeMountId !== projectRuntimeState.mountId) {
-          await window.desktop.releaseRuntime?.(definition.id, `tab:${result.tab.id}`)
-          await window.desktop.closeWorkspaceTab?.(result.tab.id)
-        }
-        // The durable tab remains visible; its Runtime can be started from the tab surface.
-      }
-    }
-  }, [activeProject, ensureTrustedProjectRuntime, projectRuntimeMountId, projectRuntimeState.mountId, setChatWorkspace])
-
   const projectRuntimePreviewId = projectRuntimeState.runtime ? `preview-project-home:${activeProject?.id ?? ''}:${projectRuntimeState.mountId}-${projectRuntimeState.runtime.generation}` : ''
   const projectRuntimeContext = useMemo<ProjectHomeRuntimeContext | null>(() => {
     if (!activeProject) return null
@@ -670,13 +652,25 @@ export function AppShell() {
       mountId: projectRuntimeState.mountId,
       definition: projectRuntimeState.definition,
       runtime: projectRuntimeState.runtime,
+      status: projectRuntimeState.status,
+      runtimeRoot: projectRuntimeState.runtimeRoot,
+      misplacedRuntime: projectRuntimeState.misplacedRuntime,
       runtimeEdit: activeProjectChatSnapshot?.runtimeEdit,
       trustRequired: projectRuntimeState.trustRequired,
       logsOpen: projectRuntimeState.logsOpen,
       viewMode: projectHomeViewMode,
       onViewModeChange: setProjectHomeViewMode,
       onStart: () => { void startProjectRuntime() },
-      onOpenTab: () => { void openProjectRuntimeTab() },
+      onCreate: () => {
+        const request = window.projectChat?.startProjectRuntimeChat(activeProject.id)
+        if (!request) {
+          setWorkspaceSaveError(t('runtime.workspaceSaveFailed'))
+          return
+        }
+        void request.then((result) => {
+          if (!result.ok) setWorkspaceSaveError(result.error.message)
+        }).catch(() => setWorkspaceSaveError(t('runtime.workspaceSaveFailed')))
+      },
       onRefresh: () => { if (projectRuntimePreviewId) void window.desktop?.reloadRuntimePreview?.(projectRuntimePreviewId) },
       onToggleLogs: () => setProjectRuntimeState((current) => ({ ...current, logsOpen: !current.logsOpen })),
       onRestart: () => { if (projectRuntimeState.definition) void window.desktop?.restartRuntime?.(projectRuntimeState.definition.id).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
@@ -690,7 +684,7 @@ export function AppShell() {
       },
       onDevelopment: () => { if (projectRuntimeState.definition) void window.desktop?.startRuntimeDevelopment?.(projectRuntimeState.definition.id, `project-home:${activeProject?.id ?? ''}:${projectRuntimeState.mountId}`).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
     }
-  }, [activeProject, openProjectRuntimeTab, projectHomeViewMode, projectRuntimePreviewId, projectRuntimeState, setProjectHomeViewMode, startProjectRuntime, window.desktop])
+  }, [activeProject, projectHomeViewMode, projectRuntimePreviewId, projectRuntimeState, setProjectHomeViewMode, startProjectRuntime, t, window.desktop])
 
   useEffect(() => {
     configureProjectHomeRuntime(projectRuntimeContext)
@@ -2131,6 +2125,7 @@ export function AppShell() {
 
   const removeProject = useCallback(
     (projectId: string) => {
+      const projectDefinition = chatWorkspace?.runtimeDefinitions.find((definition) => definition.owner.kind === 'project' && definition.owner.projectId === projectId)
       let didRemove = false
       updateChatWorkspace((prev) => {
         const next = workspaceSession.removeProject(prev, projectId)
@@ -2138,11 +2133,16 @@ export function AppShell() {
         return next
       })
       if (!didRemove) return
+      if (projectDefinition) {
+        const consumerId = `project-home:${projectId}:${projectRuntimeState.mountId}`
+        void window.desktop?.releaseRuntime?.(projectDefinition.id, consumerId)
+        void window.desktop?.stopRuntime?.(projectDefinition.id, 'last-consumer')
+      }
       void window.desktop?.resetRuntimePreviewLayout?.(projectId)
       setSelectedProjectSkill((current) => (current?.projectId === projectId ? null : current))
       goHome()
     },
-    [goHome, updateChatWorkspace, workspaceSession],
+    [chatWorkspace?.runtimeDefinitions, goHome, projectRuntimeState.mountId, updateChatWorkspace, workspaceSession],
   )
 
   const revealProjectInFileManager = useCallback((projectPath: string) => {
@@ -2681,7 +2681,7 @@ export function AppShell() {
           <RuntimeOnboardingDialog
             inspect={localAppInspect}
             chooserOpen={localAppChooserOpen}
-            existingDefinitions={chatWorkspace.runtimeDefinitions}
+            existingDefinitions={chatWorkspace.runtimeDefinitions.filter((definition) => definition.owner.kind === 'workspace')}
             busy={localAppDialogBusy}
             error={localAppDialogError}
             onCancel={() => { setLocalAppInspect(null); setLocalAppChooserOpen(false); setLocalAppDialogError('') }}
@@ -2849,7 +2849,7 @@ export function AppShell() {
         <RuntimeOnboardingDialog
           inspect={localAppInspect}
           chooserOpen={localAppChooserOpen}
-          existingDefinitions={chatWorkspace.runtimeDefinitions}
+          existingDefinitions={chatWorkspace.runtimeDefinitions.filter((definition) => definition.owner.kind === 'workspace')}
           busy={localAppDialogBusy}
           error={localAppDialogError}
           onCancel={() => { setLocalAppInspect(null); setLocalAppChooserOpen(false); setLocalAppDialogError('') }}

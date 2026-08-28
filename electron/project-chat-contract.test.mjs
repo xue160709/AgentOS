@@ -40,6 +40,7 @@ function loadRunnerModule() {
     if (specifier === './claude-agent-runner/mcp') return {}
     if (specifier === './claude-agent-runner/web-search') return {}
     if (specifier === './home-plugin-customization-prompt') return {}
+    if (specifier === './project-runtime-prompt') return { resolveProjectAgentRuntimeContext: async () => null, buildProjectRuntimeSystemPrompt: () => '' }
     if (specifier === './safe-console') return { safeConsoleError() {}, safeConsoleInfo() {}, safeConsoleWarn() {} }
     return require(specifier)
   }
@@ -51,6 +52,13 @@ test('project chat error helper preserves the frozen error result contract', () 
   assert.deepEqual(projectChatError('thread-busy', 'Thread is busy.', true), {
     code: 'thread-busy', message: 'Thread is busy.', retryable: true,
   })
+})
+
+test('Project Chat contract exposes the Runtime creation command and select-thread client event', () => {
+  const contract = readFileSync(resolve(testDir, '../src/project-chat-contract.ts'), 'utf8')
+  assert.match(contract, /export type StartProjectRuntimeChatResult = \{ threadId: string; requestId: string \}/)
+  assert.match(contract, /export type ProjectChatSelectThreadEvent = \{ type: 'select-thread'; projectId: string; threadId: string \}/)
+  assert.match(contract, /startProjectRuntimeChat\(projectId: string\): Promise<ProjectChatResult<StartProjectRuntimeChatResult>>/)
 })
 
 test('pure project chat reducer preserves transcript folding and terminal fences', () => {

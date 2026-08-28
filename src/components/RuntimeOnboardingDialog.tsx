@@ -59,7 +59,7 @@ export function RuntimeOnboardingDialog({ inspect, existingDefinitions = [], cho
     </section>
   </div>
   const definition: RuntimeDefinition | null = inspect.ok ? {
-    id: '', name: title.trim(), rootPath: inspect.rootPath, canonicalRoot: inspect.canonicalRoot,
+    id: '', owner: { kind: 'workspace' }, name: title.trim(), rootPath: inspect.rootPath, canonicalRoot: inspect.canonicalRoot,
     packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, mode: inspect.mode, agentos: inspect.agentos, trustStatus: 'trusted', autoStart: true,
     createdAt: Date.now(), updatedAt: Date.now(),
   } : null

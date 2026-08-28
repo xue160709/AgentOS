@@ -23,6 +23,7 @@ type ChatThreadViewProps = {
   onUserMessageEditDismissed?: () => void
   onReviewFileChanges: (item: ChatFileDiffItem) => void
   onRewindFileChanges: (item: ChatFileDiffItem) => void
+  rewindUsesBrokerLookup?: boolean
 }
 
 /** 有消息时的会话区：可滚动 Transcript + 吸底按钮 + Composer 插槽 / Active thread: scrollable transcript, scroll-to-bottom control, composer slot */
@@ -40,6 +41,7 @@ export function ChatThreadView({
   onUserMessageEditDismissed,
   onReviewFileChanges,
   onRewindFileChanges,
+  rewindUsesBrokerLookup,
 }: ChatThreadViewProps) {
   const { t } = useI18n()
 
@@ -58,6 +60,7 @@ export function ChatThreadView({
             onUserMessageEditDismissed={onUserMessageEditDismissed}
             onReviewFileChanges={onReviewFileChanges}
             onRewindFileChanges={onRewindFileChanges}
+            rewindUsesBrokerLookup={rewindUsesBrokerLookup}
           />
         </div>
       </div>

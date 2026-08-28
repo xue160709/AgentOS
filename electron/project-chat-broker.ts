@@ -66,6 +66,9 @@ export type ProjectChatManagedRunInput = {
   agentModeSettingsOverride: { enabled: true; todoEnabled: boolean }
 }
 
+/** Main-derived request context; renderer DTOs cannot opt into Runtime prompting. */
+export type ProjectChatRunContext = { projectRuntimePrompt?: boolean }
+
 export type ProjectChatBrokerOptions = {
   store: ProjectChatBrokerStore
   runner: ProjectChatBrokerRunner
@@ -77,6 +80,9 @@ export type ProjectChatBrokerOptions = {
   runExclusive?: <T>(operation: () => Promise<T> | T) => Promise<T>
   promptOwnerCandidates?: (input: { projectId: string; threadId: string; routeGeneration: number }) => number[]
   runtimeEditCoordinator?: RuntimeEditCoordinator
+  runtimeEditEligible?: (projectId: string) => boolean
+  onProjectRunStarting?: (projectId: string, projectRoot: string) => Promise<void> | void
+  onProjectRunTerminal?: (projectId: string, projectRoot: string) => Promise<void> | void
 }
 
 type RequestRoute = { projectId: string; threadId: string; routeGeneration: number; assistantMessageId?: string }
@@ -179,10 +185,12 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
       const run: ProjectChatRunSnapshot = { projectId: input.projectId, threadId: input.threadId, requestId: pendingRequestId, phase: 'submitting', routeGeneration, startedAt: now }
       this.runs.set(pendingRequestId, run); const permissionMode = this.permissionMode()
       try {
-        const submitted = await this.options.runner.submit({ text: input.text, threadId: input.threadId, modelPick: persistedThread.chatState.modelPick, sessionId: persistedThread.chatState.sessionId, cwd: project.path, permissionMode, promptMode: input.promptMode, agentModeSettingsOverride: input.agentModeSettingsOverride })
+        await this.options.onProjectRunStarting?.(project.id, project.path)
+        const submitted = await this.options.runner.submit({ text: input.text, projectId: project.id, threadId: input.threadId, modelPick: persistedThread.chatState.modelPick, sessionId: persistedThread.chatState.sessionId, cwd: project.path, permissionMode, promptMode: input.promptMode, agentModeSettingsOverride: input.agentModeSettingsOverride })
         this.runs.delete(pendingRequestId); this.runs.set(submitted.requestId, { ...run, requestId: submitted.requestId, phase: 'running' }); this.requestRoutes.set(submitted.requestId, { projectId: input.projectId, threadId: input.threadId, routeGeneration }); this.registerRuntimeAccepted(input.projectId, submitted.requestId, permissionMode); this.broadcastSnapshot(saved, input.projectId, permissionMode)
         return { ok: true, value: { requestId: submitted.requestId } }
       } catch {
+        await this.options.onProjectRunTerminal?.(project.id, project.path)
         const failed: ProjectChatRunSnapshot = { ...run, phase: 'failed', finishedAt: this.now(), error: projectChatError('sdk-submit-failed', 'Unable to submit the run.') }
         this.runs.set(pendingRequestId, failed); const failureSaved = await this.saveMutation(this.appendFailedRun(saved, input.threadId, failed)); this.broadcastSnapshot(failureSaved, input.projectId, permissionMode)
         return this.fail('sdk-submit-failed', 'Unable to submit the run.')
@@ -199,7 +207,7 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
     })
   }
 
-  submitRun(input: SubmitProjectRunInput): Promise<ProjectChatResult<SubmitProjectRunResult>> {
+  submitRun(input: SubmitProjectRunInput, context: ProjectChatRunContext = {}): Promise<ProjectChatResult<SubmitProjectRunResult>> {
     return this.enqueue(async () => {
       const state = this.options.store.read()
       const project = state?.projects.find((candidate) => candidate.id === input.projectId)
@@ -232,10 +240,12 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
       const permissionMode = this.permissionMode()
 
       try {
+        await this.options.onProjectRunStarting?.(project.id, project.path)
         const submitted = await this.options.runner.submit({
           text: input.text, attachments: runnerAttachments, threadId: input.threadId,
           modelPick: persistedThread.chatState.modelPick, handoffContext: input.handoffContext,
-          sessionId: persistedThread.chatState.sessionId, cwd: project.path, permissionMode,
+          sessionId: persistedThread.chatState.sessionId, cwd: project.path, projectId: project.id,
+          projectRuntimePrompt: context.projectRuntimePrompt === true, permissionMode,
         })
         this.runs.delete(pendingRequestId)
         const accepted: ProjectChatRunSnapshot = { ...run, requestId: submitted.requestId, phase: 'running' }
@@ -245,6 +255,7 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
         this.broadcastSnapshot(saved, input.projectId, permissionMode)
         return { ok: true, value: { requestId: submitted.requestId } }
       } catch {
+        await this.options.onProjectRunTerminal?.(project.id, project.path)
         const failed: ProjectChatRunSnapshot = { ...run, phase: 'failed', finishedAt: this.now(), error: projectChatError('sdk-submit-failed', 'Unable to submit the run.') }
         this.runs.set(pendingRequestId, failed)
         const failure = this.appendFailedRun(saved, input.threadId, failed)
@@ -269,7 +280,7 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
     })
   }
 
-  editAndSubmitRun(input: EditAndSubmitProjectRunInput): Promise<ProjectChatResult<SubmitProjectRunResult>> { return this.enqueue(async () => {
+  editAndSubmitRun(input: EditAndSubmitProjectRunInput, context: ProjectChatRunContext = {}): Promise<ProjectChatResult<SubmitProjectRunResult>> { return this.enqueue(async () => {
     const state = this.options.store.read(); const project = state?.projects.find((item) => item.id === input.projectId); const thread = state?.threads.find((item) => item.id === input.threadId && item.projectId === input.projectId); const stale = this.commandFence(input); if (stale) return stale
     if (!state || !project) return this.fail('project-not-found', 'Project not found.')
     if (!thread || thread.archivedAt) return this.fail('thread-not-found', 'Thread not found.')
@@ -282,8 +293,10 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
     const pick = input.modelPick ?? thread.chatState.modelPick; const edited = { ...thread, updatedAt: now, chatState: { ...thread.chatState, sessionId: undefined, model: pick?.anthropicModel ?? thread.chatState.model, modelPick: pick, items } }; const saved = await this.saveMutation({ ...state, threads: state.threads.map((item) => item.id === thread.id ? edited : item) })
     const pendingRequestId = this.createId('pending-run'); const routeGeneration = this.routeGenerationOf(input.projectId); const run: ProjectChatRunSnapshot = { projectId: input.projectId, threadId: input.threadId, requestId: pendingRequestId, phase: 'submitting', routeGeneration, startedAt: now }; this.runs.set(pendingRequestId, run); const permissionMode = this.permissionMode()
     try {
-      const submitted = await this.options.runner.submit({ text, attachments: undefined, threadId: thread.id, modelPick: edited.chatState.modelPick, sessionId: undefined, cwd: project.path, permissionMode }); this.runs.delete(pendingRequestId); this.runs.set(submitted.requestId, { ...run, requestId: submitted.requestId, phase: 'running' }); this.requestRoutes.set(submitted.requestId, { projectId: input.projectId, threadId: thread.id, routeGeneration }); this.registerRuntimeAccepted(input.projectId, submitted.requestId, permissionMode); this.broadcastSnapshot(saved, input.projectId, permissionMode); return { ok: true, value: { requestId: submitted.requestId } }
+      await this.options.onProjectRunStarting?.(project.id, project.path)
+      const submitted = await this.options.runner.submit({ text, attachments: undefined, threadId: thread.id, modelPick: edited.chatState.modelPick, sessionId: undefined, cwd: project.path, projectId: project.id, projectRuntimePrompt: context.projectRuntimePrompt === true, permissionMode }); this.runs.delete(pendingRequestId); this.runs.set(submitted.requestId, { ...run, requestId: submitted.requestId, phase: 'running' }); this.requestRoutes.set(submitted.requestId, { projectId: input.projectId, threadId: thread.id, routeGeneration }); this.registerRuntimeAccepted(input.projectId, submitted.requestId, permissionMode); this.broadcastSnapshot(saved, input.projectId, permissionMode); return { ok: true, value: { requestId: submitted.requestId } }
     } catch {
+      await this.options.onProjectRunTerminal?.(project.id, project.path)
       const failed: ProjectChatRunSnapshot = { ...run, phase: 'failed', finishedAt: this.now(), error: projectChatError('sdk-submit-failed', 'Unable to submit the run.') }; this.runs.set(pendingRequestId, failed); const failureSaved = await this.saveMutation(this.appendFailedRun(saved, thread.id, failed)); this.broadcastSnapshot(failureSaved, input.projectId, permissionMode); return this.fail('sdk-submit-failed', 'Unable to submit the run.')
     }
   }) }
@@ -452,6 +465,8 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
         error: event.type === 'error' ? projectChatError('internal-error', 'Run failed.') : undefined,
       })
       this.options.runtimeEditCoordinator?.markRunTerminal(event.requestId, event.type === 'result' ? 'succeeded' : event.type === 'error' ? 'failed' : 'cancelled')
+      const routeProject = state.projects.find((project) => project.id === route.projectId)
+      if (routeProject) await this.options.onProjectRunTerminal?.(route.projectId, routeProject.path)
       for (const [promptId, prompt] of this.prompts) if (prompt.requestId === event.requestId) { this.prompts.delete(promptId); this.promptOwners.delete(promptId) }
     }
     this.broadcastSnapshot(saved, route.projectId)
@@ -524,6 +539,7 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
     this.broadcast({ type: 'snapshot', projectId, sequence, routeGeneration: snapshot.routeGeneration, workspaceRevision: snapshot.workspaceRevision, snapshot: { ...snapshot, sequence } })
   }
   private registerRuntimeAccepted(projectId: string, requestId: string, permissionMode: ClaudePermissionMode): void {
+    if (this.options.runtimeEditEligible && !this.options.runtimeEditEligible(projectId)) return
     this.options.runtimeEditCoordinator?.registerAcceptedRun({ projectId, requestId, permissionMode })
   }
 

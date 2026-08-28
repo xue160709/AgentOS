@@ -1,5 +1,16 @@
 # 聊天与 Agent 运行时
 
+## 项目 `.agentos` Runtime prompt（Change revision 3：Current / as-built）
+
+Runtime system prompt 不是所有有效项目聊天的默认上下文。它只适用于独立项目 Chat 窗口发起的普通提交或编辑重提，以及项目主页「让 Agent 创建 Runtime 网页」按钮的 Main-owned 编排提交。路径固定为 `<project>/.agentos/`；它只约束创建或修改项目 Runtime 网页的组件、样式、脚本、资源、依赖及构建配置；Agent 的 cwd 仍是项目根，用户明确要求的非 Runtime 项目代码不被改写到 `.agentos/`。
+
+- `runtimeRoot` 与 prompt eligibility 都由 Main 派生：前者只来自权威项目路径，后者只来自 IPC sender capability 或专用按钮编排；renderer 不能提供、覆盖或声明 `runtimeRoot`、prompt scope 或等价标记。
+- 主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求和项目路径失效请求均不注入该 prompt。
+- 创建按钮只能由 main-window capability 调用。它打开或聚焦对应项目的独立 Chat 窗口，在该窗口自动创建并选中线程并提交请求；主窗口不得创建或选中空对话。
+- prompt 是路径约束而非写权限；run 后若 `.agentos/` 仍缺失而项目根出现疑似网页工程迹象，项目 Runtime 页面只显示目标路径提示，绝不搬运、复制、删除或自动重试。
+
+状态：Revision 3 已实现，自动化 Development Check 通过；正式 GUI 验收尚未执行。验收场景见 [`acceptance.md`](acceptance.md)，技术数据流见 [`technical.md`](technical.md)。
+
 ## Revision 2（Accepted / Planned，未实现）
 
 下一轮开发把当前应用内 Agent 指令通道扩展为 Main-owned 项目 Chat 事实源，并新增两个入口：每项目唯一的独立 Chat 窗口，以及经用户配对授权的网站任务。

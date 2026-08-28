@@ -382,7 +382,7 @@ test('broker persists website source and submits only durable runner authority f
   assert.deepEqual(harness.runner.submitted[0], {
     text: 'durable payload', attachments: [{ id: 'attachment', kind: 'text', name: 'note.md', mimeType: 'text/markdown', size: 7, text: 'content', path: '' }], threadId: durableThread.id,
     modelPick: { providerId: 'explicit-provider', anthropicModel: 'explicit-model' }, handoffContext: 'handoff',
-    sessionId: undefined, cwd: '/project', permissionMode: 'plan',
+    sessionId: undefined, cwd: '/project', projectId: 'project-1', projectRuntimePrompt: false, permissionMode: 'plan',
   })
   assert.deepEqual(harness.runner.resets, [durableThread.id])
   assert.equal(permissionReads, 2, 'one create snapshot read plus one submit capture')
@@ -596,6 +596,34 @@ test('broker maps accepted and terminal runs into the RuntimeEditCoordinator sna
   await plan.broker.submitRun({ projectId: 'project-1', threadId: thread.id, text: 'plan only' })
   const plannedSnapshot = await plan.broker.getSnapshot('project-1')
   assert.equal(plannedSnapshot.value.runtimeEdit, undefined)
+})
+
+test('broker supplies the authoritative projectId alongside the project-root cwd', async () => {
+  const thread = { id: 'thread-1', projectId: 'project-1', title: 'Thread', createdAt: 1, updatedAt: 1, creationSource: { kind: 'user' }, chatState: { model: 'Claude', items: [] } }
+  const harness = makeHarness(workspace([thread]))
+  const submitted = await harness.broker.submitRun({ projectId: 'project-1', threadId: thread.id, text: 'create a Runtime page' })
+  assert.equal(submitted.ok, true)
+  assert.equal(harness.runner.submitted[0].projectId, 'project-1')
+  assert.equal(harness.runner.submitted[0].cwd, '/project')
+})
+
+test('broker emits the Runtime prompt flag only from Main-derived run context', async () => {
+  const thread = { id: 'thread-1', projectId: 'project-1', title: 'Thread', createdAt: 1, updatedAt: 1, creationSource: { kind: 'user' }, chatState: { model: 'Claude', items: [{ type: 'message', id: 'user-1', role: 'user', content: 'old', status: 'done' }] } }
+  const harness = makeHarness(workspace([thread]))
+  const ordinary = await harness.broker.submitRun({ projectId: 'project-1', threadId: thread.id, text: 'ordinary' })
+  assert.equal(ordinary.ok, true)
+  assert.equal(harness.runner.submitted[0].projectRuntimePrompt, false)
+  harness.broker.publish({ type: 'result', requestId: ordinary.value.requestId, sessionId: 'ordinary-session', result: 'done' })
+  await harness.broker.idle()
+
+  const edited = await harness.broker.editAndSubmitRun({ projectId: 'project-1', threadId: thread.id, messageId: 'user-1', text: 'runtime edit', routeGeneration: 1 }, { projectRuntimePrompt: true })
+  assert.equal(edited.ok, true)
+  assert.equal(harness.runner.submitted[1].projectRuntimePrompt, true)
+
+  const managed = makeHarness()
+  assert.equal((await managed.broker.ensureManagedThread({ projectId: 'project-1', threadId: 'managed-1', title: 'Managed', purpose: 'task-run', homePluginSlug: 'home' })).ok, true)
+  assert.equal((await managed.broker.submitManagedRun({ projectId: 'project-1', threadId: 'managed-1', title: 'Managed', purpose: 'task-run', homePluginSlug: 'home', text: 'managed', promptMode: 'home-plugin-task-run', agentModeSettingsOverride: { enabled: true, todoEnabled: true } })).ok, true)
+  assert.equal(managed.runner.submitted[0].projectRuntimePrompt, undefined)
 })
 
 test('ephemeral runtime-edit rebroadcast fresh-reads without saving or advancing workspace revision', () => {

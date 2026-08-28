@@ -31,9 +31,15 @@ export type RuntimeStaticDeclaration = {
 export type RuntimeMode = 'development' | 'static'
 export type RuntimeBuildStatus = 'ready' | 'stale' | 'build_required' | 'building' | 'build_failed' | 'idle'
 
+/** Durable product-domain ownership; legacy definitions migrate to workspace. */
+export type RuntimeOwner =
+  | { kind: 'project'; projectId: string }
+  | { kind: 'workspace' }
+
 /** Durable Runtime definition / Runtime 持久化定义 */
 export type RuntimeDefinition = {
   id: string
+  owner: RuntimeOwner
   name: string
   rootPath: string
   canonicalRoot?: string

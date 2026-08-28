@@ -42,11 +42,13 @@ import {
   type GetProjectChatThreadStatusInput,
   type SubmitProjectRunInput,
   type SubmitProjectRunResult,
+  type StartProjectRuntimeChatResult,
   type SetProjectThreadModelInput,
   type SetProjectThreadPinnedInput,
   type WebsiteBindingPublic,
   type AgentOSPairingResponse,
 } from '../src/project-chat-contract'
+import type { ProjectChatRunContext } from './project-chat-broker'
 import { PROJECT_CHAT_INVOKE_CHANNELS } from '../src/project-chat-ipc-seam'
 import {
   DesktopPreferencesStore,
@@ -92,9 +94,9 @@ export class RendererCapabilityRegistry {
 export type ProjectChatBrokerPort = {
   getSnapshot(projectId: string): Promise<ProjectChatResult<ProjectChatInternalSnapshot>>
   createThread(input: CreateProjectThreadInput): Promise<ProjectChatResult<CreateProjectThreadResult>>
-  submitRun(input: SubmitProjectRunInput): Promise<ProjectChatResult<SubmitProjectRunResult>>
+  submitRun(input: SubmitProjectRunInput, context?: ProjectChatRunContext): Promise<ProjectChatResult<SubmitProjectRunResult>>
   forkThread(input: ForkProjectThreadInput): Promise<ProjectChatResult<CreateProjectThreadResult>>
-  editAndSubmitRun(input: EditAndSubmitProjectRunInput): Promise<ProjectChatResult<SubmitProjectRunResult>>
+  editAndSubmitRun(input: EditAndSubmitProjectRunInput, context?: ProjectChatRunContext): Promise<ProjectChatResult<SubmitProjectRunResult>>
   archiveThread(input: ArchiveProjectThreadInput): Promise<ProjectChatResult<void>>
   setThreadPinned(input: SetProjectThreadPinnedInput): Promise<ProjectChatResult<void>>
   setThreadModel(input: SetProjectThreadModelInput): Promise<ProjectChatResult<void>>
@@ -111,6 +113,7 @@ export type ProjectChatBrokerPort = {
 
 export type ProjectChatWindowCollaborator = {
   openProjectWindow?(projectId: string): Promise<ProjectChatResult<void>>
+  startProjectRuntimeChat?(projectId: string): Promise<ProjectChatResult<StartProjectRuntimeChatResult>>
   openWorkspaceTabProjectChat?(workspaceTabId: string): Promise<ProjectChatResult<void>>
   openProjectPreview?(projectId: string): Promise<ProjectChatResult<void>>
   openProjectPathRecovery?(projectId: string): Promise<ProjectChatResult<void>>
@@ -180,6 +183,7 @@ export type ProjectChatIpcRouter = {
   answerPrompt(event: ProjectChatIpcEvent, input: unknown): Promise<ProjectChatResult<void>>
   reportPresenceSelection(event: ProjectChatIpcEvent, input: unknown): Promise<ProjectChatResult<void>>
   openProjectWindow(event: ProjectChatIpcEvent, projectId: unknown): Promise<ProjectChatResult<void>>
+  startProjectRuntimeChat(event: ProjectChatIpcEvent, projectId: unknown): Promise<ProjectChatResult<StartProjectRuntimeChatResult>>
   openWorkspaceTabProjectChat(event: ProjectChatIpcEvent, workspaceTabId: unknown): Promise<ProjectChatResult<void>>
   openProjectPreview(event: ProjectChatIpcEvent, projectId: unknown): Promise<ProjectChatResult<void>>
   openProjectPathRecovery(event: ProjectChatIpcEvent, projectId: unknown): Promise<ProjectChatResult<void>>
@@ -277,14 +281,14 @@ export function createProjectChatIpcRouter(options: ProjectChatIpcRouterOptions)
     event: ProjectChatIpcEvent,
     raw: unknown,
     parse: (value: unknown) => Input | null,
-    operation: (input: Input) => Promise<ProjectChatResult<T>>,
+    operation: (input: Input, capability: RendererCapability) => Promise<ProjectChatResult<T>>,
   ): Promise<ProjectChatResult<T>> => {
     const capability = authorize(event, recordProjectId(raw) ?? undefined)
     if (!capability.ok) return capability
     const input = parse(raw)
     if (!input) return fail('invalid-argument', 'Project Chat command input is invalid.')
     if (capability.value.kind === 'project-chat-window' && 'routeGeneration' in input && input.routeGeneration !== capability.value.routeGeneration) return fail('sender-not-authorized', 'Sender is not authorized.')
-    return call(() => operation(input))
+    return call(() => operation(input, capability.value))
   }
 
   const router = {
@@ -311,10 +315,10 @@ export function createProjectChatIpcRouter(options: ProjectChatIpcRouterOptions)
       if (!capability.ok) return capability
       const input = submitRunInput(raw)
       if (!input) return fail('invalid-argument', 'Run input is invalid.')
-      return call(() => options.broker.submitRun(input))
+      return call(() => options.broker.submitRun(input, { projectRuntimePrompt: capability.value.kind === 'project-chat-window' }))
     },
     async forkThread(event: ProjectChatIpcEvent, raw: unknown) { return routeCommand(event, raw, forkThreadInput, (input) => options.broker.forkThread(input)) },
-    async editAndSubmitRun(event: ProjectChatIpcEvent, raw: unknown) { return routeCommand(event, raw, editAndSubmitInput, (input) => options.broker.editAndSubmitRun(input)) },
+    async editAndSubmitRun(event: ProjectChatIpcEvent, raw: unknown) { return routeCommand(event, raw, editAndSubmitInput, (input, capability) => options.broker.editAndSubmitRun(input, { projectRuntimePrompt: capability.kind === 'project-chat-window' })) },
     async archiveThread(event: ProjectChatIpcEvent, raw: unknown) { return routeCommand(event, raw, archiveThreadInput, (input) => options.broker.archiveThread(input)) },
     async setThreadPinned(event: ProjectChatIpcEvent, raw: unknown) { return routeCommand(event, raw, setPinnedInput, (input) => options.broker.setThreadPinned(input)) },
     async setThreadModel(event: ProjectChatIpcEvent, raw: unknown) { return routeCommand(event, raw, setModelInput, (input) => options.broker.setThreadModel(input)) },
@@ -350,6 +354,15 @@ export function createProjectChatIpcRouter(options: ProjectChatIpcRouterOptions)
       if (!capability.ok) return capability
       if (!projectId) return fail('invalid-argument', 'Project id is required.')
       return call(async () => options.collaborator?.openProjectWindow ? await options.collaborator.openProjectWindow(projectId) : unimplemented<void>())
+    },
+    async startProjectRuntimeChat(event: ProjectChatIpcEvent, rawProjectId: unknown) {
+      const capability = authorizeMain(event)
+      if (!capability.ok) return capability
+      const projectId = validString(rawProjectId)
+      if (!projectId) return fail('invalid-argument', 'Project id is required.')
+      return call(async () => options.collaborator?.startProjectRuntimeChat
+        ? await options.collaborator.startProjectRuntimeChat(projectId)
+        : unimplemented<StartProjectRuntimeChatResult>())
     },
     async openWorkspaceTabProjectChat(event: ProjectChatIpcEvent, rawWorkspaceTabId: unknown) {
       const capability = authorizeMain(event)
@@ -501,6 +514,7 @@ export function createProjectChatIpcRouter(options: ProjectChatIpcRouterOptions)
     [PROJECT_CHAT_INVOKE_CHANNELS.answerPrompt]: (event, payload) => router.answerPrompt(event, payload),
     [PROJECT_CHAT_INVOKE_CHANNELS.reportPresenceSelection]: (event, payload) => router.reportPresenceSelection(event, payload),
     [PROJECT_CHAT_INVOKE_CHANNELS.openProjectWindow]: (event, payload) => router.openProjectWindow(event, payload),
+    [PROJECT_CHAT_INVOKE_CHANNELS.startProjectRuntimeChat]: (event, payload) => router.startProjectRuntimeChat(event, payload),
     [PROJECT_CHAT_INVOKE_CHANNELS.openWorkspaceTabProjectChat]: (event, payload) => router.openWorkspaceTabProjectChat(event, payload),
     [PROJECT_CHAT_INVOKE_CHANNELS.openProjectPreview]: (event, payload) => router.openProjectPreview(event, payload),
     [PROJECT_CHAT_INVOKE_CHANNELS.openProjectPathRecovery]: (event, payload) => router.openProjectPathRecovery(event, payload),

@@ -1,14 +1,27 @@
 ---
 change_id: chg-20260828-project-agentos-runtime
-revision: 2
+revision: 3
 decision: accepted
-delivery: planned
+delivery: implemented
 owner: main_agent
+coverage_gate: pass
+acceptance_status: not_accepted
 confirmation_source: explicit_user_statement
-confirmed_scope: "2026-08-28：项目内置 Runtime 的网页工程固定放在项目根目录 .agentos/；该能力只存在于项目页面，不存在于 Workspace Tab；项目 Agent 创建或修改 Runtime 网页代码时必须通过 system prompt 约束写入 .agentos/。"
+confirmed_scope: "2026-08-28 revision 3：Runtime 创建按钮必须转入对应项目的独立 Chat 窗口并提交请求；`.agentos` prompt 仅限该独立窗口的普通/编辑重提及按钮编排，资格和根目录均由 Main 权威派生。"
 ---
 
 # 项目专属 `.agentos` Runtime
+
+## Revision 3 冻结纠正（Current / as-built）
+
+本节覆盖 Revision 2 中“所有有效项目聊天稳定注入”及“在当前项目聊天发起”的宽泛表述：
+
+- 点击项目主页的「让 Agent 创建 Runtime 网页」时，Main 必须打开或聚焦**该项目唯一的独立 Chat 窗口**，自动创建并选中线程，并在该窗口提交创建 Runtime 网页请求；主窗口不得创建或选中空对话。
+- `.agentos` Runtime system prompt 只可注入两类请求：独立项目 Chat 窗口发起的普通提交或编辑重提，以及上述 Main-owned 创建按钮编排的提交。主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求均不得注入。
+- prompt eligibility 必须由 Main 根据 IPC sender capability 或专用按钮编排派生；renderer 不得提交 `runtimeRoot`、prompt-scope 或等价资格标记。实际 `runtimeRoot` 仍只由 Main 从权威项目路径计算。
+- 创建按钮专用 IPC 只接受 main-window capability；其它 renderer、独立 Chat 窗口、Preview、subframe 或任意未授权 sender 必须被拒绝。
+
+Revision 3 已实现并通过独立自动化 Development Check；真实 Electron GUI 正式验收尚未执行，不能将自动化结果写成正式 Acceptance 通过。
 
 ## Revision 2 调整说明
 
@@ -33,13 +46,13 @@ Revision 1 的产品边界不变，用户已确认的范围不变。本次修订
 - `.agentos/` 本身是可运行的网页工程根目录，可包含 `package.json`、源码、资源、构建配置和构建输出。
 - 该 Runtime 只属于项目页面；项目 Runtime 不提供“打开到 Workspace Tab”，也不能被 `workspaceTabs` 引用。
 - 通用 Workspace Runtime Tab 若继续保留，仍使用用户显式绑定的目录；它不发现、不创建、不加载 `.agentos/`，也不接收项目 Runtime system prompt。
-- 项目根目录继续作为 Agent 的工作上下文；只有 Runtime 网页相关实现被约束到 `.agentos/`。用户明确要求修改非 Runtime 项目代码时，仍按用户指定目标执行。
+- 独立项目 Chat 窗口的合格普通/编辑重提，以及 Main-owned 创建按钮编排，继续以项目根作为 Agent 工作上下文；只有 Runtime 网页相关实现被约束到 `.agentos/`。用户明确要求修改非 Runtime 项目代码时，仍按用户指定目标执行。
 
 ## 目标
 
 1. 为每个项目提供唯一、可推导的 `.agentos/` Runtime 根目录。
 2. 在产品对象和 Preview host 归属上把项目 Runtime 与 Workspace Runtime 分开，`workspaceTabs` 不能引用 project-owned Definition。
-3. 让项目 Agent 稳定地把 Runtime 网页代码、配置、资源和依赖写入 `.agentos/`，**并在没有写进去时给出可见反馈**。
+3. 仅在专用独立项目 Chat 入口或 Main-owned 创建编排中让 Agent 把 Runtime 网页代码、配置、资源和依赖写入 `.agentos/`，**并在没有写进去时给出可见反馈**。
 4. 继续复用受控 build/dev supervisor、静态输出验证和 last-good 回退，但不复用 Workspace Tab 产品入口。
 5. 对目录缺失、旧绑定和符号链接逃逸提供明确且安全的处理。
 
@@ -82,5 +95,8 @@ Revision 1 的产品边界不变，用户已确认的范围不变。本次修订
 - 项目页面不再出现将项目 Runtime 打开为 Workspace Tab 的入口；`workspaceTabs` 也不接受 project-owned Definition。
 - 项目 Agent 的 Runtime 网页新建/修改稳定落在 `.agentos/`；未落在 `.agentos/` 时项目 Runtime 页面给出可见提示，而不是静默停留在 `not_initialized`。
 - `not_initialized` 状态可以从 UI 直接发起创建，不是终点状态。
+- 创建入口不会污染主窗口 Chat：它打开对应项目的独立 Chat 窗口，在其中创建、选中并提交线程。
+- Runtime prompt 不会因“有效项目”这一事实普遍注入；它严格遵循 Revision 3 的 sender-capability / Main-owned 编排资格。
+- 创建入口及其 Runtime system prompt 要求先读取当前项目文件夹的已有内容和数据，再在 `.agentos/` 内以 Next.js、React、TypeScript 构建数据可视化工作台并完成静态导出验证；Python、Flask、Streamlit 不得作为 Runtime 实现或启动入口。
 - Workspace Runtime 不读取 `.agentos/`，其既有手动目录行为不回归。
 - `.agentos/` 缺失时不 spawn，创建后可重新发现；符号链接不得逃逸项目根目录。

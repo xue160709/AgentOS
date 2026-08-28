@@ -1,5 +1,24 @@
 # Workspace Runtime
 
+## 项目专属 `.agentos` Runtime（Change revision 3：Current / as-built）
+
+本合同覆盖早期「项目首页与 Workspace Tab 共用 Runtime」的范围。系统现在有两个互不替代的 Runtime 域：
+
+| 域 | 工程根目录 | owner | Preview host | Workspace Tab |
+| --- | --- | --- | --- | --- |
+| Project Runtime | `<project>/.agentos/` | `project`（绑定该 `projectId`） | `project-home` | 不进入、不创建、不引用 |
+| Workspace Runtime | 用户显式选择的目录 | `workspace` | `workspace-tab` | 仅此域可使用 |
+
+- Project Runtime 只从固定 `.agentos/` 发现静态声明、计算 fingerprint、构建与加载 last-good；项目根目录的 `package.json` 不再是 fallback。目录不存在时状态为 `not_initialized`，不 spawn、不猜框架、不写空工程。
+- `not_initialized` 显示目标路径及「让 Agent 创建 Runtime 网页」入口。专用 IPC 只接受 main-window capability：Main 打开或聚焦对应项目独立 Chat 窗口，在其中自动创建并选中线程并提交创建请求；主窗口不得创建或选中空对话。首次发现 `.agentos/package.json` 后重新 ensure，仍须经显式信任才可执行脚本。
+- `.agentos/` 必须经 realpath 后仍位于项目根 realpath 内；symlink escape 被拒绝且不得 spawn。受控静态输出、generation fence、失败保留 last-good 的既有边界不变。
+- Workspace Runtime 继续由用户显式绑定，绝不发现、创建或加载项目 `.agentos/`。旧无 owner Definition 迁移为 `workspace`，不按路径推断、不移动/复制/删除用户文件。
+- Project Runtime 页面不提供进入 Workspace Tab 的入口；`workspaceTabs` 只能引用 workspace-owned Definition，`project-home` 只能引用同项目的 project-owned Definition。
+
+Runtime prompt 只适用于独立项目 Chat 窗口的普通/编辑重提，以及上述 Main-owned 创建编排。主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求均不得注入；eligibility 与实际 runtimeRoot 由 Main 根据 sender capability / 权威项目路径派生，renderer 不得传入 root 或 prompt-scope 标记。
+
+状态：Revision 3 已实现，自动化 Development Check 通过；正式 GUI 验收尚未执行。唯一验收增量见 [`acceptance.md`](acceptance.md)；冻结技术合同见 [`technical.md`](technical.md)。
+
 ## Revision 4 Current / as-built：静态直开与手动构建
 
 默认 Runtime 将从“恢复时自动启动 `npm run dev`”改为“直接打开最后一次成功的静态构建”。已有可用产物时不启动 npm、Node/Next server、不分配端口、不等待 HTTP readiness；没有产物时进入明确的“需要构建”状态，由用户主动构建。
@@ -10,13 +29,13 @@
 
 Revision 4 已实现并通过独立 Development Check：AgentOS 类型检查通过，完整 Electron 测试 145/145 通过，CodeNow Wiki 静态构建生成 624/624 页面。正式 Acceptance 状态见 [`acceptance.md`](acceptance.md)；本节的 Current/as-built 不等同于正式验收通过。
 
-## Revision 2 Current / as-built
+## Revision 2 历史基线（已被项目 `.agentos` 合同覆盖的部分不再适用）
 
 用户层不再使用“Local App / 本地应用”概念：它被收敛为侧栏中的 `Workspace Tab`，底层能力统一称为 `Runtime`。Tab 标题由用户创建时填写并可重命名；目录或 package 名只作为默认建议，不是不可修改的显示名。关闭入口从行内按钮移至右键/键盘上下文菜单。
 
 侧栏顺序调整为：`Tabs → 新对话 → 搜索 → Projects`。项目首页保留既有卡片 Overview，不修改 `ProjectHomeSurface` 或把 Runtime 混入卡片网格；首页新增独立 `Runtime` 页面，通过页级 `Overview / Runtime` Tab 切换两套系统。
 
-Runtime 是可复用容器，同一 canonical root 与启动命令由侧栏 Tab host 和项目首页 host 共享一个受管进程。项目首页 host 不创建隐藏 Workspace Tab；两类 host 各自拥有 PreviewSession 与 consumer，释放其中一个不会误停仍被另一个使用的 Runtime。
+本历史版本曾允许首页与侧栏视图复用一个 Runtime。该行为已被本页顶部的项目 `.agentos` 合同取代：项目页只消费 project-owned `.agentos` Runtime，Workspace Tab 只消费 workspace-owned 的显式目录 Runtime；两者不共用 Definition、consumer 或 Preview host。
 
 Revision 2 代码已实现并通过独立 Development Check；类型检查与完整构建通过，定向测试 58 项中 57 项通过，唯一未通过项是当前受限沙箱禁止 fixture 监听 `127.0.0.1` 的 `EPERM` 环境限制。C-006～C-009 尚未执行正式 `project-verify`，因此不能宣称正式 Acceptance 通过。
 
@@ -75,7 +94,6 @@ Local App Runtime 为 AgentOS 提供“在左侧打开一个本地 Web 应用 Ta
 
 ## Later
 
-- 项目首页复用同一 Local App Runtime，形成左预览、右 Claude Agent SDK 的开发工作台。
 - Claude Agent SDK 通过通用 SandboxBroker 修改代码、安装依赖和控制运行时。
 - 选择并验证生产级跨平台 Sandbox Provider，完成项目外文件、网络、环境变量和子进程逃逸验证后，再提升安全承诺。
 

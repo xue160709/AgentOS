@@ -55,6 +55,7 @@ import {
   HOME_PLUGIN_TASK_RUN_SYSTEM_PROMPT,
 } from './home-plugin-customization-prompt'
 import { safeConsoleError, safeConsoleInfo, safeConsoleWarn } from './safe-console'
+import { buildProjectRuntimeSystemPrompt, resolveProjectAgentRuntimeContext } from './project-runtime-prompt'
 
 /** 渲染进程订阅聊天事件的 IPC 信道 / IPC channel for streamed chat events to renderer */
 export const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
@@ -64,6 +65,8 @@ type ActiveRequest = {
   assistantMessageId: string
   threadId: string
   cwd: string
+  projectId?: string
+  projectRuntimePrompt: boolean
   abortController: AbortController
   query?: Query
   cancelled: boolean
@@ -196,6 +199,8 @@ export class ClaudeAgentRunner {
       assistantMessageId: `assistant-${requestId}`,
       threadId,
       cwd,
+      projectId: typeof payload.projectId === 'string' && payload.projectId.trim() ? payload.projectId.trim() : undefined,
+      projectRuntimePrompt: payload.projectRuntimePrompt === true,
       abortController: new AbortController(),
       cancelled: false,
       didEmitText: false,
@@ -656,7 +661,11 @@ export class ClaudeAgentRunner {
       threadState.configSignature = nextConfigSignature
       const runtimeContext = await buildRuntimeContext(activeRequest.cwd, agentModeSettings, this.resolveUiLocale())
       this.captureHostContextCatalog(threadState, runtimeContext.catalog)
-      const appendSystemPrompt = buildRequestAppendSystemPrompt(activeRequest, runtimeContext.appendSystemPrompt)
+      const projectRuntimeContext = activeRequest.projectRuntimePrompt
+        ? await resolveProjectAgentRuntimeContext(activeRequest.projectId, activeRequest.cwd)
+        : null
+      const projectRuntimePrompt = projectRuntimeContext ? buildProjectRuntimeSystemPrompt(projectRuntimeContext) : undefined
+      const appendSystemPrompt = buildRequestAppendSystemPrompt(activeRequest, runtimeContext.appendSystemPrompt, projectRuntimePrompt)
       const resolvedPrompt = await resolvePromptWithContext(prompt, runtimeContext.catalog, {
         forcedSkillCommand:
           activeRequest.promptMode === 'home-plugin-customization' || activeRequest.promptMode === 'home-plugin-card-customization'
@@ -1196,8 +1205,8 @@ function isMissingConversationSessionError(error: unknown): boolean {
   return isMissingConversationSessionError(error.cause)
 }
 
-function buildRequestAppendSystemPrompt(activeRequest: ActiveRequest, basePrompt?: string): string | undefined {
-  const sections = [basePrompt?.trim()].filter((section): section is string => Boolean(section))
+function buildRequestAppendSystemPrompt(activeRequest: ActiveRequest, basePrompt?: string, projectRuntimePrompt?: string): string | undefined {
+  const sections = [basePrompt?.trim(), projectRuntimePrompt?.trim()].filter((section): section is string => Boolean(section))
   if (activeRequest.promptMode === 'home-plugin-customization') {
     sections.push(HOME_PLUGIN_CUSTOMIZATION_SYSTEM_PROMPT)
   }

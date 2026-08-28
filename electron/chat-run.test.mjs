@@ -54,6 +54,7 @@ function loadRunnerModule() {
     if (specifier === './claude-agent-runner/input') return { normalizeSubmitAttachments: () => [], resolveWorkspaceCwd: (cwd, fallback) => cwd ?? fallback }
     if (specifier === './safe-console') return { safeConsoleError() {}, safeConsoleInfo() {}, safeConsoleWarn() {} }
     if (specifier.startsWith('./claude-agent-runner/') || specifier === './agent-context' || specifier === './home-plugin-customization-prompt') return {}
+    if (specifier === './project-runtime-prompt') return { resolveProjectAgentRuntimeContext: async () => null, buildProjectRuntimeSystemPrompt: () => '' }
     return require(specifier)
   }
   Function('exports', 'module', 'require', outputText)(module.exports, module, localRequire)

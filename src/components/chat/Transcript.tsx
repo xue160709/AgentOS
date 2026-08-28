@@ -56,6 +56,7 @@ export const Transcript = memo(function Transcript({
   onUserMessageEditDismissed,
   onReviewFileChanges,
   onRewindFileChanges,
+  rewindUsesBrokerLookup = false,
 }: {
   items: TranscriptItem[]
   isRunning?: boolean
@@ -66,6 +67,7 @@ export const Transcript = memo(function Transcript({
   onUserMessageEditDismissed?: () => void
   onReviewFileChanges?: (item: ChatFileDiffItem) => void
   onRewindFileChanges?: (item: ChatFileDiffItem) => void
+  rewindUsesBrokerLookup?: boolean
 }) {
   const now = useLiveNow(Boolean(activeRunState?.startedAt))
   const entries = useMemo(() => groupTranscriptForRendering(items, activeRunState), [items, activeRunState])
@@ -81,6 +83,7 @@ export const Transcript = memo(function Transcript({
           item={item}
           onReviewFileChanges={onReviewFileChanges}
           onRewindFileChanges={onRewindFileChanges}
+          rewindUsesBrokerLookup={rewindUsesBrokerLookup}
         />
       )
     }
@@ -860,16 +863,18 @@ const FileDiffRow = memo(function FileDiffRow({
   item,
   onReviewFileChanges,
   onRewindFileChanges,
+  rewindUsesBrokerLookup,
 }: {
   item: ChatFileDiffItem
   onReviewFileChanges?: (item: ChatFileDiffItem) => void
   onRewindFileChanges?: (item: ChatFileDiffItem) => void
+  rewindUsesBrokerLookup: boolean
 }) {
   const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(item.status === 'captured')
   const additions = item.files.reduce((sum, file) => sum + file.additions, 0)
   const deletions = item.files.reduce((sum, file) => sum + file.deletions, 0)
-  const canRewind = Boolean(item.checkpointId && item.status !== 'reverted')
+  const canRewind = Boolean(item.status !== 'reverted' && (rewindUsesBrokerLookup || item.checkpointId))
   const canReview = item.status !== 'reviewed' && item.status !== 'reverted'
 
   useEffect(() => {

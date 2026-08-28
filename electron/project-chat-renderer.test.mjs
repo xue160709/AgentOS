@@ -89,10 +89,28 @@ test('Project window reuses the snapshot Chat surface while persisting only loca
   assert.match(projectWindow, /projectChatWindow\.newThread/)
   assert.match(projectWindow, /setCreatingNewThread\(true\)/)
   assert.match(projectWindow, /setNewThreadModelPick\(pick\)/)
+  assert.match(projectWindow, /event\.type === 'select-thread'[\s\S]{0,280}setSelectedThreadId\(event\.threadId\)/)
   assert.doesNotMatch(projectWindow, /new WorkspaceSession|applyProjectChatSnapshot/)
   assert.match(chatPage, /projectWindow\?: \{ draft: string; onDraftChange/)
   assert.match(chatPage, /if \(projectChatEnabled\)/) // public project bridge remains the branch owner
   assert.match(chatPage, /creatingThread \? newThreadModelPick \?\? currentModelPickRef\.current/)
   assert.match(appShell, /onOpenRuntimeChatWindow/)
   assert.match(appShell, /openWorkspaceTabProjectChat\(activeWorkspaceTab\.id\)/)
+  assert.match(appShell, /window\.projectChat\?\.startProjectRuntimeChat\(activeProject\.id\)/)
+  assert.doesNotMatch(appShell, /chatRef\.current\?\.submitPromptInNewThread/)
+})
+
+test('Project Chat enables broker-owned rewind without exposing durable checkpoints', () => {
+  const chatPage = readFileSync(resolve(testDir, '../src/components/chat/ChatPage.tsx'), 'utf8')
+  const threadView = readFileSync(resolve(testDir, '../src/components/chat/ChatThreadView.tsx'), 'utf8')
+  const transcript = readFileSync(resolve(testDir, '../src/components/chat/Transcript.tsx'), 'utf8')
+  const projectWindow = readFileSync(resolve(testDir, '../src/components/chat/ProjectChatWindowPage.tsx'), 'utf8')
+  const contract = readFileSync(resolve(testDir, '../src/project-chat-contract.ts'), 'utf8')
+
+  assert.match(chatPage, /rewindUsesBrokerLookup=\{projectChatEnabled\}/)
+  assert.match(threadView, /rewindUsesBrokerLookup=\{rewindUsesBrokerLookup\}/)
+  assert.match(transcript, /item\.status !== 'reverted' && \(rewindUsesBrokerLookup \|\| item\.checkpointId\)/)
+  assert.match(projectWindow, /if \(item\.type === 'file_diff'\) return \{ \.\.\.item, requestId: '', files:/)
+  assert.match(contract, /RewindProjectFileDiffInput = \{ projectId: string; threadId: string; changeSetId: string; routeGeneration: number \}/)
+  assert.doesNotMatch(contract, /RewindProjectFileDiffInput = \{[^}]*checkpointId/)
 })

@@ -1,10 +1,16 @@
 ---
 change_id: chg-20260828-project-agentos-runtime
-revision: 2
+revision: 3
 status: accepted
 ---
 
 # 项目专属 `.agentos` Runtime｜方案设计
+
+## Revision 3 冻结纠正（Current / as-built）
+
+「让 Agent 创建 Runtime 网页」是 Main-owned 项目主页动作，不是主窗口 Chat 的快捷提交：Main 先按项目打开或聚焦唯一独立 Chat 窗口，再在该窗口自动创建并选中线程、提交创建请求。主窗口不得因此创建或选中空对话。
+
+`.agentos` prompt 的资格由 Main 的两条权威来源导出：独立项目 Chat 窗口的 sender capability（仅普通提交/编辑重提）或上述专用按钮编排。所有其它来源——主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求——一律不合格。renderer payload 不含 `runtimeRoot`、prompt scope 或等价资格字段；Main 从权威项目路径派生实际根目录。专用按钮 IPC 仅允许 main-window capability 调用。
 
 ## 1. 产品模型
 
@@ -12,7 +18,7 @@ status: accepted
 
 | 域 | 工程目录 | UI Host | 是否进入 Workspace Tab | Prompt 约束 |
 | --- | --- | --- | --- | --- |
-| Project Runtime | `<project>/.agentos/` | `project-home` | 否 | 仅项目聊天注入 |
+| Project Runtime | `<project>/.agentos/` | `project-home` | 否 | 仅独立项目 Chat 的普通/编辑重提，或 Main-owned 创建按钮编排 |
 | Workspace Runtime | 用户显式绑定目录 | `workspace-tab` | 是 | 不注入 `.agentos` 约束 |
 
 项目 Runtime 是项目的派生能力，不是一个可自由移动到工作区的 Tab。Workspace Runtime 是用户显式创建的独立工作区对象，不自动继承项目 `.agentos/`。
@@ -108,7 +114,7 @@ type RuntimeOwner =
 
 - 不创建空工程，不猜框架，不运行 npm。
 - 项目页面显示目标路径 `.agentos/` 和“尚未创建项目 Runtime”。
-- **提供「让 Agent 创建 Runtime 网页」入口**：点击后在当前项目聊天发起一次带 Runtime 约束 prompt 的普通 run。`not_initialized` 不是终点状态，用户不应被迫自己去猜要在聊天里说什么。该入口只发起会话，不由主进程写任何文件。
+- **提供「让 Agent 创建 Runtime 网页」入口**：点击后 Main 打开或聚焦对应项目的独立 Chat 窗口，在其中自动创建并选中线程并提交一次带 Runtime 约束的普通 run；主窗口不得创建或选中空对话。`not_initialized` 不是终点状态，用户不应被迫自己去猜要在聊天里说什么。该入口只编排会话，不由主进程写任何文件。
 - Agent 完成写入或项目文件 watcher 发现 `.agentos/package.json` 后重新 ensure。
 - 目录首次出现后仍遵守现有显式信任流程，未信任前不执行脚本。
 
@@ -146,7 +152,7 @@ Main 侧的 owner 判定：
 
 ### 6.1 项目上下文
 
-Project Chat Broker 已掌握权威 `projectId`，且已在 `runner.submit({ ..., cwd: project.path })` 中传递项目路径。本变更在同一处补传 `projectId`，由主进程按权威 workspace 事实派生 `runtimeRoot`：
+Main 已掌握权威项目记录。它只在独立项目 Chat 窗口的普通提交/编辑重提，或 main-window capability 调用的创建按钮编排中判定 prompt eligibility；再由主进程按权威项目路径派生 `runtimeRoot`：
 
 ```ts
 type ProjectAgentRuntimeContext = {
@@ -156,9 +162,7 @@ type ProjectAgentRuntimeContext = {
 }
 ```
 
-`runtimeRoot` 一律由主进程用 `projectRuntimeRoot()` 计算，不接受调用方提供。这是**沿用现有数据流的自然结果**，不作为独立信任边界建模：注入内容只是一个 Agent 本来就能在 `cwd` 下看到的绝对路径，不授予任何能力，误注入的最坏后果是 Workspace 会话多收到一句无害约束。
-
-Workspace Runtime 操作、非项目请求和路径已失效的项目不注入。
+`runtimeRoot` 一律由 Main 用 `projectRuntimeRoot()` 计算。renderer 不得提供或覆盖 `runtimeRoot`、prompt scope 或等价资格标记；Main 依据 sender capability / 专用编排自行判定资格。主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求和路径已失效项目一律不注入。
 
 ### 6.2 Prompt 内容
 
@@ -169,16 +173,22 @@ Workspace Runtime 操作、非项目请求和路径已失效的项目不注入�
 当前项目的 AgentOS Runtime 网页工程根目录是：
 <absolute-project-path>/.agentos
 
-当任务需要创建或修改用于项目 Runtime 预览的网页、组件、样式、脚本、
-资源、依赖或构建配置时，所有相关文件必须位于该目录内。
+当任务需要创建或修改项目 Runtime 时：
+- 先读取当前项目文件夹已有的文档、数据、代码和内容；
+- 基于这些真实内容构建数据可视化工作台；
+- 必须使用 Next.js、React、TypeScript，并配置静态导出产出 out/index.html；
+- 不得使用 Python、Flask、Streamlit 等 Python 方案替代 Runtime；
+- 所有 Runtime 文件必须位于上述 .agentos 目录内；必须在该目录执行 npm install，再执行 npm run build，并以成功生成 out/index.html 作为完成条件。
 
 不要把 Runtime 网页实现写入项目根目录或 Workspace Runtime 目录。
-可以读取项目其他文件作为上下文。
+可以只读访问项目其他文件作为数据和上下文，不因创建 Runtime 改写源文件。
 用户明确要求修改非 Runtime 项目代码时，按用户指定目标执行。
 </agentos_project_runtime>
 ```
 
-该提示稳定附加到项目请求，不依赖易漏判的“是否为代码任务”分类；其中的条件式措辞保证只约束 Runtime 网页实现。
+创建按钮的中英文用户提示重复上述 Next.js、项目内容、数据可视化工作台、静态导出与禁用 Python Runtime 的关键约束；即使任一层提示被单独检查，目标也保持明确。
+
+该提示稳定附加到**合格的独立项目 Chat 普通/编辑重提或 Main-owned 创建按钮编排请求**，不依赖易漏判的“是否为代码任务”分类；其中的条件式措辞保证只约束 Runtime 网页实现。有效项目本身不是注入资格。
 
 Agent `cwd` 仍为项目根目录，以继续读取项目指令、业务文件和知识上下文。
 
@@ -236,4 +246,6 @@ Prompt 是**建议性**的，且其条件措辞（是否 Runtime 网页 / 是否
 | 项目 Agent 创建 Runtime 页面 | 文件位于 `.agentos/`，重新探测后可预览 |
 | 项目 Agent 把 Runtime 页面写到项目根 | 页面提示落点错误并显示目标路径，不自动搬运文件 |
 | 项目 Agent 修改非 Runtime 文件 | 不被强制改写到 `.agentos/`，不触发 Runtime build，不误报落点提示 |
+| 点击创建入口 | 仅 main-window capability 可发起；打开对应独立 Chat 窗口，在其中创建/选中线程并提交；主窗口不产生空对话 |
+| 主窗口普通 Chat 或受管外部任务 | 即便关联有效项目，也不注入 `.agentos` prompt |
 | build 失败 | 保留 last-good，Agent 结果独立 |

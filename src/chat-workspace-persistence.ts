@@ -291,7 +291,7 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
   const runtimeDefinitions = normalizeRuntimeDefinitions(value.runtimeDefinitions ?? value.localAppDefinitions)
   const workspaceTabs = normalizeWorkspaceTabs(
     value.workspaceTabs ?? value.localAppTabs,
-    new Set(runtimeDefinitions.map((item) => item.id)),
+    new Map(runtimeDefinitions.map((item) => [item.id, item])),
   )
   const activeWorkspaceTabId =
     typeof (value.activeWorkspaceTabId ?? value.activeLocalAppTabId) === 'string' &&
@@ -317,14 +317,15 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
   })
 
   if (projects.length === 0) {
+    const workspaceRuntimeDefinitions = runtimeDefinitions.filter((definition) => definition.owner.kind === 'workspace')
     return attachLegacyRuntimeView({
       ...migrateLegacySeedProjects(createDefaultChatWorkspaceState()),
       workspaceRevision: readWorkspaceRevision(value) ?? 0,
-      runtimeDefinitions,
+      runtimeDefinitions: workspaceRuntimeDefinitions,
       workspaceTabs,
       activeWorkspaceTabId,
       projectHomeViewModes,
-      localAppDefinitions: runtimeDefinitions,
+      localAppDefinitions: workspaceRuntimeDefinitions,
       localAppTabs: workspaceTabs,
       activeLocalAppTabId: activeWorkspaceTabId,
       workspaceSchemaVersion,
@@ -332,6 +333,7 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
     })
   }
   const projectIds = new Set(projects.map((project) => project.id))
+  const scopedRuntimeDefinitions = runtimeDefinitions.filter((definition) => definition.owner.kind === 'workspace' || projectIds.has(definition.owner.projectId))
   const threads = value.threads.flatMap((thread): WorkspaceThread[] => {
     if (!isRecord(thread) || typeof thread.id !== 'string' || typeof thread.projectId !== 'string') return []
     if (!projectIds.has(thread.projectId)) return []
@@ -365,11 +367,11 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
     projects,
     threads,
     sidebarPrefs,
-    runtimeDefinitions,
+    runtimeDefinitions: scopedRuntimeDefinitions,
     workspaceTabs,
     activeWorkspaceTabId,
     projectHomeViewModes,
-    localAppDefinitions: runtimeDefinitions,
+    localAppDefinitions: scopedRuntimeDefinitions,
     localAppTabs: workspaceTabs,
     activeLocalAppTabId: activeWorkspaceTabId,
     workspaceSchemaVersion,
@@ -380,6 +382,7 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
 function normalizeRuntimeDefinitions(value: unknown): RuntimeDefinition[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
+  const seenProjectOwners = new Set<string>()
   return value.flatMap((item): RuntimeDefinition[] => {
     if (!isRecord(item) || typeof item.id !== 'string' || !item.id.trim() || seen.has(item.id)) return []
     const rootPath = typeof item.rootPath === 'string' ? item.rootPath.trim() : ''
@@ -387,8 +390,16 @@ function normalizeRuntimeDefinitions(value: unknown): RuntimeDefinition[] {
     seen.add(item.id)
     const devCommand = { executable: 'npm' as const, args: ['run', 'dev'] as ['run', 'dev'] }
     const agentos = normalizeStaticDeclaration(item.agentos)
+    const owner: RuntimeDefinition['owner'] = isRecord(item.owner) && item.owner.kind === 'project' && typeof item.owner.projectId === 'string' && item.owner.projectId.trim()
+      ? { kind: 'project', projectId: item.owner.projectId.trim() }
+      : { kind: 'workspace' }
+    if (owner.kind === 'project') {
+      if (seenProjectOwners.has(owner.projectId)) return []
+      seenProjectOwners.add(owner.projectId)
+    }
     return [{
       id: item.id,
+      owner,
       name: typeof item.name === 'string' && item.name.trim()
         ? item.name.trim()
         : rootPath.split(/[\\/]/).filter(Boolean).slice(-1)[0] || 'Runtime',
@@ -425,7 +436,7 @@ function isSafeStaticRelativePath(value: string): boolean {
   return value.split('/').every((segment) => segment && segment !== '.' && segment !== '..')
 }
 
-function normalizeWorkspaceTabs(value: unknown, definitionIds: Set<string>): WorkspaceTab[] {
+function normalizeWorkspaceTabs(value: unknown, definitions: Map<string, RuntimeDefinition>): WorkspaceTab[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
   return value.flatMap((item): WorkspaceTab[] => {
@@ -435,7 +446,8 @@ function normalizeWorkspaceTabs(value: unknown, definitionIds: Set<string>): Wor
       : typeof item.localAppId === 'string'
         ? item.localAppId
         : ''
-    if (!runtimeDefinitionId || !definitionIds.has(runtimeDefinitionId)) return []
+    const definition = definitions.get(runtimeDefinitionId)
+    if (!definition || definition.owner.kind !== 'workspace') return []
     seen.add(item.id)
     return [{
       id: item.id,

@@ -1,5 +1,23 @@
 # Workspace Runtime 产品设计
 
+## 项目专属 `.agentos` Runtime（Change revision 3：Current / as-built）
+
+项目 Runtime 是项目页的派生能力，不是可移动的 Workspace Tab。它固定在 `<project>/.agentos/`，持久 owner 为 `project` 与单一 `projectId`，并只能由 `project-home` 承载。Workspace Runtime 仍是用户显式选择目录的 `workspace` owner 对象；它不探测项目 `.agentos/`。
+
+```text
+项目首页 Runtime -> <project>/.agentos/ -> project-owned Definition -> project-home Preview
+Workspace Tab   -> 用户显式目录         -> workspace-owned Definition -> workspace-tab Preview
+```
+
+- 项目 `.agentos/` 缺失显示 `not_initialized`，展示目标路径及「让 Agent 创建 Runtime 网页」入口；入口专用 IPC 仅 main-window capability 可调用。Main 打开或聚焦对应独立项目 Chat 窗口，在其中自动创建并选中线程、提交带 Runtime 约束的请求；主窗口绝不创建或选中空对话，也不直接生成文件或执行命令。
+- 首次发现 `.agentos/package.json` 后才继续既有显式信任。其 canonical root 必须在项目 realpath 内；symlink escape 拒绝且不 spawn。
+- 项目页不提供进入 Workspace Tab 的动作。`workspaceTabs` 只消费 workspace-owned Definition；项目页只消费同项目 project-owned Definition。
+
+Runtime prompt eligibility 由 Main 根据独立项目 Chat sender capability（普通提交/编辑重提）或上述专用按钮编排派生；实际 runtimeRoot 由权威项目路径派生。主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求不注入，renderer 也不能提交 runtimeRoot、prompt-scope 或等价标记。
+- 已验证产物继续使用 immutable last-good。fingerprint 只覆盖 `.agentos` 源码，失败/取消/旧 generation 不替换 last-good。
+
+本节覆盖本文件早期版本中项目页与 Workspace Runtime 共享对象的叙述；这些历史内容仅用于回归定位，不构成当前产品合同。
+
 ## Revision 5 Planned：首次导入自动构建闭环
 
 Revision 5 取代 Revision 4 中“没有产物时由用户点击构建”的首次使用路径：用户只负责选择项目和确认信任，AgentOS 负责完成首次可用页面。
@@ -35,7 +53,7 @@ Revision 5 取代 Revision 4 中“没有产物时由用户点击构建”的首
 
 - 打开和恢复不得隐式构建，也不得默认启动 `npm run dev` 或 `npm run start`。
 - 构建成功后当前 host 切换到新静态产物；快速关闭、重开或切换 host 时，旧 operation/generation 的结果不得覆盖当前视图。
-- 工具栏复用现有布局：静态模式显示构建、构建状态、刷新和“开发模式”；开发模式保留现有日志、重启和停止能力。侧栏 Tab 与项目首页 Runtime host 共享同一 RuntimeDefinition 和最后成功产物。
+- 工具栏复用现有布局：静态模式显示构建、构建状态、刷新和“开发模式”；开发模式保留现有日志、重启和停止能力。Workspace Tab 只显示 workspace-owned Definition 的 last-good；项目页的 `.agentos` last-good 由独立 project-owned Definition 管理。
 - stale 检查在旧页面已经可见后异步执行，不得进入首屏阻塞路径；它只提示，不自动执行项目代码。
 
 ### 信任说明
@@ -44,7 +62,7 @@ Revision 5 取代 Revision 4 中“没有产物时由用户点击构建”的首
 
 本节已按当前实现同步为 Current/as-built，并通过独立 Development Check；真实打包 Electron Chromium GUI 的 custom-scheme 全流程尚未执行正式验收。
 
-> Revision 2 Current/as-built（Development Check PASS）：侧栏对象已改为用户命名的 `Workspace Tab`，Tabs 区位于新对话与搜索上方，关闭使用右键/键盘菜单；项目首页以页级 `Overview / Runtime` Tab 在既有卡片系统和独立 Runtime 页面之间切换。`ProjectHomeSurface` 卡片区域保持原样，项目首页 Runtime host 不创建隐藏 Tab，同一 Runtime 可被两类 host 共享。正式 Acceptance 尚未执行。
+> Revision 2 Current/as-built（Development Check PASS）：侧栏对象已改为用户命名的 `Workspace Tab`，Tabs 区位于新对话与搜索上方，关闭使用右键/键盘菜单；项目首页以页级 `Overview / Runtime` Tab 在既有卡片系统和独立 Runtime 页面之间切换。有关项目页与 Workspace Runtime 的共享叙述已由本页顶部 project-owned `.agentos` 合同取代。正式 Acceptance 尚未执行。
 
 ## Revision 2 信息架构与交互合同
 
@@ -58,12 +76,12 @@ Tabs                         [ Overview ] [ Runtime ]
 Projects
 ```
 
-- `RuntimeDefinition` 是已信任目录和启动配置；`WorkspaceTab` 是用户创建、命名、激活和关闭的持久视图；`RuntimeInstance` 是共享进程；`RuntimeHost` 是 `workspace-tab` 或 `project-home` 两类承载者。
+- `RuntimeDefinition` 具有 `workspace` 或 `project` owner；`WorkspaceTab` 只能指向前者；`RuntimeInstance` 是各 owner 域内的受管进程；`RuntimeHost` 与 owner 必须对应，`workspace-tab` 不承载 project-owned Definition。
 - 新建时标题输入可编辑，trim 后 1–64 字符，同名允许；重命名使用行内编辑，`Enter` 提交、`Escape` 取消，失焦不隐式提交。标题持久化失败时保留编辑态并显示错误，不制造乐观成功。
 - Tab 行不显示关闭按钮。鼠标右键或键盘上下文菜单提供“重命名 / 关闭”；关闭仍由 Main 权威快照提交成功后更新 UI。
 - 首页 Overview 为默认页；切到 Runtime 不改变卡片内部状态。每个项目可恢复上次页签选择，错误或启动中也停留在 Runtime 页，不强制跳回 Overview。
-- 未信任项目只展示说明与“启动预览”，不得因进入首页自动执行脚本。显式确认后才建立 `project-home:<projectId>:<mountId>` consumer。
-- 项目首页离开 Runtime 页时只释放该 host；若仍有 `tab:<workspaceTabId>` consumer，受管进程继续运行。异步结果必须同时校验 project、mount、definition 与 generation，旧结果不得覆盖新页面。
+- `.agentos` 缺失的项目只展示 `not_initialized` 说明和创建入口；不得因进入首页自动执行脚本。目录首次存在后，显式确认才可运行 project-owned Runtime。
+- 项目首页的异步结果必须校验 project、mount、Definition owner 与 generation，旧结果不得覆盖新页面；它不依赖或保留 Workspace Tab consumer。
 
 以下章节保留 Revision 1 Current/as-built 基线，供迁移与回归对照。
 
@@ -345,6 +363,5 @@ AgentOS 启动/工作区恢复
 
 ## 13. Planned / Later（未实现）
 
-- `LATER-01`：项目首页复用同一 Local App Runtime，形成左预览、右 Claude Agent SDK 的开发工作台。
-- `LATER-02`：Claude Agent SDK 通过通用 SandboxBroker 在项目运行时中读写、安装依赖和控制进程。
-- `LATER-03`：确定并实现生产级跨平台 Sandbox Provider；完成项目外文件、网络、环境变量和子进程逃逸验证后再声明强隔离。
+- `LATER-01`：Claude Agent SDK 通过通用 SandboxBroker 在项目运行时中读写、安装依赖和控制进程。
+- `LATER-02`：确定并实现生产级跨平台 Sandbox Provider；完成项目外文件、网络、环境变量和子进程逃逸验证后再声明强隔离。

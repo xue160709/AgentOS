@@ -91,6 +91,14 @@ export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
     }
     let active = true
     const unsubscribe = api.onEvent((event) => {
+      if (event.type === 'select-thread') {
+        if (!active || event.projectId !== projectId) return
+        setCreatingNewThread(false)
+        setNewThreadModelPick(undefined)
+        setSelectedThreadId(event.threadId)
+        queueViewState({ selectedThreadId: event.threadId, draft: '' })
+        return
+      }
       if (event.type !== 'snapshot') return
       if (!active || event.projectId !== projectId) return
       const outcome = controllerRef.current.accept(event)
@@ -120,7 +128,7 @@ export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
       window.removeEventListener('beforeunload', flush)
       flushViewState()
     }
-  }, [flushViewState, projectId, refreshSnapshot])
+  }, [flushViewState, projectId, queueViewState, refreshSnapshot])
 
   const snapshot = state.kind === 'ready' ? state.snapshot : undefined
   useEffect(() => {

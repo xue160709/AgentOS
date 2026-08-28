@@ -1,5 +1,13 @@
 # 聊天与 Agent 运行时技术文档
 
+## 项目 `.agentos` Runtime prompt（Change revision 3：Current / as-built）
+
+Main 只在两种资格来源满足时调用 Runtime prompt builder：（1）对应独立项目 Chat 窗口的 sender capability 发起普通提交或编辑重提；（2）main-window capability 发起的「让 Agent 创建 Runtime 网页」专用编排。Main 从权威项目路径以 `projectRuntimeRoot(project.path)` 派生 `runtimeRoot`，再追加项目 Runtime 网页的文件、资源、依赖和构建配置必须位于绝对 `<project>/.agentos/` 的语义。
+
+该 system prompt 还要求 Agent 先只读分析项目根已有的文档、数据、代码和内容，再使用 Next.js、React、TypeScript 构建基于这些真实内容的数据可视化工作台。Next.js 必须配置静态导出；Agent 必须在 `.agentos/` 执行 `npm install`，再执行 `npm run build`，并以成功产出 `out/index.html` 作为完成条件。Python、Flask、Streamlit 或其它 Python 方案不得成为 Runtime 实现、服务或启动入口。创建按钮发送的中英文用户提示保持相同约束，避免仅依赖单层提示。
+
+主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求和路径失效项目不得注入。renderer 不得传入 `runtimeRoot`、prompt scope 或等价资格标记；Main 从 sender capability / 专用编排判定 eligibility。创建按钮 IPC 只接受 main-window capability，并负责打开或聚焦对应项目独立 Chat 窗口、在其中创建并选中线程并提交请求；主窗口不得产生空对话副作用。prompt 不授予任何额外能力，Agent cwd 保持项目根。项目 run 结束后，Runtime 页面可只读检测「`.agentos` 缺失且项目根新增疑似网页工程」并提示目标路径；检测不得移动/复制/删除文件或自动重试。该反馈与 Agent run 终态、静态 last-good 和 Workspace Runtime 生命周期相互独立。
+
 ## Revision 2 计划合同（Accepted / Planned）
 
 Revision 2 将 renderer-local Chat 写入路径迁移为 Main-owned `ProjectChatBroker`。该计划尚未落地；完整冻结合同见 [`../../changes/active/chg-20260818-agent-command-channel/technical.md`](../../changes/active/chg-20260818-agent-command-channel/technical.md)，网站线协议见同目录 `protocol-v1.md`。
@@ -15,7 +23,7 @@ Revision 2 将 renderer-local Chat 写入路径迁移为 Main-owned `ProjectChat
 | IPC | `window.projectChat` typed bridge；Main 校验 sender、main frame、renderer URL 与固定 project capability |
 | 权限 | app-global Main preference，缺省 `auto`；submit 线性化时捕获，网站协议无权限字段 |
 | 网站 | safeStorage 加密 Binding credential；fixed HTTPS well-known Ticket；accepted 只表示 thread durable + runner 返回 requestId |
-| Runtime | 可靠 before-tool lease/actual diff 才记 mutation；三条件 settle，1,500ms stable / 30,000ms max；旧 generation 不切 last-good |
+| Runtime | 可靠 before-tool lease/actual diff 才记 mutation；三条件 settle，1,500ms stable / 30,000ms max；旧 generation 不切 last-good；仅独立项目 Chat 普通/编辑重提或 Main-owned 创建编排可注入 `.agentos` 路径约束 |
 
 迁移必须按 `M0 contracts/broker/window` → `M1 binding/deep-link` 与 `M2 runtime settle` 执行。M0 完成前不得让旧 renderer writer 与 broker 同时写 workspace；Revision 2 完成后，下面“同一线程新请求会取消前一个活跃请求”的 as-built 行为将改为 `thread-busy`。
 
@@ -41,7 +49,7 @@ Revision 2 将 renderer-local Chat 写入路径迁移为 Main-owned `ProjectChat
 
 ## 数据结构
 
-- `ClaudeChatSubmitPayload`：文本、附件、threadId、modelPick、sessionId、cwd、permissionMode 和 promptMode。
+- `ClaudeChatSubmitPayload`：文本、附件、threadId、modelPick、sessionId、cwd、permissionMode、promptMode 和由 Main 处理的项目身份；`runtimeRoot`、prompt scope 或任何 Runtime eligibility 标记均不属于调用方 payload。
 - `ClaudeChatEvent`：主进程推送给 UI 的流式事件联合类型。
 - `ChatState.items`：message、tool、thinking、activity、context_compaction、file_diff 的 transcript 联合。
 - `ThreadRunState`：UI 侧进行中、等待中和提问中状态。

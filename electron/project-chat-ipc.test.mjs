@@ -92,9 +92,9 @@ function makeBroker(overrides = {}) {
       unreadExternalTaskCount: 0,
     }),
     createThread: async (input) => { broker.calls.push(['create', input]); return ok({ threadId: input.title, workspaceRevision: 1 }) },
-    submitRun: async (input) => { broker.calls.push(['submit', input]); return ok({ requestId: 'request-1' }) },
+    submitRun: async (input, context) => { broker.calls.push(['submit', input, context]); return ok({ requestId: 'request-1' }) },
     forkThread: async (input) => { broker.calls.push(['fork', input]); return ok({ threadId: 'fork-1', workspaceRevision: 1 }) },
-    editAndSubmitRun: async (input) => { broker.calls.push(['edit', input]); return ok({ requestId: 'request-2' }) },
+    editAndSubmitRun: async (input, context) => { broker.calls.push(['edit', input, context]); return ok({ requestId: 'request-2' }) },
     archiveThread: async (input) => { broker.calls.push(['archive', input]); return ok(undefined) },
     setThreadPinned: async (input) => { broker.calls.push(['pin', input]); return ok(undefined) },
     setThreadModel: async (input) => { broker.calls.push(['model', input]); return ok(undefined) },
@@ -158,6 +158,25 @@ test('Workspace Tab Chat is main-window-only and forwards only its opaque tab id
   assert.deepEqual(calls, ['tab-home'])
 })
 
+test('Runtime Chat creation is main-window-only and forwards only a validated project id', async () => {
+  const calls = []
+  const harness = makeHarness({ collaborator: { startProjectRuntimeChat: async (projectId) => { calls.push(projectId); return ok({ threadId: 'thread-runtime', requestId: 'request-runtime' }) } } })
+  harness.capabilities.registerMainWindow(1)
+  harness.capabilities.registerProjectWindow(7, 'project-1', 3)
+
+  for (const sender of [event(99), event(1, 'http://renderer.test/index.html', true), event(1, 'http://renderer.test/other.html'), event(7)]) {
+    const result = await harness.router.startProjectRuntimeChat(sender, 'project-1')
+    assert.equal(result.ok, false)
+    assert.equal(result.error.code, 'sender-not-authorized')
+  }
+  assert.deepEqual(calls, [])
+  const invalid = await harness.router.startProjectRuntimeChat(event(1), { projectId: 'project-1', projectRuntimePrompt: true })
+  assert.equal(invalid.ok, false)
+  assert.equal(invalid.error.code, 'invalid-argument')
+  assert.deepEqual(await harness.router.startProjectRuntimeChat(event(1), 'project-1'), ok({ threadId: 'thread-runtime', requestId: 'request-runtime' }))
+  assert.deepEqual(calls, ['project-1'])
+})
+
 test('Project Chat IPC rejects unknown, subframe, wrong document, wrong project, and stale capability generation', async () => {
   const harness = makeHarness()
   harness.capabilities.registerMainWindow(1)
@@ -204,13 +223,13 @@ test('Project Chat IPC whitelists broker inputs and passes the authorized owner 
   const submitted = await harness.router.submitRun(event(7), {
     projectId: 'project-1', threadId: 'thread-1', text: 'hello',
     modelPick: { providerId: 'provider', anthropicModel: 'model' }, handoffContext: 'handoff',
-    cwd: '/attacker', sessionId: 'attacker-session', permissionMode: 'bypassPermissions', unexpected: true,
+    cwd: '/attacker', sessionId: 'attacker-session', permissionMode: 'bypassPermissions', projectRuntimePrompt: false, unexpected: true,
   })
   assert.equal(submitted.ok, true)
   assert.deepEqual(harness.broker.calls[0], ['submit', {
     projectId: 'project-1', threadId: 'thread-1', text: 'hello', attachments: undefined,
     modelPick: { providerId: 'provider', anthropicModel: 'model' }, handoffContext: 'handoff',
-  }])
+  }, { projectRuntimePrompt: true }])
 
   const answered = await harness.router.answerPrompt(event(7), {
     projectId: 'project-1', threadId: 'thread-1', requestId: 'request-1', promptId: 'prompt-1', routeGeneration: 3,
@@ -225,6 +244,25 @@ test('Project Chat IPC whitelists broker inputs and passes the authorized owner 
   assert.equal(mismatched.ok, false)
   assert.equal(mismatched.error.code, 'invalid-argument')
   assert.equal(harness.broker.calls.filter(([name]) => name === 'answer').length, 1, 'mismatched prompt response never reaches the runner seam')
+})
+
+test('IPC derives Runtime prompt authority from the registered sender, never renderer input', async () => {
+  const harness = makeHarness()
+  harness.capabilities.registerMainWindow(1)
+  harness.capabilities.registerProjectWindow(7, 'project-1', 3)
+  const run = { projectId: 'project-1', threadId: 'thread-1', text: 'hello', projectRuntimePrompt: true }
+  const edit = { projectId: 'project-1', threadId: 'thread-1', messageId: 'message-1', text: 'edited', routeGeneration: 3, projectRuntimePrompt: false }
+
+  assert.equal((await harness.router.submitRun(event(1), run)).ok, true)
+  assert.equal((await harness.router.editAndSubmitRun(event(1), edit)).ok, true)
+  assert.equal((await harness.router.submitRun(event(7), run)).ok, true)
+  assert.equal((await harness.router.editAndSubmitRun(event(7), edit)).ok, true)
+  assert.deepEqual(harness.broker.calls.filter(([name]) => name === 'submit').map(([, , context]) => context), [
+    { projectRuntimePrompt: false }, { projectRuntimePrompt: true },
+  ])
+  assert.deepEqual(harness.broker.calls.filter(([name]) => name === 'edit').map(([, , context]) => context), [
+    { projectRuntimePrompt: false }, { projectRuntimePrompt: true },
+  ])
 })
 
 test('Project Chat IPC binds presence and rewind to the authorized capability and frozen DTOs', async () => {
@@ -403,7 +441,7 @@ test('Website Binding management is available only to the registered main window
 test('Project Chat channels and preload adapter remain exhaustive and centralized', () => {
   const { PROJECT_CHAT_EVENT_CHANNELS, PROJECT_CHAT_INVOKE_CHANNELS } = loadTsModule(resolve(testDir, '../src/project-chat-ipc-seam.ts'))
   assert.deepEqual(Object.keys(PROJECT_CHAT_INVOKE_CHANNELS), [
-    'getSnapshot', 'createThread', 'submitRun', 'forkThread', 'editAndSubmitRun', 'archiveThread', 'setThreadPinned', 'setThreadModel', 'markFileDiffReviewed', 'rewindFileDiff', 'cancelRun', 'answerPrompt', 'reportPresenceSelection', 'openProjectWindow', 'openWorkspaceTabProjectChat', 'openProjectPreview', 'openProjectPathRecovery', 'getWindowViewState', 'saveWindowViewState', 'markExternalTasksSeen', 'listWebsiteBindings', 'revokeWebsiteBinding', 'respondToWebsitePairing', 'initializePermissionMode', 'setPermissionMode', 'getModelCatalog', 'getAgentContext', 'searchProjectFiles', 'pickAttachments', 'readProjectAttachments', 'getThreadStatus',
+    'getSnapshot', 'createThread', 'submitRun', 'forkThread', 'editAndSubmitRun', 'archiveThread', 'setThreadPinned', 'setThreadModel', 'markFileDiffReviewed', 'rewindFileDiff', 'cancelRun', 'answerPrompt', 'reportPresenceSelection', 'openProjectWindow', 'startProjectRuntimeChat', 'openWorkspaceTabProjectChat', 'openProjectPreview', 'openProjectPathRecovery', 'getWindowViewState', 'saveWindowViewState', 'markExternalTasksSeen', 'listWebsiteBindings', 'revokeWebsiteBinding', 'respondToWebsitePairing', 'initializePermissionMode', 'setPermissionMode', 'getModelCatalog', 'getAgentContext', 'searchProjectFiles', 'pickAttachments', 'readProjectAttachments', 'getThreadStatus',
   ])
   assert.deepEqual(Object.keys(PROJECT_CHAT_EVENT_CHANNELS), ['onEvent'])
   const preload = readFileSync(resolve(testDir, './preload.ts'), 'utf8')

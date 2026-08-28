@@ -576,3 +576,21 @@ test('Workspace normalization preserves optional Workspace Tab projectId while l
   assert.equal(normalized.workspaceTabs.find((tab) => tab.id === 'legacy').projectId, undefined)
   assert.equal(normalized.workspaceTabs.find((tab) => tab.id === 'linked').projectId, 'project-1')
 })
+
+test('Workspace normalization migrates missing Runtime owners, preserves project owners, and drops project-owned tabs', () => {
+  const { normalizeChatWorkspaceState } = loadTsModule(resolve(testDir, '../src/chat-workspace-persistence.ts'))
+  const normalized = normalizeChatWorkspaceState({
+    ...createState(),
+    runtimeDefinitions: [
+      { id: 'legacy', name: 'Legacy', rootPath: '/legacy', packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, trustStatus: 'trusted', autoStart: true, createdAt: 1, updatedAt: 1 },
+      { id: 'project-runtime', owner: { kind: 'project', projectId: 'project-1' }, name: 'Project Runtime', rootPath: '/project/.agentos', packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, trustStatus: 'trusted', autoStart: true, createdAt: 1, updatedAt: 1 },
+    ],
+    workspaceTabs: [
+      { id: 'legacy-tab', runtimeDefinitionId: 'legacy', title: 'Legacy', createdAt: 1, updatedAt: 1 },
+      { id: 'project-tab', runtimeDefinitionId: 'project-runtime', title: 'Project', createdAt: 1, updatedAt: 1 },
+    ],
+  })
+  assert.deepEqual(normalized.runtimeDefinitions.find((item) => item.id === 'legacy').owner, { kind: 'workspace' })
+  assert.deepEqual(normalized.runtimeDefinitions.find((item) => item.id === 'project-runtime').owner, { kind: 'project', projectId: 'project-1' })
+  assert.deepEqual(normalized.workspaceTabs.map((tab) => tab.id), ['legacy-tab'])
+})

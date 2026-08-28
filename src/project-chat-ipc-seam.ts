@@ -20,6 +20,7 @@ export const PROJECT_CHAT_INVOKE_CHANNELS = {
   answerPrompt: 'project-chat:answer-prompt',
   reportPresenceSelection: 'project-chat:report-presence-selection',
   openProjectWindow: 'project-chat:open-project-window',
+  startProjectRuntimeChat: 'project-chat:start-project-runtime-chat',
   openWorkspaceTabProjectChat: 'project-chat:open-workspace-tab-project-chat',
   openProjectPreview: 'project-chat:open-project-preview',
   openProjectPathRecovery: 'project-chat:open-project-path-recovery',

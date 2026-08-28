@@ -130,7 +130,7 @@ export type RuntimePreviewNavigationState = { previewId: string; canGoBack: bool
 export type RuntimePreviewLayoutSize = { width: number; height: number }
 export type RuntimePreviewLayout = { projectId: string; width?: number; height: number; updatedAt: number }
 export type ProjectRuntimeResult =
-  | { ok: true; status: 'ready' | 'trust_required'; projectId: string; mountId: string; definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null }
+  | { ok: true; status: 'not_initialized' | 'ready' | 'trust_required'; projectId: string; mountId: string; runtimeRoot: string; misplacedRuntime?: boolean; definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null }
   | { ok: false; message: string; code?: string }
 
 export type RuntimeBuildResult =

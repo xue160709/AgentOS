@@ -227,10 +227,11 @@ export type ProjectChatEvent = {
 }
 export type ProjectChatPreviewNavigationEvent = { type: 'open-project-preview'; projectId: string }
 export type ProjectChatPathRecoveryEvent = { type: 'open-project-path-recovery'; projectId: string }
+export type ProjectChatSelectThreadEvent = { type: 'select-thread'; projectId: string; threadId: string }
 export type AgentOSPairingPrompt = { pairingId: string; displayName: string; origin: string; expiresAt: number }
 export type AgentOSPairingResponse = { pairingId: string; action: 'accept'; projectId: string } | { pairingId: string; action: 'reject' }
 export type ProjectChatPairingEvent = { type: 'agentos-pairing'; pairing: AgentOSPairingPrompt | null }
-export type ProjectChatClientEvent = ProjectChatEvent | ProjectChatPreviewNavigationEvent | ProjectChatPathRecoveryEvent | ProjectChatPairingEvent
+export type ProjectChatClientEvent = ProjectChatEvent | ProjectChatPreviewNavigationEvent | ProjectChatPathRecoveryEvent | ProjectChatSelectThreadEvent | ProjectChatPairingEvent
 
 /** Main-only event. The IPC broadcaster must project it per recipient first. */
 export type ProjectChatInternalEvent = Omit<ProjectChatEvent, 'snapshot'> & {
@@ -250,6 +251,7 @@ export type SubmitProjectRunInput = {
   handoffContext?: string
 }
 export type SubmitProjectRunResult = { requestId: string }
+export type StartProjectRuntimeChatResult = { threadId: string; requestId: string }
 export type ForkProjectThreadInput = { projectId: string; threadId: string; messageId: string; routeGeneration: number }
 export type EditAndSubmitProjectRunInput = { projectId: string; threadId: string; messageId: string; text: string; modelPick?: ChatModelPick; routeGeneration: number }
 export type ArchiveProjectThreadInput = { projectId: string; threadId: string; routeGeneration: number }
@@ -394,6 +396,8 @@ export type ProjectChatAPI = {
   answerPrompt(input: AnswerProjectPromptInput): Promise<ProjectChatResult<void>>
   reportPresenceSelection(input: ReportProjectChatPresenceInput): Promise<ProjectChatResult<void>>
   openProjectWindow(projectId: string): Promise<ProjectChatResult<void>>
+  /** Main-only orchestration: opens the dedicated project Chat and submits a Runtime-scoped run. */
+  startProjectRuntimeChat(projectId: string): Promise<ProjectChatResult<StartProjectRuntimeChatResult>>
   /** Main resolves the durable WorkspaceTab backing Project; renderer sends only this opaque id. */
   openWorkspaceTabProjectChat(workspaceTabId: string): Promise<ProjectChatResult<void>>
   openProjectPreview(projectId: string): Promise<ProjectChatResult<void>>
