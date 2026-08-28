@@ -2,6 +2,24 @@
 
 > 当前文件名 `AGENTS111.md` 只适合作为草案。需要让 Codex 自动发现这些规则时，定稿必须放在仓库根目录并命名为 `AGENTS.md`。
 
+## 先区分 Thread 和智能体
+
+这两个词不可以混用：
+
+| 用户说法 | 含义 | 必须使用 | 禁止替代 |
+| --- | --- | --- | --- |
+| `Thread`、`Threads`、Codex task、Codex 任务、新建任务、`codex://threads/...` | 用户可在 Codex 侧边栏看到、之后可以继续对话的独立任务 | `create_thread`，后续用 `wait_threads`、`read_thread`、`send_message_to_thread` | `spawn_agent` |
+| subagent、子智能体、智能体、agent team | 当前任务内部的临时执行者 | subagent/agent 工具 | `create_thread`，除非用户同时明确要求独立 Codex Thread |
+
+硬规则：**用户明确说 Threads 时，只能创建 Codex Threads，绝不能用 `spawn_agent` 或其它内部智能体能力代替。**两者都能并行工作、都可能返回类似 ID，但不是同一种产品对象。
+
+创建后必须检查结果：
+
+- 正确的 Codex Thread 创建结果包含 `threadId` 或准备中的 `clientThreadId`，并形成用户可见的独立任务。
+- `spawn_agent` 返回的 `agent_id`、nickname、`collabAgentToolCall` 或后续 `closeAgent` 都表示创建的是内部智能体；如果用户要求 Threads，出现这些结果就是执行错误，应立即停止继续派发并改用 `create_thread`。
+- 不得在回复中把内部智能体称为“Thread”“Codex task”或“独立任务”。
+- 用户已经明确说 Threads 时，不需要再次猜测其含义；只有用户只说“并行处理”而未指定机制时，才根据上下文判断或询问。
+
 ## 基本事实
 
 Codex Threads 是平级任务。不存在平台级的“主 Agent”和“子 Agent”身份。
@@ -130,6 +148,7 @@ coordinator 必须确认：
 ## 委派消息模板
 
 ```text
+DELEGATION_KIND: codex_thread
 ROLE: worker
 COORDINATOR_THREAD_ID: <协调 Thread ID>
 WORK_ORDER: <ID>
