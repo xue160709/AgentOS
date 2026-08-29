@@ -296,6 +296,46 @@
 - 冻结 broker-owned rewind：renderer 只发 project/thread/changeSet/generation，broker 从 durable diff/thread/project 解析 checkpoint/request/session/model/cwd，direct result 是唯一 durable mutation，terminal emitted event 不得双写。
 - 剩余前置不再开放式增加：M0-05E 后只允许一张 M0-05F default-off production composition，再立即派发 renderer cutover。
 
+### 2026-08-29 主侧边栏归档/置顶 Cutover 缺陷核查
+
+- 用户报告新增网页 Runtime 后，侧边栏会话删不掉或右键删除无反应。代码核查确认右键菜单和垃圾桶按钮均正常进入 `requestArchive -> AppShell.archiveThread`，原生 Preview bounds 取内容宿主 `getBoundingClientRect()`，没有覆盖侧边栏；故排除菜单 handler、CSS z-index 和 Preview 点击拦截。
+- 根因是 M0-05 renderer cutover 漏接两条已在 M0-05B 提供的 Main intent：`AppShell.archiveThread` 仍调用 `workspaceSession.archiveThread`，`toggleThreadPinned` 仍调用 `workspaceSession.toggleThreadPinned`。
+- `projectChatEnabled=true` 时 `WorkspaceSession.stage(chatWorkspace)` 被明确跳过，因此上述本地 thread mutation 不会保存到 Main。`applyProjectChatSnapshot` 又会按 project 整批替换 threads，Main 中未归档/未置顶的旧事实会覆盖 renderer 本地变化。
+- RuntimeEditCoordinator 的 `onSnapshot` 会触发 `projectChatBroker.broadcastProjectSnapshot`；run 注册、工具 lease、mutation、terminal 与 settle 均可 publish，因此 Runtime 活跃时回滚通常发生在用户可观察到本地隐藏之前，表现为“没有反应”。即使没有 Runtime 广播，切项目、刷新 snapshot 或重启也会恢复 Main 事实。
+- broker 已有完整、测试通过的 `archiveThread` 和显式 `setThreadPinned`，并冻结 active run/prompt 返回 `thread-busy`、不隐式 cancel 的合同；P0 不需要修改 Main/broker/IPC，只需修复主 renderer 接线、busy 提示、generation/readiness 和回归测试。
+- 相邻影响审计发现：broker mode 关闭的是整个 renderer full workspace autosave，而项目置顶/排序/移除/迁移、sidebar/project collapse、project home view 及部分 home-plugin/task/skill seed 仍存在本地 `WorkspaceSession` 调用。它们不能通过重新开启 `saveChatWorkspace(fullSnapshot)` 修复，否则会恢复 Main/renderer 双 writer并覆盖 broker transcript。已在 `FIX-CHAT-01` 冻结 P1 ownership audit：逐项归类为窄 Main command、独立 view-state 或 legacy-only，并在需要时拆后续工单。
+- 本轮仅完成诊断与 change 写入：`npm run typecheck` exit 0；目标 broker/workspace 测试通过；工作区在写入 change 前干净。未改业务代码，不声明缺陷已修复，`CHECK-02` 新增 `FIX-CHAT-01` 前置。
+
+### 2026-08-29 `BUG-AUDIT-WS-02` Workspace ownership 与过度设计复核
+
+用户要求复核本 change 还有哪些 bug 要修、方案是否过度设计。仅做代码核对与 change 写入，未改业务代码。`npm run typecheck` exit 0；完整 `npm run test:electron` 在当前受限环境未跑完（与既有 loopback fixture 限制一致），因此下列结论全部来自源码核对，不引用测试结果。
+
+#### 事实修正
+
+- `README.md` 与 `changes/INDEX.md` 长期声明"业务实现未开始 / implementation pending"，与代码不符：`M0-01`–`M2-02` 共 19 单均已实现并关单。已按事实更新。
+- `projectChatBrokerV2Enabled` 返回 `environment.AGENTOS_PROJECT_CHAT_BROKER_V2 !== '0'`（`electron/project-chat-composition.ts:7`），Project Chat broker **在生产里默认开启**。`work-orders/README.md` 中"M0 未通过前默认关闭"的描述已失效并更正。缺陷影响面必须按默认开启计算。
+- `design.md` §3.5 冻结的 `M3-01` 已实现于 `electron/workspace-tab-project.ts` 与 `electron/workspace-tab-project-chat.ts`，但 `tasks.md` 与 `work-orders/` 中**没有对应任务单**，属于 work order 执行规则 1/3 的一次实际失效。已补记，不追溯回滚。
+- `ATDD-CHAT-207`–`209` 与 `ATDD-WS-201` 此前只存在于本 change 的 `acceptance.md`，未写入被声明为"唯一事实源"的 `prd/chat-agent-runtime/acceptance.md`。已回补 GWT，并在 change 侧 `acceptance.md` 顶部写入同步义务。
+
+#### 新发现缺陷（`FIX-WS-01`）
+
+- **P0 新建项目既不落盘也不可用。** 逐跳核对：`createProject` / `createProjectFromExistingPath` 只调 `workspaceSession.addProject`（`src/components/AppShell.tsx:1446`、`:1479`）→ autosave 在 broker 模式整条跳过（`:1103`）→ Main 侧不存在任何创建项目命令 → `ProjectChatBroker.getSnapshot` 对不在 Main store 的项目返回 `project-not-found`（`electron/project-chat-broker.ts:118`）→ `ChatPage` 在 `projectChatEnabled` 时无条件走 `api.createThread` / `api.submitRun`（`src/components/chat/ChatPage.tsx:1567`）。结果：工作区只要已有一个项目，之后新增的项目立即进入"发消息报错 + 重启后消失"。`BUG-AUDIT-CHAT-01` 把该项并入 P1 一行，严重度定级错误。
+- **P0 项目移除/重定位/置顶/排序不落盘**（`AppShell.tsx:2131`、`:2162`、`:2109`、`:2114`）。其中 `relocateProject` 是 Main `openProjectPathRecovery` 路径丢失恢复流程的终点，因此恢复动作本身也不落盘。
+- **P1 侧栏收起、项目折叠、项目首页 Overview/Runtime 页签不落盘**（`AppShell.tsx:2119`、`:2123`、`:549`）。
+- **P1 投影降级字段**：`projectChatThreadToWorkspaceThread`（`src/components/workspace-session.ts:137`）硬编码 `creationSource: { kind: 'user' }`、丢弃 `skillPath`、attachment `path` 置空；`src/components/chat/ProjectChatWindowPage.tsx:233` 同样。当前不致命只因 renderer 已不回写 thread。处置：`FIX-WS-01` 不补字段（补字段会把 `creationSource.bindingId` 等 website 元数据推进主窗口投影），改为让新命令 DTO 结构性拒绝 threads/projects 载荷，使投影永久 view-only。
+
+#### 新发现缺陷（`FIX-CHAT-01`）
+
+- **P0 归档运行中会话三方不一致**：`AppShellSidebar.requestArchive` 只对 `purpose === 'task-run'` 检查运行状态（`src/components/AppShellSidebar.tsx:460`）；`AppShell.archiveThread` 对 `skill-run` 走 legacy `window.claudeChat.cancel`、对普通线程完全不取消（产生孤儿 run）；文案 `sidebar.confirmRemoveRunningTask` 承诺"会先终止当前运行并归档"；broker 冻结合同却是 `thread-busy` 拒绝且不隐式 cancel。
+- **P1 readiness 单布尔**：`projectChatEnabled` 初值 `false`（`AppShell.tsx:292`）直到首个 `getSnapshot` 成功才置 true（`:464`），用同一个值表达 probing 与 legacy，启动窗口内的工作区变更会走 legacy full-snapshot writer。
+- **P2 `runtimeEditStatus` 三条状态文案硬编码中文**（`src/components/runtime-event-state.ts:12`），未走 i18n。记录为 `CHECK-02` 的收尾项，不单独派单。
+
+#### 结论与派单
+
+- 根因是一次半迁移，不是若干独立 bug：`M0-05` 迁移 thread 事实并关闭 renderer durable writer，却把 project / sidebar / view 事实留在原地。
+- `FIX-CHAT-01` 原范围只覆盖 thread 一半，且其 allowlist 明确禁止改 `electron/main.ts`/broker/IPC，无法承载 P0 项目命令。因此拆分：新增 `FIX-WS-01` 承担 ownership 收口，`FIX-CHAT-01` 收窄为 thread mutation + busy 合同 + readiness 三态，顺序固定 `FIX-WS-01 -> FIX-CHAT-01 -> CHECK-02`。
+- 过度设计复核结论与处置见 `proposal.md` 的「Revision 2 范围复核（2026-08-29）」；其中 M1 网站入口的拆分建议为**待用户决策**，本轮未执行。
+
 ## Revision 1：实现与自检
 
 ### `ACC-01`

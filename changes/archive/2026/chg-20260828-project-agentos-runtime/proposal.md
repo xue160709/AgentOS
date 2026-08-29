@@ -2,10 +2,12 @@
 change_id: chg-20260828-project-agentos-runtime
 revision: 3
 decision: accepted
-delivery: implemented
+delivery: done
 owner: main_agent
 coverage_gate: pass
-acceptance_status: not_accepted
+acceptance_status: accepted
+acceptance_source: user_manual_gui_acceptance
+closed_at: 2026-08-29
 confirmation_source: explicit_user_statement
 confirmed_scope: "2026-08-28 revision 3：Runtime 创建按钮必须转入对应项目的独立 Chat 窗口并提交请求；`.agentos` prompt 仅限该独立窗口的普通/编辑重提及按钮编排，资格和根目录均由 Main 权威派生。"
 ---

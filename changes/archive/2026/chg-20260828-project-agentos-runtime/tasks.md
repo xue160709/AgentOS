@@ -4,13 +4,15 @@ revision: 3
 task_level: Medium
 owner: implementation_agent
 confirmation: user_confirmed_scope
-acceptance_requested: false
+acceptance_requested: true
+acceptance_status: accepted
+closed_at: 2026-08-29
 coverage_gate: pass
 ---
 
 # 项目专属 `.agentos` Runtime｜TODO
 
-Revision 2：22 条（Revision 1 为 32 条）。减少的部分来自把跨 owner 引用降级为归属判定而非安全模型；新增的部分为落点反馈与 `not_initialized` 创建入口。Revision 3 收紧创建入口与 prompt scope；实现及自动化 Development Check 已完成，真实 GUI 正式验收仍待执行。
+Revision 2：22 条（Revision 1 为 32 条）。减少的部分来自把跨 owner 引用降级为归属判定而非安全模型；新增的部分为落点反馈与 `not_initialized` 创建入口。Revision 3 收紧创建入口与 prompt scope；实现、自动化 Development Check 与真实 GUI 正式验收均已完成（2026-08-29 用户确认），22/22 完成。
 
 ## M6：Revision 3 独立 Chat 编排与最小 prompt scope
 
@@ -18,7 +20,7 @@ Revision 2：22 条（Revision 1 为 32 条）。减少的部分来自把跨 own
 - [x] `M6-02` 将 Runtime prompt eligibility 改由 Main 根据独立项目 Chat sender capability（普通提交/编辑重提）或 M6-01 专用编排派生；renderer payload 不得包含 `runtimeRoot`、prompt scope 或等价标记，实际根目录继续由 Main 从权威项目路径计算。
 - [x] `M6-03` 显式排除主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目与失效路径项目；它们不得注入 Runtime prompt。
 - [x] `M6-04` 添加/更新回归：按钮窗口/线程编排、主窗口零空对话副作用、sender capability 拒绝、合格与全部不合格来源的 prompt matrix、renderer 伪造 scope/root 忽略。定向测试 77/77、完整 Electron 回归 299/299 通过。
-- [ ] `M6-05` 执行真实 Electron GUI 验收：按钮打开正确独立窗口、线程选择与请求提交、主窗口不变；正式验收仍待人工证据，不能用自动化替代。
+- [x] `M6-05` 执行真实 Electron GUI 验收：按钮打开正确独立窗口、线程选择与请求提交、主窗口不变。2026-08-29 由用户在真实 Electron GUI 完成人工验收并确认通过。
 - [x] `M6-06` 收紧 Runtime 创建合同：system prompt 与中英文创建请求均要求读取当前项目已有内容和数据，以 Next.js、React、TypeScript 在 `.agentos/` 构建数据可视化工作台；必须在 `.agentos/` 执行 `npm install` 后执行 `npm run build`，静态导出 `out/index.html`，禁止以 Python、Flask、Streamlit 实现 Runtime；相关定向回归 96/96 通过。
 
 ## M0：合同与路径（3）

@@ -185,7 +185,33 @@ Runtime Rev5 的“普通后续源码变化 stale + 手动更新”继续成立�
 1. 先冻结产品对象、授权边界和成功/失败语义。
 2. 再设计独立窗口、配对和外部任务的完整状态流。
 3. 再确定主进程 broker、deep link、HTTPS ticket、跨窗口会话与 Runtime 的技术契约。
-4. Decision Brief 已确认，PRD、Acceptance、TODO 与 Terra work orders 已同步；下一步按 M0→M1/M2 顺序实现。
+4. Decision Brief 已确认，PRD、Acceptance、TODO 与 Terra work orders 已同步；M0→M1/M2 与 M3-01 已实现并默认开启。
+5. 剩余工作固定为 `FIX-WS-01 -> FIX-CHAT-01 -> CHECK-02`。
+
+## Revision 2 范围复核（2026-08-29，`BUG-AUDIT-WS-02`）
+
+按用户要求对已交付范围做一次过度设计复核。结论分三类，**本轮只执行"记录"与"修正"，不擅自删除已交付能力**。
+
+### 1. 判定为不过度，明确不砍
+
+| 能力 | 保留理由 |
+| --- | --- |
+| `RuntimeEditCoordinator` 的 edit lease / 三条件 settle / generation fence | 已在 `TRIM-CONCURRENCY-02` 砍过一轮（移除 `MutationCoordinator`、path lock、写后校验、冲突重放）。剩余部分是"多会话并行 + 成功后自动重建一次 + 失败不保存半成品"这三条已确认边界的最小实现，再砍会产出半成品产物 |
+| 每项目单窗口 + sender frame/project/generation capability 校验 | 安全边界。`ATDD-SEC-201` / `ATDD-PREVIEW-201` 把 Preview 能否触达 Chat IPC 定为阻断级问题 |
+| broker 串行队列 + revision + terminal fence | 两个窗口共享同一个 run 的必要条件，不是冗余抽象 |
+
+### 2. 判定为过度或低收益，记录为改进项（不在本 change 内执行）
+
+| 项 | 事实 | 处置 |
+| --- | --- | --- |
+| M1 网站入口整条链（`agentos://` + well-known HTTPS + binding credential + safeStorage + 幂等 receipt store + Preview 窄捕获 + 347 行协议规格） | 目前**没有任何真实第三方网站消费者**；唯一实际使用者是 AgentOS 自己的 Preview，而 Preview 在同一进程内，本不需要 origin 校验、绑定凭据与一次性 ticket | **待用户决策**：建议后续把"Preview 走 Main 内部通道"与"浏览器入口"拆成两个独立范围，浏览器入口推迟到有真实网站接入。本轮不动已交付代码 |
+| 同一 30 方法接口在 `project-chat-contract.ts` / `ProjectChatBrokerPort` / `ProjectChatIpcRouter` / `preload.ts` / `desktop-seam.ts` 五处手工镜像 | `electron/project-chat-ipc.ts` 已 919 行，其中相当比例是一对一转写 | 不重构既有面。**新增面必须避免重演**：`FIX-WS-01` 因此冻结为"单一命令通道 + 判别联合"，而不是为 6 个操作各建一套镜像 |
+| 本 change 的 `acceptance.md` 复制了一份 34 行 ATDD 矩阵，同时声明唯一事实源在 PRD | 复核确认 `ATDD-CHAT-207`–`209`、`ATDD-WS-201` 曾只存在于 change 侧、未进入 PRD，"唯一事实源"声明已实际失效 | 已回补 PRD 场景，并在 `acceptance.md` 顶部写入同步义务；不删除实现侧 ID 注册表（它承担 work order 映射，与 PRD 的产品 GWT 职责不同） |
+| 19 张 work order 的 allowlist/停止条件流程 | `M3-01` 绕过该流程直接落地，成本已付但约束力未兑现 | 已在 `tasks.md` 与 `work-orders/README.md` 补记，并把"先补任务单再落地"写成显式规则 |
+
+### 3. 真正的缺陷不是"过度"而是"不彻底"
+
+`M0-05` 只迁移了 thread 事实就关闭了 renderer 的 durable writer，project / sidebar / view 事实被留在原地。`FIX-CHAT-01` 原范围只覆盖 thread 那一半，因此即使完成，新建项目、移除项目、重定位项目仍然不落盘。修法只有两条且必须择一执行到底：Main 补齐窄命令，或保留一个按字段裁剪的 renderer writer。本轮选择前者，冻结在 `FIX-WS-01`。
 
 ## Revision 1：已实现基线
 

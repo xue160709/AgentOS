@@ -43,9 +43,11 @@
 - THEN 页面提示 Runtime 网页可能写在项目根并显示 `<project>/.agentos/` 目标路径
 - AND 系统不移动、复制、删除文件，不自动重试 Agent，也不把该提示写成 Agent run 失败
 
-## Revision 2（Accepted / Planned，未实现）
+## Revision 2（Accepted；实现已落盘，验收未执行）
 
-> 规格来源：`changes/active/chg-20260818-agent-command-channel/`。下列场景已冻结但全部尚未开发/验收；不得把 Revision 1 的通过证据复用为 Revision 2 通过证据。
+> 规格来源：`changes/active/chg-20260818-agent-command-channel/`。M0–M2 与 M3-01 的实现已落盘且 Project Chat broker 默认开启，但下列场景**全部尚未验收**；不得把 Revision 1 的通过证据复用为 Revision 2 通过证据，也不得把实现完成当作验收通过。
+>
+> 2026-08-29 `BUG-AUDIT-WS-02` 回补：`ATDD-CHAT-207`–`210` 与 `ATDD-WS-201`–`204` 此前只存在于 change 侧实施计划中，未写入本文，使"唯一事实源"声明失效。已补齐，且 `ATDD-WS-202`–`204`、`ATDD-CHAT-210` 对应的实现缺陷尚未修复（见 `FIX-WS-01`、`FIX-CHAT-01`）。
 
 ### 需求：Main 是项目 Chat 的唯一事实源
 
@@ -88,6 +90,62 @@
 - GIVEN 一个权限或 AskUserQuestion prompt 已分配给当前聚焦并显示该 thread 的窗口
 - WHEN 其它窗口尝试回答，或 owner 窗口关闭
 - THEN 非 owner 只能看到“请在另一窗口处理”且回答被拒绝；owner 关闭后 Main 按优先级转移一次交互权，首个有效回答后迟到回答无效
+
+### 需求：主窗口的会话变更同样只由 Main 持久化
+
+系统 SHALL 让主窗口侧边栏的会话归档与置顶只经 Main intent 生效；renderer SHALL NOT 在 broker 模式下写入 durable thread 事实。
+
+#### `ATDD-CHAT-207` 场景：主侧边栏归档会话
+
+- GIVEN broker 模式下用户在主窗口侧边栏对某会话执行右键"移除"或垃圾桶确认
+- WHEN 该操作提交，且期间有 Project Chat 或 RuntimeEdit snapshot 广播交错到达
+- THEN 只发送一次 Main archive intent，最终 Main store 保留 `archivedAt`，主窗口与项目窗口都隐藏该会话，重启后仍为归档态；renderer 不产生本地 durable thread mutation
+
+#### `ATDD-CHAT-208` 场景：主侧边栏置顶会话
+
+- GIVEN broker 模式下用户对某会话执行置顶或取消置顶
+- WHEN 该操作提交，且随后收到该项目的新 snapshot
+- THEN 使用显式布尔目标值的 Main intent 生效，排序不被后续 snapshot 回滚，双窗口顺序一致；重复提交幂等
+
+#### `ATDD-CHAT-209` 场景：归档运行中的会话
+
+- GIVEN 某会话存在未终态 Run 或 pending prompt，其 purpose 为普通、`task-run` 或 `skill-run` 之一
+- WHEN 用户尝试归档该会话
+- THEN 入口禁用或返回"请先停止当前运行，再移除会话"，系统不隐式取消 Run、不停止任务插件、不隐藏该会话；三种 purpose 行为一致，且提示文案不承诺自动终止
+
+#### `ATDD-CHAT-210` 场景：Project Chat readiness 三态
+
+- GIVEN AgentOS 启动后尚未确认 Project Chat 是否可用（probing），或已确认为 enabled / legacy
+- WHEN 用户在各状态下尝试会话归档或置顶
+- THEN probing 期间入口禁用且不产生任何 durable 写入，也不落入 legacy full-snapshot writer；enabled 走 Main intent；legacy 完整保留 Revision 1 行为
+
+### 需求：工作区事实只有一个持久化归属
+
+系统 SHALL 让项目生命周期与工作区偏好经 Main 持久化并回读确认；renderer SHALL NOT 持有第二条 durable workspace 写路径。
+
+#### `ATDD-WS-201` 场景：工作区写路径归属可枚举
+
+- GIVEN broker 模式下仍存在项目、侧栏、home-plugin、task、skill 相关的工作区 mutation
+- WHEN 对全部写路径做 ownership audit
+- THEN 每一条都归类为 Main durable command、独立 view-state 或 legacy-only，且不存在普通 UI 触发的 full workspace snapshot writer
+
+#### `ATDD-WS-202` 场景：项目生命周期持久化
+
+- GIVEN 用户创建、移除、重定位、置顶或重排一个项目
+- WHEN 操作提交
+- THEN Main 以 revision 为门槛保存并回读确认后才返回成功，结果在重启后保持；新建项目随后可被 Project Chat 正常获取快照、创建线程并提交任务，而不是返回项目不存在
+
+#### `ATDD-WS-203` 场景：工作区偏好持久化
+
+- GIVEN 用户收起侧栏、折叠项目或切换项目首页的概览/运行时页签
+- WHEN 用户连续快速切换后重启 AgentOS
+- THEN 偏好按最后一次结果恢复；连续切换合并为一次持久化命令，且窗口关闭前未提交的偏好不会丢失
+
+#### `ATDD-WS-204` 场景：工作区命令不接受快照载荷
+
+- GIVEN 一个工作区命令请求携带 threads、projects、chatState、renderer 生成的项目 id 或任何未知字段
+- WHEN Main 接收该请求
+- THEN 整条命令被拒绝且不做部分应用，工作区数据不变；Main 只从自身 store 派生 durable 内容
 
 ### 需求：每个项目只有一个独立 Chat 窗口
 

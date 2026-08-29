@@ -1,7 +1,9 @@
 # Revision 2 实施验收计划
 
-> 状态：Planned，全部未验收  
+> 状态：实现已落盘，验收未执行  
 > 正式 GWT 唯一事实源：`prd/chat-agent-runtime/acceptance.md` 的 `Revision 2`。本文只提供实现任务与证据的稳定 ID、覆盖方式和通过门槛，不复制另一套产品结论。
+>
+> **同步义务（2026-08-29 补）**：本表新增任何 ID 时，必须在同一轮把对应 GWT 写入 `prd/chat-agent-runtime/acceptance.md`。`BUG-AUDIT-WS-02` 复核发现 `ATDD-CHAT-207`–`209` 与 `ATDD-WS-201` 曾只存在于本表、未进入 PRD，使"唯一事实源"声明失效。该批已回补。缺少 PRD 对应场景的 ID 不得进入 Development Check。
 
 ## 1. 通过规则
 
@@ -20,6 +22,14 @@
 | `ATDD-CHAT-204` | 迟到事件 fence | terminal 不被迟到非 terminal 覆盖，generation 错误事件丢弃 | reducer/broker test |
 | `ATDD-CHAT-205` | 权限模式同步 | app-global Main 保存、所有窗口同步、本轮 submit 快照固定 | store/broker/UI test |
 | `ATDD-CHAT-206` | Prompt 单 owner | 聚焦 owner 可回答，非 owner 被禁用，关闭后自动转移 | broker + Electron smoke |
+| `ATDD-CHAT-207` | 主侧边栏归档 | 右键/垃圾桶只调用 Main archive intent；RuntimeEdit snapshot 交错不复活 thread；重启后仍归档 | renderer integration + store readback + Electron smoke |
+| `ATDD-CHAT-208` | 主侧边栏置顶 | pin/unpin 使用显式 boolean Main intent，双窗口与后续 Runtime snapshot 保持一致 | renderer integration + broker test |
+| `ATDD-CHAT-209` | 归档 busy/模式切换 | active run/prompt 不隐式 cancel；probing 不误走 legacy；flag disabled 保持 Revision 1 | UI state test + source audit + legacy test |
+| `ATDD-CHAT-210` | Readiness 三态 | `probing` 期禁用 thread mutation 且不走 legacy writer；`enabled`/`legacy` 行为分别与 broker/Revision 1 一致 | UI state test + source audit |
+| `ATDD-WS-201` | Workspace/View-state ownership | broker mode 剩余 project/sidebar/home-plugin/task/skill mutation 均归类为 Main durable command、独立 view-state 或 legacy-only，无普通 UI full snapshot writer | source audit + restart/readback tests |
+| `ATDD-WS-202` | 项目生命周期落盘 | 创建/移除/重定位/置顶/排序经 Main 命令回读后生效，重启保持；新建项目随后 `getSnapshot` 成功并可提交 | store readback + broker integration + restart test |
+| `ATDD-WS-203` | 偏好落盘 | 侧栏收起、项目折叠、项目首页页签经 Main 命令持久化；连续切换去抖为一次命令且卸载前 flush | store readback + UI state test |
+| `ATDD-WS-204` | 命令 DTO 结构隔离 | workspace 命令携带 threads/projects/chatState/未知键或 renderer 生成的项目 id 时整条拒绝，不做部分应用 | schema negative test |
 | `ATDD-WIN-201` | 每项目一窗口 | 重复打开只聚焦；窗口固定项目且无项目切换 | manager + Electron smoke |
 | `ATDD-WIN-202` | 关闭不中止 | 关闭窗口后 run 继续，线程/transcript 保留 | Electron smoke |
 | `ATDD-WIN-203` | 视图状态恢复 | selected thread、draft、bounds 跨关闭和重启恢复 | store + Electron smoke |
@@ -48,7 +58,9 @@
 
 ### M0：共享 Chat 事实源
 
-必须通过 `ATDD-CHAT-201`–`206`、`ATDD-WIN-201`–`203`、`ATDD-SEC-201`，才允许默认开启项目 Chat 窗口。任何 renderer full-snapshot 覆盖路径仍可达则 M0 不通过。
+必须通过 `ATDD-CHAT-201`–`210`、`ATDD-WS-201`–`204`、`ATDD-WIN-201`–`203`、`ATDD-SEC-201`，才允许默认开启项目 Chat 窗口。任何 renderer full-snapshot 覆盖路径、broker mode 本地 durable thread mutation 或 probing 阶段误走 legacy writer 仍可达，则 M0/Release gate 不通过。
+
+> 事实修正（2026-08-29）：feature flag 已经默认开启（`AGENTOS_PROJECT_CHAT_BROKER_V2 !== '0'`），本门禁是在默认开启之后才被补全的。因此 `ATDD-WS-202`–`204` 与 `ATDD-CHAT-210` 属于**已上线后回补**的门禁项，在 `FIX-WS-01` / `FIX-CHAT-01` 完成前，M0 Gate 视为未通过。
 
 ### M1：网站入口
 

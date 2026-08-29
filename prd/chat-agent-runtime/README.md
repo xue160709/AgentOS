@@ -11,9 +11,9 @@ Runtime system prompt 不是所有有效项目聊天的默认上下文。它只�
 
 状态：Revision 3 已实现，自动化 Development Check 通过；正式 GUI 验收尚未执行。验收场景见 [`acceptance.md`](acceptance.md)，技术数据流见 [`technical.md`](technical.md)。
 
-## Revision 2（Accepted / Planned，未实现）
+## Revision 2（Accepted；实现已落盘，验收未执行）
 
-下一轮开发把当前应用内 Agent 指令通道扩展为 Main-owned 项目 Chat 事实源，并新增两个入口：每项目唯一的独立 Chat 窗口，以及经用户配对授权的网站任务。
+本轮把应用内 Agent 指令通道扩展为 Main-owned 项目 Chat 事实源，并新增两个入口：每项目唯一的独立 Chat 窗口，以及经用户配对授权的网站任务。M0–M2 与 M3-01 均已实现，Project Chat broker 默认开启；正式验收尚未执行。
 
 - 主窗口、独立窗口、应用内指令和网站任务复用现有普通项目线程、Transcript 与 Claude Agent SDK，不建立第二套 Chatbot 或任务历史。
 - 一个 HTTPS Origin 最多绑定一个项目；授权网站可用 `agentos://v1` 唤醒 AgentOS，再由固定 HTTPS 一次性 Ticket 新建普通线程。
@@ -55,7 +55,8 @@ Runtime system prompt 不是所有有效项目聊天的默认上下文。它只�
 
 ## 还没做什么
 
-- Revision 2 的 Main broker、独立项目 Chat 窗口、Website Binding、deep link/Ticket 和 Runtime edit settle 均尚未实现；执行顺序已拆为 Change package 的 Terra work orders。
+- Revision 2 的 Main broker、独立项目 Chat 窗口、Website Binding、deep link/Ticket 与 Runtime edit settle 均已实现并默认开启，但**全部尚未正式验收**。
+- Revision 2 存在一处已确认的半迁移缺陷：thread 事实已迁给 Main 并关闭了 renderer 的 durable writer，项目生命周期与工作区偏好却仍留在 renderer，导致新建/移除/重定位项目与侧边栏归档/置顶不落盘。收口工单为 `FIX-WS-01` 与 `FIX-CHAT-01`（见 `changes/active/chg-20260818-agent-command-channel/`），完成前 M0 Gate 视为未通过。
 - 聊天运行时 acceptance 已完成正式验收状态同步；流式、取消、权限、Generative UI、MCP 与 WebSearch 核心路径均已有单测、source audit、selector audit 或 smoke 证据。
 - 端到端 UI 流式走查、权限弹窗、Composer 语音交互和 Generative UI 截图证据仍需沉淀为全页面点击式 E2E 脚本。
 - WebSearch 的真实 Provider 可用性仍受第三方网络、额度和 bot challenge 影响；API Key 池用于在 Brave/Tavily 单个 Key 认证、配额、网络或服务失败时按顺序尝试后续 Key，真实外网成功搜索可作为 live smoke 后续补充。

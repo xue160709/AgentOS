@@ -18,7 +18,7 @@ not_needed:
   - quality_verifier: "语义冻结和实现完成后再进入风险检查；用户尚未发起正式验收"
 confirmation: user_confirmed_discovery
 acceptance_requested: false
-coverage_gate: ready_for_implementation
+coverage_gate: implemented_pending_ownership_fixes
 ---
 
 # Revision 2 Tasks
@@ -64,7 +64,12 @@ coverage_gate: ready_for_implementation
 - [x] `M1A-01` owner: implementation_engineer｜依赖：`M1-02`｜任务单：`work-orders/M1A-01-preview-capture.md`｜Preview 的合法 agentos pair/task 窄捕获、session/generation fence 与无 preload/Chat IPC 隔离已完成；typecheck、diff check 与目标测试 33/33 通过。
 - [x] `M2-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：`work-orders/M2-01-runtime-edit-coordinator.md`｜结构化 SDK hooks、edit lease、mutation、settle generation 与失败栅栏已完成；typecheck、diff check 与目标测试 42/42 通过。
 - [x] `M2-02` owner: implementation_engineer｜依赖：`M2-01`｜任务单：`work-orders/M2-02-runtime-ui-integration.md`｜Runtime intent、双 Host/Chat 状态、scoped preview navigation 与 last-good 收口已完成；精确安全断言 92/92、完整 Electron 243/243、typecheck 与 diff check 全部通过。
-- [ ] `CHECK-02` owner: quality_verifier｜依赖：`M1-03`、`M1A-01`、`M2-02`｜任务单：`work-orders/CHECK-02-development-check.md`｜执行独立 Development Check；仅在用户另行明确授权时进入正式验收。
+- [x] `M3-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：**缺失（补记）**｜Workspace Tab durable backing Project：Main-only tab-id Chat API、canonical path repair/lazy backfill、重复 root 去重与安全 sender 负例已实现于 `electron/workspace-tab-project.ts`、`electron/workspace-tab-project-chat.ts`，并冻结在 `design.md` §3.5。**该实现未经 `work-orders/` 派单**，违反 work order 执行规则 1/3；2026-08-29 由 `BUG-AUDIT-WS-02` 补记，不追溯回滚，但后续同类实现必须先补任务单。正式验收待独立证据。
+- [x] `BUG-AUDIT-CHAT-01` owner: main_agent｜依赖：`M0-05B`、`M0-05`、`M2-02`｜写入：`evidence.md`、`acceptance.md`、`work-orders/FIX-CHAT-01-sidebar-thread-mutations.md`｜已确认主侧边栏 archive/pin 漏接 Main intent；broker mode 同时关闭 renderer autosave，使修改不落盘并被 Runtime/Project Chat snapshot 覆盖。已评估相邻 project/sidebar ownership 风险，未改业务代码。
+- [x] `BUG-AUDIT-WS-02` owner: main_agent｜依赖：`BUG-AUDIT-CHAT-01`｜写入：`evidence.md`、`acceptance.md`、`tasks.md`、`README.md`、`proposal.md`、`work-orders/**`｜按用户要求复核本 change 的缺陷面与过度设计。新发现 P0：broker 默认开启下**新建项目既不落盘也不可用**（renderer-only `addProject` + Main 无项目命令 + broker `project-not-found` + ChatPage 无条件走 broker）；项目移除/重定位/置顶/排序同样不落盘，且路径丢失恢复流程终点即在此路径上；归档运行中会话存在文案/实现/broker 合同三方不一致；readiness 用单一布尔表达 probing 与 legacy。同时完成过度设计复核并给出处置（见 `proposal.md` §Revision 2 范围复核）。已核实 `npm run typecheck` exit 0；未改业务代码。
+- [ ] `FIX-WS-01` owner: implementation_engineer｜依赖：`BUG-AUDIT-WS-02`｜任务单：`work-orders/FIX-WS-01-workspace-ownership.md`｜把项目生命周期（创建/移除/重定位/置顶/排序）与侧栏/首页偏好收进单一 Main-owned 命令通道，不按 `projectChatEnabled` 分支；命令 DTO 结构性拒绝 threads/projects 载荷；关闭 `ATDD-WS-201` ownership audit。
+- [ ] `FIX-CHAT-01` owner: implementation_engineer｜依赖：`FIX-WS-01`｜任务单：`work-orders/FIX-CHAT-01-sidebar-thread-mutations.md`｜**范围已收窄**：把主侧边栏归档/置顶切到 Main-owned intent，对齐 busy 合同（覆盖全部 purpose、移除隐式 cancel、改写文案），拆 `probing | enabled | legacy` 三态，补 Runtime snapshot 交错回归。ownership audit 已移交 `FIX-WS-01`。
+- [ ] `CHECK-02` owner: quality_verifier｜依赖：`M1-03`、`M1A-01`、`M2-02`、`FIX-WS-01`、`FIX-CHAT-01`｜任务单：`work-orders/CHECK-02-development-check.md`｜执行独立 Development Check；`FIX-WS-01` 与 `FIX-CHAT-01` 完成前保持阻塞，仅在用户另行明确授权时进入正式验收。
 
 ## Revision 1 已完成基线
 

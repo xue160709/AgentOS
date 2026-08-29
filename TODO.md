@@ -6,7 +6,7 @@
 
 ## 1. 活跃变更
 
-### 1.1 Agent 指令通道与独立项目 Chat 窗口（Revision 2）— Spec 已冻结，待开发
+### 1.1 Agent 指令通道与独立项目 Chat 窗口（Revision 2）— 实现已落盘，缺陷收口中
 
 - **Change**：[`chg-20260818-agent-command-channel`](changes/active/chg-20260818-agent-command-channel/proposal.md)
 - **产品规格**：[`design.md`](changes/active/chg-20260818-agent-command-channel/design.md)
@@ -14,7 +14,8 @@
 - **网站协议**：[`protocol-v1.md`](changes/active/chg-20260818-agent-command-channel/protocol-v1.md)
 - **验收计划**：[`acceptance.md`](changes/active/chg-20260818-agent-command-channel/acceptance.md)；正式 GWT 唯一事实源为 [`prd/chat-agent-runtime/acceptance.md`](prd/chat-agent-runtime/acceptance.md)
 - **Terra 执行入口**：[`work-orders/README.md`](changes/active/chg-20260818-agent-command-channel/work-orders/README.md)
-- **当前状态**：M0-01–M0-05D 已实现并通过独立门禁；typed IPC/capability/permission/window/view-state/runtime services 均仍是 disabled seam，尚未接入 production Main/UI。剩余前置固定为 M0-05E prompt/rewind 与 M0-05F default-off composition，之后立即执行 renderer cutover；权限 v1 为 app-global、Main 权威。
+- **当前状态**（2026-08-29 由 `BUG-AUDIT-WS-02` 按事实更新）：M0 全部、M1、M1a、M2 与 M3-01 均已实现并关单，feature flag `AGENTOS_PROJECT_CHAT_BROKER_V2` **默认开启**（`0` 为回滚逃生口）。权限 v1 为 app-global、Main 权威。
+- **阻塞项**：`M0-05` 是一次半迁移——thread 事实迁给 Main 并关闭 renderer durable writer，但 project/sidebar/view 事实仍留在 renderer。由此产生 P0：broker 默认开启下**新建项目既不落盘也不可用**；项目移除/重定位/置顶/排序不落盘（含路径丢失恢复流程）；侧边栏归档/置顶不落盘并被 snapshot 回滚；归档运行中会话的文案/实现/broker 合同三方不一致。**M0 Gate 视为未通过**，直到 `FIX-WS-01`、`FIX-CHAT-01` 完成。
 
 #### M0：必须串行，先建立共享 Chat 事实源
 
@@ -27,27 +28,34 @@
 - [x] `M0-05C`｜broker 与现有 Main workspace mutations 已共用唯一 operation coordinator；独立复跑目标测试 61/61、完整 Electron 199/199、typecheck 与 diff check 均 PASS，仍未 production wiring。
 - [x] `M0-05D`｜真实 runner adapter、durable scoped read services、附件 realpath/symlink containment；独立复跑目标测试 53/53、完整 Electron 204/204、typecheck 与 diff check 均 PASS，仍未 production wiring。
 - [x] `M0-05E`｜Main-owned presence/prompt owner、broker-owned rewind；Terra 回报 typecheck、目标 73/73、完整 Electron 210/210、diff check 均 PASS；按用户指示不再重复验证。
-- [ ] `M0-05F`｜default-off production composition，原子收口 TaskHome/sink/handler 与 feature flag。
-- [ ] `M0-05`｜M0-05F 后立即做主窗口 snapshot 投影、封闭 renderer full-snapshot writer。
-- [ ] `M0-06`｜完整独立项目 Chat UI、Revision 1 `agentCommandChannel` 迁移、双窗口 M0 Gate。
+- [~] `M0-05F`｜default-off production composition，原子收口 TaskHome/sink/handler 与 feature flag；已实现，flag 现为默认开启。
+- [~] `M0-05`｜主窗口 snapshot 投影、封闭 renderer full-snapshot writer；已实现。**遗留半迁移缺陷见上方阻塞项。**
+- [~] `M0-06`｜完整独立项目 Chat UI、Revision 1 `agentCommandChannel` 迁移；目标测试 36/36、完整 Electron 221/221 通过。M0 Gate 因 `FIX-WS-01`/`FIX-CHAT-01` 未通过。
 - [~] `M3-01`｜Workspace Tab durable backing Project：Main-only tab-id Chat API、canonical path repair/lazy backfill、重复 root 去重与安全 sender 负例；实现与目标自动化检查已提交本轮门禁，正式验收待独立证据。
+  - 流程缺口：该实现**未经 `work-orders/` 派单**，违反 work order 执行规则；已在 change 的 `tasks.md` 与 `work-orders/README.md` 补记，不追溯回滚。
 
 #### M1：网站入口（M0 Gate 后）
 
-- [ ] `M1-01`｜严格 protocol parser、safeStorage Binding、幂等 receipt stores。
-- [ ] `M1-02`｜mac/argv cold-warm deep link、固定 HTTPS Ticket、accepted/rejected 回执与提交线性化。
-- [ ] `M1-03`｜配对对话框、Settings 网站连接、新任务不打断/徽标规则。
-- [ ] `M1A-01`｜Preview 窄 deep-link 捕获；保持无 preload/Node/Chat IPC。
+- [~] `M1-01`｜严格 protocol parser、safeStorage Binding、幂等 receipt stores；typecheck 与目标测试 7/7 通过。
+- [~] `M1-02`｜mac/argv cold-warm deep link、固定 HTTPS Ticket、accepted/rejected 回执与提交线性化；目标测试 31/31 通过，arm64 DMG 打包环境失败保留为发布风险。
+- [~] `M1-03`｜配对对话框、Settings 网站连接、新任务不打断/徽标规则；授权环境完整 Electron 267/267 通过。
+- [~] `M1A-01`｜Preview 窄 deep-link 捕获；目标测试 33/33 通过。
 
 #### M2：Agent 修改期 Runtime 收口（M0 Gate 后，可与 M1 前半并行）
 
-- [ ] `M2-01`｜可靠 before-tool lease/actual Diff、potential runs、三条件 settle、generation fence。
-- [ ] `M2-02`｜接入现有 Runtime：静态自动 build/last-good、development-only、失败/取消回退与双 Host 状态。
+- [~] `M2-01`｜可靠 before-tool lease/actual Diff、potential runs、三条件 settle、generation fence；目标测试 42/42 通过。
+- [~] `M2-02`｜接入现有 Runtime：静态自动 build/last-good、development-only、失败/取消回退与双 Host 状态；安全断言 92/92、完整 Electron 243/243 通过。
+
+#### 缺陷收口（阻塞 M0 Gate 与 Development Check）
+
+- [ ] `FIX-WS-01`｜把项目生命周期（创建/移除/重定位/置顶/排序）与侧栏/首页偏好收进单一 Main-owned 命令通道，不按 `projectChatEnabled` 分支；命令 DTO 结构性拒绝 threads/projects 载荷；关闭 `ATDD-WS-201` ownership audit。任务单：[`FIX-WS-01`](changes/active/chg-20260818-agent-command-channel/work-orders/FIX-WS-01-workspace-ownership.md)。
+- [ ] `FIX-CHAT-01`｜依赖 `FIX-WS-01`。主侧边栏归档/置顶切到 Main-owned intent；对齐 busy 合同（覆盖全部 purpose、移除隐式 cancel、改写文案）；拆 `probing | enabled | legacy` 三态；补 Runtime snapshot 交错回归。任务单：[`FIX-CHAT-01`](changes/active/chg-20260818-agent-command-channel/work-orders/FIX-CHAT-01-sidebar-thread-mutations.md)。
+- [ ] 收尾｜`runtimeEditStatus` 三条状态文案硬编码中文（`src/components/runtime-event-state.ts`），未走 i18n；并入 `CHECK-02` 处理，不单独派单。
 
 #### 验证门禁
 
-- [ ] `CHECK-02`｜全部 work order 完成后执行独立 Development Check；必须覆盖单 writer、同 thread busy、secret/IPC/deep-link 安全负例、幂等、窗口关闭、prompt owner、Runtime generation/last-good 和现有 Chat/Runtime 回归。
-- [ ] 正式 Acceptance｜仅在用户另行授权后逐条验证 `ATDD-CHAT-201`–`ATDD-A11Y-201`；Development Check PASS 不自动等于正式验收。
+- [ ] `CHECK-02`｜`FIX-WS-01` 与 `FIX-CHAT-01` 完成后执行独立 Development Check；必须覆盖单 writer、同 thread busy、项目生命周期落盘与重启回读、secret/IPC/deep-link 安全负例、幂等、窗口关闭、prompt owner、Runtime generation/last-good 和现有 Chat/Runtime 回归。
+- [ ] 正式 Acceptance｜仅在用户另行授权后逐条验证 `ATDD-CHAT-201`–`ATDD-A11Y-201`（含新增 `ATDD-CHAT-210`、`ATDD-WS-202`–`204`）；Development Check PASS 不自动等于正式验收。
 
 ### 1.2 Workspace Tab 与可复用 Runtime（Revision 5）— 已关闭
 

@@ -32,8 +32,12 @@ M0-GATE -> M1-01 binding/protocol stores -> M1-02 deep-link/network/task -> M1-0
 M0-GATE -> M2-01 edit coordinator/hooks -> M2-02 runtime/UI integration
 M1-02 -> M1A-01 preview narrow capture
 
-all -> CHECK-02
+M0-06 -> M3-01 workspace tab backing project（补记：已实现，未经本目录派单）
+
+all -> BUG-AUDIT-CHAT-01 -> BUG-AUDIT-WS-02 -> FIX-WS-01 -> FIX-CHAT-01 -> CHECK-02
 ```
+
+`FIX-WS-01` 必须排在 `FIX-CHAT-01` 之前：项目生命周期在它之前不落盘，`FIX-CHAT-01` 的重启回归断言无法成立。
 
 ## Work order 索引
 
@@ -57,13 +61,17 @@ all -> CHECK-02
 | 16 | `M1A-01-preview-capture.md` | Preview 窄 deep-link 捕获与隔离 |
 | 17 | `M2-01-runtime-edit-coordinator.md` | edit lease、mutation、settle generation |
 | 18 | `M2-02-runtime-ui-integration.md` | Runtime intents、状态文案、last-good 收口 |
-| 19 | `CHECK-02-development-check.md` | 独立风险检查与证据，不改产品范围 |
+| 19 | `FIX-WS-01-workspace-ownership.md` | 项目生命周期与偏好的 Main-owned 单一命令通道、ownership audit 关单 |
+| 20 | `FIX-CHAT-01-sidebar-thread-mutations.md` | 主侧边栏 archive/pin Main-owned cutover、busy 合同对齐、readiness 三态、Runtime snapshot 竞态回归 |
+| 21 | `CHECK-02-development-check.md` | 独立风险检查与证据，不改产品范围 |
+
+> `M3-01`（Workspace Tab durable backing Project）已在 `electron/workspace-tab-project.ts` / `electron/workspace-tab-project-chat.ts` 实现，但**没有经过本目录派单**。这是执行规则 1/3 的一次实际失效，已在 `evidence.md` 记录；后续同类实现必须先补任务单再落地。
 
 ## 分支与提交建议
 
 - 分支：`codex/chg-20260818-agent-command-channel-r2`
 - 每个 work order 一个可回滚提交，标题包含 work order ID。
-- M0 未通过前 feature flag `projectChatBrokerV2` 默认关闭；M0-GATE 后才允许默认开启。M1/M2 入口分别独立受控。
+- feature flag 现状：`projectChatBrokerV2Enabled` 读取 `AGENTOS_PROJECT_CHAT_BROKER_V2 !== '0'`，M0-GATE 后已**默认开启**，`0` 只保留为回滚逃生口。任何"默认关闭"的旧描述均已失效，评估缺陷影响面时必须按默认开启计算。
 
 ## 全局停止条件
 

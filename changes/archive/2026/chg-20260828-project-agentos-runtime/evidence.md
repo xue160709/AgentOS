@@ -1,8 +1,8 @@
 # 项目专属 `.agentos` Runtime｜Development Check 证据
 
-日期：2026-08-28  
+日期：2026-08-28（Development Check）／2026-08-29（正式验收关闭）  
 Change：`chg-20260828-project-agentos-runtime` revision 3  
-结论：Revision 3 实现与自动化 Development Check 完成，`coverage_gate=pass`。未执行真实 Electron GUI 正式验收，`acceptance_status=not_accepted`。
+结论：Revision 3 实现、自动化 Development Check 与真实 Electron GUI 正式验收均已完成，`coverage_gate=pass`，`acceptance_status=accepted`，change 关闭并归档。
 
 ## Revision 3 合同增量
 
@@ -22,7 +22,7 @@ Change：`chg-20260828-project-agentos-runtime` revision 3
 | `npm run build` | PASS；renderer、Electron main/preload 构建及 macOS arm64 DMG/ZIP 打包完成（项目未配置 notarize，公证按现有配置跳过） |
 | `git diff --check`（本次文档同步） | PASS |
 | 冲突措辞检查 | PASS；未发现仍以“所有/有效项目聊天”作为 Runtime prompt 注入资格或把入口定向到主窗口 Chat 的现行合同措辞 |
-| 真实 Electron GUI 正式验收 | 未执行；必须验证窗口、线程选择、请求提交和主窗口零副作用 |
+| 真实 Electron GUI 正式验收 | PASS（2026-08-29）；由用户在真实 Electron GUI 手工执行 M6-05 并确认通过 |
 
 最新 Runtime prompt 收紧后的定向回归：`node --test electron/project-runtime-prompt.test.mjs electron/project-runtime-placement.test.mjs electron/project-chat-broker.test.mjs electron/desktop-seam.test.mjs electron/chat-workspace-store.test.mjs electron/workspace-session.test.mjs electron/project-chat-contract.test.mjs electron/chat-run.test.mjs`，PASS，96/96；`npm run typecheck` 与 `git diff --check` 均 PASS。
 
@@ -47,7 +47,9 @@ Change：`chg-20260828-project-agentos-runtime` revision 3
 | `node --test --test-concurrency=1 electron/*.test.mjs`（沙箱外） | PASS，294/294，exit 0 |
 | `git diff --check` | PASS |
 
-## 未验证项
+## 正式验收（2026-08-29 关闭）
 
-- 尚未执行真实打包 Electron Chromium GUI 的项目 Runtime 点击路径、Preview 截图与可访问性人工验收。
-- 正式 Acceptance 必须按 `TESTING_CHECKLIST.md` 的 revision 2 增量矩阵补 GUI 证据；Development Check 不替代正式验收。
+- 执行人：用户（xuezhirong），在真实打包 Electron GUI 手工执行。
+- 证据来源：用户在会话中明确声明 `M6-05` 已完成；本记录为用户口头确认，未附截图或录屏，代理未复核 GUI 行为。
+- 覆盖范围：`M6-05` 定义的四点——创建按钮打开正确的独立项目 Chat 窗口、窗口内自动创建并选中线程、Runtime 网页创建请求成功提交、主窗口无空对话副作用。
+- 结论：正式验收通过，`acceptance_status=accepted`；change 由 `active/` 移入 `archive/2026/`。
