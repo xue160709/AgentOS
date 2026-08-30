@@ -7,6 +7,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nati
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import zh from '../src/locales/zh.json'
 import en from '../src/locales/en.json'
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
@@ -34,7 +35,7 @@ import { ClaudeChatEventMultiplexer } from './claude-chat-event-multiplexer'
 import { createProjectChatProductionComposition, projectChatBrokerV2Enabled } from './project-chat-composition'
 import { ProjectChatBroker } from './project-chat-broker'
 import { RendererCapabilityRegistry, ProjectChatPermissionService, createProjectChatCapabilityBroadcaster, createProjectChatIpcRouter } from './project-chat-ipc'
-import { createProjectChatBrokerRunnerAdapter, createProjectChatScopedReadCollaborator } from './project-chat-runtime-services'
+import { createProjectChatBrokerRunnerAdapter, createProjectChatScopedReadCollaborator, createRuntimeChatScopedReadCollaborator } from './project-chat-runtime-services'
 import { ProjectChatPresenceRegistry } from './project-chat-presence'
 import { ProjectChatWindowManager } from './project-chat-window-manager'
 import { ProjectChatViewStateStore } from './project-chat-view-state-store'
@@ -50,8 +51,6 @@ import { testWebSearchProviderSettings } from './claude-agent-runner/web-search'
 import { ClaudeAgentSettingsStore } from './claude-agent-settings'
 import { ChatWorkspaceStore } from './chat-workspace-store'
 import { ChatWorkspaceCoordinator } from './chat-workspace-coordinator'
-import { ensureWorkspaceTabProject } from './workspace-tab-project'
-import { openWorkspaceTabProjectChat } from './workspace-tab-project-chat'
 import { DesktopPreferencesStore } from './desktop-preferences-store'
 import { loadMainProcessEnv } from './env-loader'
 import { deleteProjectHomePlugin, runProjectHomePlugin, saveProjectHomePluginLayout, saveProjectHomePluginOrder } from './home-plugin-runner'
@@ -89,11 +88,30 @@ import type { AgentOSPairingResponse } from '../src/project-chat-contract'
 import { fingerprintStaticSource, resolveStaticRequest, STATIC_PREVIEW_SCHEME } from './local-app-runtime/static'
 import type { StaticPreviewRegistry } from './local-app-runtime/static'
 import { RuntimeEditCoordinator } from './runtime-edit-coordinator'
+import { RuntimeChatBroker } from './runtime-chat-broker'
+import { RuntimeDevelopmentCoordinator } from './runtime-development-coordinator'
+import { canonicalizeProspectiveProjectRuntimeRoot, RuntimeDevelopmentRuntimeBridge } from './runtime-development-runtime-bridge'
+import { RuntimeDevelopmentThreadStore } from './runtime-development-thread-store'
+import { RuntimeDevelopmentViewStateStore } from './runtime-development-view-state-store'
+import { RuntimeDevelopmentWindowManager } from './runtime-development-window-manager'
+import { createRuntimeChatCapabilityBroadcaster, createRuntimeChatIpcRouter } from './runtime-chat-ipc'
 import { ProjectRuntimePlacementTracker } from './project-runtime-placement'
 import type { Session } from 'electron'
-import type { RuntimeDefinition, RuntimeEvent, RuntimeSnapshot, WorkspaceTab } from '../src/components/types'
+import type { ChatWorkspaceState, RuntimeDefinition, RuntimeEvent, RuntimeSnapshot, WorkspaceTab } from '../src/components/types'
 import type { LocalAppDefinition, LocalAppRuntimeSnapshot } from '../src/components/types'
 import type { LocalAppDefinitionResult, LocalAppPreviewResult, LocalAppRelocationResult, RuntimeCreationResult, WorkspaceTabResult, WorkspaceTabCloseResult } from '../src/desktop-api'
+import {
+  parseRuntimeScopeId,
+  projectRuntimeScopeId,
+  workspaceRuntimeScopeId,
+  type OpenRuntimeDevelopmentResult,
+  type ResolvedRuntimeChatScope,
+  type RuntimeDevelopmentResult,
+  type RuntimeDevelopmentThread,
+  type RuntimeDevelopmentTarget,
+  type RuntimeRootLease,
+  type RuntimeScopeId,
+} from '../src/runtime-development-contract'
 import { withNextWorkspaceRevision, workspaceRevisionOf } from '../src/workspace-snapshot-resolution'
 import {
   applyWorkspaceCommand,
@@ -111,6 +129,7 @@ import type {
   ClaudeChatSubmitPayload,
   ClaudeFileRewindPayload,
   ChatHistorySearchOptions,
+  ChatHistorySearchItem,
   ChatHistorySearchResult,
   AgentKnowledgeSearchOptions,
   AgentKnowledgeSearchKind,
@@ -164,6 +183,11 @@ let claudeAgentRunner: ClaudeAgentRunner | null = null
 let claudeChatEventMultiplexer: ClaudeChatEventMultiplexer | null = null
 let projectChatBroker: ProjectChatBroker | null = null
 let projectChatCompositionDispose: (() => void) | null = null
+let runtimeDevelopmentCoordinator: RuntimeDevelopmentCoordinator | null = null
+let runtimeDevelopmentRuntimeBridge: RuntimeDevelopmentRuntimeBridge | null = null
+let runtimeDevelopmentThreadStore: RuntimeDevelopmentThreadStore | null = null
+let runtimeDevelopmentWindowManager: RuntimeDevelopmentWindowManager | null = null
+let runtimeDevelopmentBroker: RuntimeChatBroker | null = null
 let claudeAgentSettingsStore: ClaudeAgentSettingsStore | null = null
 let agentModeSettingsStore: AgentModeSettingsStore | null = null
 let chatWorkspaceStore: ChatWorkspaceStore | null = null
@@ -195,6 +219,9 @@ type ProjectRuntimeHostRegistration = {
 }
 
 const projectRuntimeHosts = new Map<string, ProjectRuntimeHostRegistration>()
+const projectRuntimeMountIds = new Map<string, string>()
+const runtimeDevelopmentConflictTokens = new Map<string, { senderWebContentsId: number; runtimeScopeId: RuntimeScopeId; expiresAt: number }>()
+const runtimeDevelopmentRouteGenerations = new Map<RuntimeScopeId, number>()
 
 async function staticPreviewResponse(
   request: { url: string; method: string },
@@ -538,14 +565,6 @@ function nextWorkspaceProjectId(projects: readonly { id: string }[]): string {
   return id
 }
 
-async function workspaceProjectPathsForCanonicalMatch(projects: readonly { id: string; path: string }[]): Promise<Map<string, string>> {
-  const roots = await Promise.all(projects.map(async (project) => [
-    project.id,
-    await canonicalizeLocalAppRoot(project.path).catch(() => path.resolve(project.path)),
-  ] as const))
-  return new Map(roots)
-}
-
 /** A memory-only Main network partition; no renderer can use this session. */
 function createAgentOSTicketTransport(): AgentOSTicketTransport {
   const ticketSession = session.fromPartition('agentos-ticket-v1')
@@ -612,6 +631,10 @@ function installProjectChatProductionComposition(): void {
   if (!PROJECT_CHAT_BROKER_V2_ENABLED || !win || !claudeAgentRunner || !chatWorkspaceStore || !claudeChatEventMultiplexer || projectChatBroker) return
   const mainWindow = win; const runner = claudeAgentRunner; const workspace = chatWorkspaceStore
   const capabilities = new RendererCapabilityRegistry(); const presence = new ProjectChatPresenceRegistry()
+  const runtimeDeliver = (webContentsId: number, event: import('../src/runtime-development-contract').RuntimeChatEvent) => {
+    const target = BrowserWindow.getAllWindows().map((item) => item.webContents).find((contents) => contents.id === webContentsId)
+    if (target && !target.isDestroyed()) target.send('runtime-chat:event', event)
+  }
   const broadcaster = createProjectChatCapabilityBroadcaster(capabilities, (webContentsId, event) => {
     const target = BrowserWindow.getAllWindows().map((item) => item.webContents).find((contents) => contents.id === webContentsId)
     if (target && !target.isDestroyed()) target.send('project-chat:event', event)
@@ -631,6 +654,50 @@ function installProjectChatProductionComposition(): void {
       sendProjectFilesChanged({ rootPath: projectRoot })
     },
   })
+  const runtimeStore = new RuntimeDevelopmentThreadStore(app.getPath('userData'))
+  runtimeDevelopmentThreadStore = runtimeStore
+  let runtimeBridge: RuntimeDevelopmentRuntimeBridge | null = null
+  const runtimeCoordinator = new RuntimeDevelopmentCoordinator({
+    fingerprint: (runtimeScopeId) => runtimeBridge?.fingerprint(runtimeScopeId) ?? Promise.reject(new Error('runtime-development-bridge-unavailable')),
+    intent: (intent) => runtimeBridge?.handle(intent),
+    onSnapshot: (snapshot) => {
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(DESKTOP_EVENT_CHANNELS.onRuntimeDevelopmentEvent, { type: 'snapshot', snapshot })
+      }
+      for (const capability of capabilities.runtimeRecipientsFor(snapshot)) {
+        runtimeDeliver(capability.webContentsId, { type: 'development', runtimeScopeId: snapshot.runtimeScopeId, routeGeneration: snapshot.routeGeneration, developmentGeneration: snapshot.developmentGeneration, snapshot })
+      }
+    },
+  })
+  runtimeDevelopmentCoordinator = runtimeCoordinator
+  const runtimeBroadcaster = createRuntimeChatCapabilityBroadcaster(capabilities, runtimeDeliver)
+  const runtimeBroker = new RuntimeChatBroker({
+    core: broker.core, store: runtimeStore, resolveScope: resolveRuntimeChatScope,
+    permissionMode: () => getDesktopPreferencesStore().read().chatPermissionMode ?? 'auto',
+    broadcast: runtimeBroadcaster, promptOwnerCandidates: (input) => presence.runtimeOwnerCandidates(input),
+    developmentCoordinator: runtimeCoordinator,
+  })
+  runtimeDevelopmentBroker = runtimeBroker
+  runtimeBridge = new RuntimeDevelopmentRuntimeBridge({
+    coordinator: runtimeCoordinator, manager: localAppRuntimeManager!, resolveDefinition: (runtimeScopeId) => {
+      const definitionId = resolveRuntimeChatScope(runtimeScopeId)?.runtimeDefinitionId
+      return definitionId ? readRuntimeDefinition(definitionId) : null
+    }, runner, runtimeBroker,
+    isAuthorityCurrent: (authority) => {
+      const resolved = resolveRuntimeChatScope(authority.runtimeScopeId)
+      return Boolean(resolved && resolved.routeGeneration === authority.routeGeneration && resolved.developmentGeneration === authority.developmentGeneration)
+    },
+    resolveProspectiveRoot: async (runtimeScopeId) => {
+      const parsed = parseRuntimeScopeId(runtimeScopeId)
+      const state = chatWorkspaceStore?.current() ?? chatWorkspaceStore?.read()
+      const project = parsed?.kind === 'project' ? state?.projects.find((item) => item.id === parsed.projectId) : undefined
+      if (!project || project.pathMissing) throw new Error('runtime-project-path-missing')
+      // Main fresh-reads the Project and canonicalizes its parent directory;
+      // renderer DTOs never carry a root or a path alias.
+      return canonicalizeProspectiveProjectRuntimeRoot(project.path)
+    },
+  })
+  runtimeDevelopmentRuntimeBridge = runtimeBridge
   const scopedRead = createProjectChatScopedReadCollaborator({
     workspace, settings: getClaudeAgentSettingsStore(), runner, discoverAgentContext, searchProjectFiles: async (rootPath, query) => searchProjectFiles(rootPath, query),
     pickAttachments: async (allowImages) => { const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] }); return result.canceled ? { attachments: [], skipped: [] } : readChatAttachments(result.filePaths, allowImages) },
@@ -638,6 +705,59 @@ function installProjectChatProductionComposition(): void {
   })
   const rendererEntry = VITE_DEV_SERVER_URL ?? pathToFileURL(path.join(RENDERER_DIST, 'index.html')).toString()
   const viewStateStore = new ProjectChatViewStateStore({ userDataPath: app.getPath('userData') })
+  const runtimeViewStateStore = new RuntimeDevelopmentViewStateStore({
+    userDataPath: app.getPath('userData'),
+    threadBelongsToScope: (runtimeScopeId, threadId) => runtimeStore.read().runtimeDevelopmentThreads.some((thread) => thread.runtimeScopeId === runtimeScopeId && thread.id === threadId),
+  })
+  const runtimeWindowManager = new RuntimeDevelopmentWindowManager({
+    createWindow: (options) => new BrowserWindow(options), rendererEntry, preloadPath: path.join(__dirname, 'preload.mjs'), capabilities, viewStateStore: runtimeViewStateStore,
+    prepare: async (runtimeScopeId) => {
+      const resolved = resolveRuntimeChatScope(runtimeScopeId)
+      if (!resolved) throw new Error('runtime-scope-unavailable')
+      let current = runtimeCoordinator.snapshot(runtimeScopeId)
+      if (current && current.routeGeneration !== resolved.routeGeneration) current = runtimeCoordinator.invalidateRoute(runtimeScopeId, resolved.routeGeneration) ?? undefined
+      const definitionExists = Boolean(resolved.runtimeDefinitionId && readRuntimeDefinition(resolved.runtimeDefinitionId))
+      const identity = runtimeWindowIdentity(runtimeScopeId)
+      return {
+        context: { runtimeScopeId, ...identity, scopeAvailable: resolved.available !== false },
+        authority: { runtimeScopeId, routeGeneration: current?.routeGeneration ?? resolved.routeGeneration, developmentGeneration: current?.developmentGeneration ?? resolved.developmentGeneration },
+        // Tombstones always create a fresh read-only projection. Reentering an
+        // old closed session would otherwise try to reacquire its removed root.
+        action: resolved.available === false && !definitionExists
+          ? 'open'
+          : current ? (current.canReopen || current.phase === 'closed' ? 'reenter' : 'reuse-session') : 'open',
+      }
+    },
+    activate: async (preparation) => {
+      if (preparation.action === 'reenter') return runtimeBridge!.reenter(preparation.authority.runtimeScopeId)
+      if (preparation.action === 'reuse-session') return runtimeCoordinator.snapshot(preparation.authority.runtimeScopeId) ?? null
+      const resolved = resolveRuntimeChatScope(preparation.authority.runtimeScopeId)
+      if (!resolved) return null
+      if (!resolved.runtimeDefinitionId && parseRuntimeScopeId(preparation.authority.runtimeScopeId)?.kind === 'project') return runtimeBridge!.open(preparation.authority)
+      if (!resolved.runtimeDefinitionId) {
+        runtimeCoordinator.open({ ...preparation.authority, entryFingerprint: '', saveCapability: 'unavailable' })
+        runtimeCoordinator.failOpening(preparation.authority, 'runtime-root-missing', 'Runtime 已移除；历史对话仍可查看。')
+        return runtimeCoordinator.snapshot(preparation.authority.runtimeScopeId) ?? null
+      }
+      if (!readRuntimeDefinition(resolved.runtimeDefinitionId)) {
+        runtimeCoordinator.open({ ...preparation.authority, runtimeDefinitionId: resolved.runtimeDefinitionId, entryFingerprint: '', saveCapability: 'unavailable' })
+        runtimeCoordinator.failOpening(preparation.authority, 'runtime-root-missing', 'Runtime 已移除；历史对话仍可查看。')
+        return runtimeCoordinator.snapshot(preparation.authority.runtimeScopeId) ?? null
+      }
+      if (resolved.available === false) {
+        runtimeCoordinator.open({ ...preparation.authority, runtimeDefinitionId: resolved.runtimeDefinitionId, entryFingerprint: '', saveCapability: 'unavailable' })
+        runtimeCoordinator.failOpening(preparation.authority, 'runtime-trust-required', '此 Runtime 尚未获得目录权限。')
+        return runtimeCoordinator.snapshot(preparation.authority.runtimeScopeId) ?? null
+      }
+      return runtimeBridge!.open(preparation.authority)
+    },
+    requestExit: (authority) => { runtimeCoordinator.requestExit(authority) },
+    onActivated: (webContentsId, snapshot) => runtimeDeliver(webContentsId, { type: 'development', runtimeScopeId: snapshot.runtimeScopeId, routeGeneration: snapshot.routeGeneration, developmentGeneration: snapshot.developmentGeneration, snapshot }),
+    onCapabilityRegistered: (capability) => { presence.register(capability); void runtimeBroker.refreshPromptOwners(capability.runtimeScopeId) },
+    onWindowState: (webContentsId, state) => { presence.setWindowState(webContentsId, state); const capability = capabilities.get(webContentsId); if (capability?.kind === 'runtime-development') void runtimeBroker.refreshPromptOwners(capability.runtimeScopeId) },
+    onWindowCleanup: (webContentsId) => { presence.unregister(webContentsId); void runtimeBroker.onWebContentsUnavailable(webContentsId); capabilities.unregister(webContentsId) },
+  })
+  runtimeDevelopmentWindowManager = runtimeWindowManager
   const composition = createProjectChatProductionComposition({
     multiplexer: claudeChatEventMultiplexer,
     legacySinks: [createClaudeChatWebContentsSink(mainWindow.webContents), { publish: (event) => taskHomePluginManager?.handleClaudeEvent(event as never) }],
@@ -684,15 +804,9 @@ function installProjectChatProductionComposition(): void {
           if (!submitted.ok) return submitted
           return { ok: true as const, value: { threadId, requestId: submitted.value.requestId } }
         },
-        openWorkspaceTabProjectChat: async (workspaceTabId: string) => {
-          return runChatWorkspaceOperation(() => openWorkspaceTabProjectChat(workspaceTabId, {
-            store: workspace,
-            canonicalizePath: canonicalizeLocalAppRoot,
-            createProjectId: () => nextWorkspaceProjectId(workspace.read()?.projects ?? []),
-            now: Date.now,
-            openProjectWindow: async (projectId) => { await manager.open(projectId) },
-          }))
-        },
+        // Revision 3 keeps the legacy IPC callable for rollback compatibility,
+        // but no current entry may synthesize or open a backing Project.
+        openWorkspaceTabProjectChat: async () => ({ ok: false as const, error: { code: 'invalid-argument' as const, message: 'Workspace Runtime uses its dedicated development window.', retryable: false } }),
         openProjectPreview: async (projectId: string) => {
           const snapshot = await broker.getSnapshot(projectId)
           if (!snapshot.ok) return snapshot
@@ -722,8 +836,43 @@ function installProjectChatProductionComposition(): void {
     },
     createHandlers: (collaborator) => createProjectChatIpcRouter({ broker, capabilities, rendererEntries: [rendererEntry], permissionService: new ProjectChatPermissionService(getDesktopPreferencesStore()), scopedRead, presence, collaborator }).handlers,
   })
+  const runtimeScopedRead = createRuntimeChatScopedReadCollaborator({
+    runtimeWorkspace: runtimeStore, resolveScope: resolveRuntimeChatScope, settings: getClaudeAgentSettingsStore(), runner,
+    discoverAgentContext, searchProjectFiles: async (rootPath, query) => searchProjectFiles(rootPath, query),
+    pickAttachments: async (allowImages) => { const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] }); return result.canceled ? { attachments: [], skipped: [] } : readChatAttachments(result.filePaths, allowImages) },
+    readAttachments: readChatAttachments, realpath: (input) => fs.realpath(input),
+  })
+  const runtimeRouter = createRuntimeChatIpcRouter({
+    broker: runtimeBroker, capabilities, rendererEntries: [rendererEntry], scopedRead: runtimeScopedRead,
+    window: {
+      getWindowContext: async (webContentsId) => {
+        const capability = capabilities.get(webContentsId); const context = runtimeWindowManager.contextFor(webContentsId)
+        if (!context || capability?.kind !== 'runtime-development' || context.runtimeScopeId !== capability.runtimeScopeId) return { ok: false, error: { code: 'sender-not-authorized', message: 'Sender is not authorized.', retryable: false } }
+        const resolved = resolveRuntimeChatScope(capability.runtimeScopeId)
+        return { ok: true, value: { ...context, scopeAvailable: resolved?.available !== false, development: runtimeCoordinator.snapshot(capability.runtimeScopeId) } }
+      },
+      getWindowViewState: async (runtimeScopeId) => ({ ok: true, value: await runtimeViewStateStore.get(runtimeScopeId) }),
+      saveWindowViewState: async (runtimeScopeId, input) => ({ ok: true, value: await runtimeWindowManager.saveViewState(runtimeScopeId, input) }),
+      reportPresenceSelection: (webContentsId, runtimeScopeId, input) => {
+        if (input.selectedThreadId && !runtimeStore.read().runtimeDevelopmentThreads.some((thread) => thread.runtimeScopeId === runtimeScopeId && thread.id === input.selectedThreadId)) return { ok: false, error: { code: 'thread-not-found', message: 'Thread not found.', retryable: false } }
+        return presence.reportRuntimeSelection(webContentsId, input)
+      },
+    },
+  })
+  const runtimeChannels: string[] = []
+  try {
+    for (const [channel, handler] of Object.entries(runtimeRouter.handlers)) { ipcMain.handle(channel, handler as (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown); runtimeChannels.push(channel) }
+  } catch (error) {
+    for (const channel of runtimeChannels.reverse()) ipcMain.removeHandler(channel)
+    runtimeWindowManager.dispose(); runtimeBridge.dispose(); runtimeDevelopmentRuntimeBridge = null; runtimeBroker.dispose(); runtimeCoordinator.dispose(); composition.dispose()
+    throw error
+  }
   projectChatBroker = composition.broker
-  projectChatCompositionDispose = composition.dispose
+  projectChatCompositionDispose = () => {
+    for (const channel of runtimeChannels.splice(0).reverse()) ipcMain.removeHandler(channel)
+    runtimeWindowManager.dispose(); runtimeBridge?.dispose(); runtimeDevelopmentRuntimeBridge = null; runtimeBroker.dispose(); runtimeCoordinator.dispose(); composition.dispose()
+    runtimeDevelopmentWindowManager = null; runtimeDevelopmentCoordinator = null; runtimeDevelopmentThreadStore = null; runtimeDevelopmentBroker = null
+  }
 }
 
 function taskHomeRunPort() {
@@ -819,6 +968,194 @@ function readProjectRuntimeDefinition(projectId: string): RuntimeDefinition | nu
   ) ?? null
 }
 
+function resolveRuntimeChatScope(runtimeScopeId: RuntimeScopeId): ResolvedRuntimeChatScope | null {
+  const parsed = parseRuntimeScopeId(runtimeScopeId)
+  const state = chatWorkspaceStore?.current() ?? chatWorkspaceStore?.read()
+  if (!parsed || !state) return null
+  const previous = runtimeDevelopmentCoordinator?.snapshot(runtimeScopeId)
+  if (parsed.kind === 'project') {
+    const project = state.projects.find((item) => item.id === parsed.projectId)
+    if (!project || project.pathMissing || !project.path.trim()) {
+      const historical = runtimeDevelopmentThreadStore?.read().runtimeDevelopmentThreads.find((thread) => thread.runtimeScopeId === runtimeScopeId)
+      if (!historical?.chatState.cwd?.trim()) return null
+      const routeGeneration = runtimeRouteGeneration(runtimeScopeId, historical.updatedAt)
+      return {
+        runtimeScopeId,
+        runtimeDefinitionId: historical.runtimeDefinitionId,
+        runtimeOwner: { kind: 'project', projectId: parsed.projectId },
+        cwd: historical.chatState.cwd,
+        runtimeRoot: projectRuntimeRoot(historical.chatState.cwd),
+        routeGeneration,
+        developmentGeneration: previous?.routeGeneration === routeGeneration ? previous.developmentGeneration : 1,
+        available: false,
+      }
+    }
+    const definition = state.runtimeDefinitions.find((item) => item.owner.kind === 'project' && item.owner.projectId === project.id && path.resolve(item.rootPath) === projectRuntimeRoot(project.path))
+    const routeGeneration = runtimeRouteGeneration(runtimeScopeId, definition?.updatedAt ?? project.updatedAt)
+    const canonicalRoot = definition?.canonicalRoot ?? definition?.rootPath
+    const awaitingDefinitionBinding = Boolean(definition && runtimeDevelopmentRuntimeBridge?.hasProspectiveLease(runtimeScopeId))
+    return {
+      runtimeScopeId, runtimeDefinitionId: definition?.id, runtimeOwner: { kind: 'project', projectId: project.id }, cwd: project.path,
+      runtimeRoot: projectRuntimeRoot(project.path), routeGeneration,
+      developmentGeneration: previous?.routeGeneration === routeGeneration ? previous.developmentGeneration : 1,
+      // Missing .agentos is a valid Project creation scope. Once a definition
+      // exists, its Main-owned trust fact remains mandatory.
+      available: definition
+        ? !awaitingDefinitionBinding && definition.trustStatus === 'trusted' && Boolean(canonicalRoot && localAppTrustStore?.isTrusted(canonicalRoot))
+        : true,
+    }
+  }
+  const definition = state.runtimeDefinitions.find((item) => item.id === parsed.runtimeDefinitionId && item.owner.kind === 'workspace')
+  const historical = definition ? undefined : runtimeDevelopmentThreadStore?.read().runtimeDevelopmentThreads.find((thread) => thread.runtimeScopeId === runtimeScopeId)
+  const root = definition?.rootPath ?? historical?.chatState.cwd
+  if (!root) return null
+  const routeGeneration = runtimeRouteGeneration(runtimeScopeId, definition?.updatedAt ?? historical?.updatedAt ?? 1)
+  const canonicalRoot = definition?.canonicalRoot ?? definition?.rootPath
+  return {
+    runtimeScopeId, runtimeDefinitionId: parsed.runtimeDefinitionId, runtimeOwner: { kind: 'workspace' }, cwd: root, runtimeRoot: root,
+    routeGeneration, developmentGeneration: previous?.routeGeneration === routeGeneration ? previous.developmentGeneration : 1,
+    available: Boolean(definition && definition.trustStatus === 'trusted' && canonicalRoot && localAppTrustStore?.isTrusted(canonicalRoot)),
+  }
+}
+
+function generationOf(value: number): number { return Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(Number.isFinite(value) ? value : 1))) }
+
+function runtimeRouteGeneration(runtimeScopeId: RuntimeScopeId, durableSeed: number): number {
+  return Math.max(generationOf(durableSeed), runtimeDevelopmentRouteGenerations.get(runtimeScopeId) ?? 0)
+}
+
+function invalidateRuntimeDevelopmentRoute(runtimeScopeId: RuntimeScopeId, durableSeed = 0): number {
+  const current = runtimeDevelopmentCoordinator?.snapshot(runtimeScopeId)
+  const next = Math.max(generationOf(durableSeed), runtimeDevelopmentRouteGenerations.get(runtimeScopeId) ?? 0, current?.routeGeneration ?? 0) + 1
+  runtimeDevelopmentRouteGenerations.set(runtimeScopeId, next)
+  runtimeDevelopmentCoordinator?.invalidateRoute(runtimeScopeId, next)
+  if (current) {
+    // Route invalidation first disables submit synchronously, then releases the
+    // exact old token. A late release cannot affect a rebound/new-generation lease.
+    void runtimeDevelopmentRuntimeBridge?.invalidate({
+      runtimeScopeId,
+      routeGeneration: current.routeGeneration,
+      developmentGeneration: current.developmentGeneration,
+    })
+  }
+  return next
+}
+
+function runtimeDevelopmentBusy(runtimeScopeId: RuntimeScopeId): boolean {
+  return runtimeDevelopmentCoordinator?.hasActiveSession(runtimeScopeId) ?? false
+}
+
+function runtimeWindowIdentity(runtimeScopeId: RuntimeScopeId): { runtimeName: string; ownerLabel: string } {
+  const parsed = parseRuntimeScopeId(runtimeScopeId)
+  const state = chatWorkspaceStore?.current() ?? chatWorkspaceStore?.read()
+  if (!parsed || !state) return { runtimeName: 'Runtime', ownerLabel: '未知归属' }
+  if (parsed.kind === 'project') {
+    const project = state.projects.find((item) => item.id === parsed.projectId)
+    const definition = state.runtimeDefinitions.find((item) => item.owner.kind === 'project' && item.owner.projectId === parsed.projectId)
+    return { runtimeName: definition?.name ?? project?.name ?? 'Runtime', ownerLabel: `项目 · ${project?.name ?? parsed.projectId}` }
+  }
+  const definition = state.runtimeDefinitions.find((item) => item.id === parsed.runtimeDefinitionId)
+  return { runtimeName: definition?.name ?? 'Runtime（已移除）', ownerLabel: '工作台' }
+}
+
+function resolveRuntimeDevelopmentTarget(raw: unknown, freshState?: ChatWorkspaceState | null): { target: RuntimeDevelopmentTarget; runtimeScopeId: RuntimeScopeId; uninitialized: boolean } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const target = raw as Record<string, unknown>
+  if (target.kind === 'project-runtime' && Object.keys(target).length === 3 && typeof target.projectId === 'string' && target.projectId.trim() && typeof target.mountId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(target.mountId.trim())) {
+    const projectId = target.projectId.trim(); const mountId = target.mountId.trim()
+    const state = freshState ?? chatWorkspaceStore?.read(); const project = state?.projects.find((item) => item.id === projectId)
+    if (!project || project.pathMissing) return null
+    const definition = state?.runtimeDefinitions.find((item) => item.owner.kind === 'project' && item.owner.projectId === projectId && path.resolve(item.rootPath) === projectRuntimeRoot(project.path))
+    const registered = definition ? registeredProjectRuntimeHost(projectId, mountId, definition.id) : null
+    if ((definition && !registered) || projectRuntimeMountIds.get(projectId) !== mountId) return null
+    return { target: { kind: 'project-runtime', projectId, mountId }, runtimeScopeId: projectRuntimeScopeId(projectId), uninitialized: !definition }
+  }
+  if (target.kind === 'workspace-runtime' && Object.keys(target).length === 2 && typeof target.workspaceTabId === 'string' && target.workspaceTabId.trim()) {
+    const workspaceTabId = target.workspaceTabId.trim(); const state = freshState ?? chatWorkspaceStore?.read()
+    const tab = state?.workspaceTabs.find((item) => item.id === workspaceTabId); const definition = tab ? state?.runtimeDefinitions.find((item) => item.id === tab.runtimeDefinitionId) : undefined
+    if (!tab || !definition || definition.owner.kind !== 'workspace') return null
+    return { target: { kind: 'workspace-runtime', workspaceTabId }, runtimeScopeId: workspaceRuntimeScopeId(definition.id), uninitialized: false }
+  }
+  return null
+}
+
+function runtimeDevelopmentFailure(code: Exclude<import('../src/runtime-development-contract').RuntimeDevelopmentErrorCode, 'runtime-development-conflict'>, message: string, retryable = false): OpenRuntimeDevelopmentResult {
+  return { ok: false, error: { code, message, retryable } }
+}
+
+function mintRuntimeRootConflict(senderWebContentsId: number, lease: RuntimeRootLease) {
+  const conflictToken = randomUUID()
+  const conflictIdentity = runtimeWindowIdentity(lease.runtimeScopeId)
+  runtimeDevelopmentConflictTokens.set(conflictToken, { senderWebContentsId, runtimeScopeId: lease.runtimeScopeId, expiresAt: Date.now() + 60_000 })
+  return {
+    conflictToken,
+    conflictingRuntimeName: conflictIdentity.runtimeName,
+    conflictingOwnerKind: parseRuntimeScopeId(lease.runtimeScopeId)?.kind ?? 'workspace',
+  }
+}
+
+function runtimeDevelopmentConflict(senderWebContentsId: number, lease: RuntimeRootLease): OpenRuntimeDevelopmentResult {
+  console.error('[runtime-development/ipc] fail', { operation: 'open', code: 'runtime-development-conflict' })
+  return {
+    ok: false,
+    error: {
+      code: 'runtime-development-conflict',
+      message: 'Another Runtime is modifying the same directory.',
+      retryable: false,
+      ...mintRuntimeRootConflict(senderWebContentsId, lease),
+    },
+  }
+}
+
+/**
+ * `T4.7`: a browse-path start that loses the root race must reach the renderer
+ * as the same explicit conflict the development action already shows, instead
+ * of a swallowed error that leaves the card silently stopped.
+ */
+function runtimeRootConflictError(senderWebContentsId: number, lease: RuntimeRootLease): Error {
+  console.error('[runtime/ipc] fail', { operation: 'start', code: 'runtime-root-conflict' })
+  return new Error(JSON.stringify({ code: 'runtime-root-conflict', ...mintRuntimeRootConflict(senderWebContentsId, lease) }))
+}
+
+function conflictingRuntimeRootLease(error: unknown): RuntimeRootLease | null {
+  if (!error || typeof error !== 'object') return null
+  const candidate = error as { code?: unknown; conflictingLease?: unknown }
+  return candidate.code === 'runtime-development-conflict' && candidate.conflictingLease && typeof candidate.conflictingLease === 'object'
+    ? candidate.conflictingLease as RuntimeRootLease
+    : null
+}
+
+async function submitControlledRuntimeCreationPrompt(
+  runtimeScopeId: RuntimeScopeId,
+  snapshot: import('../src/runtime-development-contract').RuntimeDevelopmentSnapshot,
+): Promise<boolean> {
+  const broker = runtimeDevelopmentBroker
+  const store = runtimeDevelopmentThreadStore
+  const manager = runtimeDevelopmentWindowManager
+  if (!broker || !store || !manager || !snapshot.canSubmit) return false
+  const authority = {
+    runtimeScopeId,
+    routeGeneration: snapshot.routeGeneration,
+    developmentGeneration: snapshot.developmentGeneration,
+  }
+  const copy = (normalizeUiLocale(getDesktopPreferencesStore().read().locale) === 'zh' ? zh : en).runtime
+  let thread: RuntimeDevelopmentThread | undefined = store.read().runtimeDevelopmentThreads
+    .filter((candidate) => candidate.runtimeScopeId === runtimeScopeId && !candidate.archivedAt)
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+  if (!thread) {
+    const created = await broker.createThread(authority, { title: copy.createWithAgent })
+    if (!created.ok) return false
+    thread = store.read().runtimeDevelopmentThreads.find((candidate) => candidate.id === created.value.threadId)
+  }
+  if (!thread) return false
+  await manager.saveViewState(runtimeScopeId, { patch: { selectedThreadId: thread.id, draft: '' } })
+  // A repeated click focuses the same durable creation conversation and never
+  // submits a second controlled prompt after the first accepted message.
+  if (thread.chatState.items.some((item) => item.type === 'message' && item.role === 'user')) return true
+  const submitted = await broker.submitRun(authority, { threadId: thread.id, text: copy.createPrompt })
+  return submitted.ok
+}
+
 async function assertRuntimeTrust(definition: RuntimeDefinition): Promise<string> {
   const canonicalRoot = await canonicalizeLocalAppRoot(definition.rootPath).catch(() => {
     throw new Error('local-app-path-missing')
@@ -826,6 +1163,28 @@ async function assertRuntimeTrust(definition: RuntimeDefinition): Promise<string
   await localAppTrustStore?.load()
   if (!localAppTrustStore?.isTrusted(canonicalRoot)) throw new Error('local-app-trust-required')
   return canonicalRoot
+}
+
+async function bindProspectiveProjectRuntimeDefinition(definition: RuntimeDefinition): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
+  if (definition.owner.kind !== 'project' || !runtimeDevelopmentRuntimeBridge) return { ok: true }
+  const runtimeScopeId = projectRuntimeScopeId(definition.owner.projectId)
+  try {
+    await runtimeDevelopmentRuntimeBridge.bindDefinition(runtimeScopeId, definition)
+    return { ok: true }
+  } catch (error) {
+    const current = runtimeDevelopmentCoordinator?.snapshot(runtimeScopeId)
+    if (current) {
+      // Disable submit before dropping the prospective token. The conflicting
+      // owner remains untouched and no Runtime process is stopped or adopted.
+      invalidateRuntimeDevelopmentRoute(runtimeScopeId, definition.updatedAt)
+      await runtimeDevelopmentRuntimeBridge.abort(current)
+    }
+    const conflict = conflictingRuntimeRootLease(error)
+    console.error('[runtime-development/bridge] fail', { operation: 'bind-definition', code: conflict ? 'runtime-development-conflict' : 'runtime-root-missing' })
+    return conflict
+      ? { ok: false, code: 'runtime-development-conflict', message: '该目录正在由另一 Runtime 修改。' }
+      : { ok: false, code: 'runtime-root-missing', message: 'Runtime 目录重新校验失败。' }
+  }
 }
 
 function sendProjectFilesChanged(event: { rootPath: string; relativePath?: string }): void {
@@ -932,12 +1291,15 @@ function ensureTray() {
 async function prepareForAppQuit(): Promise<void> {
   if (localAppQuitCleanup) return localAppQuitCleanup
   isQuitting = true
+  runtimeDevelopmentCoordinator?.setQuitting()
+  runtimeDevelopmentConflictTokens.clear()
   localAppQuitCleanup = (async () => {
     speechRecognitionService?.dispose()
     disposeProjectFileWatchers()
     await Promise.race([
       Promise.all([
         localAppPreviewManager?.closeAll() ?? Promise.resolve(),
+        runtimeDevelopmentRuntimeBridge?.releaseProspectiveLeases() ?? Promise.resolve(),
         localAppRuntimeManager?.stopAll('app-quit') ?? Promise.resolve(),
       ]),
       new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
@@ -1052,7 +1414,7 @@ if (gotSingleInstanceLock) {
       fingerprint: async (projectId) => {
         const definition = readProjectRuntimeDefinition(projectId)
         if (!definition) throw new Error('project-runtime-unavailable')
-        const inspected = await inspectLocalAppDirectory(definition.rootPath)
+        const inspected = await inspectLocalAppDirectory(definition.rootPath, definition.serveOverride)
         if (!inspected.ok || inspected.mode !== 'static' || !inspected.agentos) throw new Error('static-runtime-unavailable')
         return fingerprintStaticSource(inspected.canonicalRoot, inspected.agentos)
       },
@@ -1096,6 +1458,101 @@ if (gotSingleInstanceLock) {
     // --- IPC handlers / IPC 注册 ---
 
     registerAppUpdaterIpc(() => win, { beforeQuitAndInstall: prepareForAppQuit })
+
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openRuntimeDevelopment, async (event, rawTarget: unknown): Promise<OpenRuntimeDevelopmentResult> => {
+      console.info('[runtime-development/ipc] enter', { operation: 'open' })
+      if (!win || event.sender.id !== win.webContents.id || event.senderFrame !== event.sender.mainFrame) return runtimeDevelopmentFailure('runtime-scope-stale', '当前窗口无权打开 Runtime 开发。')
+      // Renderer only names the page object. Main fresh-reads its owner/host
+      // under the workspace lock before resolving the stable Runtime scope.
+      const resolvedTarget = await runChatWorkspaceOperation(async () => resolveRuntimeDevelopmentTarget(rawTarget, getChatWorkspaceStore().read()))
+      if (!resolvedTarget || !runtimeDevelopmentWindowManager || !runtimeDevelopmentRuntimeBridge || !localAppRuntimeManager) return runtimeDevelopmentFailure('runtime-scope-stale', 'Runtime 归属已变化，请刷新后重试。')
+      const scope = resolveRuntimeChatScope(resolvedTarget.runtimeScopeId)
+      if (!scope) return runtimeDevelopmentFailure('runtime-root-missing', 'Runtime 路径不可用，请检查后重试。')
+      const authority = {
+        runtimeScopeId: resolvedTarget.runtimeScopeId,
+        routeGeneration: scope.routeGeneration,
+        developmentGeneration: scope.developmentGeneration,
+      }
+      if (resolvedTarget.uninitialized) {
+        try {
+          await runtimeDevelopmentRuntimeBridge.acquireProspective(authority)
+        } catch (error) {
+          const conflictingLease = conflictingRuntimeRootLease(error)
+          if (conflictingLease) return runtimeDevelopmentConflict(event.sender.id, conflictingLease)
+          console.error('[runtime-development/ipc] fail', { operation: 'open', code: 'runtime-root-missing' })
+          return runtimeDevelopmentFailure('runtime-root-missing', 'Runtime 路径不可用，请检查后重试。')
+        }
+      }
+      const definition = scope.runtimeDefinitionId ? readRuntimeDefinition(scope.runtimeDefinitionId) : null
+      const currentLease = localAppRuntimeManager.getRootExecutionRegistry().getByRoot(definition?.canonicalRoot ?? scope.runtimeRoot)
+      if (currentLease && currentLease.runtimeScopeId !== resolvedTarget.runtimeScopeId) {
+        return runtimeDevelopmentConflict(event.sender.id, currentLease)
+      }
+      try {
+        const opened = await runtimeDevelopmentWindowManager.open(resolvedTarget.runtimeScopeId)
+        const development = opened.context.development
+        const developmentGeneration = development?.developmentGeneration ?? resolveRuntimeChatScope(resolvedTarget.runtimeScopeId)?.developmentGeneration ?? 1
+        if (resolvedTarget.uninitialized && (!development || !(await submitControlledRuntimeCreationPrompt(resolvedTarget.runtimeScopeId, development)))) {
+          await runtimeDevelopmentWindowManager.close(resolvedTarget.runtimeScopeId)
+          await runtimeDevelopmentRuntimeBridge.abort(authority)
+          console.error('[runtime-development/ipc] fail', { operation: 'controlled-create', code: 'runtime-development-busy' })
+          return runtimeDevelopmentFailure('runtime-development-busy', '创建请求暂未提交，请在开发窗口中重试。', true)
+        }
+        console.info('[runtime-development/ipc] success', { operation: 'open', scopeKind: parseRuntimeScopeId(resolvedTarget.runtimeScopeId)?.kind })
+        return { ok: true, value: { runtimeScopeId: resolvedTarget.runtimeScopeId, developmentGeneration } }
+      } catch (error) {
+        if (resolvedTarget.uninitialized) await runtimeDevelopmentRuntimeBridge.abort(authority)
+        const conflictingLease = conflictingRuntimeRootLease(error)
+        if (conflictingLease) return runtimeDevelopmentConflict(event.sender.id, conflictingLease)
+        // load/runtime 错误可能包含本地路径；默认日志只保留固定错误码。
+        console.error('[runtime-development/ipc] fail', { operation: 'open', code: 'runtime-window-open-failed' })
+        return runtimeDevelopmentFailure('runtime-live-preview-unavailable', 'Runtime 开发窗口暂时无法打开，请重试。', true)
+      }
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.focusRuntimeDevelopmentConflict, async (event, rawToken: unknown): Promise<RuntimeDevelopmentResult<void>> => {
+      if (!win || event.sender.id !== win.webContents.id || event.senderFrame !== event.sender.mainFrame || typeof rawToken !== 'string') return { ok: false, error: { code: 'runtime-scope-stale', message: '切换凭证无效。', retryable: false } }
+      const conflict = runtimeDevelopmentConflictTokens.get(rawToken); runtimeDevelopmentConflictTokens.delete(rawToken)
+      if (!conflict || conflict.senderWebContentsId !== event.sender.id || conflict.expiresAt < Date.now()) return { ok: false, error: { code: 'runtime-scope-stale', message: '切换凭证已过期。', retryable: false } }
+      showMainWindow()
+      const target = runtimeDevelopmentWindowManager?.get(conflict.runtimeScopeId)
+      if (!target || target.isDestroyed()) return { ok: false, error: { code: 'runtime-scope-stale', message: '正在修改的 Runtime 窗口已关闭。', retryable: true } }
+      target.show(); target.focus()
+      return { ok: true, value: undefined }
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.endRuntimeDevelopment, async (event, rawTarget: unknown): Promise<RuntimeDevelopmentResult<void>> => {
+      if (!win || event.sender.id !== win.webContents.id || event.senderFrame !== event.sender.mainFrame) return { ok: false, error: { code: 'runtime-scope-stale', message: '当前窗口无权结束 Runtime 开发。', retryable: false } }
+      const resolvedTarget = await runChatWorkspaceOperation(async () => resolveRuntimeDevelopmentTarget(rawTarget, getChatWorkspaceStore().read()))
+      if (!resolvedTarget || !runtimeDevelopmentCoordinator) return { ok: false, error: { code: 'runtime-scope-stale', message: 'Runtime 归属已变化，请刷新后重试。', retryable: false } }
+      const closedWindow = await runtimeDevelopmentWindowManager?.close(resolvedTarget.runtimeScopeId)
+      if (!closedWindow) {
+        const snapshot = runtimeDevelopmentCoordinator.snapshot(resolvedTarget.runtimeScopeId)
+        if (snapshot) runtimeDevelopmentCoordinator.requestExit({ runtimeScopeId: snapshot.runtimeScopeId, routeGeneration: snapshot.routeGeneration, developmentGeneration: snapshot.developmentGeneration })
+      }
+      return { ok: true, value: undefined }
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openRuntimeDevelopmentThread, async (event, rawThreadId: unknown): Promise<RuntimeDevelopmentResult<void>> => {
+      if (!win || event.sender.id !== win.webContents.id || event.senderFrame !== event.sender.mainFrame || typeof rawThreadId !== 'string' || !rawThreadId.trim()) {
+        return { ok: false, error: { code: 'runtime-scope-stale', message: 'Runtime 对话不可用。', retryable: false } }
+      }
+      const thread = runtimeDevelopmentThreadStore?.read().runtimeDevelopmentThreads.find((candidate) => candidate.id === rawThreadId.trim())
+      if (!thread || !runtimeDevelopmentWindowManager || !resolveRuntimeChatScope(thread.runtimeScopeId)) {
+        return { ok: false, error: { code: 'runtime-root-missing', message: 'Runtime 已移除或路径不可用。', retryable: false } }
+      }
+      await runtimeDevelopmentWindowManager.saveViewState(thread.runtimeScopeId, { patch: { selectedThreadId: thread.id } })
+      try {
+        const existing = runtimeDevelopmentWindowManager.get(thread.runtimeScopeId)
+        if (existing && !existing.isDestroyed()) {
+          const browserWindow = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.id === existing.webContents.id)
+          browserWindow?.webContents.reload()
+          existing.show(); existing.focus()
+          return { ok: true, value: undefined }
+        }
+        await runtimeDevelopmentWindowManager.open(thread.runtimeScopeId)
+        return { ok: true, value: undefined }
+      } catch {
+        return { ok: false, error: { code: 'runtime-live-preview-unavailable', message: 'Runtime 开发窗口暂时无法打开，请重试。', retryable: true } }
+      }
+    })
 
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getDesktopPreferences, () => {
       return getDesktopPreferencesStore().read()
@@ -1216,6 +1673,25 @@ if (gotSingleInstanceLock) {
           })
           if (!applied.ok) return applied
           if (!applied.changed) return { ok: true, workspace: current, projectId: applied.projectId }
+          const destructiveProjectId = command.type === 'project.remove' || command.type === 'project.relocate'
+            ? command.projectId
+            : undefined
+          const projectRuntimeDefinition = destructiveProjectId
+            ? current.runtimeDefinitions.find((definition) => definition.owner.kind === 'project' && definition.owner.projectId === destructiveProjectId)
+            : undefined
+          if (destructiveProjectId && runtimeDevelopmentBusy(projectRuntimeScopeId(destructiveProjectId))) {
+            return { ok: false, code: 'workspace-conflict', message: 'Runtime 正在修改，请先结束修改后再移除或更换项目目录' }
+          }
+          if (projectRuntimeDefinition) {
+            // Root ownership changes stop the bounded process tree before the
+            // durable owner/path mutation. A failed stop leaves workspace data intact.
+            await localAppPreviewManager?.closeForLocalApp(projectRuntimeDefinition.id)
+            const beforeStop = localAppRuntimeManager?.get(projectRuntimeDefinition.id)
+            const stopped = await localAppRuntimeManager?.stop(projectRuntimeDefinition.id, 'user')
+            if (beforeStop && (!stopped || stopped.status !== 'stopped')) {
+              return { ok: false, code: 'workspace-save-failed', message: 'Runtime 未能安全停止，项目未更改' }
+            }
+          }
           const proposed = withNextWorkspaceRevision(applied.state, workspaceRevisionOf(current))
           try {
             await getChatWorkspaceStore().save(proposed)
@@ -1228,6 +1704,10 @@ if (gotSingleInstanceLock) {
               throw new Error('workspace-command-readback-failed')
             }
             void taskHomePluginManager?.refreshFromWorkspace(persisted)
+            if (destructiveProjectId) {
+              await clearProjectRuntimeHost(destructiveProjectId)
+              invalidateRuntimeDevelopmentRoute(projectRuntimeScopeId(destructiveProjectId), persisted.projects.find((project) => project.id === destructiveProjectId)?.updatedAt ?? 0)
+            }
             return { ok: true, workspace: persisted, projectId: applied.projectId }
           } catch {
             return { ok: false, code: 'workspace-save-failed', message: '工作区保存失败，请重试' }
@@ -1302,19 +1782,10 @@ if (gotSingleInstanceLock) {
           let tabCollision = 1
           while (tabIds.has(tabId)) tabId = `${tabIdBase}-${tabCollision++}`
           const tab: WorkspaceTab = { id: tabId, runtimeDefinitionId: definition.id, title: rawTitle.trim(), createdAt: now, updatedAt: now }
-          const projectRoots = await workspaceProjectPathsForCanonicalMatch(current.projects)
-          const linked = ensureWorkspaceTabProject({
-            workspace: { ...current, runtimeDefinitions: [definition, ...current.runtimeDefinitions.filter((item) => item.id !== definition.id)], workspaceTabs: [tab, ...current.workspaceTabs] },
-            workspaceTabId: tab.id,
-            canonicalRoot: inspected.canonicalRoot,
-            now,
-            createProjectId: () => nextWorkspaceProjectId(current.projects),
-            projectPathForMatch: (project) => projectRoots.get(project.id) ?? project.path,
-          })
-          if (!linked.ok) return { ok: false, code: linked.code, message: linked.message }
           const proposed = withNextWorkspaceRevision({
-            ...linked.workspace,
-            activeProjectId: linked.project.id,
+            ...current,
+            runtimeDefinitions: [definition, ...current.runtimeDefinitions.filter((item) => item.id !== definition.id)],
+            workspaceTabs: [tab, ...current.workspaceTabs],
             activeThreadId: '',
             activeWorkspaceTabId: tab.id,
           }, workspaceRevisionOf(current))
@@ -1325,8 +1796,8 @@ if (gotSingleInstanceLock) {
             await getChatWorkspaceStore().save(proposed)
             const persisted = getChatWorkspaceStore().read()
             const persistedDefinition = persisted?.runtimeDefinitions.find((item) => item.id === definition.id)
-            const persistedTab = persisted?.workspaceTabs.find((item) => item.id === tab.id && item.runtimeDefinitionId === definition.id && item.projectId === linked.project.id)
-            if (!persisted || !persistedDefinition || !persistedTab || persisted.activeWorkspaceTabId !== tab.id || persisted.activeProjectId !== linked.project.id) throw new Error('runtime-workspace-tab-readback-failed')
+            const persistedTab = persisted?.workspaceTabs.find((item) => item.id === tab.id && item.runtimeDefinitionId === definition.id)
+            if (!persisted || !persistedDefinition || !persistedTab || persisted.activeWorkspaceTabId !== tab.id || persisted.activeProjectId !== current.activeProjectId) throw new Error('runtime-workspace-tab-readback-failed')
           } catch {
             if (!wasTrusted) await trustStore.revoke(inspected.canonicalRoot).catch(() => undefined)
             return { ok: false, code: 'workspace-save-failed', message: 'Runtime 工作区保存失败，请重试' }
@@ -1367,23 +1838,13 @@ if (gotSingleInstanceLock) {
           let tabCollision = 1
           while (tabIds.has(tabId)) tabId = `${tabIdBase}-${tabCollision++}`
           const tab: WorkspaceTab = { id: tabId, runtimeDefinitionId: definition.id, title: definition.name, createdAt: now, updatedAt: now }
-          const projectRoots = await workspaceProjectPathsForCanonicalMatch(current.projects)
-          const linked = ensureWorkspaceTabProject({
-            workspace: { ...current, workspaceTabs: [tab, ...current.workspaceTabs] },
-            workspaceTabId: tab.id,
-            canonicalRoot,
-            now,
-            createProjectId: () => nextWorkspaceProjectId(current.projects),
-            projectPathForMatch: (project) => projectRoots.get(project.id) ?? project.path,
-          })
-          if (!linked.ok) return { ok: false, code: linked.code, message: linked.message }
-          const proposed = withNextWorkspaceRevision({ ...linked.workspace, activeProjectId: linked.project.id, activeThreadId: '', activeWorkspaceTabId: tab.id }, workspaceRevisionOf(current))
+          const proposed = withNextWorkspaceRevision({ ...current, workspaceTabs: [tab, ...current.workspaceTabs], activeThreadId: '', activeWorkspaceTabId: tab.id }, workspaceRevisionOf(current))
           try {
             await getChatWorkspaceStore().save(proposed)
             const persisted = getChatWorkspaceStore().read()
             const persistedDefinition = persisted?.runtimeDefinitions.find((item) => item.id === definition.id)
-            const persistedTab = persisted?.workspaceTabs.find((item) => item.id === tab.id && item.runtimeDefinitionId === definition.id && item.projectId === linked.project.id)
-            if (!persisted || !persistedDefinition || !persistedTab || persisted.activeWorkspaceTabId !== tab.id || persisted.activeProjectId !== linked.project.id) throw new Error('runtime-workspace-tab-readback-failed')
+            const persistedTab = persisted?.workspaceTabs.find((item) => item.id === tab.id && item.runtimeDefinitionId === definition.id)
+            if (!persisted || !persistedDefinition || !persistedTab || persisted.activeWorkspaceTabId !== tab.id || persisted.activeProjectId !== current.activeProjectId) throw new Error('runtime-workspace-tab-readback-failed')
             return { ok: true, workspace: persisted, definition: persistedDefinition, tab: persistedTab }
           } catch {
             return { ok: false, code: 'workspace-save-failed', message: 'Runtime 工作区保存失败，请重试' }
@@ -1471,6 +1932,7 @@ if (gotSingleInstanceLock) {
       const state = getChatWorkspaceStore().current() ?? getChatWorkspaceStore().read()
       const project = state?.projects.find((item) => item.id === projectId.trim())
       if (!state || !project) return { ok: false, code: 'project-missing', message: '项目不存在' }
+      projectRuntimeMountIds.set(project.id, normalizedMountId)
       if (project.pathMissing) {
         await clearProjectRuntimeHost(project.id)
         return { ok: false, code: 'project-path-missing', message: '项目路径不存在' }
@@ -1502,6 +1964,8 @@ if (gotSingleInstanceLock) {
       if (existing && !existingMatchesRoot) await clearProjectRuntimeHost(project.id)
       if (!trust || trusted) {
         if (trusted && existing) {
+          const bound = await bindProspectiveProjectRuntimeDefinition(existing)
+          if (!bound.ok) return bound
           localAppRuntimeManager?.register(existing)
           await registerProjectRuntimeHost({ projectId: project.id, mountId: normalizedMountId, canonicalRoot: inspected.canonicalRoot, runtimeDefinitionId: existing.id })
           return { ok: true, status: 'ready', projectId: project.id, mountId: normalizedMountId, runtimeRoot, definition: existing, runtime: localAppRuntimeManager?.get(existing.id) ?? null }
@@ -1551,6 +2015,8 @@ if (gotSingleInstanceLock) {
           if (!wasTrusted) await localAppTrustStore?.revoke(inspected.canonicalRoot).catch(() => undefined)
           return committed
         }
+        const bound = await bindProspectiveProjectRuntimeDefinition(committed.definition)
+        if (!bound.ok) return bound
         localAppRuntimeManager?.register(committed.definition)
         await registerProjectRuntimeHost({ projectId: project.id, mountId: normalizedMountId, canonicalRoot: inspected.canonicalRoot, runtimeDefinitionId: committed.definition.id })
         return { ok: true, status: 'ready', projectId: project.id, mountId: normalizedMountId, runtimeRoot, definition: committed.definition, runtime: localAppRuntimeManager?.get(committed.definition.id) ?? null }
@@ -1588,6 +2054,10 @@ if (gotSingleInstanceLock) {
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.relocateRuntime, async (_event, rawId: unknown, rawRoot: unknown, rawExpectedRevision: unknown): Promise<LocalAppRelocationResult> => {
       if (typeof rawId !== 'string' || !rawId.trim()) return { ok: false, code: 'invalid-id', message: 'Runtime 标识无效' }
       if (typeof rawRoot !== 'string' || !rawRoot.trim()) return { ok: false, code: 'invalid-root', message: 'Runtime 目录无效' }
+      const relocatingScope = workspaceRuntimeScopeId(rawId.trim())
+      if (runtimeDevelopmentBusy(relocatingScope)) {
+        return { ok: false, code: 'runtime-development-busy', message: 'Runtime 正在修改，请先结束修改后再更换目录' }
+      }
       const expectedRevision = typeof rawExpectedRevision === 'number' && Number.isFinite(rawExpectedRevision)
         ? Math.max(0, Math.floor(rawExpectedRevision))
         : undefined
@@ -1677,6 +2147,7 @@ if (gotSingleInstanceLock) {
         }
       })
       if (!committed.ok) return committed
+      invalidateRuntimeDevelopmentRoute(relocatingScope, committed.definition.updatedAt)
 
       // Only after the new state is durable do we register/start the new
       // definition. Old-root trust is revoked last and is retained on a
@@ -1701,13 +2172,23 @@ if (gotSingleInstanceLock) {
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.revokeRuntimeTrust, async (_event, rawRoot: unknown) => {
       if (typeof rawRoot !== 'string' || !rawRoot.trim()) return
       const canonicalRoot = await canonicalizeLocalAppRoot(rawRoot).catch(() => rawRoot.trim())
-      await localAppTrustStore?.revoke(canonicalRoot)
       const state = chatWorkspaceStore?.read()
-      for (const definition of state?.runtimeDefinitions ?? []) {
-        if ((definition.canonicalRoot ?? definition.rootPath) === canonicalRoot) {
-          await localAppPreviewManager?.closeForLocalApp(definition.id)
-          await localAppRuntimeManager?.stop(definition.id, 'user')
-        }
+      const affected = (state?.runtimeDefinitions ?? []).filter((definition) => (definition.canonicalRoot ?? definition.rootPath) === canonicalRoot)
+      if (affected.some((definition) => runtimeDevelopmentBusy(definition.owner.kind === 'project' ? projectRuntimeScopeId(definition.owner.projectId) : workspaceRuntimeScopeId(definition.id)))) {
+        throw new Error('runtime-development-busy')
+      }
+      // Fence every owner by stopping its bounded process tree; only then is
+      // the shared canonical-root authorization removed.
+      for (const definition of affected) {
+        await localAppPreviewManager?.closeForLocalApp(definition.id)
+        await localAppRuntimeManager?.stop(definition.id, 'user')
+      }
+      await localAppTrustStore?.revoke(canonicalRoot)
+      for (const definition of affected) {
+        const runtimeScopeId = definition.owner.kind === 'project'
+          ? projectRuntimeScopeId(definition.owner.projectId)
+          : workspaceRuntimeScopeId(definition.id)
+        invalidateRuntimeDevelopmentRoute(runtimeScopeId, definition.updatedAt)
       }
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getRuntime, async (_event, rawId: unknown) => {
@@ -1732,7 +2213,7 @@ if (gotSingleInstanceLock) {
       }
       return null
     })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startRuntime, async (_event, rawId: unknown, rawCause: unknown, rawConsumerId: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startRuntime, async (event, rawId: unknown, rawCause: unknown, rawConsumerId: unknown) => {
       if (typeof rawId !== 'string' || !rawId.trim()) throw new Error('runtime-definition-id-invalid')
       const definition = readRuntimeDefinition(rawId.trim())
       if (!definition) throw new Error('runtime-definition-missing')
@@ -1755,7 +2236,12 @@ if (gotSingleInstanceLock) {
       // static project is allowed to trigger its first fixed build here;
       // subsequent opens reuse the last-good artifact without spawning.
       const cause = rawCause === 'restore' ? 'restore' : 'user'
-      return localAppRuntimeManager.start(rawId.trim(), consumerId, { autoBuild: cause !== 'restore' })
+      try {
+        return await localAppRuntimeManager.start(rawId.trim(), consumerId, { autoBuild: cause !== 'restore' })
+      } catch (error) {
+        const conflictingLease = conflictingRuntimeRootLease(error)
+        throw conflictingLease ? runtimeRootConflictError(event.sender.id, conflictingLease) : error
+      }
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.stopRuntime, async (_event, rawId: unknown, rawReason: unknown) => {
       if (typeof rawId !== 'string' || !rawId.trim()) return null
@@ -1783,14 +2269,18 @@ if (gotSingleInstanceLock) {
       await localAppPreviewManager?.closeForLocalApp(rawId.trim())
       return localAppRuntimeManager.restart(rawId.trim())
     })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.buildRuntime, async (_event, rawId: unknown) => {
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.buildRuntime, async (event, rawId: unknown) => {
       if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) return { ok: false, code: 'invalid-id', message: 'Runtime 标识无效' }
       const id = rawId.trim()
       const definition = readRuntimeDefinition(id)
       if (!definition) return { ok: false, code: 'runtime-definition-missing', message: 'Runtime 不存在' }
-      const inspected = await inspectLocalAppDirectory(definition.rootPath)
+      const inspected = await inspectLocalAppDirectory(definition.rootPath, definition.serveOverride)
       if (!inspected.ok) return { ok: false, code: inspected.code, message: inspected.message }
-      if (inspected.mode !== 'static' || !inspected.agentos) return { ok: false, code: 'static-runtime-required', message: '只有静态 Runtime 可以构建' }
+      // `C-RSM-402` tier ②: a directory that can build an openable page is
+      // buildable even before any declaration exists.
+      if (inspected.servePlan.kind !== 'artifact' && inspected.servePlan.kind !== 'buildable') {
+        return { ok: false, code: 'static-runtime-required', message: '这个页面需要保持运行才能查看，无法生成已保存预览' }
+      }
       await assertRuntimeTrust(definition)
       if (!localAppRuntimeManager) return { ok: false, code: 'runtime-unavailable', message: 'Runtime 服务暂不可用，请重试' }
       const staticDefinition: RuntimeDefinition = { ...definition, mode: 'static', agentos: inspected.agentos }
@@ -1816,6 +2306,18 @@ if (gotSingleInstanceLock) {
         }
         return { ok: true, runtime }
       } catch (error) {
+        // `T4.7`: losing the same-root race is not a build failure. Hand the
+        // browsing surface the occupant's identity and a switch token.
+        const conflictingLease = conflictingRuntimeRootLease(error)
+        if (conflictingLease) {
+          return {
+            ok: false,
+            code: 'runtime-development-conflict',
+            message: '该目录正在由另一个 Runtime 使用。',
+            runtime: localAppRuntimeManager.get(id) ?? undefined,
+            conflict: mintRuntimeRootConflict(event.sender.id, conflictingLease),
+          }
+        }
         return { ok: false, code: 'build-failed', message: error instanceof Error ? error.message : '静态构建失败', runtime: localAppRuntimeManager.get(id) ?? undefined }
       }
     })
@@ -1823,6 +2325,34 @@ if (gotSingleInstanceLock) {
       if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) return null
       const buildId = typeof rawBuildId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(rawBuildId) ? rawBuildId : undefined
       return localAppRuntimeManager?.cancelBuild(rawId.trim(), buildId) ?? null
+    })
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.setRuntimeServeOverride, async (_event, rawId: unknown, rawOverride: unknown): Promise<RuntimeSnapshot | null> => {
+      if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) throw new Error('runtime-definition-id-invalid')
+      if (rawOverride !== null && rawOverride !== 'artifact' && rawOverride !== 'server') throw new Error('runtime-serve-override-invalid')
+      const id = rawId.trim()
+      const serveOverride = rawOverride ?? undefined
+      // `C-RSM-404`: the user's explicit choice is durable and outranks
+      // detection. Persist first, then re-serve under the new plan.
+      const committed = await runChatWorkspaceOperation(async () => {
+        const state = getChatWorkspaceStore().read()
+        const current = state?.runtimeDefinitions.find((item) => item.id === id)
+        if (!state || !current) return null
+        const next: RuntimeDefinition = { ...current, serveOverride, updatedAt: Date.now() }
+        const proposed = withNextWorkspaceRevision({
+          ...state,
+          runtimeDefinitions: state.runtimeDefinitions.map((item) => (item.id === id ? next : item)),
+        }, workspaceRevisionOf(state))
+        await getChatWorkspaceStore().save(proposed)
+        const persisted = getChatWorkspaceStore().read()
+        const saved = persisted?.runtimeDefinitions.find((item) => item.id === id)
+        if (!saved || saved.serveOverride !== serveOverride) throw new Error('runtime-serve-override-readback-failed')
+        return saved
+      })
+      if (!committed || !localAppRuntimeManager) return null
+      await localAppPreviewManager?.closeForLocalApp(id)
+      await localAppRuntimeManager.stop(id, 'user')
+      localAppRuntimeManager.register(committed)
+      return localAppRuntimeManager.start(id, undefined, { autoBuild: true })
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.startRuntimeDevelopment, async (_event, rawId: unknown, rawConsumerId: unknown) => {
       if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) throw new Error('runtime-definition-id-invalid')
@@ -1835,7 +2365,7 @@ if (gotSingleInstanceLock) {
       await localAppRuntimeManager.stop(id, 'user')
       // The explicit development action is the only path that may opt a
       // static definition into the existing npm run dev supervisor.
-      const developmentDefinition: RuntimeDefinition = { ...definition, mode: 'development', agentos: undefined }
+      const developmentDefinition: RuntimeDefinition = { ...definition, mode: 'development', agentos: undefined, serveScript: 'dev' }
       localAppRuntimeManager.register(developmentDefinition)
       const requestedConsumer = typeof rawConsumerId === 'string' && rawConsumerId.trim() && rawConsumerId.length <= 200 ? rawConsumerId.trim() : `tab:${id}`
       const consumerId = requestedConsumer.startsWith('project-home:') || requestedConsumer.startsWith('tab:') ? requestedConsumer : `tab:${requestedConsumer}`
@@ -2025,11 +2555,36 @@ if (gotSingleInstanceLock) {
           }
         : {}
       return runChatWorkspaceOperation(async (): Promise<ChatHistorySearchResult> => {
-        return getChatWorkspaceStore().searchChatHistory(
-          typeof projectId === 'string' ? projectId : '',
-          typeof query === 'string' ? query : '',
-          normalizedOptions,
+        const normalizedProjectId = typeof projectId === 'string' ? projectId : ''
+        const normalizedQuery = typeof query === 'string' ? query : ''
+        const ordinary = getChatWorkspaceStore().searchChatHistory(normalizedProjectId, normalizedQuery, normalizedOptions)
+        if (!ordinary.ok) return ordinary
+        const runtime = runtimeDevelopmentThreadStore?.search(
+          normalizedQuery,
+          {
+            includeArchived: normalizedOptions.includeArchived,
+            limit: normalizedOptions.limit,
+            runtimeScopeId: normalizedProjectId ? projectRuntimeScopeId(normalizedProjectId) : undefined,
+          },
+          (runtimeScopeId) => runtimeWindowIdentity(runtimeScopeId).runtimeName,
         )
+        const runtimeItems: ChatHistorySearchItem[] = runtime?.ok ? runtime.items.map((item) => ({
+          id: item.id,
+          documentKind: 'thread',
+          projectId: item.projectId ?? '',
+          threadId: item.threadId,
+          threadTitle: item.threadTitle,
+          title: item.threadTitle,
+          subtitle: item.subtitle,
+          snippet: item.snippet,
+          body: item.snippet,
+          updatedAt: item.updatedAt,
+          archivedAt: item.archivedAt,
+          score: item.score,
+          metadata: item.metadata,
+        })) : []
+        const limit = Math.max(1, Math.min(100, Math.floor(normalizedOptions.limit ?? 50)))
+        return { ok: true, projectId: normalizedProjectId, items: [...ordinary.items, ...runtimeItems].sort((left, right) => right.score - left.score || right.updatedAt - left.updatedAt).slice(0, limit) }
       })
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.listAgentContext, (_event, rootPath: string) => {

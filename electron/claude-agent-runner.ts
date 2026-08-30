@@ -4,6 +4,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import {
   query,
   type CanUseTool,
@@ -56,6 +57,7 @@ import {
 } from './home-plugin-customization-prompt'
 import { safeConsoleError, safeConsoleInfo, safeConsoleWarn } from './safe-console'
 import { buildProjectRuntimeSystemPrompt, resolveProjectAgentRuntimeContext } from './project-runtime-prompt'
+import { runtimeMutationTargetAllowed } from './chat-broker-core'
 
 /** 渲染进程订阅聊天事件的 IPC 信道 / IPC channel for streamed chat events to renderer */
 export const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
@@ -65,6 +67,7 @@ type ActiveRequest = {
   assistantMessageId: string
   threadId: string
   cwd: string
+  runtimeRoot?: string
   projectId?: string
   projectRuntimePrompt: boolean
   abortController: AbortController
@@ -141,6 +144,7 @@ export class ClaudeAgentRunner {
   private readonly eventCoalescer: ClaudeChatEventCoalescer
   private readonly messageRouter: ClaudeSdkMessageRouter
   private runtimeEditHook?: RuntimeEditRunnerHook
+  private readonly additionalRuntimeEditHooks = new Set<RuntimeEditRunnerHook>()
 
   constructor(
     private readonly eventSink: ClaudeChatEventSink,
@@ -163,10 +167,16 @@ export class ClaudeAgentRunner {
     this.runtimeEditHook = hook
   }
 
+  /** Runtime Development subscribes beside the legacy Project edit hook; each hook ignores unknown request ids. */
+  addRuntimeEditHook(hook: RuntimeEditRunnerHook): () => void {
+    this.additionalRuntimeEditHooks.add(hook)
+    return () => this.additionalRuntimeEditHooks.delete(hook)
+  }
+
   // --- Public API / 对外 API ---
 
   /** 排队新的用户轮次并在后台启动 SDK / Enqueue a user turn and start SDK query asynchronously */
-  submit(payload: ClaudeChatSubmitPayload): ClaudeChatSubmitResult {
+  submit(payload: ClaudeChatSubmitPayload & { runtimeRoot?: string }): ClaudeChatSubmitResult {
     const text = payload.text.trim()
     const attachments = normalizeSubmitAttachments(payload.attachments)
     const requestId = randomUUID()
@@ -199,6 +209,7 @@ export class ClaudeAgentRunner {
       assistantMessageId: `assistant-${requestId}`,
       threadId,
       cwd,
+      runtimeRoot: typeof payload.runtimeRoot === 'string' && payload.runtimeRoot.trim() ? path.resolve(payload.runtimeRoot) : undefined,
       projectId: typeof payload.projectId === 'string' && payload.projectId.trim() ? payload.projectId.trim() : undefined,
       projectRuntimePrompt: payload.projectRuntimePrompt === true,
       abortController: new AbortController(),
@@ -850,9 +861,14 @@ export class ClaudeAgentRunner {
     this.emitActivity(activeRequest, 'file-checkpoint', '文件快照已创建', 'done', '可用于撤销本轮文件改动')
   }
 
-  private async handlePreToolUseHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
+  private async handlePreToolUseHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true; hookSpecificOutput?: { hookEventName: 'PreToolUse'; permissionDecision: 'deny'; permissionDecisionReason: string } }> {
     if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
-      this.runtimeEditHook?.beforeTool({
+      const toolInput = isRecord(input.tool_input) ? input.tool_input : {}
+      if (activeRequest.runtimeRoot && !(await runtimeMutationTargetAllowed(activeRequest.runtimeRoot, input.tool_name, toolInput, activeRequest.cwd))) {
+        safeConsoleWarn('[ClaudeAgentRunner] runtime mutation rejected', { toolName: input.tool_name })
+        return { continue: true, suppressOutput: true, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'This Runtime can only modify files inside its Runtime root.' } }
+      }
+      this.notifyRuntimeEditHooks('beforeTool', {
         requestId: activeRequest.requestId,
         toolUseId: input.tool_use_id,
         toolName: input.tool_name,
@@ -867,7 +883,7 @@ export class ClaudeAgentRunner {
       if (toolUseId && activeRequest.diffedToolUseIds.has(toolUseId)) return { continue: true, suppressOutput: true }
       const file = fileDiffFromPostToolUse(input, activeRequest.cwd)
       if (toolUseId && isRecord(input) && typeof input.tool_name === 'string') {
-        this.runtimeEditHook?.afterTool({
+        this.notifyRuntimeEditHooks('afterTool', {
           requestId: activeRequest.requestId,
           toolUseId,
           toolName: input.tool_name,
@@ -887,7 +903,7 @@ export class ClaudeAgentRunner {
       }
     } catch (error) {
       if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
-        this.runtimeEditHook?.afterTool({
+        this.notifyRuntimeEditHooks('afterTool', {
           requestId: activeRequest.requestId,
           toolUseId: input.tool_use_id,
           toolName: input.tool_name,
@@ -905,7 +921,7 @@ export class ClaudeAgentRunner {
 
   private async handlePostToolUseFailureHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
     if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
-      this.runtimeEditHook?.afterTool({
+      this.notifyRuntimeEditHooks('afterTool', {
         requestId: activeRequest.requestId,
         toolUseId: input.tool_use_id,
         toolName: input.tool_name,
@@ -938,6 +954,15 @@ export class ClaudeAgentRunner {
     return { continue: true, suppressOutput: true }
   }
 
+  private notifyRuntimeEditHooks<K extends keyof RuntimeEditRunnerHook>(method: K, input: Parameters<RuntimeEditRunnerHook[K]>[0]): void {
+    const hooks = new Set<RuntimeEditRunnerHook>(this.additionalRuntimeEditHooks)
+    if (this.runtimeEditHook) hooks.add(this.runtimeEditHook)
+    for (const hook of hooks) {
+      if (method === 'beforeTool') hook.beforeTool(input as Parameters<RuntimeEditRunnerHook['beforeTool']>[0])
+      else hook.afterTool(input as Parameters<RuntimeEditRunnerHook['afterTool']>[0])
+    }
+  }
+
   // --- Tool permission gating / 工具权限闸门 ---
 
   private async handleCanUseTool(
@@ -948,6 +973,12 @@ export class ClaudeAgentRunner {
   ): Promise<PermissionResult> {
     if (activeRequest.cancelled || options.signal.aborted) {
       return { behavior: 'deny', message: 'Request cancelled.', toolUseID: options.toolUseID }
+    }
+
+    // Runtime Chat 的 app-global 权限不等于 OS sandbox；可靠文件 mutation 仍必须留在 Main 冻结的 runtimeRoot。
+    if (activeRequest.runtimeRoot && !(await runtimeMutationTargetAllowed(activeRequest.runtimeRoot, toolName, input, activeRequest.cwd))) {
+      safeConsoleWarn('[ClaudeAgentRunner] runtime mutation rejected', { toolName })
+      return { behavior: 'deny', message: 'This Runtime can only modify files inside its Runtime root.', toolUseID: options.toolUseID }
     }
 
     const permissionRequestId = randomUUID()

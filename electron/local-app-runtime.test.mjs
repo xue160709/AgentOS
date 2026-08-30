@@ -406,7 +406,7 @@ test('Normal stop, stopAll, and repeated stop release the bridge-owned subtree',
   }
 })
 
-test('Runtime manager restart preserves every consumer until the last release', async () => {
+test('Runtime manager restart preserves every consumer and the root lease until the last release', async () => {
   const root = mkdtempSync(`${tmpdir()}/local-app-runtime-`)
   mkdirSync(resolve(root, 'node_modules'))
   writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
@@ -427,13 +427,16 @@ test('Runtime manager restart preserves every consumer until the last release', 
   })
   const app = definition(root)
   manager.register(app)
-  const first = await manager.start(app.id, 'tab-a')
-  await manager.start(app.id, 'tab-b')
+  const first = await manager.start(app.id, 'runtime-development:workspace:runtime:2:3')
+  await manager.start(app.id, 'tab:runtime-preview')
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 1)
   const restarted = await manager.restart(app.id)
   assert.equal(restarted.status, 'running')
   assert.notEqual(restarted.runtimeId, first.runtimeId)
-  assert.equal((await manager.release(app.id, 'tab-a')).status, 'running')
-  assert.equal((await manager.release(app.id, 'tab-b')).status, 'stopped')
+  assert.equal((await manager.release(app.id, 'runtime-development:workspace:runtime:2:3')).status, 'running')
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 1)
+  assert.equal((await manager.release(app.id, 'tab:runtime-preview')).status, 'stopped')
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 0)
 })
 
 test('Runtime manager definition root change stops old process and starts with new cwd', async () => {
@@ -551,19 +554,21 @@ test('Runtime conservatively runs npm ci when lock digest record is missing desp
   await supervisor.stop(started.localAppId, 'user')
 })
 
-test('Runtime manager deduplicates the same canonical root and stops after the last consumer releases', async () => {
+test('Runtime manager keeps same-root Definitions isolated and conflicts before a second spawn', async () => {
   const root = mkdtempSync(`${tmpdir()}/local-app-runtime-`)
   mkdirSync(resolve(root, 'node_modules'))
   writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
   let spawnCount = 0
+  const events = []
   const manager = new runtime.LocalAppRuntimeManager({
     allocatePort: async () => 45200,
     fetch: async () => ({ status: 200 }),
     defaults: { readinessTimeoutMs: 100, probeIntervalMs: 1, probeTimeoutMs: 10 },
+    onEvent: (event) => events.push(event),
     spawn: () => {
       spawnCount += 1
       const child = new EventEmitter()
-      child.pid = 999997; child.exitCode = null; child.signalCode = null
+      child.pid = 999997 - spawnCount; child.exitCode = null; child.signalCode = null
       child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
       child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {}
       queueMicrotask(() => child.stdout.emit('data', 'ready at http://127.0.0.1:45200/'))
@@ -575,10 +580,25 @@ test('Runtime manager deduplicates the same canonical root and stops after the l
   manager.register(first)
   manager.register(second)
   const runningA = await manager.start(first.id, 'tab:tab-a')
-  const runningB = await manager.start(second.id, 'project-home:project-1:mount-1')
-  assert.equal(runningA.runtimeId, runningB.runtimeId)
+  await assert.rejects(
+    manager.start(second.id, 'project-home:project-1:mount-1'),
+    (error) => error?.code === 'runtime-development-conflict',
+  )
   assert.equal(spawnCount, 1)
-  assert.equal((await manager.release(first.id, 'tab:tab-a')).status, 'running')
+  assert.equal(manager.get(second.id), null)
+  assert.equal(events.some((event) => event.runtimeDefinitionId === second.id), false)
+  assert.equal((await manager.release(first.id, 'tab:tab-a')).status, 'stopped')
+
+  const runningB = await manager.start(second.id, 'project-home:project-1:mount-1')
+  assert.equal(runningA.runtimeDefinitionId, first.id)
+  assert.equal(runningB.runtimeDefinitionId, second.id)
+  assert.notEqual(runningA.runtimeId, runningB.runtimeId)
+  assert.equal(runningA.generation, 1)
+  assert.equal(runningB.generation, 1)
+  assert.equal(spawnCount, 2)
+  assert.equal(manager.get(first.id).status, 'stopped')
+  assert.equal(manager.get(second.id).status, 'running')
+  assert.equal((await manager.release(second.id, 'project-home:project-1:mount-1')).status, 'stopped')
   assert.equal((await manager.release(second.id, 'project-home:project-1:mount-1')).status, 'stopped')
 })
 
@@ -612,9 +632,9 @@ test('Development to static transition stops the old supervisor before replacing
   const root = mkdtempSync(`${tmpdir()}/local-app-mode-transition-dev-static-`)
   const userData = mkdtempSync(`${tmpdir()}/local-app-mode-transition-dev-static-data-`)
   mkdirSync(resolve(root, 'node_modules'))
-  mkdirSync(resolve(root, 'out'))
+  // The directory only becomes statically servable in the second phase; an
+  // output file present from the start would be detected as static up front.
   writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
-  writeFileSync(resolve(root, 'out', 'index.html'), '<h1>static</h1>')
   const children = []
   const supervisor = new runtime.LocalAppRuntimeSupervisor({
     userDataPath: userData,
@@ -646,6 +666,8 @@ test('Development to static transition stops the old supervisor before replacing
     const dev = await supervisor.start(devDefinition)
     assert.equal(dev.mode, 'development')
     assert.equal(children.length, 1)
+    mkdirSync(resolve(root, 'out'))
+    writeFileSync(resolve(root, 'out', 'index.html'), '<h1>static</h1>')
     writeFileSync(resolve(root, 'package.json'), JSON.stringify({
       scripts: { dev: 'fixture', build: 'fixture-build' },
       agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'out', entryFile: 'index.html' },
@@ -722,6 +744,59 @@ test('Static to development transition revokes the active preview without deleti
     await restoring.stop(staticDefinition.id, 'user')
   } finally {
     await supervisor.stopAll('app-quit')
+    rmSync(root, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true })
+  }
+})
+
+test('static restart paints last-good first and then marks it stale when source fingerprint changed', async () => {
+  const root = mkdtempSync(`${tmpdir()}/local-app-static-stale-restart-`)
+  const userData = mkdtempSync(`${tmpdir()}/local-app-static-stale-restart-data-`)
+  mkdirSync(resolve(root, 'out'), { recursive: true })
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({
+    scripts: { build: 'fixture-build' },
+    agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'out', entryFile: 'index.html' },
+  }))
+  writeFileSync(resolve(root, 'source.txt'), 'version-one')
+  writeFileSync(resolve(root, 'out', 'index.html'), '<h1>version one</h1>')
+  const staticDefinition = { ...definition(root), mode: 'static', agentos: { mode: 'static', buildCommand: 'npm run build', outputRoot: 'out', entryFile: 'index.html' } }
+  const spawnBuild = () => {
+    const child = new EventEmitter()
+    child.pid = 999989; child.exitCode = null; child.signalCode = null
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+    child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {}
+    queueMicrotask(() => { child.exitCode = 0; child.emit('exit', 0, null) })
+    return child
+  }
+  const first = new runtime.LocalAppRuntimeSupervisor({ userDataPath: userData, spawn: spawnBuild })
+  let restored
+  try {
+    const built = await first.build(staticDefinition)
+    assert.equal(built.status, 'ready')
+    assert.ok(built.artifactId)
+    await first.stop(staticDefinition.id, 'user')
+    writeFileSync(resolve(root, 'source.txt'), 'version-two')
+    const events = []
+    restored = new runtime.LocalAppRuntimeSupervisor({
+      userDataPath: userData,
+      spawn: () => { throw new Error('restart from last-good must not spawn') },
+      onEvent: (event) => events.push(event),
+    })
+    const firstPaint = await restored.start(staticDefinition)
+    assert.equal(firstPaint.artifactId, built.artifactId)
+    assert.ok(firstPaint.status === 'ready' || firstPaint.status === 'stale')
+    for (let index = 0; index < 30 && restored.snapshot(staticDefinition.id)?.status !== 'stale'; index += 1) {
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    const stale = restored.snapshot(staticDefinition.id)
+    assert.equal(stale.artifactId, built.artifactId)
+    assert.equal(stale.status, 'stale')
+    assert.equal(stale.buildStatus, 'stale')
+    assert.equal(stale.stale, true)
+    assert.equal(events.some((event) => event.status === 'stale' && event.artifactId === built.artifactId), true)
+  } finally {
+    await first.stopAll('app-quit')
+    await restored?.stopAll('app-quit')
     rmSync(root, { recursive: true, force: true })
     rmSync(userData, { recursive: true, force: true })
   }

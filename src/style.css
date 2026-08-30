@@ -10457,12 +10457,13 @@ html[data-window-effects='mac-vibrancy'] .app-shell-empty {
 /* Local App binding, runtime status and controlled preview host. */
 .local-app-sidebar-heading { margin-top: 14px; }
 .local-app-sidebar-list { display: grid; gap: 2px; margin: 0 10px 12px; }
-.local-app-sidebar-row { display: flex; align-items: center; min-width: 0; border-radius: 8px; }
+.runtime-tabs-list { margin: 0 0 12px; }
+.local-app-sidebar-row { display: flex; align-items: center; min-width: 0; min-height: 32px; border-radius: 8px; }
 .local-app-sidebar-row.is-active { background: var(--color-surface-subtle, rgba(127,127,127,.12)); }
 .local-app-sidebar-select { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 7px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.local-app-sidebar-select span { display: grid; min-width: 0; gap: 2px; }
-.local-app-sidebar-select strong, .local-app-sidebar-select small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.local-app-sidebar-select small { opacity: .62; font-size: 11px; }
+.runtime-tab-select { gap: 8px; padding: 0 12px; }
+.local-app-sidebar-select span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.local-app-sidebar-select strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .local-app-sidebar-close { border: 0; background: transparent; opacity: .55; cursor: pointer; padding: 5px 8px; }
 .local-app-sidebar-empty { padding: 0 12px 12px; color: var(--color-text-muted, #777); font-size: 12px; }
 .local-app-workspace { display: flex; flex-direction: column; gap: 14px; height: 100%; min-height: 0; padding: 28px; overflow: auto; }

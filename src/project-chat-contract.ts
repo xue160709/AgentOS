@@ -12,6 +12,12 @@ import type {
   ClaudePermissionResponsePayload,
 } from './claude-chat-types'
 export type { ProjectThreadCreationSource } from './components/types'
+export type { ChatThreadBase } from './components/types'
+export type {
+  RuntimeDevelopmentThread,
+  RuntimeDevelopmentWorkspace,
+  RuntimeScopeId,
+} from './runtime-development-contract'
 
 export type ProjectChatErrorCode =
   | 'invalid-argument'
@@ -37,6 +43,9 @@ export type ProjectChatErrorCode =
   | 'receipt-failed'
   | 'credential-storage-unavailable'
   | 'sdk-submit-failed'
+  | 'runtime-scope-unavailable'
+  | 'runtime-scope-stale'
+  | 'runtime-root-invalid'
   | 'internal-error'
 
 export type ProjectChatError = { code: ProjectChatErrorCode; message: string; retryable: boolean }

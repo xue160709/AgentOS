@@ -288,6 +288,34 @@ test('Chat Workspace Store preserves project Runtime owner while removing a proj
   })
 })
 
+test('Chat Workspace Store keeps an explicit serve override and rejects an unknown one', async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    const base = {
+      owner: { kind: 'workspace' }, name: 'Runtime', rootPath: '/runtime', canonicalRoot: '/runtime',
+      packageManager: 'npm', devCommand: { executable: 'npm', args: ['run', 'dev'] }, trustStatus: 'trusted', autoStart: false, createdAt: 1, updatedAt: 1,
+    }
+    await store.save({
+      ...createWorkspaceState(),
+      workspaceRevision: 1,
+      runtimeDefinitions: [
+        { ...base, id: 'keep-running', serveOverride: 'server' },
+        { ...base, id: 'saved-preview', serveOverride: 'artifact' },
+        { ...base, id: 'unknown-choice', serveOverride: 'development' },
+        { ...base, id: 'automatic' },
+      ],
+    })
+    const restored = store.read()
+    assert.ok(restored)
+    const override = (id) => restored.runtimeDefinitions.find((item) => item.id === id)?.serveOverride
+    assert.equal(override('keep-running'), 'server')
+    assert.equal(override('saved-preview'), 'artifact')
+    assert.equal(override('unknown-choice'), undefined)
+    assert.equal(override('automatic'), undefined)
+  })
+})
+
 test('Chat Workspace Store does not resurrect stale SQLite rows after an empty workspace save', { skip: !hasSqlite() }, async () => {
   const { ChatWorkspaceStore } = loadChatWorkspaceStore()
 
@@ -393,5 +421,20 @@ test('Chat Workspace Store rejects only when both snapshot media fail', async ()
     store.saveDatabaseIndex = () => false
     store.saveJsonSnapshot = async () => false
     await assert.rejects(() => store.save(createWorkspaceState()), /workspace-save-failed/)
+  })
+})
+
+test('shared rollout reader preserves the valid prefix of an ordinary Project Thread', { skip: !hasSqlite() }, async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath)
+    await store.save(createWorkspaceState())
+    const dbPath = join(userDataPath, 'chat-workspace.sqlite')
+    const rolloutPath = execFileSync('sqlite3', [dbPath, "SELECT rollout_path FROM threads WHERE id = 'thread-old';"], { encoding: 'utf8' }).trim()
+    await writeFile(rolloutPath, `${readFileSync(rolloutPath, 'utf8')}{invalid-json\n`, 'utf8')
+    await rm(join(userDataPath, 'chat-workspace.json'))
+
+    const restored = new ChatWorkspaceStore(userDataPath).read()
+    assert.equal(restored.threads[0].chatState.items[0].content, 'old content')
   })
 })

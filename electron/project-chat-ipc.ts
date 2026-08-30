@@ -49,6 +49,7 @@ import {
   type AgentOSPairingResponse,
 } from '../src/project-chat-contract'
 import type { ProjectChatRunContext } from './project-chat-broker'
+import { parseRuntimeScopeId, type RuntimeScopeId } from '../src/runtime-development-contract'
 import { PROJECT_CHAT_INVOKE_CHANNELS } from '../src/project-chat-ipc-seam'
 import {
   DesktopPreferencesStore,
@@ -58,13 +59,16 @@ export type RendererCapability =
   | { kind: 'main-window'; webContentsId: number }
   | { kind: 'project-chat-window'; webContentsId: number; projectId: string; routeGeneration: number }
 
+export type RuntimeDevelopmentCapability = { kind: 'runtime-development'; webContentsId: number; runtimeScopeId: RuntimeScopeId; routeGeneration: number; developmentGeneration: number }
+export type RegisteredRendererCapability = RendererCapability | RuntimeDevelopmentCapability
+
 export type ProjectChatIpcEvent = {
   sender?: { id?: number; mainFrame?: unknown }
   senderFrame?: { url?: string }
 }
 
 export class RendererCapabilityRegistry {
-  private readonly capabilities = new Map<number, RendererCapability>()
+  private readonly capabilities = new Map<number, RegisteredRendererCapability>()
 
   registerMainWindow(webContentsId: number): RendererCapability | null {
     if (!isWebContentsId(webContentsId)) return null
@@ -80,14 +84,25 @@ export class RendererCapabilityRegistry {
     return capability
   }
 
+  registerRuntimeDevelopmentWindow(webContentsId: number, runtimeScopeId: RuntimeScopeId, routeGeneration: number, developmentGeneration: number): RuntimeDevelopmentCapability | null {
+    if (!isWebContentsId(webContentsId) || !parseRuntimeScopeId(runtimeScopeId) || !isGeneration(routeGeneration) || !isGeneration(developmentGeneration)) return null
+    const capability: RuntimeDevelopmentCapability = { kind: 'runtime-development', webContentsId, runtimeScopeId, routeGeneration, developmentGeneration }
+    this.capabilities.set(webContentsId, capability)
+    return capability
+  }
+
   unregister(webContentsId: number): void { this.capabilities.delete(webContentsId) }
-  get(webContentsId: number): RendererCapability | undefined { return this.capabilities.get(webContentsId) }
+  get(webContentsId: number): RegisteredRendererCapability | undefined { return this.capabilities.get(webContentsId) }
 
   recipientsFor(event: Pick<ProjectChatInternalEvent, 'projectId' | 'routeGeneration'>): RendererCapability[] {
-    return [...this.capabilities.values()].filter((capability) =>
+    return [...this.capabilities.values()].filter((capability): capability is RendererCapability =>
       capability.kind === 'main-window' ||
-      (capability.projectId === event.projectId && capability.routeGeneration === event.routeGeneration),
+      (capability.kind === 'project-chat-window' && capability.projectId === event.projectId && capability.routeGeneration === event.routeGeneration),
     )
+  }
+
+  runtimeRecipientsFor(input: { runtimeScopeId: RuntimeScopeId; routeGeneration: number; developmentGeneration: number }): RuntimeDevelopmentCapability[] {
+    return [...this.capabilities.values()].filter((capability): capability is RuntimeDevelopmentCapability => capability.kind === 'runtime-development' && capability.runtimeScopeId === input.runtimeScopeId && capability.routeGeneration === input.routeGeneration && capability.developmentGeneration === input.developmentGeneration)
   }
 }
 
@@ -263,6 +278,7 @@ export function createProjectChatIpcRouter(options: ProjectChatIpcRouterOptions)
     if (!entryAllowlist.has(rendererEntryKey(event.senderFrame.url) ?? '')) return fail('sender-not-authorized', 'Sender is not authorized.')
     const capability = options.capabilities.get(webContentsId)
     if (!capability) return fail('sender-not-authorized', 'Sender is not authorized.')
+    if (capability.kind === 'runtime-development') return fail('sender-not-authorized', 'Sender is not authorized.')
     if (capability.kind === 'project-chat-window') {
       if (capability.routeGeneration !== options.broker.routeGenerationOf(capability.projectId)) return fail('sender-not-authorized', 'Sender is not authorized.')
       if (projectId !== undefined && capability.projectId !== projectId) return fail('sender-not-authorized', 'Sender is not authorized.')

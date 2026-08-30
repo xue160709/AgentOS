@@ -39,6 +39,8 @@ import type { AgentModeSettingsResult, HomePluginRunItem } from '../desktop-type
 import { projectContent } from '../project-content'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
 import type { ProjectChatSnapshot } from '../project-chat-contract'
+import type { RuntimeDevelopmentSnapshot } from '../runtime-development-contract'
+import { runtimeDevelopmentStatus } from './runtime-event-state'
 
 /** 右侧辅助抽屉开关与当前标签 / Auxiliary side panel open flag and active tab */
 type SidePanelState = {
@@ -111,8 +113,9 @@ type AppShellWorkspaceProps = {
   onRelocateRuntime?: () => void
   onBuildRuntime?: () => void
   onCancelBuildRuntime?: () => void
-  onDevelopmentRuntime?: () => void
-  onOpenRuntimeChatWindow?: () => void
+  runtimeDevelopment?: RuntimeDevelopmentSnapshot
+  onRuntimeDevelopmentAction?: () => void
+  onOpenRuntimeDevelopmentThread?: (threadId: string) => void
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
   projectChatSnapshot?: ProjectChatSnapshot
@@ -163,8 +166,9 @@ export function AppShellWorkspace({
   onRelocateRuntime,
   onBuildRuntime,
   onCancelBuildRuntime,
-  onDevelopmentRuntime,
-  onOpenRuntimeChatWindow,
+  runtimeDevelopment,
+  onRuntimeDevelopmentAction,
+  onOpenRuntimeDevelopmentThread,
   projectDefaultModelPick,
   projectHomeModelPick,
   projectChatSnapshot,
@@ -198,6 +202,7 @@ export function AppShellWorkspace({
   // --- Derived chrome flags (settings hide header; home “surface” vs chat stream) / 派生框架标志（设置页隐藏顶栏；首页表面对话流）---
 
   const { t } = useI18n()
+  const runtimeDevelopmentUi = runtimeDevelopmentStatus(t, runtimeDevelopment)
   const isSettingsChromeHidden = activeViewId === 'settings'
   const [sidePanel, setSidePanel] = useState<SidePanelState>(() => ({ open: false, tab: 'files' }))
   const [filePreview, setFilePreview] = useState<ProjectFilePreviewOverlayState | null>(null)
@@ -569,9 +574,9 @@ export function AppShellWorkspace({
                 }}
               />
             ) : null}
-            {isRuntimeActive ? <button type="button" className="btn btn-toolbar runtime-chat-window-action" data-testid="runtime-open-chat-window" onClick={onOpenRuntimeChatWindow} disabled={!onOpenRuntimeChatWindow}>
+            {isRuntimeActive && onRuntimeDevelopmentAction ? <button type="button" className="btn btn-toolbar runtime-chat-window-action" data-testid={runtimeDevelopmentUi.action === 'end' ? 'runtime-end-development' : 'runtime-open-development'} aria-label={runtimeDevelopmentUi.actionLabel} onClick={onRuntimeDevelopmentAction} disabled={runtimeDevelopmentUi.actionDisabled}>
               <IconInline name="message" />
-              <span>{t('runtime.openChatWindow')}</span>
+              <span>{runtimeDevelopmentUi.actionLabel}</span>
             </button> : null}
             {!isRuntimeActive ? <button
               type="button"
@@ -595,7 +600,7 @@ export function AppShellWorkspace({
             tab={activeWorkspaceTab}
             definition={activeRuntimeDefinition}
             runtime={activeRuntime ?? null}
-            runtimeEdit={projectChatSnapshot?.runtimeEdit}
+            runtimeDevelopment={runtimeDevelopment}
             onRetry={onRetryRuntime ?? (() => undefined)}
             onRestart={onRestartRuntime ?? (() => undefined)}
             onStop={onStopRuntime ?? (() => undefined)}
@@ -603,7 +608,7 @@ export function AppShellWorkspace({
             onRelocate={onRelocateRuntime ?? (() => undefined)}
             onBuild={onBuildRuntime}
             onCancelBuild={onCancelBuildRuntime}
-            onDevelopment={onDevelopmentRuntime}
+            onDevelopmentAction={onRuntimeDevelopmentAction}
             logsOpen={localAppLogsOpen}
             onLogsToggle={() => setLocalAppLogsOpen((open) => !open)}
             showToolbar={false}
@@ -696,6 +701,7 @@ export function AppShellWorkspace({
           onInsertKnowledgeContext={insertKnowledgeContext}
           onSelectMessage={openSearchMessageResult}
           onSelectThread={onSelectThread}
+          onOpenRuntimeDevelopmentThread={onOpenRuntimeDevelopmentThread}
         />
       ) : null}
     </div>

@@ -23,6 +23,7 @@ function load(modulePath, cache = new Map()) {
 function registry() { const { ProjectChatPresenceRegistry } = load(resolve(testDir, './project-chat-presence.ts')); return new ProjectChatPresenceRegistry() }
 function main(id) { return { webContentsId: id, kind: 'main-window' } }
 function project(id, projectId, routeGeneration) { return { webContentsId: id, kind: 'project-chat-window', projectId, routeGeneration } }
+function runtime(id, runtimeScopeId, routeGeneration, developmentGeneration) { return { webContentsId: id, kind: 'runtime-development', runtimeScopeId, routeGeneration, developmentGeneration } }
 
 test('presence defaults hidden and selection is capability-bound', () => {
   const presence = registry(); presence.register(main(1)); presence.register(project(7, 'p', 3)); presence.register(project(8, 'p', 2))
@@ -49,4 +50,14 @@ test('presence ranks focused exact thread, current project windows, then main wi
   assert.deepEqual(presence.ownerCandidates({ projectId: 'p', threadId: 't', routeGeneration: 3 }), [1, 7, 8, 2])
   presence.setWindowState(1, { visible: false, focused: true }); presence.unregister(7)
   assert.deepEqual(presence.ownerCandidates({ projectId: 'p', threadId: 't', routeGeneration: 3 }), [8, 2])
+})
+
+test('Runtime prompt owner is only the visible exact scope and both-generation window', () => {
+  const presence = registry(); presence.register(main(1)); presence.register(project(7, 'p', 3)); presence.register(runtime(20, 'workspace:r', 4, 8)); presence.register(runtime(21, 'workspace:r', 4, 7)); presence.register(runtime(22, 'workspace:other', 4, 8))
+  assert.equal(presence.reportRuntimeSelection(1, { selectedThreadId: 't' }).error.code, 'sender-not-authorized')
+  presence.reportRuntimeSelection(20, { selectedThreadId: 't' }); presence.reportRuntimeSelection(21, { selectedThreadId: 't' }); presence.reportRuntimeSelection(22, { selectedThreadId: 't' })
+  presence.setWindowState(20, { visible: true, focused: true }); presence.setWindowState(21, { visible: true, focused: false }); presence.setWindowState(22, { visible: true, focused: false })
+  assert.deepEqual(presence.runtimeOwnerCandidates({ runtimeScopeId: 'workspace:r', threadId: 't', routeGeneration: 4, developmentGeneration: 8 }), [20])
+  presence.setWindowState(20, { visible: false, focused: false })
+  assert.deepEqual(presence.runtimeOwnerCandidates({ runtimeScopeId: 'workspace:r', threadId: 't', routeGeneration: 4, developmentGeneration: 8 }), [], 'closed/hidden window leaves no Runtime prompt owner')
 })

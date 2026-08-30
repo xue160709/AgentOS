@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -64,4 +64,14 @@ test('placement feedback ignores pre-existing root signals and clears once .agen
   await tracker.beforeRun('project-1', root)
   await tracker.afterRun('project-1', root)
   assert.equal(tracker.hasWarning('project-1'), false)
+})
+
+test('Project Runtime development stays on the project surface and sends only projectId plus mountId', () => {
+  const shell = readFileSync(resolve(testDir, '../src/components/AppShell.tsx'), 'utf8')
+  const projectView = readFileSync(resolve(testDir, '../src/components/chat/ProjectHomeRuntimeView.tsx'), 'utf8')
+  assert.match(shell, /runRuntimeDevelopmentAction\(\{ kind: 'project-runtime', projectId: activeProject\.id, mountId: projectRuntimeState\.mountId \}/)
+  assert.doesNotMatch(shell, /onCreate:[\s\S]{0,300}(openWorkspaceTab|selectWorkspaceTab|activeWorkspaceTabId|activeProjectId)/)
+  assert.match(projectView, /project-runtime-open-development/)
+  assert.match(projectView, /project-runtime-end-development/)
+  assert.match(projectView, /aria-label=\{developmentStatus\.actionLabel\}/)
 })

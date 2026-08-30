@@ -91,7 +91,12 @@ export const DESKTOP_INVOKE_CHANNELS = {
   restartRuntime: 'desktop:runtime:restart',
   buildRuntime: 'desktop:runtime:build',
   cancelRuntimeBuild: 'desktop:runtime:build-cancel',
+  setRuntimeServeOverride: 'desktop:runtime:set-serve-override',
   startRuntimeDevelopment: 'desktop:runtime:start-development',
+  openRuntimeDevelopment: 'desktop:runtime-development:open',
+  focusRuntimeDevelopmentConflict: 'desktop:runtime-development:focus-conflict',
+  endRuntimeDevelopment: 'desktop:runtime-development:end',
+  openRuntimeDevelopmentThread: 'desktop:runtime-development:open-thread',
   createRuntimePreview: 'desktop:runtime-preview:create',
   getRuntimePreviewLayout: 'desktop:runtime-preview-layout:get',
   saveRuntimePreviewLayout: 'desktop:runtime-preview-layout:save',
@@ -134,6 +139,7 @@ export const DESKTOP_EVENT_CHANNELS = {
   onAppUpdaterState: 'app-updater:event',
   onLocalAppRuntimeEvent: 'desktop:runtime:event',
   onRuntimeEvent: 'desktop:runtime:event',
+  onRuntimeDevelopmentEvent: 'desktop:runtime-development:event',
   onRuntimePreviewNavigationState: 'desktop:runtime-preview:navigation-state-changed',
 } as const satisfies Record<DesktopEventCapability, string>
 

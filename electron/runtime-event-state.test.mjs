@@ -36,7 +36,9 @@ function loadTsModule(modulePath, cache = new Map()) {
 }
 
 const {
+  applyRuntimeDevelopmentSnapshot,
   applyRuntimeEvents,
+  runtimeDevelopmentStatus,
   RuntimeEventBatcher,
 } = loadTsModule(resolve(testDir, '../src/components/runtime-event-state.ts'))
 
@@ -150,4 +152,37 @@ test('dispose cancels delayed work and ignores events after unmount', () => {
   batcher.handle(event({ type: 'ready', line: undefined }))
   assert.equal(timers[0].cancelled, true)
   assert.equal(commits.length, 0)
+})
+
+function development(overrides = {}) {
+  return {
+    runtimeScopeId: 'workspace:runtime-a', runtimeDefinitionId: 'runtime-a', routeGeneration: 1,
+    developmentGeneration: 1, phase: 'live', activeRunCount: 0, activeAgentLeaseCount: 0,
+    waitingPromptCount: 0, hasChanges: false, canSubmit: true, canReopen: false, canEnd: true,
+    exitRequested: false, autoSaveAttempted: false, ...overrides,
+  }
+}
+
+const t = (key) => key
+
+test('main-window development snapshots fence late route and development generations', () => {
+  const current = applyRuntimeDevelopmentSnapshot({}, development({ routeGeneration: 2, developmentGeneration: 3, phase: 'saving' }))
+  assert.strictEqual(applyRuntimeDevelopmentSnapshot(current, development({ routeGeneration: 1, developmentGeneration: 99 })), current)
+  assert.strictEqual(applyRuntimeDevelopmentSnapshot(current, development({ routeGeneration: 2, developmentGeneration: 2 })), current)
+  const next = applyRuntimeDevelopmentSnapshot(current, development({ routeGeneration: 2, developmentGeneration: 4, phase: 'live' }))
+  assert.equal(next['workspace:runtime-a'].developmentGeneration, 4)
+  assert.equal(next['workspace:runtime-a'].phase, 'live')
+})
+
+test('development action and copy come only from the Main snapshot', () => {
+  const idle = runtimeDevelopmentStatus(t)
+  assert.equal(idle.action, 'open')
+  assert.equal(idle.actionLabel, 'runtime.modifyWithAi')
+  const live = runtimeDevelopmentStatus(t, development({ activeRunCount: 1 }))
+  assert.equal(live.action, 'end')
+  assert.equal(live.actionLabel, 'runtime.endModification')
+  assert.equal(live.message, 'runtime.developmentEditing')
+  const developmentOnlyClosed = runtimeDevelopmentStatus(t, development({ phase: 'closed', canSubmit: false, canEnd: false, exitRequested: true, userMessage: 'npm run build at /secret:4173' }))
+  assert.equal(developmentOnlyClosed.message, 'runtime.developmentEnded')
+  assert.doesNotMatch(developmentOnlyClosed.message, /npm|\/secret|4173/)
 })

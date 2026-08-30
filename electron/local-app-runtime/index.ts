@@ -14,11 +14,20 @@ import type {
   LocalAppRuntimeEvent,
   LocalAppRuntimeSnapshot,
   LocalAppRuntimeStatus,
+  RuntimeServeOverride,
+  RuntimeServeScript,
   RuntimeStaticDeclaration,
 } from '../../src/components/types'
+import type { RuntimeRootLease, RuntimeRootLeaseAcquireResult, RuntimeScopeId } from '../../src/runtime-development-contract'
 import {
+  applyServeOverride,
+  detectRuntimeServePlan,
+  findDetectedStaticArtifact,
   fingerprintStaticSource,
+  serverServePlan,
   parseAgentOSStaticDeclaration,
+  type RuntimeServePlan,
+  RuntimeBuildCommitFenceRejectedError,
   StaticArtifactStore,
   StaticPreviewRegistry,
   staticPreviewUrl,
@@ -26,6 +35,7 @@ import {
   validateStaticOutput,
 } from './static'
 import type { RuntimeEditCoordinator, RuntimeEditIntent } from '../runtime-edit-coordinator'
+import { RuntimeRootExecutionRegistry } from '../runtime-root-execution-registry'
 
 export const LOCAL_APP_RUNTIME_DEFAULTS = {
   prepareTimeoutMs: 120_000,
@@ -76,8 +86,12 @@ export type LocalAppInspectResult =
       nodeModulesPresent: boolean
       /** The only reliable signal that a temporary edit-time dev Runtime is supported. */
       hasDevScript: boolean
+      hasBuildScript: boolean
+      hasStartScript: boolean
       mode: 'development' | 'static'
       agentos?: RuntimeStaticDeclaration
+      /** How this directory can be viewed today (`C-RSM-402`). */
+      servePlan: RuntimeServePlan
     }
   | {
       ok: false
@@ -127,6 +141,10 @@ export type RuntimeSupervisorOptions = {
   onEvent?: (event: LocalAppRuntimeEvent) => void
 }
 
+export type RuntimeManagerOptions = RuntimeSupervisorOptions & {
+  rootExecutionRegistry?: RuntimeRootExecutionRegistry
+}
+
 /**
  * Start policy is kept inside Main so restoring a trusted tab can stay
  * spawn-free while a user-initiated first import may build its static
@@ -134,6 +152,11 @@ export type RuntimeSupervisorOptions = {
  */
 export type RuntimeStartOptions = {
   autoBuild?: boolean
+}
+
+export type RuntimeBuildOptions = {
+  /** Revalidated immediately before the atomic last-good pointer rename. */
+  beforeCommit?: () => boolean
 }
 
 type RuntimeProcess = ChildProcess & { pid: number }
@@ -390,7 +413,10 @@ export async function canonicalizeLocalAppRoot(rootPath: string): Promise<string
   return realpath(trimmed)
 }
 
-export async function inspectLocalAppDirectory(rootPath: string): Promise<LocalAppInspectResult> {
+export async function inspectLocalAppDirectory(
+  rootPath: string,
+  serveOverride?: RuntimeServeOverride,
+): Promise<LocalAppInspectResult> {
   const requested = rootPath.trim()
   if (!requested) return { ok: false, rootPath, code: 'invalid-root', message: 'Runtime 目录为空' }
   try {
@@ -408,8 +434,25 @@ export async function inspectLocalAppDirectory(rootPath: string): Promise<LocalA
     const staticDeclaration = parseAgentOSStaticDeclaration(packageJson)
     if (!staticDeclaration.ok) return { ok: false, rootPath, code: staticDeclaration.code, message: staticDeclaration.message }
     const scripts = isRecord(packageJson) && isRecord(packageJson.scripts) ? packageJson.scripts : undefined
-    if (!staticDeclaration.declaration && (!scripts || typeof scripts.dev !== 'string' || !scripts.dev.trim())) {
-      return { ok: false, rootPath, code: 'dev-script-missing', message: 'package.json 缺少 dev 脚本' }
+    const hasDevScript = Boolean(scripts && typeof scripts.dev === 'string' && scripts.dev.trim())
+    const hasBuildScript = Boolean(scripts && typeof scripts.build === 'string' && scripts.build.trim())
+    const hasStartScript = Boolean(scripts && typeof scripts.start === 'string' && scripts.start.trim())
+    // `C-RSM-401`: how a Runtime is viewed comes from directory facts, not from
+    // the project declaring itself. A missing dev script is only fatal when the
+    // directory offers no other way to be served.
+    const servePlan = applyServeOverride(
+      await detectRuntimeServePlan({
+        canonicalRoot,
+        declaration: staticDeclaration.declaration,
+        hasBuildScript,
+        hasStartScript,
+        hasDevScript,
+      }),
+      serveOverride,
+      { hasBuildScript, hasStartScript, hasDevScript },
+    )
+    if (servePlan.kind === 'unsupported') {
+      return { ok: false, rootPath, code: 'dev-script-missing', message: 'package.json 缺少可用的 dev 或 build 脚本' }
     }
     const lockfilePath = path.join(canonicalRoot, 'package-lock.json')
     const hasLockfile = existsSync(lockfilePath)
@@ -425,9 +468,15 @@ export async function inspectLocalAppDirectory(rootPath: string): Promise<LocalA
       lockfilePath: hasLockfile ? lockfilePath : undefined,
       lockDigest,
       nodeModulesPresent: existsSync(path.join(canonicalRoot, 'node_modules')),
-      hasDevScript: Boolean(scripts && typeof scripts.dev === 'string' && scripts.dev.trim()),
-      mode: staticDeclaration.declaration ? 'static' : 'development',
-      agentos: staticDeclaration.declaration,
+      hasDevScript,
+      hasBuildScript,
+      hasStartScript,
+      // `mode` and `agentos` stay the shape every existing caller reads; they
+      // are now derived from the serve plan instead of from the declaration
+      // alone, so a detected artifact serves exactly like a declared one.
+      mode: servePlan.kind === 'development' || servePlan.kind === 'production' ? 'development' : 'static',
+      agentos: servePlan.kind === 'artifact' || servePlan.kind === 'buildable' ? servePlan.declaration : undefined,
+      servePlan,
     }
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'path-missing' : 'invalid-root'
@@ -445,7 +494,7 @@ export class RuntimeEditRuntimeBridge {
 
   constructor(private readonly options: {
     coordinator: Pick<RuntimeEditCoordinator, 'beginBuild' | 'completeBuild'>
-    manager: Pick<LocalAppRuntimeManager, 'register' | 'start' | 'release' | 'build' | 'cancelBuild' | 'stopOwnedDevelopmentRuntimes'>
+    manager: Pick<LocalAppRuntimeManager, 'register' | 'start' | 'release' | 'build' | 'cancelBuild'>
     resolveDefinition: (projectId: string) => LocalAppDefinition | null
     inspect?: (rootPath: string) => Promise<LocalAppInspectResult>
   }) {}
@@ -493,15 +542,9 @@ export class RuntimeEditRuntimeBridge {
     // npm development script so the page can update live. Static projects
     // without a dev script remain on their last-good artifact.
     if (!inspected.ok || (inspected.mode === 'static' && !inspected.hasDevScript)) return
-    if (inspected.mode === 'static') {
-      // Another workbench may already own npm run dev for this project under a
-      // different durable definition. Stop that AgentOS-owned instance before
-      // registering the temporary development definition.
-      await this.options.manager.stopOwnedDevelopmentRuntimes(inspected.canonicalRoot)
-    }
     const developmentDefinition: LocalAppDefinition = inspected.mode === 'static'
-      ? { ...definition, mode: 'development', agentos: undefined }
-      : { ...definition, mode: 'development' }
+      ? { ...definition, mode: 'development', agentos: undefined, serveScript: 'dev' }
+      : { ...definition, mode: 'development', serveScript: 'dev' }
     this.options.manager.register(developmentDefinition)
     await this.options.manager.start(definition.id, consumerId)
     this.activeDevelopmentConsumers.add(consumerId)
@@ -726,8 +769,8 @@ export class LocalAppRuntimeSupervisor {
     consumerIds: Iterable<string>,
     options: RuntimeStartOptions = {},
   ): Promise<LocalAppRuntimeSnapshot> {
-    const inspection = await inspectLocalAppDirectory(definition.rootPath)
-    if (inspection.ok && inspection.mode === 'static' && inspection.agentos) {
+    const inspection = await inspectLocalAppDirectory(definition.rootPath, definition.serveOverride)
+    if (inspection.ok && inspection.mode === 'static') {
       return this.start({ ...definition, mode: 'static', agentos: inspection.agentos }, consumerIds, options)
     }
     if (!inspection.ok && inspection.code === 'static-declaration-invalid') {
@@ -736,9 +779,11 @@ export class LocalAppRuntimeSupervisor {
       // silently falling back to npm run dev would bypass the static contract.
       return this.start({ ...definition, mode: 'static', agentos: undefined }, consumerIds, options)
     }
-    // Legacy definitions remain development runtimes. Setting the explicit
-    // mode avoids another inspection pass and preserves old npm run dev flow.
-    return this.start({ ...definition, mode: 'development' }, consumerIds, options)
+    // Legacy definitions remain server-backed runtimes. Setting the explicit
+    // mode avoids another inspection pass; the plan decides whether that means
+    // the production server or the dev server.
+    const serveScript = inspection.ok && inspection.servePlan.kind === 'production' ? 'start' as const : 'dev' as const
+    return this.start({ ...definition, mode: 'development', serveScript }, consumerIds, options)
   }
 
   /** Static restore is spawn-free unless this is the trusted first import. */
@@ -762,22 +807,30 @@ export class LocalAppRuntimeSupervisor {
     const inspection = await inspectLocalAppDirectory(definition.rootPath)
     if (!isActive()) return runtime.snapshot
     if (!inspection.ok) return this.fail(runtime, inspection.code, inspection.message, 'inspect')
-    if (inspection.mode !== 'static' || !inspection.agentos) return this.fail(runtime, 'static-declaration-invalid', 'Runtime 声明不是静态模式', 'inspect')
+    if (inspection.mode !== 'static') return this.fail(runtime, 'static-declaration-invalid', 'Runtime 声明不是静态模式', 'inspect')
+    // A detected `buildable` directory has no output root until its first
+    // build; serving still works from a previously committed artifact.
+    const declaration = inspection.agentos ?? null
+    if (!declaration && inspection.servePlan.kind !== 'buildable') {
+      return this.fail(runtime, 'static-declaration-invalid', 'Runtime 声明不是静态模式', 'inspect')
+    }
     if (definition.trustStatus !== 'trusted') return this.fail(runtime, 'trust-required', '目录尚未获得信任', 'inspect')
     const artifact = await this.staticArtifactStore.loadLastGood(definition.id, inspection.canonicalRoot)
     if (!isActive()) return runtime.snapshot
     let current = artifact
-    if (!current) {
+    if (!current && declaration) {
+      // `C-RSM-402` tier ①: an output directory that already exists on disk is
+      // adopted as the artifact. Viewing must not require a build.
       try {
-        await validateStaticOutput(inspection.canonicalRoot, inspection.agentos)
+        await validateStaticOutput(inspection.canonicalRoot, declaration)
         if (!isActive()) return runtime.snapshot
-        const fingerprint = await fingerprintStaticSource(inspection.canonicalRoot, inspection.agentos)
+        const fingerprint = await fingerprintStaticSource(inspection.canonicalRoot, declaration)
         if (!isActive()) return runtime.snapshot
         current = await this.staticArtifactStore.commit(
           definition.id,
           inspection.canonicalRoot,
-          inspection.agentos,
-          path.resolve(inspection.canonicalRoot, ...inspection.agentos.outputRoot.split('/')),
+          declaration,
+          path.resolve(inspection.canonicalRoot, ...declaration.outputRoot.split('/')),
           fingerprint,
           runtime.controller.signal,
         )
@@ -820,8 +873,9 @@ export class LocalAppRuntimeSupervisor {
       updatedAt: this.now(),
     }
     this.emit(runtime, 'ready')
-    // Stale detection must never delay the first paint.
-    void this.checkStaticStale(runtime, inspection.canonicalRoot, inspection.agentos, current)
+    // Stale detection must never delay the first paint, and it needs a known
+    // output root; a just-built detected artifact is fresh by construction.
+    if (declaration) void this.checkStaticStale(runtime, inspection.canonicalRoot, declaration, current)
     return runtime.snapshot
   }
 
@@ -867,21 +921,21 @@ export class LocalAppRuntimeSupervisor {
     return this.staticPreviewRegistry
   }
 
-  async build(definition: LocalAppDefinition, consumerIds: Iterable<string> = []): Promise<LocalAppRuntimeSnapshot> {
+  async build(definition: LocalAppDefinition, consumerIds: Iterable<string> = [], options: RuntimeBuildOptions = {}): Promise<LocalAppRuntimeSnapshot> {
     const previous = this.buildLocks.get(definition.id) ?? Promise.resolve()
-    const operation = previous.then(() => this.buildOnce(definition, consumerIds))
+    const operation = previous.then(() => this.buildOnce(definition, consumerIds, options))
     this.buildLocks.set(definition.id, operation.then(() => undefined, () => undefined))
     return operation
   }
 
-  private async buildOnce(definition: LocalAppDefinition, consumerIds: Iterable<string> = []): Promise<LocalAppRuntimeSnapshot> {
-    if (!definition.mode && !definition.agentos) {
-      const inspection = await inspectLocalAppDirectory(definition.rootPath)
-      if (inspection.ok && inspection.mode === 'static' && inspection.agentos) {
-        return this.buildOnce({ ...definition, mode: 'static', agentos: inspection.agentos }, consumerIds)
+  private async buildOnce(definition: LocalAppDefinition, consumerIds: Iterable<string> = [], options: RuntimeBuildOptions = {}): Promise<LocalAppRuntimeSnapshot> {
+    if (!definition.mode) {
+      const inspection = await inspectLocalAppDirectory(definition.rootPath, definition.serveOverride)
+      if (inspection.ok && inspection.mode === 'static') {
+        return this.buildOnce({ ...definition, mode: 'static', agentos: inspection.agentos }, consumerIds, options)
       }
     }
-    if (definition.mode !== 'static' || !definition.agentos) {
+    if (definition.mode !== 'static') {
       const existing = this.runtimes.get(definition.id)
       return existing?.snapshot ?? this.createSnapshot(definition.id, 0, 'failed')
     }
@@ -893,9 +947,12 @@ export class LocalAppRuntimeSupervisor {
     if (!runtime) throw new Error('static-runtime-missing')
     for (const consumerId of consumerIds) runtime.consumerIds.add(consumerId)
     if (runtime.buildOperation) return runtime.buildOperation
-    const inspection = await inspectLocalAppDirectory(definition.rootPath)
+    const inspection = await inspectLocalAppDirectory(definition.rootPath, definition.serveOverride)
     if (!inspection.ok) return this.fail(runtime, inspection.code, inspection.message, 'inspect')
-    if (inspection.mode !== 'static' || !inspection.agentos) return this.fail(runtime, 'static-declaration-invalid', 'Runtime 声明不是静态模式', 'inspect')
+    if (inspection.mode !== 'static') return this.fail(runtime, 'static-declaration-invalid', 'Runtime 声明不是静态模式', 'inspect')
+    if (!inspection.agentos && inspection.servePlan.kind !== 'buildable') {
+      return this.fail(runtime, 'static-declaration-invalid', 'Runtime 声明不是静态模式', 'inspect')
+    }
     const buildId = `build-${this.now().toString(36)}-${randomBytes(6).toString('hex')}`
     const operationId = `op-${this.now().toString(36)}-${randomBytes(6).toString('hex')}`
     const buildController = new AbortController()
@@ -917,7 +974,7 @@ export class LocalAppRuntimeSupervisor {
       updatedAt: this.now(),
     }
     this.emit(runtime, 'status')
-    const operation = this.runStaticBuild(runtime, inspection.canonicalRoot, inspection.agentos, buildId, operationId, buildController.signal)
+    const operation = this.runStaticBuild(runtime, inspection.canonicalRoot, inspection.agentos ?? null, buildId, operationId, buildController.signal, options)
       .finally(() => {
         if (runtime?.buildOperation === operation) {
           runtime.buildOperation = undefined
@@ -946,10 +1003,11 @@ export class LocalAppRuntimeSupervisor {
   private async runStaticBuild(
     runtime: ActiveRuntime,
     canonicalRoot: string,
-    declaration: RuntimeStaticDeclaration,
+    declared: RuntimeStaticDeclaration | null,
     buildId: string,
     operationId: string,
     signal: AbortSignal,
+    options: RuntimeBuildOptions,
   ): Promise<LocalAppRuntimeSnapshot> {
     let child: RuntimeProcess
     try {
@@ -998,6 +1056,26 @@ export class LocalAppRuntimeSupervisor {
       this.emit(runtime, 'exit', { detail: runtime.snapshot.detail, code: exit.code, signal: exit.signal ?? undefined })
       return runtime.snapshot
     }
+    // `C-RSM-402` tier ②: without a declared output root, the build itself is
+    // what reveals it. Detection runs once, after a successful build.
+    let declaration = declared
+    if (!declaration) {
+      declaration = await findDetectedStaticArtifact(canonicalRoot)
+      if (!operationStillOwnsRuntime()) return runtime.snapshot
+      if (!declaration) {
+        runtime.snapshot = {
+          ...runtime.snapshot,
+          status: 'build_failed',
+          buildStatus: 'build_failed',
+          errorCode: 'build-produces-no-artifact',
+          detail: '构建没有产出可直接打开的静态页面',
+          updatedAt: this.now(),
+          logs: this.recentLogs(runtime),
+        }
+        this.emit(runtime, 'status', { buildId, operationId })
+        return runtime.snapshot
+      }
+    }
     try {
       await this.validateStaticOutputImpl(canonicalRoot, declaration, signal)
       if (!operationStillOwnsRuntime()) return runtime.snapshot
@@ -1014,7 +1092,7 @@ export class LocalAppRuntimeSupervisor {
         this.emit(runtime, 'status', { buildId, operationId })
         return runtime.snapshot
       }
-      const artifact = await this.staticArtifactStore.commit(runtime.definition.id, canonicalRoot, declaration, outputRoot, fingerprint, signal)
+      const artifact = await this.staticArtifactStore.commit(runtime.definition.id, canonicalRoot, declaration, outputRoot, fingerprint, signal, options.beforeCommit)
       if (!operationStillOwnsRuntime()) return runtime.snapshot
       // `commit` returns only after the last-good pointer rename. That rename
       // is the non-cancellable persistence boundary: an abort in this narrow
@@ -1043,6 +1121,11 @@ export class LocalAppRuntimeSupervisor {
       return runtime.snapshot
     } catch (error) {
       if (!operationStillOwnsRuntime()) return runtime.snapshot
+      if (error instanceof RuntimeBuildCommitFenceRejectedError) {
+        this.restoreStaticBuildAfterCancellation(runtime)
+        this.emit(runtime, 'status', { buildId, operationId })
+        return runtime.snapshot
+      }
       if (signal.aborted) {
         this.restoreStaticBuildAfterCancellation(runtime)
         this.emit(runtime, 'status', { buildId, operationId })
@@ -1284,12 +1367,21 @@ export class LocalAppRuntimeSupervisor {
   }
 
   private spawnNpm(runtime: ActiveRuntime, cwd: string, port: number): RuntimeProcess {
-    const npmArgs = runtimeDevCommandArgs(runtime.logs)
+    // `C-RSM-402` tier ②/④: the same supervised bridge runs either the
+    // production server or the dev server. Only the fixed script and NODE_ENV
+    // differ, and the dev-only Turbopack retry never applies to `start`.
+    const production = runtime.definition.serveScript === 'start'
+    const npmArgs = production ? ['run', 'start'] : runtimeDevCommandArgs(runtime.logs)
     const child = this.spawnProcess(runtimeBridgeExecutable(), ['-e', createRuntimeLivenessBridgeSource(this.defaults.termTimeoutMs, this.defaults.killTimeoutMs, npmArgs)], {
       cwd,
       shell: false,
       detached: process.platform !== 'win32',
-      env: { ...buildAllowedRuntimeEnv(this.env), PORT: String(port), HOST: '127.0.0.1', NODE_ENV: 'development' },
+      env: {
+        ...buildAllowedRuntimeEnv(this.env),
+        PORT: String(port),
+        HOST: '127.0.0.1',
+        NODE_ENV: production ? 'production' : 'development',
+      },
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     }) as RuntimeProcess
     runtime.snapshot = { ...runtime.snapshot, startedAt: this.now(), port, updatedAt: this.now() }
@@ -1479,14 +1571,18 @@ export class LocalAppRuntimeSupervisor {
 
 export class LocalAppRuntimeManager {
   private readonly supervisor: LocalAppRuntimeSupervisor
+  private readonly rootExecutionRegistry: RuntimeRootExecutionRegistry
   private readonly definitions = new Map<string, LocalAppDefinition>()
-  private readonly ownerByDedupeKey = new Map<string, string>()
-  private readonly dedupeKeyByApp = new Map<string, string>()
   private readonly consumers = new Map<string, Set<string>>()
-  private readonly pendingDefinitionStops = new Map<string, Promise<LocalAppRuntimeSnapshot | null>>()
+  private readonly leaseByDefinition = new Map<string, RuntimeRootLease>()
+  private readonly leaseGenerationByDefinition = new Map<string, number>()
+  private readonly pendingLeaseGeneration = new Map<string, number>()
+  private readonly pendingDefinitionStops = new Map<string, Promise<void>>()
+  private readonly buildOperations = new Map<string, Promise<LocalAppRuntimeSnapshot>>()
   private readonly listeners = new Set<(event: LocalAppRuntimeEvent) => void>()
 
-  constructor(options: RuntimeSupervisorOptions = {}) {
+  constructor(options: RuntimeManagerOptions = {}) {
+    this.rootExecutionRegistry = options.rootExecutionRegistry ?? new RuntimeRootExecutionRegistry()
     this.supervisor = new LocalAppRuntimeSupervisor({
       ...options,
       onEvent: (event) => {
@@ -1509,21 +1605,20 @@ export class LocalAppRuntimeManager {
       // A definition id is durable identity. A root change must never allow
       // start() to reuse the old process; defer the bounded stop until the
       // caller starts the replacement definition.
-      const pending = this.supervisor.stop(definition.id, 'user')
+      const existingLease = this.leaseByDefinition.get(definition.id)
+      const pending = existingLease
+        ? this.rootExecutionRegistry.stopAndRelease(existingLease, () => this.supervisor.stop(definition.id, 'user')).then((result) => {
+            if (!result.ok) throw result.error.cause
+            if (this.leaseByDefinition.get(definition.id)?.leaseId === existingLease.leaseId) this.leaseByDefinition.delete(definition.id)
+          })
+        : this.supervisor.stop(definition.id, 'user').then(() => undefined)
       this.pendingDefinitionStops.set(definition.id, pending)
     }
-    const previousKey = this.dedupeKeyByApp.get(definition.id)
-    if (previousKey && this.ownerByDedupeKey.get(previousKey) === definition.id) {
-      this.ownerByDedupeKey.delete(previousKey)
-    }
     this.definitions.set(definition.id, definition)
-    const key = runtimeDedupeKey(definition)
-    if (!this.ownerByDedupeKey.has(key)) this.ownerByDedupeKey.set(key, definition.id)
-    this.dedupeKeyByApp.set(definition.id, key)
   }
 
   get(localAppId: string): LocalAppRuntimeSnapshot | null {
-    return this.supervisor.snapshot(this.ownerId(localAppId))
+    return this.supervisor.snapshot(localAppId)
   }
 
   async start(
@@ -1534,59 +1629,148 @@ export class LocalAppRuntimeManager {
     const definition = this.definitions.get(localAppId)
     if (!definition) throw new Error('local-app-definition-missing')
     if (definition.trustStatus !== 'trusted') throw new Error('local-app-trust-required')
-    const ownerId = this.ownerId(localAppId)
-    const ownerDefinition = this.definitions.get(ownerId) ?? definition
-    const consumers = this.consumers.get(ownerId) ?? new Set<string>()
-    if (consumerId) consumers.add(consumerId)
-    this.consumers.set(ownerId, consumers)
-    for (const id of consumers) this.supervisor.attachConsumer(ownerId, id)
-    const pendingStop = this.pendingDefinitionStops.get(ownerId)
+    const pendingStop = this.pendingDefinitionStops.get(localAppId)
     if (pendingStop) {
-      this.pendingDefinitionStops.delete(ownerId)
+      this.pendingDefinitionStops.delete(localAppId)
       await pendingStop
     }
-    return this.supervisor.start(ownerDefinition, consumers, options)
+
+    // `T4.6`: a persisted `mode` can be stale (it was written before detection
+    // existed). Re-inspect on every start; only an explicit user override is
+    // allowed to outrank what the directory says today.
+    const inspected = await inspectLocalAppDirectory(definition.rootPath, definition.serveOverride)
+    const effectiveDefinition = inspected?.ok
+      ? {
+          ...definition,
+          mode: inspected.mode,
+          agentos: inspected.agentos,
+          canonicalRoot: inspected.canonicalRoot,
+        }
+      : definition
+    // A forced script (an AI editing session) wins; otherwise the plan decides
+    // whether keeping this Runtime running means `start` or `dev`.
+    const plan = inspected.ok ? inspected.servePlan : null
+    const serveScript: RuntimeServeScript | undefined = definition.serveScript
+      ?? (plan?.kind === 'production' ? 'start' : plan?.kind === 'development' ? 'dev' : undefined)
+    const servedDefinition = serveScript
+      ? { ...effectiveDefinition, mode: 'development' as const, agentos: undefined, serveScript }
+      : effectiveDefinition
+    const isDevelopment = servedDefinition.mode === 'development'
+    if (isDevelopment) await this.acquireExecutionLease(servedDefinition, 'development')
+
+    const consumers = this.consumers.get(localAppId) ?? new Set<string>()
+    if (consumerId) consumers.add(consumerId)
+    this.consumers.set(localAppId, consumers)
+    for (const id of consumers) this.supervisor.attachConsumer(localAppId, id)
+
+    if (!isDevelopment) await this.releaseDevelopmentLeaseBeforeStaticStart(localAppId)
+    try {
+      // 静态 Preview 本身不占 lease；首次缺少 last-good 时再由 build() 单独取得瞬时 build lease。
+      const snapshot = await this.supervisor.start(servedDefinition, consumers, isDevelopment ? options : { ...options, autoBuild: false })
+      if (isDevelopment && snapshot.status !== 'running' && snapshot.status !== 'starting' && snapshot.status !== 'preparing') {
+        await this.stopAndReleaseExecutionLease(localAppId, () => this.supervisor.stop(localAppId, 'error'))
+      }
+      // `C-RSM-402` tier ③: a directory whose build produces no openable page is
+      // served by keeping `npm run dev` running instead. The fallback is not a
+      // failure, and a Runtime already known to be in tier ③ must not be asked
+      // to build again before it can be served.
+      const serveAsServer = () => {
+        if (!inspected.ok) return null
+        const fallback = serverServePlan(inspected, 'build-produces-no-artifact')
+        if (fallback.kind !== 'production' && fallback.kind !== 'development') return null
+        return this.startDevelopment(
+          localAppId,
+          { ...effectiveDefinition, mode: 'development' as const, agentos: undefined, serveScript: fallback.kind === 'production' ? 'start' : 'dev' },
+          consumerId,
+          options,
+        )
+      }
+      if (!isDevelopment && snapshot.errorCode === 'build-produces-no-artifact') {
+        const served = serveAsServer()
+        if (served) return served
+      }
+      if (!isDevelopment && options.autoBuild !== false && snapshot.mode === 'static' && snapshot.buildStatus === 'build_required') {
+        const built = await this.build(localAppId, consumerId)
+        if (built.errorCode === 'build-produces-no-artifact') {
+          const served = serveAsServer()
+          if (served) return served
+        }
+        return built
+      }
+      return snapshot
+    } catch (error) {
+      if (isDevelopment) await this.stopAndReleaseExecutionLease(localAppId, () => this.supervisor.stop(localAppId, 'error')).catch(() => undefined)
+      throw error
+    }
   }
 
-  stop(localAppId: string, reason: LocalAppRuntimeSnapshot['stopReason'] = 'user'): Promise<LocalAppRuntimeSnapshot | null> {
-    return this.supervisor.stop(this.ownerId(localAppId), reason)
+  /**
+   * Serve tier ③: keep `npm run dev` running because this directory cannot
+   * produce an openable page. It takes the development lease like any other
+   * dev runtime, so same-root exclusion still holds.
+   */
+  private async startDevelopment(
+    localAppId: string,
+    definition: LocalAppDefinition,
+    consumerId: string | undefined,
+    options: RuntimeStartOptions,
+  ): Promise<LocalAppRuntimeSnapshot> {
+    await this.acquireExecutionLease(definition, 'development')
+    const consumers = this.consumers.get(localAppId) ?? new Set<string>()
+    if (consumerId) consumers.add(consumerId)
+    this.consumers.set(localAppId, consumers)
+    try {
+      const snapshot = await this.supervisor.start(definition, consumers, options)
+      if (snapshot.status !== 'running' && snapshot.status !== 'starting' && snapshot.status !== 'preparing') {
+        await this.stopAndReleaseExecutionLease(localAppId, () => this.supervisor.stop(localAppId, 'error'))
+      }
+      return snapshot
+    } catch (error) {
+      await this.stopAndReleaseExecutionLease(localAppId, () => this.supervisor.stop(localAppId, 'error')).catch(() => undefined)
+      throw error
+    }
+  }
+
+  async stop(localAppId: string, reason: LocalAppRuntimeSnapshot['stopReason'] = 'user'): Promise<LocalAppRuntimeSnapshot | null> {
+    const lease = this.leaseByDefinition.get(localAppId)
+    if (!lease) return this.supervisor.stop(localAppId, reason)
+    let snapshot: LocalAppRuntimeSnapshot | null = this.supervisor.snapshot(localAppId)
+    const result = await this.rootExecutionRegistry.stopAndRelease(lease, async () => {
+      snapshot = await this.supervisor.stop(localAppId, reason)
+    })
+    if (!result.ok) throw result.error.cause
+    if (this.leaseByDefinition.get(localAppId)?.leaseId === lease.leaseId) this.leaseByDefinition.delete(localAppId)
+    return snapshot
   }
 
   restart(localAppId: string): Promise<LocalAppRuntimeSnapshot> {
     const definition = this.definitions.get(localAppId)
     if (!definition) return Promise.reject(new Error('local-app-definition-missing'))
-    const ownerId = this.ownerId(localAppId)
-    const consumers = this.consumers.get(ownerId) ?? new Set<string>()
-    return this.supervisor.restart(this.definitions.get(ownerId) ?? definition, consumers)
+    const consumers = this.consumers.get(localAppId) ?? new Set<string>()
+    return this.stop(localAppId, 'user').then(() => this.start(localAppId, undefined, { autoBuild: true })).then((snapshot) => {
+      for (const consumerId of consumers) this.supervisor.attachConsumer(localAppId, consumerId)
+      return snapshot
+    })
   }
 
-  build(localAppId: string, consumerId?: string): Promise<LocalAppRuntimeSnapshot> {
+  build(localAppId: string, consumerId?: string, options: RuntimeBuildOptions = {}): Promise<LocalAppRuntimeSnapshot> {
+    const existingOperation = this.buildOperations.get(localAppId)
+    if (existingOperation) {
+      if (options.beforeCommit) return Promise.reject(new Error('runtime-build-already-active'))
+      return existingOperation
+    }
     const definition = this.definitions.get(localAppId)
     if (!definition) return Promise.reject(new Error('local-app-definition-missing'))
     if (definition.trustStatus !== 'trusted') return Promise.reject(new Error('local-app-trust-required'))
-    const ownerId = this.ownerId(localAppId)
-    const ownerDefinition = this.definitions.get(ownerId) ?? definition
-    const consumers = this.consumers.get(ownerId) ?? new Set<string>()
-    if (consumerId) consumers.add(consumerId)
-    this.consumers.set(ownerId, consumers)
-    return this.supervisor.build(ownerDefinition, consumers)
+    const operation = this.buildWithExecutionLease(definition, consumerId, options).finally(() => {
+      if (this.buildOperations.get(localAppId) === operation) this.buildOperations.delete(localAppId)
+    })
+    this.buildOperations.set(localAppId, operation)
+    return operation
   }
 
   cancelBuild(localAppId: string, buildId?: string): Promise<LocalAppRuntimeSnapshot | null> {
-    return this.supervisor.cancelBuild(this.ownerId(localAppId), buildId)
-  }
-
-  /** Stop only AgentOS-owned development processes for the same project root. */
-  async stopOwnedDevelopmentRuntimes(rootPath: string): Promise<void> {
-    const comparableRoot = runtimeComparableRoot(rootPath)
-    const ownerIds = new Set<string>()
-    for (const [definitionId, definition] of this.definitions) {
-      if (runtimeComparableRoot(definition.canonicalRoot ?? definition.rootPath) !== comparableRoot) continue
-      const ownerId = this.ownerId(definitionId)
-      const snapshot = this.supervisor.snapshot(ownerId)
-      if (snapshot?.mode === 'development' && snapshot.status !== 'stopped') ownerIds.add(ownerId)
-    }
-    await Promise.all([...ownerIds].map((ownerId) => this.supervisor.stop(ownerId, 'user')))
+    return this.supervisor.cancelBuild(localAppId, buildId)
   }
 
   getStaticPreviewRegistry(): StaticPreviewRegistry {
@@ -1594,32 +1778,135 @@ export class LocalAppRuntimeManager {
   }
 
   async release(localAppId: string, consumerId: string): Promise<LocalAppRuntimeSnapshot | null> {
-    const ownerId = this.ownerId(localAppId)
-    const consumers = this.consumers.get(ownerId)
-    consumers?.delete(consumerId)
-    return this.supervisor.detachConsumer(ownerId, consumerId)
+    const consumers = this.consumers.get(localAppId)
+    if (!consumers?.delete(consumerId)) return this.supervisor.snapshot(localAppId)
+    if (consumers.size > 0) return this.supervisor.detachConsumer(localAppId, consumerId)
+    const lease = this.leaseByDefinition.get(localAppId)
+    if (!lease) return this.supervisor.detachConsumer(localAppId, consumerId)
+    let snapshot: LocalAppRuntimeSnapshot | null = this.supervisor.snapshot(localAppId)
+    const result = await this.rootExecutionRegistry.stopAndRelease(lease, async () => {
+      snapshot = await this.supervisor.detachConsumer(localAppId, consumerId)
+    })
+    if (!result.ok) throw result.error.cause
+    if (this.leaseByDefinition.get(localAppId)?.leaseId === lease.leaseId) this.leaseByDefinition.delete(localAppId)
+    return snapshot
   }
 
   async stopAll(reason: LocalAppRuntimeSnapshot['stopReason'] = 'app-quit'): Promise<void> {
-    await this.supervisor.stopAll(reason)
+    const failures: unknown[] = []
+    for (const definitionId of this.definitions.keys()) {
+      try { await this.stop(definitionId, reason) } catch (error) { failures.push(error) }
+    }
+    if (failures.length > 0) throw failures[0]
   }
 
-  private ownerId(localAppId: string): string {
+  getRootExecutionRegistry(): RuntimeRootExecutionRegistry {
+    return this.rootExecutionRegistry
+  }
+
+  /** Static-only edit sessions still hold the root mutex without spawning a dev process. */
+  async acquireDevelopmentLease(localAppId: string): Promise<RuntimeRootLease> {
     const definition = this.definitions.get(localAppId)
-    return definition ? this.ownerByDedupeKey.get(runtimeDedupeKey(definition)) ?? localAppId : localAppId
+    if (!definition) throw new Error('local-app-definition-missing')
+    return this.acquireExecutionLease(definition, 'development')
+  }
+
+  async releaseDevelopmentLease(localAppId: string, expectedLease?: RuntimeRootLease): Promise<void> {
+    const lease = expectedLease ?? this.leaseByDefinition.get(localAppId)
+    if (!lease || lease.kind !== 'development') return
+    const result = await this.rootExecutionRegistry.release(lease)
+    if (!result.ok) throw result.error.cause
+    if (this.leaseByDefinition.get(localAppId)?.leaseId === lease.leaseId) this.leaseByDefinition.delete(localAppId)
+  }
+
+  private async buildWithExecutionLease(definition: LocalAppDefinition, consumerId?: string, options: RuntimeBuildOptions = {}): Promise<LocalAppRuntimeSnapshot> {
+    const consumers = this.consumers.get(definition.id) ?? new Set<string>()
+    if (consumerId) consumers.add(consumerId)
+    this.consumers.set(definition.id, consumers)
+    let buildLease: RuntimeRootLease
+    const developmentLease = this.leaseByDefinition.get(definition.id)
+    if (developmentLease?.kind === 'development') {
+      const transition = await this.rootExecutionRegistry.transitionDevelopmentToBuild(
+        developmentLease,
+        () => this.supervisor.stop(definition.id, 'user'),
+      )
+      if (!transition.ok) {
+        throw transition.error.code === 'runtime-root-transition-failed'
+          ? transition.error.cause
+          : new Error(transition.error.code)
+      }
+      buildLease = transition.lease
+      this.leaseByDefinition.set(definition.id, buildLease)
+    } else {
+      buildLease = await this.acquireExecutionLease(definition, 'build')
+    }
+    try {
+      return await this.supervisor.build(definition, consumers, options)
+    } finally {
+      const released = await this.rootExecutionRegistry.release(buildLease)
+      if (released.ok && this.leaseByDefinition.get(definition.id)?.leaseId === buildLease.leaseId) {
+        this.leaseByDefinition.delete(definition.id)
+      }
+    }
+  }
+
+  private async acquireExecutionLease(definition: LocalAppDefinition, kind: RuntimeRootLease['kind']): Promise<RuntimeRootLease> {
+    const current = this.leaseByDefinition.get(definition.id)
+    let generation = current?.generation ?? this.pendingLeaseGeneration.get(definition.id)
+    if (generation === undefined) {
+      generation = (this.leaseGenerationByDefinition.get(definition.id) ?? 0) + 1
+      this.leaseGenerationByDefinition.set(definition.id, generation)
+      this.pendingLeaseGeneration.set(definition.id, generation)
+    }
+    // Every caller must key the lease on the same string. A definition can
+    // still carry a pre-realpath root, and a lease taken under `/var/...`
+    // would not exclude one taken under `/private/var/...`.
+    let canonicalRoot = definition.canonicalRoot ?? definition.rootPath
+    try {
+      canonicalRoot = await canonicalizeLocalAppRoot(canonicalRoot)
+    } catch {
+      // A vanished directory fails later with its own error code.
+    }
+    const result = await this.rootExecutionRegistry.acquire({
+      canonicalRoot,
+      runtimeDefinitionId: definition.id,
+      runtimeScopeId: runtimeScopeForDefinition(definition),
+      kind,
+      generation,
+    })
+    if (!result.ok) throw runtimeRootAcquireError(result)
+    this.pendingLeaseGeneration.delete(definition.id)
+    this.leaseByDefinition.set(definition.id, result.lease)
+    return result.lease
+  }
+
+  private async releaseDevelopmentLeaseBeforeStaticStart(definitionId: string): Promise<void> {
+    const lease = this.leaseByDefinition.get(definitionId)
+    if (!lease || lease.kind !== 'development') return
+    const result = await this.rootExecutionRegistry.stopAndRelease(lease, () => this.supervisor.stop(definitionId, 'user'))
+    if (!result.ok) throw result.error.cause
+    if (this.leaseByDefinition.get(definitionId)?.leaseId === lease.leaseId) this.leaseByDefinition.delete(definitionId)
+  }
+
+  private async stopAndReleaseExecutionLease(definitionId: string, stop: () => Promise<unknown>): Promise<void> {
+    const lease = this.leaseByDefinition.get(definitionId)
+    if (!lease) return
+    const result = await this.rootExecutionRegistry.stopAndRelease(lease, stop)
+    if (!result.ok) throw result.error.cause
+    if (this.leaseByDefinition.get(definitionId)?.leaseId === lease.leaseId) this.leaseByDefinition.delete(definitionId)
   }
 }
 
-function runtimeDedupeKey(definition: LocalAppDefinition): string {
-  const comparable = runtimeComparableRoot(definition.canonicalRoot ?? definition.rootPath)
-  return definition.mode === 'static'
-    ? `${comparable}|static|${definition.agentos?.outputRoot ?? ''}|${definition.agentos?.entryFile ?? ''}`
-    : `${comparable}|npm run dev`
+function runtimeScopeForDefinition(definition: LocalAppDefinition): RuntimeScopeId {
+  return definition.owner?.kind === 'project'
+    ? `project:${definition.owner.projectId}`
+    : `workspace:${definition.id}`
 }
 
-function runtimeComparableRoot(rootPath: string): string {
-  const normalized = rootPath.replace(/\\/g, '/').replace(/\/+$/, '')
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+function runtimeRootAcquireError(result: Extract<RuntimeRootLeaseAcquireResult, { ok: false }>): Error {
+  const error = new Error(result.error.code)
+  Object.assign(error, { code: result.error.code, conflictingLease: result.error.conflictingLease })
+  return error
 }
 
 /**

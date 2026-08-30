@@ -103,6 +103,19 @@ test('adoptAuthoritativeWorkspace falls back when the selection disappeared', ()
   assert.equal(merged.activeThreadId, 'thread-1')
 })
 
+test('adoptAuthoritativeWorkspace keeps the project home instead of Main stale Workspace Tab', () => {
+  const tab = { id: 'tab-1', runtimeDefinitionId: 'runtime-1', title: 'Workbench', createdAt: 1, updatedAt: 1 }
+  // Project home: empty thread/tab ids are a selection, not a missing value.
+  const current = workspace({ activeThreadId: '', activeWorkspaceTabId: '', workspaceTabs: [tab] })
+  // Main still records the Workspace Tab the user opened earlier; selection is
+  // renderer-owned in broker mode, so Main is never told the user left it.
+  const next = workspace({ activeThreadId: 'thread-1', activeWorkspaceTabId: 'tab-1', workspaceTabs: [tab] })
+  const merged = client.adoptAuthoritativeWorkspace(current, next, { preserveSelection: true })
+  assert.equal(merged.activeWorkspaceTabId, '')
+  assert.equal(merged.activeLocalAppTabId, '')
+  assert.equal(merged.activeThreadId, '')
+})
+
 test('adoptAuthoritativeWorkspace takes Main selection when the command owns it', () => {
   const current = workspace()
   const next = workspace({ activeProjectId: 'project-new', projects: [{ id: 'project-new', name: 'New', path: '/new', createdAt: 2, updatedAt: 2 }], threads: [] })

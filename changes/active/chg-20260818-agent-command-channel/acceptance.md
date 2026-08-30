@@ -5,6 +5,21 @@
 >
 > **同步义务（2026-08-29 补）**：本表新增任何 ID 时，必须在同一轮把对应 GWT 写入 `prd/chat-agent-runtime/acceptance.md`。`BUG-AUDIT-WS-02` 复核发现 `ATDD-CHAT-207`–`209` 与 `ATDD-WS-201` 曾只存在于本表、未进入 PRD，使"唯一事实源"声明失效。该批已回补。缺少 PRD 对应场景的 ID 不得进入 Development Check。
 
+## 0. Revision 4 P0/P1 覆盖矩阵
+
+| ID | 优先级 | 能力 | 必须证明 | 最低证据 |
+| --- | --- | --- | --- | --- |
+| `ATDD-RSM-401` | P0 | 探测优先级 | 声明块 > 已有产物 > 可构建 > dev > 不支持，顺序固定；非法声明块仍是硬错误不降级；产物目录越界被拒 | detector unit + containment negative |
+| `ATDD-RSM-402` | P0 | 已有产物零进程 | 目录里已有 `out/index.html`（含 `dist`/`build` 变体）时直接文件伺服，不 spawn 任何进程、不占 root 执行锁 | manager integration + spawn 断言 |
+| `ATDD-RSM-403` | P0 | 可构建则构建一次 | 无产物有 build 脚本时构建一次并提交 last-good；构建后仍无产物则降级为 dev 且不报硬失败 | build integration + 降级用例 |
+| `ATDD-RSM-404` | P0 | dev 只在两处出现 | 浏览态永不 spawn dev；dev 只出现在开发会话或第 ③ 档 | source audit + manager integration |
+| `ATDD-RSM-405` | P0 | 同路径可并行查看 | 同一目录的 Project 与 Workspace Runtime 都处于 artifact 档时可同时伺服；dev/构建互斥仍生效且冲突可见 | registry integration + renderer 冲突断言 |
+| `ATDD-RSM-406` | P1 | 手动覆盖 | 覆盖持久化且不被自动探测推翻；选"已保存预览"无产物时触发构建，构建不出则如实失败不静默回退 | store readback + UI state test |
+| `ATDD-RSM-408` | P0 | 生产伺服优先于 dev | 已有服务端产物且有 `start` 脚本时直接 `npm run start` 不重新构建；构建后无静态产物但可 `start` 时进入生产伺服；只有两者都不可用才 `npm run dev`；开发会话仍强制 dev | detector unit + manager integration + spawn 断言 |
+| `ATDD-RSM-407` | P1 | 状态与入口 | 卡片同时显示 Runtime 状态与开发会话状态；停止态有启动入口；导入项目与自建 `.agentos` 走同一套判定与文案 | UI state test + locale 解析断言 |
+
+Revision 4 未实现，以上只定义计划合同。`ATDD-EDIT-206`「无声明不猜命令」被 `C-RSM-401` 显式放宽为"可依据产物/配置/scripts 推导，但必须可解释、可显示、可覆盖，且只允许固定的 `npm run build` / `npm run dev` 两条命令"。
+
 ## 0. Revision 3 P0/P1 覆盖矩阵
 
 | ID | 优先级 | 能力 | 必须证明 | 最低证据 |
@@ -20,6 +35,8 @@
 | `ATDD-RDS-309` | P1 | 能力矩阵与用户语言 | Project Runtime 成功退出回到 last-good；static-capable Workspace 同步保存；development-only Workspace 结束 Chat 但保持查看所需服务且不宣称已保存；普通界面只使用“用 AI 修改/结束修改” | capability fixtures + UI copy assertions |
 
 Revision 3 未实现，以上只定义计划合同，不记录通过状态。`CHECK-02` 不得再以 Revision 2 的 M2/M3 语义关闭整个 Change。
+
+> 证据缺口修正（2026-08-30，来自 `R3-FIX-USER-01`）：`ATDD-RDS-301` 的"不改变 active tab/project"与 `ATDD-RDS-309` 的 UI copy 断言，此前只有 source-grep 级证据——只断言入口未调用 `openWorkspaceTab`、源码里出现 `t('runtime.modifyWithAi')`，既未覆盖权威快照合并这条真实覆盖路径，也未验证 key 能解析。用户实测因此暴露两处 P0（项目首页仍被 Main 陈旧 `activeWorkspaceTabId` 拉回工作台；开发文案全部显示原始 key）。两条已修复并补回归（`electron/workspace-command-client.test.mjs` 空选中态、`electron/ui-locale-keys.test.mjs` 全量键解析），但这两个 ID 的"最低证据"列仍要求 Electron smoke，缺口未因此关闭。
 
 ## 1. 通过规则
 

@@ -52,6 +52,7 @@ function loadRunnerModule() {
     if (specifier === './claude-agent-runner/event-coalescer') return { ClaudeChatEventCoalescer: Coalescer }
     if (specifier === './claude-agent-runner/sdk-message-router') return { ClaudeSdkMessageRouter: Router }
     if (specifier === './claude-agent-runner/input') return { normalizeSubmitAttachments: () => [], resolveWorkspaceCwd: (cwd, fallback) => cwd ?? fallback }
+    if (specifier === './chat-broker-core') return { runtimeMutationTargetAllowed: async () => true }
     if (specifier === './safe-console') return { safeConsoleError() {}, safeConsoleInfo() {}, safeConsoleWarn() {} }
     if (specifier.startsWith('./claude-agent-runner/') || specifier === './agent-context' || specifier === './home-plugin-customization-prompt') return {}
     if (specifier === './project-runtime-prompt') return { resolveProjectAgentRuntimeContext: async () => null, buildProjectRuntimeSystemPrompt: () => '' }

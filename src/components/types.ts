@@ -29,6 +29,14 @@ export type RuntimeStaticDeclaration = {
 }
 
 export type RuntimeMode = 'development' | 'static'
+/**
+ * Explicit "view this Runtime as…" choice; overrides automatic detection.
+ * `server` only means "keep it running"; production vs development stays
+ * detection's call.
+ */
+export type RuntimeServeOverride = 'artifact' | 'server'
+/** Forced serve script for one run; never persisted. */
+export type RuntimeServeScript = 'dev' | 'start'
 export type RuntimeBuildStatus = 'ready' | 'stale' | 'build_required' | 'building' | 'build_failed' | 'idle'
 
 /** Durable product-domain ownership; legacy definitions migrate to workspace. */
@@ -49,6 +57,16 @@ export type RuntimeDefinition = {
   mode?: RuntimeMode
   /** Main-validated package.json.agentos declaration for static projects. */
   agentos?: RuntimeStaticDeclaration
+  /**
+   * Explicit user choice of how this Runtime is viewed (`C-RSM-404`).
+   * Detection never overwrites it; absence means "decide automatically".
+   */
+  serveOverride?: RuntimeServeOverride
+  /**
+   * Runtime-only: forces one run onto a fixed npm script (an AI editing
+   * session needs `dev`). Never persisted, never read from the store.
+   */
+  serveScript?: RuntimeServeScript
   trustStatus: RuntimeTrustStatus
   autoStart: boolean
   createdAt: number
@@ -59,7 +77,7 @@ export type RuntimeDefinition = {
 export type WorkspaceTab = {
   id: string
   runtimeDefinitionId: string
-  /** Durable Project backing this editable Runtime tab. Main owns and repairs this link. */
+  /** @deprecated Revision 2 compatibility only; new Workspace Runtime entries never write or follow this link. */
   projectId?: string
   title: string
   createdAt: number
@@ -350,10 +368,21 @@ export type ProjectThreadCreationSource =
   | { kind: 'app-command' }
   | { kind: 'website'; bindingId: string; receivedAt: number }
 
-export type WorkspaceThread = {
+/** Project 与 Runtime 开发对话共用的持久字段；scope 身份由各自子类型补充。 */
+export type ChatThreadBase = {
   id: string
-  projectId: string
   title: string
+  createdAt: number
+  updatedAt: number
+  /** 置顶权重：越大越靠前（持久化）/ Pin rank: larger sorts higher (persisted) */
+  pinnedAt?: number
+  archivedAt?: number
+  creationSource: ProjectThreadCreationSource
+  chatState: ChatState
+}
+
+export type WorkspaceThread = ChatThreadBase & {
+  projectId: string
   /** 特殊线程用途，例如项目首页插件定制 / Special thread purpose, such as project home customization */
   purpose?: 'home-plugin-customization' | 'home-plugin-card-customization' | 'task-run' | 'skill-run'
   /** 关联的 Home Plugin 目录名；用于单卡片修改线程 / Bound Home Plugin slug for card customization threads */
@@ -362,14 +391,6 @@ export type WorkspaceThread = {
   skillPath?: string
   skillCommand?: string
   skillTitle?: string
-  createdAt: number
-  updatedAt: number
-  /** 置顶权重：越大越靠前（持久化）/ Pin rank: larger sorts higher (persisted) */
-  pinnedAt?: number
-  archivedAt?: number
-  /** Durable source used for external-task unread accounting. */
-  creationSource: ProjectThreadCreationSource
-  chatState: ChatState
 }
 
 /** 新建线程时的瞬时行为；不进入持久化线程数据。 / Ephemeral behavior for creating a thread. */

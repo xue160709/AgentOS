@@ -45,9 +45,17 @@ export function adoptAuthoritativeWorkspace(
   options: { preserveSelection: boolean },
 ): ChatWorkspaceState {
   if (!options.preserveSelection) return next
+  // An empty thread/tab id is the project home: a deliberate renderer-owned
+  // selection, not a missing one. Main is never told when the user leaves a
+  // Workspace Tab, so treating empty as "no opinion" would let its stale
+  // `activeWorkspaceTabId` pull the project home back into the workbench.
   const projectStillExists = next.projects.some((project) => project.id === current.activeProjectId)
-  const threadStillExists = next.threads.some((thread) => thread.id === current.activeThreadId)
-  const tabStillExists = next.workspaceTabs.some((tab) => tab.id === current.activeWorkspaceTabId)
+  const threadStillExists = current.activeThreadId
+    ? next.threads.some((thread) => thread.id === current.activeThreadId)
+    : true
+  const tabStillExists = current.activeWorkspaceTabId
+    ? next.workspaceTabs.some((tab) => tab.id === current.activeWorkspaceTabId)
+    : true
   const activeWorkspaceTabId = tabStillExists ? current.activeWorkspaceTabId : next.activeWorkspaceTabId
   return {
     ...next,

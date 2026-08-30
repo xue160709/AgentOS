@@ -2,6 +2,7 @@ import path from 'node:path'
 import type { ChatModelPick, ClaudeAgentSettingsSnapshot, ClaudeAgentStatusRequest, ClaudeAgentStatusSnapshot, ClaudeChatSubmitPayload, ClaudePermissionResponsePayload, ClaudeFileRewindPayload, ClaudeFileRewindResult } from '../src/claude-chat-types'
 import { normalizeProjectChatRelativePath, projectChatBasename, type GetProjectChatThreadStatusInput, type ProjectChatAgentContext, type ProjectChatAttachmentSelection, type ProjectChatFileSearchItem, type ProjectChatModelCatalog, type ProjectChatThreadStatus, type ReadProjectChatAttachmentsInput, type SearchProjectChatFilesInput } from '../src/project-chat-contract'
 import type { ChatWorkspaceState } from '../src/components/types'
+import type { ReadRuntimeChatAttachmentsInput, ResolvedRuntimeChatScope, RuntimeDevelopmentWorkspace, RuntimeScopeId, SearchRuntimeChatFilesInput } from '../src/runtime-development-contract'
 
 export type ProjectChatRunnerLike = {
   submit(payload: ClaudeChatSubmitPayload): { requestId: string } | Promise<{ requestId: string }>
@@ -92,6 +93,63 @@ export function createProjectChatScopedReadCollaborator(options: ProjectChatScop
       const thread = resolved?.state.threads.find((item) => item.id === input.threadId && item.projectId === input.projectId)
       if (!resolved || !thread || thread.archivedAt) throw new Error('thread-unavailable')
       const payload: ClaudeAgentStatusRequest = { threadId: thread.id, cwd: resolved.path, refresh: false, ...(thread.chatState.sessionId ? { sessionId: thread.chatState.sessionId } : {}), ...(thread.chatState.modelPick ? { modelPick: thread.chatState.modelPick as ChatModelPick } : {}) }
+      const status = await options.runner.getStatus(payload)
+      if (status.threadId !== input.threadId) throw new Error('thread-status-mismatch')
+      return { threadId: status.threadId, active: status.active, requestId: status.requestId, reportedModel: status.reportedModel, permissionMode: status.permissionMode, tools: status.tools ?? [], skills: status.skills ?? [], slashCommands: status.slashCommands ?? [], agents: status.agents ?? [], contextUsage: status.contextUsage, lastError: status.lastError, updatedAt: status.updatedAt }
+    },
+  }
+}
+
+export type RuntimeChatScopedReadOptions = Omit<ProjectChatScopedReadOptions, 'workspace'> & {
+  runtimeWorkspace: { read(): RuntimeDevelopmentWorkspace }
+  resolveScope(runtimeScopeId: RuntimeScopeId): ResolvedRuntimeChatScope | null
+}
+
+/** Runtime scoped read 每次由 Main fresh-resolve；Project 读上下文根，Workspace 读 Runtime root。 */
+export function createRuntimeChatScopedReadCollaborator(options: RuntimeChatScopedReadOptions) {
+  const resolved = (runtimeScopeId: RuntimeScopeId) => {
+    const scope = options.resolveScope(runtimeScopeId)
+    if (!scope || scope.runtimeScopeId !== runtimeScopeId) throw new Error('runtime-scope-unavailable')
+    return scope
+  }
+  const contextRoot = (scope: ResolvedRuntimeChatScope) => scope.runtimeOwner.kind === 'project' ? scope.cwd : scope.runtimeRoot
+  return {
+    async getModelCatalog(): Promise<ProjectChatModelCatalog> {
+      const { settings } = options.settings.getSnapshot()
+      return { activeProviderId: settings.activeProviderId, activeAnthropicModel: settings.activeAnthropicModel, providers: settings.providers.map((provider) => ({ id: provider.id, name: provider.name, model: provider.model, modelSupportsImages: provider.modelSupportsImages, defaultHaikuModel: provider.defaultHaikuModel, defaultHaikuSupportsImages: provider.defaultHaikuSupportsImages, defaultOpusModel: provider.defaultOpusModel, defaultOpusSupportsImages: provider.defaultOpusSupportsImages, defaultSonnetModel: provider.defaultSonnetModel, defaultSonnetSupportsImages: provider.defaultSonnetSupportsImages })) }
+    },
+    async getAgentContext(runtimeScopeId: RuntimeScopeId): Promise<ProjectChatAgentContext> {
+      return projectContext(await options.discoverAgentContext(contextRoot(resolved(runtimeScopeId))))
+    },
+    async searchFiles(runtimeScopeId: RuntimeScopeId, input: SearchRuntimeChatFilesInput): Promise<ProjectChatFileSearchItem[]> {
+      return projectFiles(await options.searchProjectFiles(contextRoot(resolved(runtimeScopeId)), input.query))
+    },
+    async pickAttachments(input?: { allowImages?: boolean }): Promise<unknown> { return options.pickAttachments(input?.allowImages === true) },
+    async readAttachments(runtimeScopeId: RuntimeScopeId, input: ReadRuntimeChatAttachmentsInput): Promise<ProjectChatAttachmentSelection | RawAttachmentSelection> {
+      if (!Array.isArray(input.relativePaths) || input.relativePaths.length < 1 || input.relativePaths.length > 8) throw new Error('attachment-path-invalid')
+      const relativePaths = input.relativePaths.map(normalizeProjectChatRelativePath)
+      if (relativePaths.some((item) => item === null)) throw new Error('attachment-path-invalid')
+      const root = await options.realpath(contextRoot(resolved(runtimeScopeId)))
+      const accepted: string[] = []; const skipped: Array<{ name: string; reason: string }> = []
+      for (const relativePath of relativePaths as string[]) {
+        const name = projectChatBasename(relativePath) ?? 'Attachment'
+        try {
+          const candidate = await options.realpath(path.join(root, ...relativePath.split('/')))
+          const relative = path.relative(root, candidate)
+          if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) { skipped.push({ name, reason: 'Attachment is unavailable.' }); continue }
+          accepted.push(candidate)
+        } catch { skipped.push({ name, reason: 'Attachment is unavailable.' }) }
+      }
+      if (!accepted.length) return { attachments: [], skipped }
+      const raw = await options.readAttachments(accepted, input.allowImages === true)
+      if (!isSelection(raw)) throw new Error('attachment-reader-invalid')
+      return { attachments: raw.attachments, skipped: [...skipped, ...raw.skipped.map((item) => ({ name: safeName(item), reason: 'Attachment is unavailable.' }))] }
+    },
+    async getThreadStatus(runtimeScopeId: RuntimeScopeId, input: { threadId: string }): Promise<ProjectChatThreadStatus> {
+      const scope = resolved(runtimeScopeId)
+      const thread = options.runtimeWorkspace.read().runtimeDevelopmentThreads.find((item) => item.id === input.threadId && item.runtimeScopeId === runtimeScopeId && item.archivedAt === undefined)
+      if (!thread) throw new Error('thread-unavailable')
+      const payload: ClaudeAgentStatusRequest = { threadId: thread.id, cwd: scope.cwd, refresh: false, ...(thread.chatState.sessionId ? { sessionId: thread.chatState.sessionId } : {}), ...(thread.chatState.modelPick ? { modelPick: thread.chatState.modelPick as ChatModelPick } : {}) }
       const status = await options.runner.getStatus(payload)
       if (status.threadId !== input.threadId) throw new Error('thread-status-mismatch')
       return { threadId: status.threadId, active: status.active, requestId: status.requestId, reportedModel: status.reportedModel, permissionMode: status.permissionMode, tools: status.tools ?? [], skills: status.skills ?? [], slashCommands: status.slashCommands ?? [], agents: status.agents ?? [], contextUsage: status.contextUsage, lastError: status.lastError, updatedAt: status.updatedAt }

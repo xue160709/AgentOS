@@ -10,6 +10,8 @@ import path from 'node:path'
 import {
   normalizeChatWorkspaceState,
   normalizeProjectThreadCreationSource,
+  readChatThreadRollout,
+  serializeChatThreadRollout,
 } from '../src/chat-workspace-persistence'
 import {
   readWorkspaceRevision,
@@ -530,47 +532,29 @@ export class ChatWorkspaceStore {
         const rolloutPath = existingRolloutPaths.get(thread.id) ?? this.rolloutPathForThread(thread)
         await mkdir(path.dirname(rolloutPath), { recursive: true })
         const tmpPath = `${rolloutPath}.tmp`
-        await writeFile(tmpPath, serializeRollout(thread), 'utf8')
+        await writeFile(tmpPath, serializeChatThreadRollout(thread, {
+          projectId: thread.projectId,
+          purpose: thread.purpose,
+          homePluginSlug: thread.homePluginSlug,
+          skillPath: thread.skillPath,
+          skillCommand: thread.skillCommand,
+          skillTitle: thread.skillTitle,
+        }), 'utf8')
         await rename(tmpPath, rolloutPath)
       }),
     )
   }
 
   private readRolloutChatState(thread: ThreadRow): ChatState {
-    const state: ChatState = {
+    const fallback: ChatState = {
       sessionId: thread.sessionId ?? undefined,
       model: thread.model || 'Claude Agent',
       modelPick: safeModelPick(safeJsonParse(thread.modelPickJson ?? undefined, undefined)),
       cwd: thread.cwd ?? undefined,
       items: [],
     }
-    if (!thread.rolloutPath || !existsSync(thread.rolloutPath)) return state
-
-    try {
-      const lines = readFileSync(thread.rolloutPath, 'utf8').split(/\n/).filter(Boolean)
-      for (const line of lines) {
-        const event = JSON.parse(line) as unknown
-        if (!isRecord(event)) continue
-        const payload = event.payload
-        if (!isRecord(payload)) continue
-
-        if (event.type === 'session_meta' || event.type === 'thread_state') {
-          state.sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : state.sessionId
-          state.model = typeof payload.model === 'string' ? payload.model : state.model
-          state.modelPick = safeModelPick(payload.modelPick) ?? state.modelPick
-          state.cwd = typeof payload.cwd === 'string' ? payload.cwd : state.cwd
-          continue
-        }
-
-        if (event.type === 'response_item') {
-          state.items.push(payload as TranscriptItem)
-        }
-      }
-    } catch {
-      return state
-    }
-
-    return state
+    if (!thread.rolloutPath || !existsSync(thread.rolloutPath)) return fallback
+    try { return readChatThreadRollout(readFileSync(thread.rolloutPath, 'utf8'), fallback) } catch { return fallback }
   }
 
   private rolloutPathForThread(thread: WorkspaceThread): string {
@@ -1256,50 +1240,6 @@ function safeRecord(value: unknown): Record<string, unknown> {
 
 function isSearchDocumentKind(value: unknown): value is ChatHistorySearchDocumentKind {
   return value === 'activity' || value === 'message' || value === 'thread' || value === 'tool'
-}
-
-function serializeRollout(thread: WorkspaceThread): string {
-  const timestamp = new Date(thread.updatedAt || Date.now()).toISOString()
-  const lines = [
-    {
-      timestamp,
-      type: 'session_meta',
-      payload: {
-        id: thread.id,
-        projectId: thread.projectId,
-        title: thread.title,
-        purpose: thread.purpose,
-        homePluginSlug: thread.homePluginSlug,
-        skillPath: thread.skillPath,
-        skillCommand: thread.skillCommand,
-        skillTitle: thread.skillTitle,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-        archivedAt: thread.archivedAt,
-        model: thread.chatState.model,
-        modelPick: thread.chatState.modelPick,
-        cwd: thread.chatState.cwd,
-        sessionId: thread.chatState.sessionId,
-        source: 'agentos',
-      },
-    },
-    {
-      timestamp,
-      type: 'thread_state',
-      payload: {
-        sessionId: thread.chatState.sessionId,
-        model: thread.chatState.model,
-        modelPick: thread.chatState.modelPick,
-        cwd: thread.chatState.cwd,
-      },
-    },
-    ...thread.chatState.items.map((item) => ({
-      timestamp: new Date(itemTimestamp(item, thread.updatedAt)).toISOString(),
-      type: 'response_item',
-      payload: item,
-    })),
-  ]
-  return `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`
 }
 
 function sqlValue(value: unknown): string {

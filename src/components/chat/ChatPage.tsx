@@ -63,6 +63,7 @@ import type {
   WorkspaceThread,
 } from '../types'
 import { AgentInputPromptModal, type PendingUserInputPrompt, type UserInputDecision } from './AgentInputPromptModal'
+import { createProjectChatBridge, type ChatBridge, type ChatBrokerPrompt, type ChatBrokerSnapshot } from './chat-bridge'
 import { ChatStartView } from './ChatStartView'
 import { ChatThreadView } from './ChatThreadView'
 import { ChatRun, type ChatRunTransition } from './chat-run'
@@ -78,8 +79,6 @@ import type {
   ProjectChatAttachment,
   ProjectChatAttachmentSelection,
   ProjectChatModelCatalog,
-  ProjectChatPromptSnapshot,
-  ProjectChatSnapshot,
 } from '../../project-chat-contract'
 
 const PROCESS_TRACE_TOGGLE_EVENT = 'chat-process-trace:toggle'
@@ -242,8 +241,12 @@ type ChatPageProps = {
   activeThread: WorkspaceThread | undefined
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
-  projectChatSnapshot?: ProjectChatSnapshot
+  projectChatSnapshot?: ChatBrokerSnapshot
   projectChatEnabled: boolean
+  /** 非 Project scope（如 Runtime 开发窗口）自带 broker 通道；缺省时按 activeProject 就地构造。 */
+  chatBridge?: ChatBridge
+  /** 有值时禁用输入并用它作为拦截文案；用于 Runtime 未就绪或只读态。 */
+  submitBlockedReason?: string
   agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
   /** 按 threadId 查找持久化 sessionId（重启后恢复 SDK）/ Threads list for resolving persisted session ids */
   threads: WorkspaceThread[]
@@ -380,12 +383,21 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     onRunProjectSkill,
     onStopProjectSkillRun,
     projectWindow,
+    chatBridge: injectedChatBridge,
+    submitBlockedReason,
   },
   ref,
 ) {
   // --- Local state & refs / 组件状态与引用 ---
 
   const { t } = useI18n()
+  // Project scope 的 bridge 就地构造；Runtime 等其它 scope 由上层注入同一个接口。
+  const brokerScopeRef = useRef({ projectId: activeProject.id, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+  brokerScopeRef.current = { projectId: activeProject.id, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 }
+  const chatBridge = useMemo(
+    () => injectedChatBridge ?? (projectChatEnabled ? createProjectChatBridge(() => brokerScopeRef.current) : undefined),
+    [injectedChatBridge, projectChatEnabled],
+  )
   const chatItems = activeThread?.chatState.items ?? []
   const activeRunState = activeThread ? threadRunStates[activeThread.id] : undefined
   const isRunning = Boolean(activeRunState)
@@ -672,7 +684,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const refreshAgentContext = useCallback(async () => {
     if (projectChatEnabled) {
       try {
-        const result = await window.projectChat?.getAgentContext(activeProject.id)
+        const result = await chatBridge?.getAgentContext()
         setAgentContext(result?.ok ? projectChatAgentContextToCatalog(result.value) : null)
       } catch {
         setAgentContext(null)
@@ -691,7 +703,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     } catch {
       setAgentContext(null)
     }
-  }, [activeProject.id, activeProject.path, projectChatEnabled])
+  }, [activeProject.path, chatBridge, projectChatEnabled])
 
   // --- Effects: desktop IPC & settings sync / 副作用：桌面 IPC 与设置 ---
 
@@ -946,7 +958,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   useEffect(() => {
     if (projectChatEnabled) {
-      void window.projectChat?.getModelCatalog().then((result) => {
+      void chatBridge?.getModelCatalog().then((result) => {
         if (result?.ok) applyProjectModelCatalog(result.value)
       }).catch(() => undefined)
       return
@@ -961,7 +973,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
     window.addEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
     return () => window.removeEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
-  }, [applyGlobalModelFromSettings, applyProjectModelCatalog, projectChatEnabled])
+  }, [applyGlobalModelFromSettings, applyProjectModelCatalog, chatBridge, projectChatEnabled])
 
   useEffect(() => {
     if (!projectChatEnabled || !projectModelCatalog) return
@@ -1010,7 +1022,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (projectChatEnabled) {
       let active = true
       const timer = window.setTimeout(() => {
-        void window.projectChat?.searchProjectFiles({ projectId: activeProject.id, query }).then((result) => {
+        void chatBridge?.searchFiles({ query }).then((result) => {
           if (!active) return
           setFileMentionResults(result?.ok ? result.value.map((item) => ({ ...item, path: item.relativePath })) : [])
         }).catch(() => { if (active) setFileMentionResults([]) })
@@ -1033,7 +1045,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       window.clearTimeout(timer)
       searchSession.dispose()
     }
-  }, [activeComposerTrigger, activeProject.id, activeProject.path, projectChatEnabled])
+  }, [activeComposerTrigger, activeProject.path, chatBridge, projectChatEnabled])
 
   useLayoutEffect(() => {
     if (!composerAutocompleteOpen || !chatInputRef.current) {
@@ -1099,12 +1111,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     const pick = modelPickFromRow(row)
     if (activeThread?.id) {
       if (projectChatEnabled) {
-        const result = await window.projectChat?.setThreadModel({
-          projectId: activeThread.projectId,
-          threadId: activeThread.id,
-          modelPick: pick,
-          routeGeneration: projectChatSnapshot?.routeGeneration ?? 0,
-        })
+        const result = await chatBridge?.setThreadModel({ threadId: activeThread.id, modelPick: pick })
         if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
         return
       }
@@ -1131,7 +1138,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     setGlobalDisplayModel(pick.anthropicModel)
     setActiveModelSupportsImages(row.supportsImages)
     setModelPickerOpen(false)
-  }, [activeProject.id, activeThread?.id, activeThread?.projectId, onProjectHomeModelPickChange, onStatusChange, projectChatEnabled, projectChatSnapshot?.routeGeneration, setThreadChatState, t])
+  }, [activeProject.id, activeThread?.id, chatBridge, onProjectHomeModelPickChange, onStatusChange, projectChatEnabled, setThreadChatState, t])
 
   useLayoutEffect(() => {
     if (!modelPickerOpen || !modelPopoverAnchorRef.current) {
@@ -1554,6 +1561,10 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   ): Promise<boolean> => {
     const text = rawText.trim()
     if (!text && attachmentsForSubmit.length === 0) return false
+    if (submitBlockedReason) {
+      onStatusChange(submitBlockedReason)
+      return false
+    }
     if (text.toLowerCase() === '/status' && attachmentsForSubmit.length === 0) {
       clearComposerDraft()
       window.dispatchEvent(new CustomEvent(OPEN_AGENT_STATUS_EVENT, { detail: { refresh: true } }))
@@ -1565,8 +1576,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       target?.project ?? (activeThread ? projects.find((project) => project.id === activeThread.projectId) : undefined) ?? activeProject
 
     if (projectChatEnabled) {
-      const api = window.projectChat
-      if (!api) return false
+      if (!chatBridge) return false
       if (projectForSubmit.pathMissing) {
         onStatusChange(t('shell.projectPathMissingSubmitBlocked'))
         return false
@@ -1575,20 +1585,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       const creatingThread = !threadId
       const modelPickForSubmit = target?.modelPick ?? (creatingThread ? newThreadModelPick ?? currentModelPickRef.current : undefined)
       if (!threadId) {
-        const created = await api.createThread({ projectId: projectForSubmit.id, title: '新对话', source: 'user' })
-        if (!created.ok) { onStatusChange(created.error.message); return false }
+        const created = await chatBridge.createThread({ title: '新对话' })
+        if (!created?.ok) { onStatusChange(created?.error.message ?? t('chat.errorGeneric')); return false }
         threadId = created.value.threadId
         onSelectThread(threadId)
       }
-      const result = await api.submitRun({
-        projectId: projectForSubmit.id,
+      const result = await chatBridge.submitRun({
         threadId,
         text,
         attachments: attachmentsForSubmit.map(projectChatAttachmentFromComposer),
         modelPick: modelPickForSubmit,
       })
-      if (!result.ok) {
-        onStatusChange(result.error.code === 'thread-busy' ? '当前对话正在处理中，请等待完成后再发送。' : result.error.message)
+      if (!result?.ok) {
+        onStatusChange(result?.error.code === 'thread-busy' ? '当前对话正在处理中，请等待完成后再发送。' : result?.error.message ?? t('chat.errorGeneric'))
         return false
       }
       if (!target?.preserveComposerDraft) clearComposerDraft()
@@ -1706,7 +1715,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     (messageId: string) => {
       if (!activeThread) return
       if (projectChatEnabled) {
-        void window.projectChat?.forkThread({ projectId: activeThread.projectId, threadId: activeThread.id, messageId, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+        void chatBridge?.forkThread({ threadId: activeThread.id, messageId })
         return
       }
       const items = chatItems
@@ -1717,7 +1726,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       const title = activeThread.title
       onForkThread(activeProject.id, forkedItems, title, activeThread.chatState.model, activeThread.chatState.modelPick)
     },
-    [activeProject.id, activeThread, chatItems, onForkThread, projectChatEnabled, projectChatSnapshot?.routeGeneration, t],
+    [activeProject.id, activeThread, chatBridge, chatItems, onForkThread, projectChatEnabled, t],
   )
 
   const editUserMessage = (messageId: string, text: string) => {
@@ -1729,7 +1738,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!threadId) return
 
     if (projectChatEnabled) {
-      void window.projectChat?.editAndSubmitRun({ projectId: activeProject.id, threadId, messageId, text: nextText, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+      void chatBridge?.editAndSubmitRun({ threadId, messageId, text: nextText })
       return
     }
 
@@ -1918,12 +1927,10 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (projectChatEnabled) {
       const activePrompt = projectChatSnapshot?.pendingPrompts.find((item) => item.promptId === prompt.permissionRequestId)
       if (!activePrompt?.isOwnedByCaller) return
-      const result = await window.projectChat?.answerPrompt({
-        projectId: activePrompt.projectId,
+      const result = await chatBridge?.answerPrompt({
         threadId: activePrompt.threadId,
         requestId: activePrompt.requestId,
         promptId: activePrompt.promptId,
-        routeGeneration: projectChatSnapshot?.routeGeneration ?? 0,
         response: { permissionRequestId: prompt.permissionRequestId, ...decision },
       })
       if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
@@ -1974,7 +1981,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (projectChatEnabled) {
       if (isRunningRef.current) return
       try {
-        const result = await window.projectChat?.pickAttachments({ allowImages: activeModelSupportsImages })
+        const result = await chatBridge?.pickAttachments({ allowImages: activeModelSupportsImages })
         if (!result) {
           onStatusChange(t('chat.attachmentPickerUnavailable'))
           return
@@ -2261,12 +2268,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         onStatusChange('当前对话正在处理中，请等待完成后再发送。')
         return
       }
-      void window.projectChat?.cancelRun({
-        projectId: run.projectId,
-        threadId: run.threadId,
-        requestId: run.requestId,
-        routeGeneration: projectChatSnapshot?.routeGeneration ?? 0,
-      }).then((result) => {
+      void chatBridge?.cancelRun({ threadId: run.threadId, requestId: run.requestId }).then((result) => {
         if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
       }).catch(() => onStatusChange(t('chat.errorGeneric')))
       return
@@ -2415,7 +2417,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     (item: ChatFileDiffItem) => {
       const threadId = item.threadId?.trim() || activeThreadIdRef.current
       if (projectChatEnabled) {
-        void window.projectChat?.markFileDiffReviewed({ projectId: activeProject.id, threadId, changeSetId: item.changeSetId, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+        void chatBridge?.markFileDiffReviewed({ threadId, changeSetId: item.changeSetId })
         return
       }
       setThreadChatState(threadId, (prev) => {
@@ -2427,14 +2429,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return { ...prev, items: next }
       })
     },
-    [activeProject.id, projectChatEnabled, projectChatSnapshot?.routeGeneration, setThreadChatState],
+    [chatBridge, projectChatEnabled, setThreadChatState],
   )
 
   const rewindFileChanges = useCallback(
     async (item: ChatFileDiffItem) => {
       const threadId = item.threadId?.trim() || activeThreadIdRef.current
       if (projectChatEnabled) {
-        const result = await window.projectChat?.rewindFileDiff({ projectId: activeProject.id, threadId, changeSetId: item.changeSetId, routeGeneration: projectChatSnapshot?.routeGeneration ?? 0 })
+        const result = await chatBridge?.rewindFileDiff({ threadId, changeSetId: item.changeSetId })
         if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.fileDiffUnavailable'))
         return
       }
@@ -2460,7 +2462,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         setThreadChatState(threadId, (prev) => updateFileDiffStatus(prev, item.changeSetId, 'error', result.message || t('chat.fileDiffUnavailable')))
       }
     },
-    [activeProject, onStatusChange, projectChatEnabled, projectChatSnapshot?.routeGeneration, projects, setThreadChatState, t, threads],
+    [activeProject, chatBridge, onStatusChange, projectChatEnabled, projects, setThreadChatState, t, threads],
   )
 
   const composerContextUsage = useMemo(() => {
@@ -2494,15 +2496,21 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   const selectPermissionMode = useCallback((value: ClaudePermissionMode | ((previous: ClaudePermissionMode) => ClaudePermissionMode)) => {
     const mode = typeof value === 'function' ? value(permissionMode) : value
+    const setBrokerPermissionMode = chatBridge?.setPermissionMode
     if (!projectChatEnabled) {
       setPermissionMode(mode)
       return
     }
-    void window.projectChat?.setPermissionMode(mode).then((result) => {
+    // Runtime 开发对话没有独立开关：权限模式由主窗口 Project scope 决定。
+    if (!setBrokerPermissionMode) {
+      onStatusChange(t('chat.permissionModeManagedElsewhere'))
+      return
+    }
+    void setBrokerPermissionMode(mode).then((result) => {
       if (result?.ok) setPermissionMode(result.value)
       else onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
     }).catch(() => onStatusChange(t('chat.errorGeneric')))
-  }, [onStatusChange, permissionMode, projectChatEnabled, t])
+  }, [chatBridge, onStatusChange, permissionMode, projectChatEnabled, t])
 
   // --- Composer subtree (props-only; layout lives in `Composer.tsx`) / Composer 子树（仅传参；布局在 Composer 组件内）---
 
@@ -2510,7 +2518,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     <Composer
       inputValue={inputValue}
       isRunning={isRunning}
-      disabled={activeProject.pathMissing}
+      disabled={activeProject.pathMissing || Boolean(submitBlockedReason)}
       activeModelSupportsImages={activeModelSupportsImages}
       pendingAttachments={pendingAttachments}
       permissionMode={permissionMode}
@@ -2901,7 +2909,7 @@ function projectChatAgentContextToCatalog(context: ProjectChatAgentContext): Age
   }
 }
 
-function projectPromptToPendingInput(prompt: ProjectChatPromptSnapshot | undefined): PendingUserInputPrompt | null {
+function projectPromptToPendingInput(prompt: ChatBrokerPrompt | undefined): PendingUserInputPrompt | null {
   if (!prompt) return null
   return prompt.payload.kind === 'permission'
     ? {

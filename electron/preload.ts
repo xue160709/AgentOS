@@ -66,6 +66,12 @@ import {
   type SearchProjectChatFilesInput,
 } from '../src/project-chat-contract'
 import { PROJECT_CHAT_EVENT_CHANNELS, PROJECT_CHAT_INVOKE_CHANNELS } from '../src/project-chat-ipc-seam'
+import {
+  type RuntimeChatAPI,
+  type RuntimeChatEvent,
+  type RuntimeDevelopmentMainEvent,
+} from '../src/runtime-development-contract'
+import { RUNTIME_CHAT_INVOKE_CHANNELS } from './runtime-chat-ipc'
 
 const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
 
@@ -313,8 +319,23 @@ const desktopAdapter = {
   cancelRuntimeBuild(runtimeDefinitionId: string, buildId?: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild, runtimeDefinitionId, buildId) as Promise<RuntimeSnapshot | null>
   },
+  setRuntimeServeOverride(runtimeDefinitionId: string, serveOverride: 'artifact' | 'server' | null) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setRuntimeServeOverride, runtimeDefinitionId, serveOverride) as Promise<RuntimeSnapshot | null>
+  },
   startRuntimeDevelopment(runtimeDefinitionId: string, consumerId?: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startRuntimeDevelopment, runtimeDefinitionId, consumerId) as Promise<RuntimeSnapshot>
+  },
+  openRuntimeDevelopment(target) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openRuntimeDevelopment, target)
+  },
+  focusRuntimeDevelopmentConflict(conflictToken: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.focusRuntimeDevelopmentConflict, conflictToken)
+  },
+  endRuntimeDevelopment(target) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.endRuntimeDevelopment, target)
+  },
+  openRuntimeDevelopmentThread(threadId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openRuntimeDevelopmentThread, threadId)
   },
   createRuntimePreview(host: RuntimePreviewHost) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createRuntimePreview, host) as Promise<RuntimePreviewResult>
@@ -355,6 +376,11 @@ const desktopAdapter = {
     const listener = (_event: IpcRendererEvent, event: RuntimeEvent) => handler(event)
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onRuntimeEvent, listener)
     return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onRuntimeEvent, listener)
+  },
+  onRuntimeDevelopmentEvent(handler: (event: RuntimeDevelopmentMainEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: RuntimeDevelopmentMainEvent) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onRuntimeDevelopmentEvent, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onRuntimeDevelopmentEvent, listener)
   },
   ensureProjectRuntime(projectId: string, mountId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.ensureProjectRuntime, projectId, mountId) as Promise<ProjectRuntimeResult>
@@ -570,13 +596,52 @@ const projectChatAdapter: ProjectChatAPI = {
   },
 }
 
+const runtimeChatAdapter: RuntimeChatAPI = {
+  getSnapshot: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getSnapshot),
+  createThread: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.createThread, input),
+  submitRun: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.submitRun, input),
+  forkThread: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.forkThread, input),
+  editAndSubmitRun: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.editAndSubmitRun, input),
+  archiveThread: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.archiveThread, input),
+  setThreadPinned: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.setThreadPinned, input),
+  setThreadModel: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.setThreadModel, input),
+  markFileDiffReviewed: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.markFileDiffReviewed, input),
+  rewindFileDiff: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.rewindFileDiff, input),
+  cancelRun: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.cancelRun, input),
+  answerPrompt: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.answerPrompt, input),
+  getModelCatalog: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getModelCatalog),
+  getAgentContext: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getAgentContext),
+  searchFiles: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.searchFiles, input),
+  pickAttachments: (options) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.pickAttachments, options),
+  readAttachments: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.readAttachments, input),
+  getThreadStatus: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getThreadStatus, input),
+  getWindowContext: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getWindowContext),
+  getWindowViewState: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getWindowViewState),
+  saveWindowViewState: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.saveWindowViewState, input),
+  reportPresenceSelection: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.reportPresenceSelection, input),
+  onEvent(handler: (event: RuntimeChatEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: RuntimeChatEvent) => handler(event)
+    ipcRenderer.on('runtime-chat:event', listener)
+    return () => ipcRenderer.off('runtime-chat:event', listener)
+  },
+}
+
 /** Only Main-controlled BrowserWindow additionalArguments select this profile. */
 export function isProjectChatWindowProfile(argv: readonly string[] = process.argv): boolean {
   return argv.includes('--agentos-window-kind=project-chat')
 }
 
-if (!isProjectChatWindowProfile()) {
+export function isRuntimeDevelopmentWindowProfile(argv: readonly string[] = process.argv): boolean {
+  return argv.includes('--agentos-window-kind=runtime-development')
+}
+
+if (isRuntimeDevelopmentWindowProfile()) {
+  // Runtime 开发窗口只能访问 capability-scoped Runtime Chat；不暴露 desktop、Project 或 Node/path API。
+  contextBridge.exposeInMainWorld('runtimeChat', runtimeChatAdapter)
+} else if (isProjectChatWindowProfile()) {
+  contextBridge.exposeInMainWorld('projectChat', projectChatAdapter)
+} else {
   contextBridge.exposeInMainWorld('desktop', desktopAdapter)
   contextBridge.exposeInMainWorld('claudeChat', claudeChatAdapter)
+  contextBridge.exposeInMainWorld('projectChat', projectChatAdapter)
 }
-contextBridge.exposeInMainWorld('projectChat', projectChatAdapter)

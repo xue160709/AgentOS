@@ -1,15 +1,44 @@
 ---
 change_id: chg-20260818-agent-command-channel
-revision: 3
+revision: 4
 decision: accepted
 delivery: in_progress
 owner: main_agent
 confirmation_source: explicit_user_statement
 confirmed_scope: "Revision 2 已确认范围继续有效；2026-08-30 新增 C-RDS-301–309：Project Runtime 与 Workspace Runtime 独立；项目首页不跳工作台；一键打开 Runtime 专用开发 Chat；窗口级开发会话允许多轮修改；关闭窗口或主窗口结束动作统一请求收口；成功修改在会话结束时一次性更新已保存预览；失败保留 last-good；普通用户不接触 npm/dev/build 术语；Runtime 开发对话不混入普通对话列表但可持久恢复和全局搜索；同路径已有实时开发时阻止第二实例并提供显式切换；主按钮使用“用 AI 修改”，退出动作使用“结束修改”"
+confirmed_scope_r4: "2026-08-30 新增 C-RSM-401–407：Runtime 如何被查看由系统探测决定而非项目申报；探测三档（已有静态产物直接伺服 / 可构建则构建一次 / 构建不出静态才保持 npm run dev）；dev 只出现在开发会话或第三档；探测结论可见且可手动覆盖；自建与导入目录一视同仁；浏览态不占同路径执行资源；卡片必须同时显示 Runtime 状态与开发会话状态并提供启动入口与显式冲突提示"
 spec_status: BUILDABLE
 ---
 
 # Agent 指令通道与独立项目 Chat 窗口
+
+## Revision 4：Runtime 伺服模式探测（BUILDABLE / Planned）
+
+### 为什么修订
+
+Revision 3 用 `package.json` 的 `agentos` 声明块作为"这个 Runtime 能不能提供已保存预览"的唯一开关。真实使用证明这条路不成立：
+
+- 用户导入的项目永远不会带这个块。实测 `/Github/homepage` 与 `/Github/codenow.wiki` 都已配置 `output: "export"` 且 `out/index.html` 就在目录里，应用却完全看不见，坚持启动 `npm run dev`。
+- 连 AgentOS 自己创建的 `/data/.agentos` 也没有该块，且创建 prompt 从未要求写入，因此自建 Runtime 同样退化为常驻 dev。
+- 常驻 dev 又让同一目录上的两个 Runtime 争抢 root 执行锁，项目首页的卡片因此无法运行。
+
+Revision 4 把判断责任从项目挪回系统：**能不能"平时静态地看"，由后端探测目录事实得出，而不是等项目申报。** 用户要的是"平时看的是构建产物，只有让 AI 改的时候才跑 dev"，这对自建 Runtime 和导入项目一视同仁。
+
+### 已确认范围
+
+| ID | 已确认产品事实 | 来源 |
+| --- | --- | --- |
+| `C-RSM-401` | Runtime 如何被查看由系统探测目录事实决定；`agentos` 声明块降级为可选覆盖，不再是唯一开关 | 2026-08-30 用户："导入的项目不可能有这个声明块，应该是我们后端帮它做" |
+| `C-RSM-402`（2026-08-30 修订） | 探测收敛为四档：① 已有可用静态产物 → 文件伺服，零进程；② 已有服务端产物且有启动脚本 → 直接 `npm run start`，不重新构建；③ 有构建脚本 → 构建一次，产出静态产物回到 ①，否则有启动脚本落到 ②；④ 都不成立而有 dev 脚本 → `npm run dev` | 用户先要求删除生产服务器档，实测 `/data/.agentos` 的 `next build` 产出 0 个 HTML、三个 `force-dynamic` API 路由后改为"把 B 加回来"，并要求覆盖"已经做好的 `.next` 直接运行" |
+| `C-RSM-403`（2026-08-30 修订） | `npm run dev` 只允许出现在两种情况：Runtime 开发会话进行中，或第 ④ 档（连生产启动都不可用）。浏览态优先用静态产物，其次用生产服务器 | 2026-08-30 用户："只有进入开发者模式才使用 npm run dev" + 生产档回归 |
+| `C-RSM-404` | 探测结论对用户可见，并且可以手动覆盖；覆盖持久化在 Definition 上，后续探测不推翻用户的显式选择 | 2026-08-30 用户回答"能" |
+| `C-RSM-405` | 探测适用于所有 Runtime：AgentOS 自建的 `.agentos` 与用户导入的任意目录使用同一套规则 | 2026-08-30 用户："不能只是我们的 runtime 做这个事情，导入其他的网站也需要" |
+| `C-RSM-406` | 项目首页 Runtime 与工作台 Runtime 各自独立探测、构建与伺服；浏览态不占用同路径执行资源，同一目录可同时在两处查看；只有 dev 与构建需要互斥 | `C-RDS-301` 的延续 + 2026-08-30 用户"两者没有直接的关系" |
+| `C-RSM-407` | Runtime 卡片必须同时显示 Runtime 自身状态与开发会话状态；停止态提供启动入口；浏览路径上的同路径冲突必须显式告知并提供切换，不得静默失败 | 2026-08-30 用户实测"项目首页的卡片现在无法运行" |
+
+### 与 Revision 3 的冲突处置
+
+Revision 3 的 `ATDD-EDIT-206`「无声明不猜命令」被本轮**显式放宽**：系统可以依据目录里的产物、框架配置与 `package.json` scripts 推导伺服方式，但推导必须可解释、可显示、可被用户覆盖，且不得凭空发明命令。禁止的仍然是"没有任何依据地猜测启动方式"。Revision 3 的其余合同（开发会话、结束协议、last-good、对象隔离）全部继续有效。
 
 ## Revision 3：Runtime 专用开发会话（BUILDABLE / Planned）
 

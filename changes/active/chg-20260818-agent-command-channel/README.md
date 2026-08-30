@@ -1,8 +1,10 @@
 # Revision 3 Spec Package
 
-> 状态：Revision 3 `BUILDABLE / Planned`，尚未实施；Revision 2 的 M0–M2、M3-01 与两张缺陷单业务实现已落盘但未正式验收。Revision 3 已取代其中 Runtime 开发会话、Workspace backing Project 与 Project/Workspace Runtime 共享语义，旧 `CHECK-02` 不能关闭整个 Change。
+> 状态：Revision 3 工程实现与 Development Check 已完成，结论 `PASS_WITH_RISK`；尚未进入正式 Acceptance。Revision 3 已取代 Revision 2 中的 Runtime 开发会话、Workspace backing Project 与 Project/Workspace Runtime 共享语义，旧 `CHECK-02` 不能关闭整个 Change。
 >
 > 2026-08-29 由 `BUG-AUDIT-WS-02` 修正：本文此前长期写着"业务实现未开始"，与代码严重不符，已按事实更新。
+>
+> 2026-08-30 补记：`R3-CHECK-02` 之后，用户在真实应用内报告两处 `R3-06` 缺陷（项目首页仍被 Main 陈旧 `activeWorkspaceTabId` 拉回工作台；Runtime 开发文案写错命名空间，界面显示原始 key）。已由 `R3-FIX-USER-01` 修复并补齐回归。两条缺陷都发生在自动化未覆盖的真实渲染路径上，因此 Change 仍不得在没有真实 Electron GUI 证据的情况下关闭。
 
 ## 从这里开始
 
@@ -40,7 +42,7 @@
 | `FIX-WS-01` | P0 新建项目不落盘且不可用；P0 项目移除/重定位/置顶/排序不落盘（含路径丢失恢复流程）；P1 侧栏与首页偏好不落盘；ownership audit | 已完成 |
 | `FIX-CHAT-01` | P0 侧边栏归档/置顶不落盘并被 snapshot 回滚；P0 归档运行中会话的文案/实现/broker 合同三方不一致；P1 readiness 三态 | 已完成 |
 
-工作区现在只有一条 durable 写路径：Main。renderer 只发意图并采纳回读后的权威快照，selection 仍归 renderer。该 Revision 2 收口事实继续保留；Revision 3 的 `DECIDE-RUNTIME-03 → TECH-RUNTIME-03` 已完成，下一门是精确 work order 后的 `DEV/ATDD-RUNTIME-03`。
+工作区现在只有一条 durable 写路径：Main。renderer 只发意图并采纳回读后的权威快照，selection 仍归 renderer。该 Revision 2 收口事实继续保留；Revision 3 的 `DECIDE-RUNTIME-03 → TECH-RUNTIME-03 → PLAN-RUNTIME-03 → R3-01 → R3-02 → R3-03 → R3-04 → R3-05 → R3-06 → R3-07 → R3-CHECK-02` 已完成，最终 Development Check 为 `PASS_WITH_RISK`，不是正式 Acceptance。
 
 ## 已识别的过度设计与处置
 
@@ -55,4 +57,6 @@
 完成后回报修改文件、合同映射、测试命令/退出码和未验证风险；遇到停止条件立即停工，不自行补设计。
 ```
 
-Revision 3 已达到 BUILDABLE，但不得把现有 `CHECK-02` 或旧 M2/M3 work order 当作新方案实施入口。`TECH-RUNTIME-03` 已完成；实施前必须根据 `technical.md T3.11` 生成精确 Revision 3 work order 和 allowlist。
+Revision 3 已完成工程实现与只读 Development Check；首次 `R3-CHECK` 的 prospective-root P0 与 submit/exit P1 已分别由 `R3-FIX-CHECK-01/02` 修复并在 `R3-CHECK-02` 独立确认，无新增 P0/P1。剩余风险是 exact 默认并发 Electron suite 在 `local-app-runtime.test.mjs` pending、真实 Electron GUI smoke 未执行以及既有 notarization 配置缺失；任何工程复验或 Development Check 都不得冒充正式 Acceptance。
+
+2026-08-30 复核后的关闭前剩余项：`R3-FIX-USER-01` 的两条缺陷已修复且串行全量 427/427 PASS，但 exact `npm run test:electron` 在本机再次于 `electron/local-app-runtime.test.mjs` pending（该文件单独运行 24/24 PASS，属默认并发下的 fixture 资源竞争），`ATDD-RDS-301`–`309` 要求的真实 Electron GUI smoke 与 `ATDD-LINK-201` 的 macOS cold/warm deep-link smoke 仍未执行，Revision 2 的 `CHECK-02` 与 Revision 1 的 `VER-01` 仍未关闭。归档条件未满足。

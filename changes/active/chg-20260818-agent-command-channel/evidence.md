@@ -73,6 +73,196 @@
 - actual_execution: `main_direct`
 - actors: `main=DONE@TECH-RUNTIME-03/main`；证据指针：`technical.md T3.7`–`T3.12` 状态机、late-event 不变量、findings 与自动化/Electron smoke 门禁
 
+## PLAN-RUNTIME-03（2026-08-30）
+
+- `confirmed_artifact`：`technical.md T3.11` 的六段迁移序列已拆为七张串行 writer 单：R3-01 data、R3-02 broker、R3-03 Runtime identity、R3-04 transaction、R3-05 window、R3-06 surface cutover、R3-07 recovery hardening；另有只读 `R3-CHECK`。
+- 每张 writer 单已列出 `change_id@revision`、精确来源、依赖、exact write allowlist、V3 五面、最小验证、交付与停止条件。仓库内 writer/baseline 明示为 `UNASSIGNED`，因此文档生成不冒充派发或业务代码写权。
+- 依赖强制串行：核心合同与 `electron/main.ts` 等路径跨单重叠，且后单的正确性依赖前单冻结的 data/broker/identity/state/window contract，不满足安全并行条件。
+- `verified / V0`：工单路径/依赖/ATDD 引用与 `technical.md T3.2–T3.12`、两个正式 PRD acceptance 做静态核对；未改业务代码、未执行正式验收。
+
+### ORCH-011
+
+- skill: `change-package`
+- actual_execution: `main_direct`
+- actors: `main=DONE@PLAN-RUNTIME-03/main`；证据指针：`work-orders/R3-01`–`R3-07`、`R3-CHECK`、`work-orders/README.md` 依赖图与 `tasks.md` 映射
+
+### ORCH-012
+
+- `confirmed_artifact`：`R3-01` 由 Builder task `01a050c3-fb77-7fb0-9ed8-0586fd2665df` 在 attempt 2 完成，主任务按同一 allowlist 与命令独立复验后 accepted。
+- 关键证据：Runtime Thread 使用独立 `runtime_development_threads` 与 `runtime-development-workspace.json`；无 Project FK；`idx_runtime_threads_scope_updated` 存在；rollout 按 revision 分路径，双介质失败不会把新 Transcript 混入旧 revision；unknown owner/scope、website source、duplicate id、stale revision 均拒绝。
+- 回归证据：普通 Project Thread 的共享 rollout reader 保留有效前缀恢复；ordinary workspace save 不删除 Runtime 行、sidecar 或旧 app-command Thread。
+- 命令：`npm run typecheck` exit 0；`node --test electron/project-chat-contract.test.mjs electron/chat-workspace-store.test.mjs electron/runtime-development-thread-store.test.mjs` 28/28 PASS；`git diff --check` exit 0。
+- 边界：未接 broker、Main/preload、React、Runtime manager 或窗口入口；未执行正式验收。下一 writer 单为 `R3-02`。
+
+### ORCH-013
+
+- `confirmed_artifact`：`R3-02` 由 Builder task `01a050ce-f5f5-7b50-b05f-8dd84c6b2876` 完成，主任务核对 allowlist、唯一 core/reducer/Runner 路径并独立复验后 accepted。
+- 关键证据：Project/Runtime facade 共用 `ChatBrokerCore`；原 Project 54/54 回归保持；Runtime capability 拒绝 Preview、未知 sender、Project/Main window、subframe、错误 document/origin、renderer 自报 scope/root/cwd/双 generation/durable state、跨 scope threadId 与 stale capability。
+- 路由与文件证据：request route 在 Runner accepted 前冻结 scope/thread/routeGeneration/developmentGeneration；广播匹配完整 scope 与双 generation；Runtime reliable mutation 拒绝 traversal、root 外路径与 symlink escape，Bash 仍只声明 app-global 权限。
+- 命令：`npm run typecheck` exit 0；`node --test electron/project-chat-broker.test.mjs electron/project-chat-ipc.test.mjs electron/project-chat-runtime-services.test.mjs electron/runtime-chat-broker.test.mjs electron/runtime-chat-ipc.test.mjs` 69/69 PASS；`git diff --check` exit 0。
+- 环境与边界：`validate_electron_foundation.py --root .` 因仓库既有非 electron-vite 架构（无对应 config/watch/ELECTRON_RENDERER_URL 约定）exit 1；未修改 allowlist 外地基。未注册 `main.ts`/preload/UI/Runtime coordinator/window，下一 writer 单为 `R3-03`。
+
+### ORCH-014
+
+- `confirmed_artifact`：`R3-03` 由 Builder task `01a050ea-8178-7250-87a9-3716c8778fd9` 完成，主任务按 `interaction-flow-review` 复核 acquire/conflict/transition/stop failure/stale release 后 accepted。
+- Definition 隔离：删除 `ownerByDedupeKey`、path alias 与抢占式 `stopOwnedDevelopmentRuntimes`；同 root 不同 Definition 的 snapshot、generation、consumer、event、artifact 均独立，第二个实时 Definition 在 spawn 前 conflict，零进程副作用；静态 last-good Preview 不占 lease。
+- lease 矩阵：同 Definition acquire 幂等；development→build 仅同 Definition 且换发 leaseId；stale/duplicate release 不释放当前 lease；transition/stop failure 保留 `stop_failed`；最后 consumer 经过 bounded stop 才 release；static-only/uninitialized 的 development lease 仍参与互斥。
+- 命令：`npm run typecheck` exit 0；目标 Node tests 沙箱内因 fixture `listen EPERM 127.0.0.1` 为 40/41，允许回环监听环境原命令 41/41 PASS；`git diff --check` exit 0。
+- 边界：未接开发窗口、自动保存、UI 或 R3-04 coordinator；真实 Electron remove/relocate、trust revoke、app quit 留后续 smoke。下一 writer 单为 `R3-04`。
+
+### ORCH-015
+
+- `confirmed_artifact`：`R3-04` 由 Builder task `01a050f5-6ff2-7931-be12-a8f52257fd6b` 两个 attempt 完成；主审发现 bridge 直接记录 `Error.message` 可能泄露 root/命令/token/用户内容，attempt 2 改为固定 operation/scopeKind/枚举 code 并补敏感异常测试后 accepted。
+- transition 证据：多轮不 build；active Run 关窗不中止；waiting prompt close/reenter；double exit；saving 中 reenter；failed-with/without-mutation；30s timeout/manual retry；build fail；late save；duplicate terminal/release；app quit fence 均有自动化覆盖。fake clock 验证 1500ms quiet window 与 30000ms 总上限。
+- 原子性证据：Runtime Run 只登记新 coordinator；旧 Project RuntimeEditCoordinator 回归保持；last-good pointer rename 前同步复核 `runtimeScopeId + routeGeneration + developmentGeneration + operationId`，旧 generation 不发布 artifact、不切 Preview、不关闭或释放新会话。
+- 命令：`npm run typecheck` exit 0；完整目标 Node tests 沙箱内唯一 `listen EPERM 127.0.0.1`，允许回环监听环境 74/74 PASS；`git diff --check` exit 0。
+- 边界：未接真实 Electron 窗口、跨窗口 close/focus、app restart 或 Main/IPC composition；下一 writer 单为 `R3-05`。
+
+### ORCH-016
+
+- `confirmed_artifact`：`R3-05` 由 Builder task `01a05108-a4ad-7852-bf84-0d96f1c0aa40` 完成，主任务抽查 preload/profile、native close、late load 与 view-state scope 后 accepted。
+- 生命周期证据：same-scope open 仅 show/focus；跨 scope 独立；native close 先同步 `requestExit`，再 flush view state 与 destroy；closed/destroyed 只做幂等 cleanup，不产生第二 exit，也不 cancel Main 中的 Run。load failure 和 close-during-load 会撤销 capability/presence/window ref，迟到 activation 被 window identity + scope + 双 generation 拒绝。
+- capability/恢复证据：Runtime profile 只暴露 `runtimeChat`，不暴露 desktop/Project/Node/path；Preview/main/Project/unknown/subframe/wrong document/query spoof/stale generation 拒绝；scope/thread/draft/bounds 独立持久化，跨 scope selected Thread 拒绝；prompt owner close 后清空、reopen 只转移一次。
+- 命令：`npm run typecheck` exit 0；目标 Node tests 41/41 PASS；`git diff --check` exit 0。Electron foundation 既有非 electron-vite 差异继续保留。
+- 边界：未改项目首页/工作台入口；真实 Electron focus、多显示器 bounds、native close 与 prompt 人工 smoke 未执行。下一 writer 单为 `R3-06`。
+
+### ORCH-017
+
+- `confirmed_artifact`：`R3-06` 由 Builder task `01a0511a-812c-7343-8879-a754fb6c109b` 完成；主任务核对入口 payload、legacy reachability、Main snapshot 与 generation fence 后 accepted。
+- 入口证据：项目首页只发送 `{projectId,mountId}`，不切工作台 Tab；工作台只发送 `{workspaceTabId}`，不创建或打开 backing Project；未初始化 Runtime 进入受控创建提示。Project/Workspace 的 scope、窗口、Thread 与 view state 分离，只有 root execution lease 冲突时聚焦既有 owner 窗口。
+- 状态证据：项目首页、工作台、全局搜索与开发窗口统一消费 Main-owned Runtime snapshot；旧 `openWorkspaceTabProjectChat` 路径从 production composition 不可达，legacy collaborator 明确拒绝；动作文案收敛为“用 AI 修改 / 结束修改”。
+- 命令：`npm run typecheck` exit 0；目标 Node tests 40/40 PASS；`npm run build` exit 0，完成签名与 DMG/ZIP（notarization 仍因既有配置缺失跳过）；`git diff --check` exit 0。
+- 边界：未执行真实 Electron 项目首页/工作台/搜索/focus GUI smoke，也未把工程复验表述为正式验收。下一 writer 单为 `R3-07`。
+
+### ORCH-018
+
+- `confirmed_artifact`：`R3-07` 由 Builder task `01a05136-810f-7813-966b-36875524b5db` 实现；该 task 在可选 computer-use smoke 授权处等待后，主任务接管只读复验并接受代码 slice。
+- 中断/恢复证据：app quit 先冻结 coordinator 且不启动 save；remove/relocate/trust revoke 在 active development 时 busy，先完成纯命令校验，再有界停止旧 process tree 后变更 owner/root/trust；旧 route/generation 失效，Definition removed 保留只读 Thread，static restart 先显示 last-good 再标 stale。
+- 完整性/可访问性证据：development-only close 只释放 session consumer；last consumer 才停进程/释放 lease；rollback 不删除 Runtime collection/sidecar/view state/last-good；开发窗口本地化错误、单次 focus、disabled composer、role/status/alert、aria-busy/aria-live 均有 source/behavior 断言，日志只保留固定 code。
+- 命令：`npm run typecheck` exit 0；R3-07 定向 tests 86/86 PASS；`npm run build` exit 0；`git diff --check` exit 0。Builder 串行全量在 loader 修复前为 407/409，主任务默认并发复跑另遇 local-app fixture pending；`R3-FIX-01` 后单文件串行全量 409/409 PASS。
+- 边界：真实 Electron GUI smoke 因可选操作授权未执行；默认并发 `npm run test:electron` 的 local-app fixture 竞争留给 `R3-CHECK` 独立定性，不签正式验收。
+
+### ORCH-019
+
+- `confirmed_artifact`：`R3-FIX-01` 由 Builder task `01a05153-56b2-7943-ba55-49648622f3ae` 完成，主任务核对精确两文件 diff 后 accepted。
+- 根因：R3-02 让 `claude-agent-runner.ts` 引入 `./chat-broker-core` 的 Runtime containment helper，但 `chat-run.test.mjs` 与 `project-chat-contract.test.mjs` 的手工 loader 未提供该依赖，导致两个与 containment 无关的 Runner 回归测试在装载阶段失败。
+- 修复：仅在两份测试 loader 中提供异步 true stub；生产 `runtimeMutationTargetAllowed`、Runtime root/symlink containment 与对应负例均未改。
+- 命令：目标 tests 17/17 PASS；`node --test --test-concurrency=1 electron/*.test.mjs` 409/409 PASS；`git diff --check` exit 0。下一阶段为只读 `R3-CHECK`。
+
+### ORCH-020
+
+- `confirmed_artifact`：首次 `R3-CHECK` 由独立 Verifier task `01a05156-67a7-7c00-955e-173c8edd982c` 只读执行，结论 `FAIL`，未签正式 Acceptance。
+- P0：未初始化 Project 在 `main.ts` 无 Definition 分支直接 ready，bridge 只在 Definition 存在时取得 lease；Main 冲突预检只能看到既有 lease，因此同 prospective root 的 Workspace 请求可并发，违反 ATDD-RDS-301/C-021/ATDD-RUNTIME-DEV-301。
+- P1：Runtime submit 持久化后等待 `runner.submit()`，coordinator 仅在 requestId 返回后登记 active Run；close/end 可先 settle，迟到 accepted registration 被拒绝且返回值被忽略，违反 ATDD-RDS-304/305、C-025/026、ATDD-RUNTIME-DEV-303。
+- 门禁：typecheck/build/diff-check exit 0；串行诊断 409/409；exact 默认并发 Electron suite 在 local-app fixture pending，非 PASS；真实 Electron smoke 未执行。
+- 处置：冻结 `R3-FIX-CHECK-01 → R3-FIX-CHECK-02 → R3-CHECK-02` 串行链，修复前不得给出 Revision 3 Development PASS。
+
+### ORCH-021
+
+- `confirmed_artifact`：`R3-FIX-CHECK-01` 由 Builder task `01a05163-37cb-74b1-8575-6f357d641ae8` 完成，主任务复核 Main 派生、Registry rebind 与释放 fence 后 accepted。
+- 互斥证据：prospective root 由 Main fresh-read Project path 后 realpath 并追加固定 `.agentos`；在 BrowserWindow/controlled prompt 前 acquire。Project-first/Workspace-first 第二方均 conflict 且无 process/coordinator 副作用，symlink parent 不能绕过。
+- 连续性证据：Definition 出现后重新 inspect/canonicalize；Registry 在同一串行临界区先发布新 token、再按旧 leaseId 删除旧 key，冲突保留双方原 lease，旧 token 无法释放 rebound token。manager 采用该 exact token，无释放后再获取窗口。
+- 回收证据：controlled creation 提交失败、native close、route invalidation、quit 都按 authority/leaseId 幂等释放；不停止另一 owner，不删除 Thread/sidecar/last-good。
+- 命令：`npm run typecheck` exit 0；目标 tests 38/38 PASS；`git diff --check` exit 0。下一 writer 单为 `R3-FIX-CHECK-02`。
+
+### ORCH-022
+
+- `confirmed_artifact`：`R3-FIX-CHECK-02` 由 Builder task `01a0516e-de5b-78f2-a937-3d31d684e948` 完成，主任务复核 Core route 撤销、coordinator 原子换绑与回滚语义后 accepted。
+- 线性化证据：Runtime adapter 在 `runner.submit()` 前同步登记 pending authority；accepted 将 pending ID 原子换绑真实 requestId，exit→accepted 与 accepted→exit 均只有一个 active Run。31 秒 submit 延迟不计入 settle timeout，不发 save/closed。
+- 失败证据：submit rejection 清理 Core pending/coordinator authority；无 mutation 正常 closed 且零 save，有可靠 mutation 则 needs_attention。accepted registration failure 先移除 Core route/run，再立即 cancel Runner；迟到 event 找不到 route，不能写 Thread 或 mutation。
+- 边界：Project adapter 未接 Runtime submitting hook，保留原失败 snapshot/submit 语义；renderer、generation fence、prompt/double-exit/reenter/late event 不变。
+- 命令：`npm run typecheck` exit 0；目标 tests 26/26 PASS；`git diff --check` exit 0。下一阶段为只读 `R3-CHECK-02`。
+
+### ORCH-023
+
+- `confirmed_artifact`：最终 `R3-CHECK-02` 由独立 Verifier task `01a05179-413b-7ac1-b77b-3cd2166d2587` 只读执行，结论 `PASS_WITH_RISK`，未签正式 Acceptance。
+- finding 复核：原 P0 prospective-root lease 已覆盖未初始化 Project、Project-first/Workspace-first、symlink parent、rebind 与失败/close/route/quit 回收；原 P1 submit/exit race 已覆盖 pending authority、accepted 原子换绑、reject/registration-failure 回滚及 31 秒 delayed submit。两项均确认修复，无新增 P0/P1。
+- 自动化证据：`npm run typecheck`、`npm run build`、`git diff --check` 均 exit 0；P0 定向 tests 38/38、P1 定向 tests 26/26、`node --test --test-concurrency=1 electron/*.test.mjs` 424/424 PASS。build 完成 app/DMG/ZIP，notarization 因既有配置缺失跳过。
+- 风险证据：exact `npm run test:electron` 在沙箱为 421/424（3 个 loopback fixture `listen EPERM 127.0.0.1`）；在允许回环的授权环境连续两次均停于 `electron/local-app-runtime.test.mjs` pending 后有界终止，最终观察 421 pass / 0 fail / 1 cancelled，因此不得写成 exact suite PASS。真实 Electron GUI smoke 未执行，同路径冲突后的窗口聚焦、实际独立窗口与多显示器/焦点链仍待正式验收。
+- 门禁结论：Revision 3 工程序列与 Development Check 已完成，可报告 `PASS_WITH_RISK`；Change 的正式 Acceptance、GUI 证据与 exact 默认并发套件问题仍保持开放。
+
+### 用户实测缺陷（2026-08-30，`R3-FIX-USER-01` 来源）
+
+- `explicit_user_statement`：用户在真实应用内使用后报告"项目首页的运行时现在还是依然跳到工作台"，并报告"工作台的所有文本现在都没有进行翻译"。两条均在 `R3-CHECK-02` 之后、由用户而非自动化发现。
+- 缺陷 1 根因链（只读复核确认）：`R3-06` 的入口本身干净，项目首页只发 `{projectId,mountId}`；跳转来自 `adoptAuthoritativeWorkspace` 把空 `activeThreadId`/`activeWorkspaceTabId` 判为"本地无意见"并回退 Main 旧值。broker mode 下 renderer 不再持久化选中态且 `WorkspaceCommand` 无 selection variant，Main 的 `activeWorkspaceTabId` 长期陈旧；项目首页切"运行时"页签发出的 `preferences.set` 回包即触发覆盖，`ensureTrustedProjectRuntime` 的整份 `setChatWorkspace(authoritative)` 还把它写进 localStorage。`AppShellWorkspace` 的 `isRuntimeActive` 只要该字段非空就隐藏 `ChatPage`。
+- 缺陷 2 根因：`R3-06` 新增的 25 条 Runtime 开发文案写入旧 `localApp` 段，渲染层读的是 `runtime.*`，`translate()` 未命中即返回原始 key。冻结文案"用 AI 修改/结束修改"从未真正显示。既有遗留 `previewNavigation` 同类。
+- 检查缺口（对 `R3-CHECK-02` 的修正）：`ATDD-RDS-301` 的"不改变 active tab/project"只由 source-grep 断言入口未调用 `openWorkspaceTab`，未覆盖快照合并这条真实覆盖路径；`ATDD-RDS-309` 的"UI copy assertions"只断言源码里出现 `t('runtime.modifyWithAi')`，未断言该 key 能解析。两项的既有自动化证据不足以支撑其"最低证据"列，`PASS_WITH_RISK` 对这两条被高估。
+
+### ORCH-024
+
+- `confirmed_artifact`：`R3-FIX-USER-01` 由主任务在用户授权下直接实现并补记任务单；write allowlist 六文件，未触碰 Main selection 所有权、workspace 命令 DTO、Runtime coordinator/window/registry 与 `localApp` 段中仍被 `LocalAppPreview.tsx`/`LocalAppWorkspace.tsx` 使用的旧键。
+- 选中态证据：空 `activeThreadId`/`activeWorkspaceTabId` 现在被判为项目首页这一有效选择，合并 Main 快照后保持为空并同步 `activeLocalAppTabId`；非空但对象消失时仍回退 Main，原有两条断言语义不变。`ensureTrustedProjectRuntime` 改走同一 `adoptAuthoritativeWorkspace(..., { preserveSelection: true })`，并把合并结果而非 Main 原始快照写入 localStorage，避免跳转跨重启固化。
+- 文案证据：25 条 Runtime 开发文案与 `previewNavigation` 从 `localApp` 段移入 `runtime` 段（中英各一份，键名与文案内容不变）；源码内 1007 个静态 `t()` 键在 zh/en 两份目录全部解析，此前中英同缺 17 个。
+- 回归证据：新增 `electron/ui-locale-keys.test.mjs` 扫描全部静态 `t('a.b')` 并断言双目录解析，使"写错命名空间"成为可检失败；`electron/workspace-command-client.test.mjs` 新增空选中态用例（原三条只覆盖非空选择与 `preserveSelection:false`）。
+- 命令：`npm run typecheck` exit 0；`node --test electron/ui-locale-keys.test.mjs electron/workspace-command-client.test.mjs` 19/19 PASS；`node --test --test-concurrency=1 electron/*.test.mjs` 427/427 PASS（424 基线 + 本单 3 条）；`npx vite build` exit 0；`git diff --check` exit 0。
+- 边界：冷启动仍按 Main 陈旧 `activeWorkspaceTabId` 直接进入工作台（`restoreWorkspaceSessionState` 项目首页分支保留该字段），需另开工单以 `selection.set` 命令或 adopt/restore 剥离 selection 收口。真实 Electron GUI smoke 仍未执行；本单不是正式验收。
+
+### ARCHIVE-CHECK-01（2026-08-30 归档前复核）
+
+- 触发：用户要求"看 change 里有哪些没有实现，通过测试验收后归档"。本节只记录只读复核事实，未签正式 Acceptance，未归档。
+- 结论：`BLOCKED`。自动化可覆盖的部分全绿，但 Change 自己冻结的关闭条件仍有未满足项，其中两项是硬门禁。
+- 通过的命令：`npm run typecheck` exit 0；`node --test --test-concurrency=1 electron/*.test.mjs` 427/427 PASS；`npx vite build` exit 0；`npm run build:local` exit 0（签名 + DMG/ZIP 产出，notarization 因既有配置缺失跳过；选 `--publish never` 变体以排除任何发布副作用）；`git diff --check` exit 0。
+- 硬门禁 1：exact `npm run test:electron` 仍非 PASS，且本机两次复现同一现象——默认并发下 `electron/local-app-runtime.test.mjs` 不自行终止（runner 使用 `--test-timeout=0`），第二次有界终止于 389 秒，最终 424 pass / 0 fail / 1 cancelled、exit 1。该文件单独运行 24/24 PASS / 2.1 秒，串行全量 427/427 PASS，因此是默认并发下的 fixture 资源竞争（该单测会 spawn 真实子进程并等待 PID 消失），不是本轮改动引入，但它是 Release candidate 门禁命令之一，未修复即不得关闭 Change。
+- 硬门禁 2：真实 Electron GUI smoke 至今一次未执行。`ATDD-RDS-301`–`309` 的"最低证据"列全部含 Electron smoke，`ATDD-LINK-201` 另需 macOS cold/warm deep-link smoke，`ATDD-PREVIEW-201`、`ATDD-WIN-201`–`203`、`ATDD-A11Y-201` 同样要求 Electron 证据。`R3-FIX-USER-01` 的两条缺陷都只在真实渲染路径显现，证明该缺口是实际风险而非形式要求。
+- 事实源漂移：`prd/chat-agent-runtime/acceptance.md` 的 `Revision 3` 与 `prd/local-app-runtime/acceptance.md` 的 `Revision 6` 仍标"BUILDABLE / Planned，未实现"，与已落盘实现不符；acceptance.md 声明 PRD 为唯一验收事实源，归档前必须回写 as-built 状态（`prd/local-app-runtime/acceptance.md` 的 `Revision 5` 同样标"Planned / 未实现"，但对应 change 已归档为 done，属更早遗留）。
+- 未关闭任务：`CHECK-02`（Revision 2 独立检查，被 Revision 3 取代后暂停）与 `VER-01`（Revision 1 verification，从未执行）仍未勾选；`tasks.md` frontmatter 仍为 `acceptance_requested: false`、`coverage_gate: buildable`，与归档模板要求的 `acceptance_status: accepted`、`coverage_gate: pass` 不符。
+- 范围未决：`proposal.md` 的 Revision 2 范围复核把 M1 网站入口整链记为"没有真实第三方消费者，建议后续拆分，待用户决策，本轮不执行"。
+- 新增待办（均不在 `R3-FIX-USER-01` 范围，需各自工单）：其一，冷启动仍按 Main 陈旧 `activeWorkspaceTabId` 直接进入工作台，根因是 broker mode 下 selection 无 Main 命令通道；其二，Main 侧中文错误 message 经 `setWorkspaceSaveError(result.message)` 等六处直传 renderer，`locale=en` 下界面显示中文，属跨 revision 的既有 i18n 缺口。
+
+## Revision 4：Runtime 伺服模式探测（2026-08-30）
+
+### 用户确认与实测来源
+
+- `explicit_user_statement`：「工作台的 tab 如果没有在开发者模式，那么都是使用这一个静态网页。只有进入开发者模式，才使用 npm run dev。项目首页的运行时也是一样的。两者没有直接的关系。」
+- `explicit_user_statement`：「导入的项目 package.json 里不可能有 agentos 声明块……应该是我们的后端帮它做静态配置。先看有没有已经做好的静态产出物，有就直接运行；没有就看 package.json 怎么 build。新建的 runtime 和导入的网站都要实现。」
+- `explicit_user_statement`：2026-08-30 追加四项决定——删除"构建后跑生产服务器"这一档（build 后没有静态就直接到 dev）；探测结论可手动覆盖；开 Revision 4；规格写完直接进入实现。
+- 实测事实（只读核对用户机器）：`/Github/homepage` 与 `/Github/codenow.wiki` 都有 `output: "export"` 且 `out/index.html` 已存在，却因缺少 `agentos` 声明块被判为 development 并常驻 `npm run dev`；`/AgentOS/data/.agentos` 既无声明块也无 `output: 'export'`，且其创建 prompt 从未要求写声明块。workspace 存档显示同一 canonical root 上并存 project 与 workspace 两个 Definition，两者都是 development，因而争抢 root 执行锁——这就是"项目首页卡片无法运行"的直接原因。
+
+### ORCH-025
+
+- `confirmed_artifact`：`SPEC-RSM-04` 与 `R4-01`–`R4-04` 由主任务在用户授权下连续实现（"修改完直接开发"），任务单与规格同轮落盘。
+- 探测证据：新增 `detectRuntimeServePlan` / `findDetectedStaticArtifact` / `applyServeOverride`，顺序固定为 声明块 → 已有产物（`out` → `dist` → `build`）→ 可构建 → dev → 不支持；探测输出与既有 `StaticDeclaration` 同形，静态构建、last-good 产物库与静态 Preview 链路未改。产物候选逐个走 `validateStaticOutput`，symlink 逃逸被拒。
+- 伺服证据：`start()` 现在每次重新探测（只有 `serveOverride` 能压过它），tier ① 直接把已有产物 commit 为 artifact 并以文件伺服，**零 spawn、零 root lease**；tier ② 构建一次后按实际产出目录 commit；构建产不出可打开页面时记 `build-produces-no-artifact` 并降级为 dev，不报硬失败。开发会话与旧 development 入口改用 `serveOverride: 'development'` 表达"这次就是要 dev"，因此探测不会把会话中的 Runtime 拉回静态。
+- 修复证据：`acquireExecutionLease` 统一 realpath 化 lease key（此前 `/var` 与 `/private/var` 两种写法会互相绕过锁）；浏览路径的 root 冲突由 Main 铸造一次性 token 并以结构化 payload 抛回 renderer，项目首页与工作台的 start/restore 不再静默吞错；卡片改为并列显示 Runtime 伺服状态与开发会话状态，并按状态提供「启动 / 更新预览」；新增「查看方式」覆盖（已保存预览 / 保持运行 / 恢复自动判断），经 `desktop:runtime:set-serve-override` 由 Main 持久化并回读校验。
+- 创建合同证据：system prompt 与中英创建请求都要求 `next.config` 配置 `output: 'export'` 并以 `out/index.html` 存在为完成条件，并说明系统按实际产物判断能否提供已保存预览。
+- 命令：`npm run typecheck` exit 0；`node --test --test-concurrency=1 electron/*.test.mjs` **432/432 PASS**（427 基线 + 本轮 5 条新用例）；`npx vite build` exit 0；`git diff --check` exit 0。
+- allowlist 偏离（如实记录）：为落地覆盖 IPC 另改了 `src/desktop-seam.ts`、`electron/preload.ts`、`src/desktop-api.ts`；`electron/desktop-seam.test.mjs` 的 save-count 守卫从 8 改为 9（新增的第 9 处 save 已按要求包在 `runChatWorkspaceOperation` 内）。两处均属工单未预见但必要的最小扩展。
+- 边界：真实 Electron GUI smoke 仍未执行；`ATDD-RSM-401`–`407` 只取得自动化证据，未签正式验收。同路径两个 Runtime 若都落在 tier ③（都只能 dev），仍然只能有一个在运行——此时显示的是显式冲突与切换入口，而不是静默停止。
+
+### ORCH-026（Revision 4 真实 Electron GUI smoke）
+
+- `confirmed_artifact`：用户授权后在本机真实启动 Electron（`electron . --remote-debugging-port=9222`，加载 `vite build` 产物），通过 CDP 驱动真实界面与真实工作区数据完成 R4 验证；这是本 Change 第一次执行真实 GUI smoke。
+- 工作台 · 导入项目（`/Github/homepage`）：`mode=static`、`hasArtifact=true`、`previewUrl` 有值、`stale=true`，**全程没有为它启动任何 dev server**。即 tier ① 直接采用目录里已有的 `out/`，零进程。R4 之前它必然常驻 `next dev`。
+- 项目首页 · `data`（`/AgentOS/data/.agentos`）：卡片同时显示「还没有生成预览」（Runtime）与「可以开始修改」（开发会话），并给出「更新预览 / 构建 / 用 AI 修改 / 查看方式」入口——此前该卡片只有一句「可以开始修改」和一个不可用的预览，用户报告"无法运行"。
+- tier ② → ③ 实测：点「更新预览」触发 `npm run build`，Next 构建成功但因该工程是 SSR（含 `ƒ` 动态路由、无 `output: 'export'`）没有产出 `out/index.html`，系统据实记为 `build-produces-no-artifact` 并显示「需要保持运行才能查看」；再点「启动」后 `status=running`、`mode=development`，并可见新起的 `/data/.agentos` dev 进程。整条阶梯按 `C-RSM-402` 落地。
+- 同路径冲突可见：`data` 的 dev 占用 root 后，对同目录的工作台 Runtime 触发构建，界面出现「另一个 Runtime 正在修改相同目录 · data · 项目 Runtime」并附「切换到正在修改的 Runtime」。冲突不再静默失败，且浏览态（restore）本身不占锁，两个 Runtime 可同时打开。
+- 退出清理：关闭应用后，其启动的 Runtime dev 进程随之退出，未留孤儿进程。
+- GUI smoke 暴露并当场修复的三处缺陷：① `buildRuntime` IPC 仍要求 `agentos` 声明块，导致 tier ② 无法构建（改为按 `servePlan` 判定）；② 已处于 `build-produces-no-artifact` 的 Runtime 再次「启动」不会回落到 dev（`start()` 增加该分支，无需重复构建）；③ 该状态此前显示为红色「生成预览失败」，改为如实的「需要保持运行才能查看」+「启动」。另补 `runtime.serveNotGenerated`（「还没有生成预览」）取代此前误用的「已停止」。
+- 命令：`npm run typecheck` exit 0；`node --test --test-concurrency=1 electron/*.test.mjs` **432/432 PASS**；`npx vite build` exit 0；`git diff --check` exit 0。
+- 边界：本轮只覆盖 `ATDD-RSM-401`–`405`、`407` 的主路径与 `C-RSM-402` 三档；`ATDD-RSM-406`（手动覆盖持久化）只验证了控件渲染，未点击切换；`ATDD-RDS-30x` 的开发窗口多轮修改、结束收口与 macOS deep-link smoke 仍未执行。`Page.captureScreenshot` 在该窗口挂起，本轮证据以 DOM 文本与进程事实为准，无截图。
+
+### ORCH-027（第二轮 GUI smoke：覆盖、开发窗口与同路径冲突）
+
+- `confirmed_artifact`：用户要求把剩余项"跑掉"，继续在真实 Electron + 真实工作区上驱动。
+- `ATDD-RSM-406` 手动覆盖：点「保持运行」后 `serveOverride` 持久化为 `development`、Runtime 变为 `running/development`、文案「需要保持运行才能查看」、按钮 `aria-pressed=true` 且出现「恢复自动判断」；点「恢复自动判断」后 override 清空、按钮消失，自动探测重新接管并得出同一结论。**首次点击失败暴露第四个缺陷**：`normalizeRuntimeDefinitions` 的严格白名单没有携带 `serveOverride`，导致 Main 回读校验失败（`runtime-serve-override-readback-failed`）——已修并补 store 回归（合法值保留、未知值丢弃）。
+- `ATDD-RDS-301`（同路径第二实例）：工作台 Runtime 正持有该目录的实时开发时，在项目首页点「用 AI 修改」被阻止，界面显示「另一个 Runtime 正在修改相同目录 · agentos-intelligence-workbench · 工作台 Runtime」+「切换到正在修改的 Runtime」，且**没有打开第二个开发窗口**。进程侧复核：同一 root 上始终只有一个 dev 进程。
+- `ATDD-RDS-302`（入口不改主窗口）：点「用 AI 修改」打开 `window-kind=runtime-development&runtimeScopeId=project:<id>` 专用窗口；`getChatWorkspace()` 的 `activeWorkspaceTabId` / `activeProjectId` 前后完全一致，**主窗口不切工作台 Tab、不换项目**。这是该条第一次拿到 GUI 证据。
+- 窗口能力隔离：主窗口 `window.desktop` 存在、`runtimeChat` 不存在；开发窗口 `runtimeChat` 存在、`desktop` 与 `projectChat` 均不存在。开发窗口标题显示归属（「项目 · data」/「工作台 · agentos-intelligence-workbench」），文案全中文且无原始 key。
+- `ATDD-RDS-304`（结束收口）：主窗口点「结束修改」后状态转为「修改已结束」，动作回到「用 AI 修改」。
+- 附带观察（非缺陷，记录以免误判）：用 CDP `Target.closeTarget` 关闭开发窗口不会触发 `requestExit`，会话仍停在 live——原生窗口关闭按钮走的是另一条路径，本轮自动化无法点击 macOS 窗口按钮，因此"关闭窗口即结束"未取得 GUI 证据。
+- 命令：`npm run typecheck` exit 0；`node --test --test-concurrency=1 electron/*.test.mjs` **433/433 PASS**；`npx vite build` exit 0；`git diff --check` exit 0。
+- 仍未覆盖：`ATDD-RDS-303`（窗口内连续多轮 AI 修改）需要真实提交 Agent 请求并改动用户 Runtime 源码，本轮主动不执行；`ATDD-LINK-201` deep link 未测——`agentos:` scheme 由已打包的 AgentOS.app 占用，用 `open` 触发会拉起另一份应用并与开发实例争抢同一 userData，风险大于收益；原生窗口关闭路径同上。
+
+### ORCH-028（`R4-05` 生产伺服档回归）
+
+- `explicit_user_statement`：2026-08-30 用户在看过实测事实后要求"把 B 加回来"，撤回此前"删掉第三档"的决定。触发事实：`/data/.agentos` 的 `npm run build` 成功但 `.next` 里 **0 个 HTML**，三个 API 路由都声明 `runtime='nodejs'` + `dynamic='force-dynamic'` 且在请求时读磁盘，主页面标记 `ƒ server-rendered on demand`——这类工程不是"少配了一行 `output: export`"，静态化需要改数据获取架构。
+- 合同修订：`C-RSM-402`/`C-RSM-403` 由三档改为四档（已有静态产物 → 已有服务端产物直接 `start` → 构建后再判 → 只能 `dev`）；`ATDD-RSM-408` 新增；`serveOverride` 词表由 `artifact|development` 改为 `artifact|server`，并新增**不持久化**的 `serveScript: 'dev'|'start'` 供开发会话强制 dev。
+- 实现证据：探测新增 `.next/BUILD_ID` 标记（唯一被认可的服务端产物标记，只对 Next 生效，其它框架仍必须先构建）；`spawnNpm` 按 `serveScript` 选择 `run start`（`NODE_ENV=production`）或 `run dev`，共用同一套端口分配、就绪探测与 root lease；构建后无静态产物时优先落到生产伺服，其次才是 dev。
+- 真实 GUI 复验：在 `/data/.agentos` 直接执行一次 `npm run build` 产出 `.next/BUILD_ID` 后重启应用，工作台 Runtime 的日志首行即 `> next start -H 127.0.0.1 -p 3457`、`✓ Ready in 135ms`，进程为 `next-server (v15.5.4)`——确认跑的是生产服务器而非 dev，且**没有再构建一次**。同一时刻 `homepage` / `codenow-wiki` 仍是零进程 `stale` 静态产物，项目 Runtime 因同路径已被占用而显示显式冲突提示与切换入口。
+- 附带确认（既有行为，非本轮引入）：当项目脚本硬编码端口（此处 `-p 3457`）时，分配的端口被忽略，但 supervisor 从 stdout 解析出真实 `readyUrl` 并据此预览，因此不受影响。
+- 命令：`npm run typecheck` exit 0；`node --test --test-concurrency=1 electron/*.test.mjs` **436/436 PASS**（新增 3 条生产档用例）；`npx vite build` exit 0；`git diff --check` exit 0。
+- 边界：`.next` 之外的服务端产物形态不探测；生产伺服与 dev 对用户是同一句「需要保持运行才能查看」，界面不暴露两者差别。
+
 ## Revision 2：Discovery
 
 ### 用户确认来源（2026-08-26）

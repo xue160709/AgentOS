@@ -16,6 +16,7 @@ import type {
   ChatContextCompactionItem,
   ChatMessageAttachment,
   ChatState,
+  ChatThreadBase,
   ChatTaskItem,
   ChatTaskState,
   ChatWorkspaceState,
@@ -409,6 +410,9 @@ function normalizeRuntimeDefinitions(value: unknown): RuntimeDefinition[] {
       devCommand,
       mode: agentos ? 'static' : undefined,
       agentos,
+      // `C-RSM-404`: an explicit "how to view this" choice is durable, and the
+      // strict whitelist has to carry it or the readback check rejects it.
+      serveOverride: item.serveOverride === 'artifact' || item.serveOverride === 'server' ? item.serveOverride : undefined,
       // Unknown/newly corrupted trust fields must never become executable by
       // default. The binding remains visible so the user can re-trust it.
       trustStatus: item.trustStatus === 'trusted' ? 'trusted' : 'revoked',
@@ -471,7 +475,7 @@ function normalizeProjectHomeViewModes(value: unknown): Record<string, 'overview
   return result
 }
 
-function normalizeStoredChatState(value: unknown): ChatState {
+export function normalizeStoredChatState(value: unknown): ChatState {
   if (!isRecord(value)) return createEmptyChatState()
   return {
     sessionId: typeof value.sessionId === 'string' ? value.sessionId : undefined,
@@ -481,6 +485,86 @@ function normalizeStoredChatState(value: unknown): ChatState {
     tasks: normalizeStoredTaskState(value.tasks),
     items: Array.isArray(value.items) ? value.items.flatMap(normalizeTranscriptItem) : [],
   }
+}
+
+/** 两类 Thread 共用同一 rollout 编码，避免 Runtime 复制后逐渐偏离普通对话格式。 */
+export function serializeChatThreadRollout(
+  thread: ChatThreadBase,
+  identity: Record<string, unknown>,
+): string {
+  const timestamp = new Date(thread.updatedAt || Date.now()).toISOString()
+  const lines = [
+    {
+      timestamp,
+      type: 'session_meta',
+      payload: {
+        id: thread.id,
+        title: thread.title,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        pinnedAt: thread.pinnedAt,
+        archivedAt: thread.archivedAt,
+        model: thread.chatState.model,
+        modelPick: thread.chatState.modelPick,
+        cwd: thread.chatState.cwd,
+        sessionId: thread.chatState.sessionId,
+        source: 'agentos',
+        ...identity,
+      },
+    },
+    {
+      timestamp,
+      type: 'thread_state',
+      payload: {
+        sessionId: thread.chatState.sessionId,
+        model: thread.chatState.model,
+        modelPick: thread.chatState.modelPick,
+        cwd: thread.chatState.cwd,
+      },
+    },
+    ...thread.chatState.items.map((item) => ({
+      timestamp: new Date(chatTranscriptItemTimestamp(item, thread.updatedAt)).toISOString(),
+      type: 'response_item',
+      payload: item,
+    })),
+  ]
+  return `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`
+}
+
+/** rollout 损坏时保留已成功解析的前缀，让旧普通对话维持原有的部分恢复语义。 */
+export function readChatThreadRollout(text: string, fallback: ChatState): ChatState {
+  const state: ChatState = {
+    sessionId: fallback.sessionId,
+    model: fallback.model,
+    modelPick: fallback.modelPick,
+    cwd: fallback.cwd,
+    tasks: fallback.tasks,
+    items: [],
+  }
+  try {
+    for (const line of text.split(/\n/).filter(Boolean)) {
+      const event = JSON.parse(line) as unknown
+      if (!isRecord(event) || !isRecord(event.payload)) continue
+      const payload = event.payload
+      if (event.type === 'session_meta' || event.type === 'thread_state') {
+        state.sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : state.sessionId
+        state.model = typeof payload.model === 'string' ? payload.model : state.model
+        state.modelPick = normalizeStoredModelPick(payload.modelPick) ?? state.modelPick
+        state.cwd = typeof payload.cwd === 'string' ? payload.cwd : state.cwd
+      } else if (event.type === 'response_item') {
+        state.items.push(...normalizeTranscriptItem(payload))
+      }
+    }
+  } catch {
+    return state
+  }
+  return state
+}
+
+export function chatTranscriptItemTimestamp(item: ChatState['items'][number], fallback: number): number {
+  if (item.type === 'message') return item.completedAt ?? item.createdAt ?? fallback
+  if (item.type === 'context_compaction') return item.updatedAt ?? item.createdAt ?? fallback
+  return fallback
 }
 
 function normalizeStoredTaskState(value: unknown): ChatTaskState | undefined {

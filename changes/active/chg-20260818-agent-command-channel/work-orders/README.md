@@ -1,19 +1,31 @@
-# Terra Work Orders
+# Revision 3 Work Orders
 
-> 这些任务单是执行入口，不是新的产品事实源。实现前必须阅读同目录上级的 `design.md`、`technical.md`、`protocol-v1.md`、`acceptance.md`。冲突时按 `technical.md` 顶部优先级处理并停工报告。
+> 这些任务单是执行入口，不是新的产品事实源。Revision 3 实现只允许从 `R3-01` 开始；旧 `M2/M3` 已被新 Runtime 合同取代，不能作为开发会话实现入口。实现前必须阅读同目录上级的 `design.md`、`technical.md`、`acceptance.md`；网站线另读 `protocol-v1.md`。冲突时按 `technical.md` 顶部优先级处理并停工报告。
 
 ## 执行规则
 
-1. 一次只给 Terra 一个 work order；不要直接给“实现 Revision 2”。
-2. `M0-01` 到 `M0-06`（含插入的 `M0-05A`–`M0-05F` production 前置）必须串行，因为都迁移 Chat 单 writer。M0 通过后，`M1-01` 与 `M2-01` 才可并行。
+1. 一次只给实现者一个 work order；不要直接给“实现 Revision 3”。
+2. `R3-01 → R3-07 → R3-CHECK` 必须串行：它们依次冻结 durable data、共享 broker、Runtime identity、开发事务、窗口 capability、入口 cutover 与恢复边界，并共享核心文件。
 3. 实现者只能写任务单 `write allowlist` 中的文件；发现必须改其它业务文件时停下说明原因，先修订任务单。
 4. 不得删除、回滚或格式化 allowlist 外的用户改动；工作区脏文件不是实现者的清理目标。
 5. 每单完成时必须回报：修改文件、合同映射、运行命令、退出码、未验证风险。没有测试证据不能标完成。
 6. 禁止自行补产品行为、放宽协议校验、增加兼容 fallback，或把失败吞成 success。
+7. 每张 R3 writer 单的 `instance_id` 与 `diff_baseline` 在仓库中保持 `UNASSIGNED`，表示尚未派发、没有长期写权；派发者必须在任务消息中绑定当前 writer、attempt、deadline、精确 allowlist 与当时基线，未绑定不可执行。
 
 ## 依赖图
 
 ```text
+R3-01 Runtime Thread contract/store/search
+  -> R3-02 ChatBrokerCore + Runtime facade/capability
+    -> R3-03 Definition isolation + root execution registry
+      -> R3-04 RuntimeDevelopmentCoordinator + artifact bridge
+        -> R3-05 Runtime window + view state + IPC/presence
+          -> R3-06 Project/Workspace surfaces + legacy cutover (P0 gate)
+            -> R3-07 recovery/quit/migration/a11y hardening (P1 gate)
+              -> R3-CHECK independent development check
+
+Revision 2 历史链（已实现、未正式验收）：
+
 M0-01 contracts + runner sink
   -> M0-02 broker + single writer
     -> M0-03 typed IPC + permission + capability
@@ -40,6 +52,26 @@ all -> BUG-AUDIT-CHAT-01 -> BUG-AUDIT-WS-02 -> FIX-WS-01 -> FIX-CHAT-01 -> CHECK
 `FIX-WS-01` 必须排在 `FIX-CHAT-01` 之前：项目生命周期在它之前不落盘，`FIX-CHAT-01` 的重启回归断言无法成立。
 
 ## Work order 索引
+
+### Revision 3（当前实施入口）
+
+当前进度：`R3-01`–`R3-07`、旧测试 loader、`R3-FIX-CHECK-01/02` 与最终只读 `R3-CHECK-02` 均已完成；原 P0/P1 独立确认修复，无新增 P0/P1。Development Check 结论为 `PASS_WITH_RISK`：exact 默认并发 Electron suite 仍在 local-app fixture pending，真实 Electron GUI smoke 未执行；不得签正式验收。
+
+2026-08-30 补记：用户真实使用后报告两处 `R3-06` 缺陷（项目首页仍被 Main 陈旧 `activeWorkspaceTabId` 拉回工作台；Runtime 开发文案写错命名空间全部显示原始 key），由 `R3-FIX-USER-01` 修复并补齐回归。这两条说明 `ATDD-RDS-301`/`ATDD-RDS-309` 此前只有 source-grep 级证据，真实渲染路径仍未被自动化覆盖。
+
+| 顺序 | 文件 | 交付 | 门禁 |
+| --- | --- | --- | --- |
+| R3-01 | `R3-01-runtime-thread-store.md` | Runtime Thread 合同、SQLite/sidecar、搜索元数据与回滚保留 | data contract |
+| R3-02 | `R3-02-chat-broker-core-runtime-facade.md` | 唯一 ChatBrokerCore、Runtime facade/capability/scoped read | broker contract |
+| R3-03 | `R3-03-runtime-root-execution-registry.md` | Definition 独立、root execution lease、去 path alias | runtime identity |
+| R3-04 | `R3-04-runtime-development-coordinator.md` | 窗口级状态机、exit gate、generation-fenced atomic save | transaction |
+| R3-05 | `R3-05-runtime-development-window-ipc.md` | 专用窗口、view state、窄 preload、presence/close | window security |
+| R3-06 | `R3-06-runtime-surfaces-cutover.md` | 项目首页/工作台入口、统一 snapshot、停用 backing Project 路径 | P0 complete |
+| R3-07 | `R3-07-runtime-recovery-hardening.md` | quit/restart/relocation/trust/late event/a11y/rollback | P1 complete |
+| CHECK | `R3-CHECK-runtime-development.md` | 独立 Development Check 与真实 Electron smoke，不是正式验收 | verification |
+| FIX-USER | `R3-FIX-USER-01-project-home-selection-locale.md` | 空选中态不被 Main 陈旧 Tab 覆盖、Runtime 文案归位 `runtime` 段、两条渲染路径回归 | 用户实测缺陷 |
+
+### Revision 2（历史执行记录）
 
 | 顺序 | 文件 | 交付 |
 | --- | --- | --- |
@@ -69,9 +101,10 @@ all -> BUG-AUDIT-CHAT-01 -> BUG-AUDIT-WS-02 -> FIX-WS-01 -> FIX-CHAT-01 -> CHECK
 
 ## 分支与提交建议
 
-- 分支：`codex/chg-20260818-agent-command-channel-r2`
+- 分支：`codex/chg-20260818-agent-command-channel-r3`
 - 每个 work order 一个可回滚提交，标题包含 work order ID。
 - feature flag 现状：`projectChatBrokerV2Enabled` 读取 `AGENTOS_PROJECT_CHAT_BROKER_V2 !== '0'`，M0-GATE 后已**默认开启**，`0` 只保留为回滚逃生口。任何"默认关闭"的旧描述均已失效，评估缺陷影响面时必须按默认开启计算。
+- Revision 3 rollback flag 必须同时关闭新 Runtime 入口与 Runtime facade，但不得删除 `runtime_development_threads`、sidecar、view state、last-good 或旧 synthetic Project 数据。
 
 ## 全局停止条件
 

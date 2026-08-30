@@ -44,3 +44,19 @@ test('attachment reads canonicalize candidates before reader and turn escapes in
   assert.deepEqual(realpaths, ['/root', '/real/root/dir/ok.md', '/real/root/escape.md', '/real/root/missing.md']); assert.deepEqual(read, [[['/real/root/ok.md'], true]]); assert.equal(JSON.stringify(result).includes('/outside'), false); assert.equal(result.skipped.length, 3)
   await assert.rejects(service.readProjectAttachments({ projectId: 'p', relativePaths: ['/abs'], allowImages: false })); await assert.rejects(service.readProjectAttachments({ projectId: 'p', relativePaths: Array.from({ length: 9 }, () => 'x') }))
 })
+
+test('Runtime scoped services fresh-resolve Project cwd versus Workspace root and fence cross-scope threads', async () => {
+  const { createRuntimeChatScopedReadCollaborator } = load(resolve(testDir, './project-chat-runtime-services.ts'))
+  const scopes = {
+    'project:p': { runtimeScopeId: 'project:p', runtimeDefinitionId: 'rd-p', runtimeOwner: { kind: 'project', projectId: 'p' }, cwd: '/project', runtimeRoot: '/project/.agentos', routeGeneration: 1, developmentGeneration: 1 },
+    'workspace:w': { runtimeScopeId: 'workspace:w', runtimeDefinitionId: 'w', runtimeOwner: { kind: 'workspace' }, cwd: '/runtime', runtimeRoot: '/runtime', routeGeneration: 1, developmentGeneration: 1 },
+  }
+  const runtimeWorkspace = { schemaVersion: 1, runtimeThreadRevision: 1, runtimeDevelopmentThreads: [{ id: 'rt', purpose: 'runtime-development', runtimeScopeId: 'workspace:w', runtimeDefinitionId: 'w', runtimeOwner: { kind: 'workspace' }, title: 'Runtime', createdAt: 1, updatedAt: 1, creationSource: { kind: 'user' }, chatState: { model: 'Claude', sessionId: 'session', items: [] } }] }
+  const calls = []
+  const service = createRuntimeChatScopedReadCollaborator({ runtimeWorkspace: { read: () => runtimeWorkspace }, resolveScope: (id) => scopes[id] ?? null, settings: { getSnapshot: settings }, runner: { getStatus: async (payload) => { calls.push(['status', payload]); return { threadId: payload.threadId, active: false, reportedModel: 'm', permissionMode: 'auto', tools: [], skills: [], slashCommands: [], agents: [] } } }, discoverAgentContext: async (root) => { calls.push(['context', root]); return { skills: [], agents: [] } }, searchProjectFiles: async (root) => { calls.push(['search', root]); return { ok: true, items: [] } }, pickAttachments: async () => ({ attachments: [], skipped: [] }), readAttachments: async () => ({ attachments: [], skipped: [] }), realpath: async (input) => input })
+  await service.getAgentContext('project:p'); await service.searchFiles('workspace:w', { query: 'x' }); await service.getThreadStatus('workspace:w', { threadId: 'rt' })
+  assert.deepEqual(calls.filter(([name]) => name === 'context' || name === 'search'), [['context', '/project'], ['search', '/runtime']])
+  assert.equal(calls.find(([name]) => name === 'status')[1].cwd, '/runtime')
+  await assert.rejects(service.getThreadStatus('project:p', { threadId: 'rt' }), /thread-unavailable/)
+  await assert.rejects(service.getAgentContext('workspace:missing'), /runtime-scope-unavailable/)
+})

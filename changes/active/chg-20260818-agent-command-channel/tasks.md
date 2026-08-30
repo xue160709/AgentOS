@@ -1,6 +1,6 @@
 ---
 change_id: chg-20260818-agent-command-channel
-revision: 3
+revision: 4
 task_level: Heavy
 level_basis: "网站授权与身份边界、跨窗口共享会话、平台 deep link、主进程协调和预览 Runtime 跨模块契约"
 professional_gaps:
@@ -20,6 +20,43 @@ confirmation: user_confirmed
 acceptance_requested: false
 coverage_gate: buildable
 ---
+
+# Revision 4 Tasks
+
+## Runtime 伺服模式探测（2026-08-30）
+
+- [x] `CONFIRM-RSM-04`｜来源：用户实测导入项目已有静态产物却仍跑 dev｜owner=`user`｜write_mode=`response_only`
+  - 确认：伺服方式由系统探测而非项目申报；三档（已有产物 / 可构建 / 只能 dev），明确删除"构建后跑生产服务器"这一档；dev 只在开发会话或第三档出现；探测结论可手动覆盖；自建与导入一视同仁；并要求同轮修复此前实测的卡片不可运行与状态文案问题。
+
+- [x] `SPEC-RSM-04`｜来源 `CONFIRM-RSM-04`｜owner=`main_agent`｜write_mode=`writer`
+  - 完成：升 Revision 4，冻结 `C-RSM-401`–`407`、探测阶梯、覆盖语义、双段状态与 `ATDD-RSM-401`–`407`；显式记录对 `ATDD-EDIT-206`「无声明不猜命令」的放宽及其边界。
+
+- [x] `R4-01`｜任务单 `work-orders/R4-01-runtime-serve-plan-detector.md`｜owner=`main_agent`｜依赖：`SPEC-RSM-04`
+  - 完成：`detectRuntimeServePlan` / `findDetectedStaticArtifact` / `applyServeOverride` 与固定探测顺序；`servePlan` 进入 inspect 结果，`mode`/`agentos` 改由 plan 派生；Definition 新增 `serveOverride`。
+- [x] `R4-02`｜任务单 `work-orders/R4-02-serve-plan-runtime-wiring.md`｜owner=`main_agent`｜依赖：`R4-01`
+  - 完成：tier ① 零 spawn 零 lease 直接伺服已有产物；tier ② 构建一次后按实际产出目录 commit；构建无产物降级 dev；开发会话与旧 development 入口改用 `serveOverride: 'development'`；lease key 统一 realpath 化；浏览路径 root 冲突结构化回传。
+- [x] `R4-03`｜任务单 `work-orders/R4-03-runtime-surface-state-and-override.md`｜owner=`main_agent`｜依赖：`R4-02`
+  - 完成：卡片并列显示伺服状态与开发会话状态并提供启动/更新预览；新增「查看方式」覆盖与 `desktop:runtime:set-serve-override`（Main 持久化 + 回读校验）；start/restore 冲突显示名称、归属与切换入口。
+- [x] `R4-SMOKE-01`｜来源：用户授权"启动"真实应用做 GUI 验证｜owner=`main_agent`｜write_mode=`writer`｜依赖：`R4-04`
+  - 结论：Revision 4 主路径在真实应用与真实工作区数据上通过。导入项目零进程直出静态产物；项目首页卡片恢复可用并双段显示状态；tier ②→③ 阶梯与同路径冲突提示实测符合合同；退出后 Runtime 进程随之清理。
+  - GUI 暴露并当场修复：`buildRuntime` 仍要求声明块、`build-produces-no-artifact` 后「启动」不回落 dev、该状态误报为失败。详见 `evidence.md` ORCH-026。
+  - 复验：typecheck 0；串行全量 `432/432`；`npx vite build` 0；`git diff --check` 0。`ATDD-RSM-406` 仅验证控件渲染；开发窗口多轮修改与 deep-link smoke 未覆盖。
+
+- [x] `R4-05`｜任务单 `work-orders/R4-05-production-serve-tier.md`｜owner=`main_agent`｜依赖：`R4-SMOKE-02`
+  - 来源：用户"把 B 加回来"，撤回删除生产伺服档的决定；修订 `C-RSM-402`/`C-RSM-403`，新增 `ATDD-RSM-408`。
+  - 完成：探测四档（静态产物 → `.next/BUILD_ID` 直接 `start` → 构建后再判 → `dev`）；`spawnNpm` 按 `serveScript` 选 `run start`/`run dev` 并切换 `NODE_ENV`；`serveOverride` 词表改为 `artifact|server`，开发会话改用不持久化的 `serveScript: 'dev'`。
+  - GUI 复验：`/data/.agentos` 现由 `next start` 伺服（日志 `✓ Ready in 135ms`，无重复构建），静态项目仍零进程，同路径冲突提示正常。
+  - 复验：typecheck 0；串行全量 `436/436`；`npx vite build` 0；`git diff --check` 0。
+
+- [x] `R4-SMOKE-02`｜来源：用户要求把剩余 GUI 项"跑掉"｜owner=`main_agent`｜write_mode=`writer`｜依赖：`R4-SMOKE-01`
+  - 结论：`ATDD-RSM-406`、`ATDD-RDS-301/302/304` 与窗口能力隔离取得 GUI 证据；同路径第二实例被阻止且提示占用者与切换入口，主窗口不被入口改动。
+  - 新修：`serveOverride` 未进入 workspace store 白名单导致覆盖无法持久化（回读失败），已修并补 store 回归。
+  - 未覆盖：`ATDD-RDS-303`（真实多轮 AI 修改）、`ATDD-LINK-201`（deep link，scheme 被已打包应用占用）、原生窗口关闭触发收口。详见 `evidence.md` ORCH-027。
+  - 复验：typecheck 0；串行全量 `433/433`；`npx vite build` 0；`git diff --check` 0。
+
+- [x] `R4-04`｜任务单 `work-orders/R4-04-runtime-creation-static-contract.md`｜owner=`main_agent`｜依赖：`R4-01`
+  - 完成：system prompt 与中英创建请求要求 `output: 'export'` 并以 `out/index.html` 为完成条件。
+  - 复验（R4-01–R4-04 合并）：`npm run typecheck` exit 0；串行全量 `432/432` PASS；`npx vite build` exit 0；`git diff --check` exit 0。真实 GUI smoke 未执行，不是正式验收。
 
 # Revision 3 Tasks
 
@@ -49,19 +86,96 @@ coverage_gate: buildable
   - 保持：复用 Main broker core、Thread/Transcript/SDK/权限/Diff；不为 Workspace Runtime 创建 synthetic Project 或第二套聊天引擎；不写业务代码、不执行正式验收。
   - 验证：V0 文档 diff/reference 检查与 `git diff --check`；Interaction Flow Review 覆盖 close/background Run/prompt/reenter/app quit。
 
-- [ ] `DEV-P0-RUNTIME-03`｜来源 `C-RDS-301`–`C-RDS-309`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`TECH-RUNTIME-03`、Revision 3 达到 BUILDABLE
-  - 写入：由实施前 work order 根据稳定技术规格给出精确 allowlist；当前不授权业务代码。
-  - 修改：完成 Runtime owner 隔离、一键专用窗口、窗口级开发会话、结束收口、Workspace 无 synthetic Project 与主窗口一致状态。
+- [x] `PLAN-RUNTIME-03`｜来源 `technical.md T3.11–T3.12`｜owner=`main_agent`｜write_mode=`writer`｜依赖：`TECH-RUNTIME-03`
+  - 编排：`deadline=本轮生成 Revision 3 工单与映射后停止，不进入实现`；`attempt=1`；`instance_id=main`；`exact_write_allowlist=changes/active/chg-20260818-agent-command-channel/{tasks.md,evidence.md,README.md,work-orders/README.md,work-orders/R3-01-runtime-thread-store.md,work-orders/R3-02-chat-broker-core-runtime-facade.md,work-orders/R3-03-runtime-root-execution-registry.md,work-orders/R3-04-runtime-development-coordinator.md,work-orders/R3-05-runtime-development-window-ipc.md,work-orders/R3-06-runtime-surfaces-cutover.md,work-orders/R3-07-runtime-recovery-hardening.md,work-orders/R3-CHECK-runtime-development.md}`；`diff_baseline=TECH-RUNTIME-03 完成后的当前 dirty diff；排除用户删除 TODO.md 与新增 AGENTS.md`。
+  - 完成：按技术迁移序列拆成 `R3-01 → R3-07 → R3-CHECK`，每单包含事实来源、依赖、精确 allowlist、V3 五面、验证、交付和停止条件。
+  - 门禁：R3 writer 工单尚未派发，仓库内 `instance_id/diff_baseline=UNASSIGNED` 不产生写权；派发时必须绑定当前 writer 与基线。
+
+- [x] `R3-01`｜来源 `technical.md T3.1–T3.3 / T3.11.1`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`PLAN-RUNTIME-03`
+  - 编排：`attempt=2`；`instance_id=01a050c3-fb77-7fb0-9ed8-0586fd2665df`；`diff_baseline=bf70d5307487ab53f57203baa275083b5801af77 + 当前 Revision 3 文档 dirty diff`；严格使用 `work-orders/R3-01-runtime-thread-store.md` 的 10 路径 allowlist。
+  - 完成：建立独立 Runtime Development Thread 合同、SQLite/sidecar、共享单调 revision、按 revision 隔离的 rollout、scope/owner 校验与 Runtime 搜索元数据；普通 Project Thread 与旧 app-command 数据保持隔离。
+  - 独立复验：`npm run typecheck` PASS；目标 Node tests `28/28` PASS；`git diff --check` PASS。该结果仅表示工程工作单 accepted，不是 Revision 3 正式验收。
+
+- [x] `R3-02`｜来源 `technical.md T3.2–T3.5 / T3.9 / T3.11.2`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-01`
+  - 编排：`attempt=1`；`instance_id=01a050ce-f5f5-7b50-b05f-8dd84c6b2876`；`diff_baseline=bf70d5307487ab53f57203baa275083b5801af77 + 已 accepted 的 Revision 3 文档与 R3-01 dirty diff`；严格使用 `work-orders/R3-02-chat-broker-core-runtime-facade.md` allowlist。
+  - 完成：抽出唯一 `ChatBrokerCore`，Project facade 回归保持原语义；新增 Runtime facade、capability-only router、fresh-resolved scoped read、双 generation route fence 与 Runtime root mutation containment，Project/Runtime durable collection 双向隔离。
+  - 独立复验：`npm run typecheck` PASS；目标 Node tests `69/69` PASS（原 Project 基线 54/54 全保留）；`git diff --check` PASS。Electron foundation 参考脚本因仓库既有非 electron-vite 架构返回 1，记录为既有架构差异，不越权修改地基文件；本单不是正式验收。
+
+- [x] `R3-03`｜来源 `technical.md T3.2 / T3.8–T3.12`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-02`
+  - 编排：`attempt=1`；`instance_id=01a050ea-8178-7250-87a9-3716c8778fd9`；`diff_baseline=bf70d5307487ab53f57203baa275083b5801af77 + 已 accepted 的 Revision 3 文档与 R3-01/R3-02 dirty diff`；严格使用 `work-orders/R3-03-runtime-root-execution-registry.md` allowlist。
+  - 完成：移除 canonical-root Definition alias，保持 supervisor/snapshot/consumer/event/artifact/generation 按 Definition 独立；新增 Main-owned root execution registry，冻结 development/build acquire、conflict、原子 transition、stopping/stop_failed 与 generation/leaseId fenced release。
+  - 独立复验：`npm run typecheck` PASS；目标测试沙箱内因 loopback `EPERM` 为 40/41，允许回环监听环境原命令 `41/41` PASS；`git diff --check` PASS。未执行真实 Electron remove/relocate/trust revoke/app quit smoke，本单不是正式验收。
+
+- [x] `R3-04`｜来源 `technical.md T3.7 / T3.9–T3.11.4`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-03`
+  - 编排：`attempt=2`；`instance_id=01a050f5-6ff2-7931-be12-a8f52257fd6b`；`diff_baseline=bf70d5307487ab53f57203baa275083b5801af77 + 已 accepted 的 Revision 3 文档与 R3-01–R3-03 dirty diff`；attempt 2 仅修 bridge 日志脱敏并补敏感异常负例。
+  - 完成：实现窗口级 `RuntimeDevelopmentCoordinator` 与 Runtime bridge；冻结多轮 live、exit gate、1500ms 稳定窗/30s 上限、failed-mutation/prompt gate、每 generation 一次自动保存、manual retry、reenter/quit/late result fence，并在 last-good pointer rename 前复核 scope + 双 generation + operationId。
+  - 独立复验：`npm run typecheck` PASS；完整目标集合沙箱内唯一 loopback `EPERM`，允许回环监听环境 `74/74` PASS；`git diff --check` PASS。bridge 日志只含 operation/scopeKind/枚举 code；未接 BrowserWindow/React/Main IPC，本单不是正式验收。
+
+- [x] `R3-05`｜来源 `technical.md T3.4–T3.6 / T3.9–T3.11.5`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-04`
+  - 编排：`attempt=1`；`instance_id=01a05108-a4ad-7852-bf84-0d96f1c0aa40`；`diff_baseline=bf70d5307487ab53f57203baa275083b5801af77 + 已 accepted 的 Revision 3 文档与 R3-01–R3-04 dirty diff`；严格使用 `work-orders/R3-05-runtime-development-window-ipc.md` allowlist。
+  - 完成：新增按 RuntimeScopeId 唯一的专用窗口、独立 view state、Runtime-only preload/capability/IPC 与 prompt presence；native close 同步 requestExit，再 flush/destroy，active Run 不 cancel；load failure 与 late activation 按 window/scope/双 generation 清理和拒绝。
+  - 独立复验：`npm run typecheck` PASS；目标 Node tests `41/41` PASS；`git diff --check` PASS。Runtime preload source audit 无 desktop/Project bridge，跨 scope selected Thread 拒绝；未执行真实 Electron GUI/多显示器/prompt smoke，本单不是正式验收。
+
+- [x] `R3-06`｜来源 `technical.md T3.5–T3.7 / T3.10–T3.11.6`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-05`
+  - 编排：`attempt=1`；`instance_id=01a0511a-812c-7343-8879-a754fb6c109b`；`diff_baseline=bf70d5307487ab53f57203baa275083b5801af77 + 已 accepted 的 Revision 3 文档与 R3-01–R3-05 dirty diff`；严格使用 `work-orders/R3-06-runtime-surfaces-cutover.md` allowlist。
+  - 完成：项目首页与工作台入口分别发送 Project/Workspace Runtime identity 并打开专用开发窗口；不再切换工作台 Tab、创建或打开 synthetic backing Project；未初始化 Runtime 进入受控创建提示。主窗口、开发窗口与全局搜索统一消费 Main snapshot，冲突只聚焦现有 owner 窗口；旧 helper 保留为不可达兼容代码。
+  - 独立复验：`npm run typecheck` PASS；目标 Node tests `40/40` PASS；`npm run build` exit 0（签名、DMG/ZIP 成功，既有 notarization 配置缺失提示保留）；`git diff --check` PASS。未执行真实 Electron GUI smoke，本单不是正式验收。
+
+- [x] `R3-07`｜来源 `technical.md T3.3 / T3.6–T3.12`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-06`
+  - 编排：`attempt=1`；`instance_id=01a05136-810f-7813-966b-36875524b5db`；`diff_baseline=bf70d5307487ab53f57203baa275083b5801af77 + 已 accepted 的 Revision 3 文档与 R3-01–R3-06 dirty diff`；严格使用 `work-orders/R3-07-runtime-recovery-hardening.md` allowlist。Builder 在可选 computer-use smoke 授权处等待，主任务已接管只读复验并要求跳过该 smoke。
+  - 完成：封闭 app quit、remove/relocate/trust revoke、pending prompt、development-only consumer、late event、restart stale、Definition removed、rollback 保留、焦点/键盘/a11y 与错误脱敏；无效项目命令先完成纯校验，避免提前停止 Runtime。
+  - 独立复验：`npm run typecheck` PASS；R3-07 定向 Node tests `86/86` PASS；`npm run build` exit 0；`git diff --check` PASS。完整默认并发 Electron 套件暴露两份 R3-02 遗留 loader 缺口，已由 `R3-FIX-01` 修复；串行全量 `409/409` PASS。真实 Electron GUI smoke 未执行，本单不是正式验收。
+
+- [x] `R3-FIX-01`｜来源 `R3-07 npm run test:electron`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-07`
+  - 编排：`attempt=1`；`instance_id=01a05153-56b2-7943-ba55-49648622f3ae`；精确 allowlist 仅 `electron/chat-run.test.mjs`、`electron/project-chat-contract.test.mjs`。
+  - 完成：两份旧手工 TypeScript loader 提供 `./chat-broker-core` 的最小 `runtimeMutationTargetAllowed` stub；不改生产 containment、Runner 或测试主题。
+  - 独立复验：目标测试 `17/17` PASS；单文件串行全量 Electron tests `409/409` PASS；`git diff --check` PASS。
+
+- [x] `R3-CHECK-01`｜来源 `work-orders/R3-CHECK-runtime-development.md`｜owner=`quality_verifier`｜write_mode=`response_only`｜依赖：`R3-FIX-01`
+  - 编排：`instance_id=01a05156-67a7-7c00-955e-173c8edd982c`；只读；未签正式 Acceptance。
+  - 结论：`FAIL`。P0：未初始化 Project 未取得 prospective-root lease；P1：submit 等待 Runner accepted 时 close/end 可提前 settle。另有 exact 默认并发 Electron suite 在 local-app fixture pending、真实 GUI smoke 未执行。
+  - 命令：typecheck/build/diff-check exit 0；串行诊断全量 409/409；exact `npm run test:electron` 非 PASS。
+
+- [x] `R3-FIX-CHECK-01`｜来源 `R3-CHECK-01 P0`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-CHECK-01`
+  - 编排：`attempt=1`；`instance_id=01a05163-37cb-74b1-8575-6f357d641ae8`；严格使用 `work-orders/R3-FIX-CHECK-01-prospective-root-lease.md` allowlist。
+  - 完成：Main 从 Project path realpath 派生 prospective `.agentos` root，在窗口/controlled prompt 前取得 Project lease；Registry 提供 fenced 原子 rebind，Definition 出现后新 token 先发布、旧 key 再移除，旧 token 不可释放新 owner。双向冲突无 spawn，失败/close/route/quit 幂等释放。
+  - 独立复验：typecheck exit 0；目标 tests 38/38 PASS；diff-check exit 0。未执行 GUI/全量/build，不签正式验收。
+
+- [x] `R3-FIX-CHECK-02`｜来源 `R3-CHECK-01 P1`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`R3-FIX-CHECK-01`
+  - 编排：`attempt=1`；`instance_id=01a0516e-de5b-78f2-a937-3d31d684e948`；严格使用 `work-orders/R3-FIX-CHECK-02-submit-exit-linearization.md` allowlist。
+  - 完成：Runner 前登记 pending authority，accepted 原子换绑真实 requestId；exit 在 accepted 前后均看到同一 active Run。submit rejection 显式回滚；accepted registration failure 先撤销 Core route 再 cancel Runner，旧 generation 事件不落库。
+  - 独立复验：typecheck exit 0；目标 tests 26/26 PASS；diff-check exit 0。31 秒 delayed submit 不 settle/save，terminal 后只收口一次；未执行 GUI/全量/build，不签正式验收。
+
+- [x] `R3-CHECK-02`｜来源 `R3-CHECK-01`｜owner=`quality_verifier`｜write_mode=`response_only`｜依赖：`R3-FIX-CHECK-02`
+  - 编排：`instance_id=01a05179-413b-7ac1-b77b-3cd2166d2587`；只读重跑 `work-orders/R3-CHECK-runtime-development.md`，未签正式 Acceptance。
+  - 结论：`PASS_WITH_RISK`。原 prospective-root P0 与 submit/exit P1 均已独立确认修复，无新增 P0/P1；C-021–C-027 与对应自动化路径通过。
+  - 命令：typecheck/build/diff-check exit 0；P0 定向 38/38、P1 定向 26/26、串行诊断全量 424/424 PASS。exact `npm run test:electron` 在授权环境两次均停于 `local-app-runtime.test.mjs` pending，非 PASS；真实 Electron GUI smoke 未执行，继续作为正式验收前风险。
+
+- [x] `R3-FIX-USER-01`｜来源：2026-08-30 用户真实使用后报告的两处 `R3-06` 缺陷｜owner=`main_agent`｜write_mode=`writer`｜依赖：`R3-CHECK-02`
+  - 编排：`attempt=1`；`instance_id=main`（用户授权主任务直接实现，任务单同轮补记）；`diff_baseline=R3-CHECK-02 之后的当前 dirty diff`；严格使用 `work-orders/R3-FIX-USER-01-project-home-selection-locale.md` 的 6 路径 allowlist。
+  - 完成：空 `activeThreadId`/`activeWorkspaceTabId` 不再被 `adoptAuthoritativeWorkspace` 判为"本地无意见"，项目首页不再被 Main 陈旧 `activeWorkspaceTabId` 拉回工作台；`ensureTrustedProjectRuntime` 改走同一保选中态合并并只持久化合并结果；25 条 Runtime 开发文案与 `previewNavigation` 从 `localApp` 段移入渲染层实际读取的 `runtime` 段。
+  - 检查缺口修正：`ATDD-RDS-301` 与 `ATDD-RDS-309` 此前只有 source-grep 级证据，未覆盖快照合并路径与 key 解析；已分别补 `electron/workspace-command-client.test.mjs` 空选中态用例与新增 `electron/ui-locale-keys.test.mjs` 全量键解析断言。
+  - 独立复验：`npm run typecheck` exit 0；目标 tests 19/19 PASS；串行全量 `427/427` PASS；`npx vite build` exit 0；`git diff --check` exit 0。冷启动仍按 Main 陈旧 Tab 进入工作台，留作后续 selection 所有权工单；本单不是正式验收。
+
+- [x] `ARCHIVE-CHECK-01`｜来源：2026-08-30 用户要求复核未实现项并在通过后归档｜owner=`main_agent`｜write_mode=`response_only`（仅写 change 文档）｜依赖：`R3-FIX-USER-01`
+  - 结论：`BLOCKED`，不归档。typecheck / 串行全量 427/427 / `npx vite build` / `npm run build:local` / diff-check 全部 exit 0，但 exact `npm run test:electron` 仍非 PASS（默认并发下 `local-app-runtime.test.mjs` 不终止，有界终止于 389s，424 pass / 1 cancelled / exit 1），真实 Electron GUI smoke 从未执行。
+  - 其余未满足项：PRD 两处 Revision 状态仍写"未实现"与实现不符；`CHECK-02`、`VER-01` 未关闭；frontmatter 仍为 `acceptance_requested: false` / `coverage_gate: buildable`；M1 网站入口范围待用户决策。
+  - 新增待办：冷启动选中态回落工作台；Main 中文错误 message 直传 renderer。两条需各自工单，不并入本 Change 的关闭条件。
+
+- [x] `DEV-P0-RUNTIME-03`｜来源 `C-RDS-301`–`C-RDS-309`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`PLAN-RUNTIME-03`
+  - 任务单：严格串行执行 `R3-01-runtime-thread-store.md` → `R3-02-chat-broker-core-runtime-facade.md` → `R3-03-runtime-root-execution-registry.md` → `R3-04-runtime-development-coordinator.md` → `R3-05-runtime-development-window-ipc.md` → `R3-06-runtime-surfaces-cutover.md`；每次只派一单并重新绑定 writer/baseline。六张 P0 writer 单已完成工程复验，正式验收仍待 `R3-CHECK` 与用户授权。
+  - 修改：完成 Runtime owner 隔离、一键专用窗口、窗口级开发会话、结束收口、Workspace 无 synthetic Project 与主窗口一致状态；`R3-06` 是 P0 code gate。
   - 保持：last-good 原子切换、失败/取消不保存半成品、运行中 Run 关闭窗口不取消、Preview sandbox。
 
-- [ ] `ATDD-P0-RUNTIME-03`｜来源 `ATDD-RDS-301`–`ATDD-RDS-306`｜owner=`quality_verifier`｜write_mode=`response_only`｜依赖：`DEV-P0-RUNTIME-03`
-  - 目标：产出并执行 P0 自动化与真实 Electron 路径；正式验收仍需用户另行授权。
+- [x] `ATDD-P0-RUNTIME-03`｜来源 `ATDD-RDS-301`–`ATDD-RDS-306`｜owner=`quality_verifier`｜write_mode=`response_only`｜依赖：`DEV-P0-RUNTIME-03`
+  - Development Check：`R3-CHECK-02` 自动化范围 `PASS_WITH_RISK`；同路径冲突/窗口聚焦等真实 Electron GUI 路径未执行。该完成标记仅表示开发检查已执行，正式验收仍需用户另行授权。
 
-- [ ] `DEV-P1-RUNTIME-03`｜来源 `ATDD-RDS-307`–`ATDD-RDS-309`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`DEV-P0-RUNTIME-03`
+- [x] `DEV-P1-RUNTIME-03`｜来源 `ATDD-RDS-307`–`ATDD-RDS-309`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`DEV-P0-RUNTIME-03`
+  - 任务单：`work-orders/R3-07-runtime-recovery-hardening.md`；派发时绑定新 writer/baseline。
   - 修改：持久开发记录、pending prompt/关闭恢复、app quit、capability matrix、可访问状态与迁移。
 
-- [ ] `ATDD-P1-RUNTIME-03`｜来源 `ATDD-RDS-307`–`ATDD-RDS-309`｜owner=`quality_verifier`｜write_mode=`response_only`｜依赖：`DEV-P1-RUNTIME-03`
-  - 目标：覆盖重开/重启、dev-only Workspace、build 失败、late event、焦点与状态一致性。
+- [x] `ATDD-P1-RUNTIME-03`｜来源 `ATDD-RDS-307`–`ATDD-RDS-309`｜owner=`quality_verifier`｜write_mode=`response_only`｜依赖：`DEV-P1-RUNTIME-03`
+  - Development Check：`R3-CHECK-02` 自动化范围 `PASS_WITH_RISK`，重开/重启、dev-only Workspace、build 失败与 late event 已有自动化证据；真实窗口焦点/状态 smoke 未执行。只完成 Development Check，不签正式验收。
 
 ## Revision 2 已完成/待验收基线
 

@@ -78,8 +78,16 @@ import { RuntimeOnboardingDialog } from './RuntimeOnboardingDialog'
 import { AgentOSPairingDialog } from './AgentOSPairingDialog'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
 import { RuntimeDetailsDialog } from './RuntimeDetailsDialog'
-import { applyRuntimeEvents, RuntimeEventBatcher } from './runtime-event-state'
+import { applyRuntimeDevelopmentSnapshot, applyRuntimeEvents, RuntimeEventBatcher } from './runtime-event-state'
 import { projectContent } from '../project-content'
+import {
+  projectRuntimeScopeId,
+  workspaceRuntimeScopeId,
+  type RuntimeDevelopmentErrorCode,
+  type RuntimeDevelopmentSnapshot,
+  type RuntimeDevelopmentTarget,
+  type RuntimeScopeKind,
+} from '../runtime-development-contract'
 
 const INITIAL_PROVIDER_SKIP_VALUE = '__skip'
 const INITIAL_PROVIDER_CUSTOM_VALUE = '__custom'
@@ -148,6 +156,63 @@ function WorkspaceSaveErrorNotice({
       </button>
     </div>
   )
+}
+
+type RuntimeDevelopmentConflict = {
+  token: string
+  runtimeName: string
+  ownerKind: RuntimeScopeKind
+}
+
+/**
+ * `T4.7`: Main reports a lost root race as a structured payload inside the IPC
+ * error message. Browsing paths must show it instead of silently staying
+ * stopped, which is how a same-directory Runtime looked broken before.
+ */
+function parseRuntimeRootConflict(error: unknown): RuntimeDevelopmentConflict | null {
+  const message = error instanceof Error ? error.message : ''
+  const start = message.indexOf('{')
+  if (start < 0) return null
+  try {
+    const parsed = JSON.parse(message.slice(start)) as {
+      code?: unknown
+      conflictToken?: unknown
+      conflictingRuntimeName?: unknown
+      conflictingOwnerKind?: unknown
+    }
+    if (parsed.code !== 'runtime-root-conflict' || typeof parsed.conflictToken !== 'string') return null
+    return {
+      token: parsed.conflictToken,
+      runtimeName: typeof parsed.conflictingRuntimeName === 'string' ? parsed.conflictingRuntimeName : '',
+      ownerKind: parsed.conflictingOwnerKind === 'project' ? 'project' : 'workspace',
+    }
+  } catch {
+    return null
+  }
+}
+
+function RuntimeDevelopmentConflictNotice({ conflict, onFocus }: { conflict: RuntimeDevelopmentConflict | null; onFocus: () => void }) {
+  const { t } = useI18n()
+  if (!conflict) return null
+  return <div className="workspace-save-error" data-testid="runtime-development-conflict" role="alert">
+    <span>{t('runtime.developmentConflict')} · {conflict.runtimeName} · {t(conflict.ownerKind === 'project' ? 'runtime.runtimeOwnerProject' : 'runtime.runtimeOwnerWorkspace')}</span>
+    <button type="button" data-testid="runtime-development-conflict-focus" onClick={onFocus}>{t('runtime.switchToActiveRuntime')}</button>
+  </div>
+}
+
+function runtimeDevelopmentErrorCopy(t: (path: string) => string, code: RuntimeDevelopmentErrorCode): string {
+  const keys: Record<RuntimeDevelopmentErrorCode, string> = {
+    'runtime-development-conflict': 'runtime.developmentConflict',
+    'runtime-development-busy': 'runtime.developmentBusy',
+    'runtime-scope-stale': 'runtime.developmentStale',
+    'runtime-root-missing': 'runtime.developmentRootMissing',
+    'runtime-trust-required': 'runtime.developmentTrustRequired',
+    'runtime-live-preview-unavailable': 'runtime.developmentLiveUnavailable',
+    'runtime-save-unavailable': 'runtime.developmentSaveUnavailable',
+    'runtime-save-timeout': 'runtime.developmentSaveTimeout',
+    'runtime-build-failed': 'runtime.developmentPreviewFailed',
+  }
+  return t(keys[code])
 }
 
 function RuntimeOnlySidebar({
@@ -273,6 +338,8 @@ export function AppShell() {
   const [workspaceSaveError, setWorkspaceSaveError] = useState('')
   const [workspaceSaveRetrying, setWorkspaceSaveRetrying] = useState(false)
   const [runtimeStates, setRuntimeStates] = useState<Record<string, RuntimeSnapshot>>({})
+  const [runtimeDevelopmentStates, setRuntimeDevelopmentStates] = useState<Record<string, RuntimeDevelopmentSnapshot>>({})
+  const [runtimeDevelopmentConflict, setRuntimeDevelopmentConflict] = useState<RuntimeDevelopmentConflict | null>(null)
   const [runtimeDetailsTabId, setRuntimeDetailsTabId] = useState<string | null>(null)
   const [projectRuntimeState, setProjectRuntimeState] = useState<{ definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null; status: 'not_initialized' | 'trust_required' | 'ready'; runtimeRoot: string; misplacedRuntime?: boolean; trustRequired: boolean; mountId: string; logsOpen: boolean }>({ runtime: null, status: 'not_initialized', runtimeRoot: '', trustRequired: false, mountId: '', logsOpen: false })
   const [projectRuntimeRefreshNonce, setProjectRuntimeRefreshNonce] = useState(0)
@@ -295,6 +362,9 @@ export function AppShell() {
   // durable writer, so only an explicit `legacy` re-enables Revision 1 paths.
   const [projectChatReadiness, setProjectChatReadiness] = useState<ProjectChatReadiness>('probing')
   const projectChatEnabled = projectChatReadiness !== 'legacy'
+  // The Revision 3 entry and Runtime facade share the same Main composition
+  // flag. During probing/rollback the new entry stays unreachable.
+  const runtimeDevelopmentEnabled = projectChatReadiness === 'enabled'
   const projectChatReadinessRef = useRef<ProjectChatReadiness>('probing')
   projectChatReadinessRef.current = projectChatReadiness
   const [pendingPairing, setPendingPairing] = useState<import('../project-chat-contract').AgentOSPairingPrompt | null>(null)
@@ -352,6 +422,51 @@ export function AppShell() {
   const updateChatWorkspace = useCallback((update: (prev: ChatWorkspaceState) => ChatWorkspaceState) => {
     setChatWorkspace((prev) => (prev ? update(prev) : prev))
   }, [])
+
+  useEffect(() => {
+    return window.desktop?.onRuntimeDevelopmentEvent?.((event) => {
+      if (event.type !== 'snapshot') return
+      setRuntimeDevelopmentStates((current) => applyRuntimeDevelopmentSnapshot(current, event.snapshot))
+    })
+  }, [])
+
+  const runRuntimeDevelopmentAction = useCallback(async (
+    target: RuntimeDevelopmentTarget,
+    snapshot?: RuntimeDevelopmentSnapshot,
+  ) => {
+    if (!runtimeDevelopmentEnabled) return
+    setRuntimeDevelopmentConflict(null)
+    const request = snapshot?.canEnd
+      ? window.desktop?.endRuntimeDevelopment?.(target)
+      : window.desktop?.openRuntimeDevelopment?.(target)
+    if (!request) {
+      setWorkspaceSaveError(t('runtime.developmentLiveUnavailable'))
+      return
+    }
+    try {
+      const result = await request
+      if (result.ok) return
+      if (result.error.code === 'runtime-development-conflict' && 'conflictToken' in result.error) {
+        setRuntimeDevelopmentConflict({ token: result.error.conflictToken, runtimeName: result.error.conflictingRuntimeName, ownerKind: result.error.conflictingOwnerKind })
+        return
+      }
+      setWorkspaceSaveError(runtimeDevelopmentErrorCopy(t, result.error.code))
+    } catch {
+      setWorkspaceSaveError(t('runtime.developmentLiveUnavailable'))
+    }
+  }, [runtimeDevelopmentEnabled, t])
+
+  const focusRuntimeDevelopmentConflict = useCallback(async () => {
+    const conflict = runtimeDevelopmentConflict
+    if (!conflict) return
+    const result = await window.desktop?.focusRuntimeDevelopmentConflict?.(conflict.token)
+    if (result?.ok) {
+      setRuntimeDevelopmentConflict(null)
+      return
+    }
+    setRuntimeDevelopmentConflict(null)
+    setWorkspaceSaveError(result ? runtimeDevelopmentErrorCopy(t, result.error.code) : t('runtime.developmentStale'))
+  }, [runtimeDevelopmentConflict, t])
 
   // --- Main-owned workspace commands (`FIX-WS-01`) / 主进程权威工作区命令 ---
 
@@ -464,6 +579,12 @@ export function AppShell() {
   const activeThread = activeWorkspace.thread
   const activeWorkspaceTab = activeWorkspace.workspaceTab
   const activeRuntimeDefinition = activeWorkspace.runtimeDefinition
+  const activeWorkspaceRuntimeDevelopment = activeRuntimeDefinition
+    ? runtimeDevelopmentStates[workspaceRuntimeScopeId(activeRuntimeDefinition.id)]
+    : undefined
+  const activeProjectRuntimeDevelopment = activeProject
+    ? runtimeDevelopmentStates[projectRuntimeScopeId(activeProject.id)]
+    : undefined
   const runtimeDetailsTab = chatWorkspace?.workspaceTabs.find((item) => item.id === runtimeDetailsTabId)
   const runtimeDetailsDefinition = runtimeDetailsTab
     ? chatWorkspace?.runtimeDefinitions.find((item) => item.id === runtimeDetailsTab.runtimeDefinitionId)
@@ -650,8 +771,15 @@ export function AppShell() {
         void window.desktop?.releaseRuntime?.(result.definition.id, `project-home:${result.projectId}:${result.mountId}`)
         return null
       }
-      flushSync(() => setChatWorkspace(authoritative))
-      persistChatWorkspaceStateToLocalStorage(authoritative)
+      // Trusting a project Runtime must not move the user: adopt Main's facts
+      // but keep the renderer's selection, or the project home would flip to
+      // whichever Workspace Tab Main still records as active.
+      let adopted = authoritative
+      flushSync(() => setChatWorkspace((current) => {
+        adopted = current ? adoptAuthoritativeWorkspace(current, authoritative, { preserveSelection: true }) : authoritative
+        return adopted
+      }))
+      persistChatWorkspaceStateToLocalStorage(adopted)
     } catch (error) {
       setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.workspaceSaveFailed'))
       return null
@@ -687,7 +815,9 @@ export function AppShell() {
         await window.desktop?.releaseRuntime?.(definition.id, consumerId)
         return
       }
-      setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.runtimeFailed'))
+      const conflict = parseRuntimeRootConflict(error)
+      if (conflict) setRuntimeDevelopmentConflict(conflict)
+      else setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.runtimeFailed'))
     }
   }, [activeProject, ensureTrustedProjectRuntime, projectRuntimeMountId, projectRuntimeState, t])
 
@@ -706,10 +836,13 @@ export function AppShell() {
         return
       }
       setProjectRuntimeState((current) => ({ ...current, runtime }))
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (cancelled || request !== projectRuntimeRequestRef.current || mountId !== projectRuntimeMountId || activeProject?.id !== project.id) {
         void window.desktop?.releaseRuntime?.(definition.id, consumerId)
+        return
       }
+      const conflict = parseRuntimeRootConflict(error)
+      if (conflict) setRuntimeDevelopmentConflict(conflict)
     })
     return () => {
       cancelled = true
@@ -728,36 +861,57 @@ export function AppShell() {
       status: projectRuntimeState.status,
       runtimeRoot: projectRuntimeState.runtimeRoot,
       misplacedRuntime: projectRuntimeState.misplacedRuntime,
-      runtimeEdit: activeProjectChatSnapshot?.runtimeEdit,
+      runtimeDevelopment: activeProjectRuntimeDevelopment,
       trustRequired: projectRuntimeState.trustRequired,
       logsOpen: projectRuntimeState.logsOpen,
       viewMode: projectHomeViewMode,
       onViewModeChange: setProjectHomeViewMode,
       onStart: () => { void startProjectRuntime() },
-      onCreate: () => {
-        const request = window.projectChat?.startProjectRuntimeChat(activeProject.id)
-        if (!request) {
-          setWorkspaceSaveError(t('runtime.workspaceSaveFailed'))
-          return
-        }
-        void request.then((result) => {
-          if (!result.ok) setWorkspaceSaveError(result.error.message)
-        }).catch(() => setWorkspaceSaveError(t('runtime.workspaceSaveFailed')))
-      },
+      onCreate: runtimeDevelopmentEnabled ? () => { void runRuntimeDevelopmentAction({ kind: 'project-runtime', projectId: activeProject.id, mountId: projectRuntimeState.mountId }) } : undefined,
       onRefresh: () => { if (projectRuntimePreviewId) void window.desktop?.reloadRuntimePreview?.(projectRuntimePreviewId) },
       onToggleLogs: () => setProjectRuntimeState((current) => ({ ...current, logsOpen: !current.logsOpen })),
       onRestart: () => { if (projectRuntimeState.definition) void window.desktop?.restartRuntime?.(projectRuntimeState.definition.id).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
       onStop: () => { if (projectRuntimeState.definition) void window.desktop?.stopRuntime?.(projectRuntimeState.definition.id, 'user').then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
-      onBuild: () => { if (projectRuntimeState.definition) void window.desktop?.buildRuntime?.(projectRuntimeState.definition.id).then((result) => { if (result.ok) setProjectRuntimeState((current) => ({ ...current, runtime: result.runtime })); else if (result.runtime) setProjectRuntimeState((current) => ({ ...current, runtime: result.runtime! })) }) },
+      onBuild: () => {
+        if (!projectRuntimeState.definition) return
+        void window.desktop?.buildRuntime?.(projectRuntimeState.definition.id).then((result) => {
+          if (result.ok) { setProjectRuntimeState((current) => ({ ...current, runtime: result.runtime })); return }
+          if (result.runtime) setProjectRuntimeState((current) => ({ ...current, runtime: result.runtime! }))
+          if (result.conflict) {
+            setRuntimeDevelopmentConflict({
+              token: result.conflict.conflictToken,
+              runtimeName: result.conflict.conflictingRuntimeName,
+              ownerKind: result.conflict.conflictingOwnerKind,
+            })
+          }
+        })
+      },
       onCancelBuild: () => {
         const definition = projectRuntimeState.definition
         const buildId = projectRuntimeState.runtime?.buildId
         const request = definition ? window.desktop?.cancelRuntimeBuild?.(definition.id, buildId) : undefined
         void request?.then((runtime) => { if (runtime) setProjectRuntimeState((current) => ({ ...current, runtime })) })
       },
-      onDevelopment: () => { if (projectRuntimeState.definition) void window.desktop?.startRuntimeDevelopment?.(projectRuntimeState.definition.id, `project-home:${activeProject?.id ?? ''}:${projectRuntimeState.mountId}`).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
+      onDevelopmentAction: runtimeDevelopmentEnabled ? () => { void runRuntimeDevelopmentAction({ kind: 'project-runtime', projectId: activeProject.id, mountId: projectRuntimeState.mountId }, activeProjectRuntimeDevelopment) } : undefined,
+      serveOverride: projectRuntimeState.definition?.serveOverride,
+      onServeOverrideChange: projectRuntimeState.definition && window.desktop?.setRuntimeServeOverride
+        ? (next) => {
+            const definitionId = projectRuntimeState.definition?.id
+            if (!definitionId) return
+            void window.desktop?.setRuntimeServeOverride?.(definitionId, next)
+              .then((runtime) => {
+                setProjectRuntimeState((current) => (runtime ? { ...current, runtime } : current))
+                setProjectRuntimeRefreshNonce((value) => value + 1)
+              })
+              .catch((error: unknown) => {
+                const conflict = parseRuntimeRootConflict(error)
+                if (conflict) setRuntimeDevelopmentConflict(conflict)
+                else setWorkspaceSaveError(error instanceof Error ? error.message : t('runtime.workspaceSaveFailed'))
+              })
+          }
+        : undefined,
     }
-  }, [activeProject, projectHomeViewMode, projectRuntimePreviewId, projectRuntimeState, setProjectHomeViewMode, startProjectRuntime, t, window.desktop])
+  }, [activeProject, activeProjectRuntimeDevelopment, projectHomeViewMode, projectRuntimePreviewId, projectRuntimeState, runRuntimeDevelopmentAction, runtimeDevelopmentEnabled, setProjectHomeViewMode, startProjectRuntime])
 
   useEffect(() => {
     configureProjectHomeRuntime(projectRuntimeContext)
@@ -1555,9 +1709,13 @@ export function AppShell() {
   const selectWorkspaceTab = useCallback((tabId: string) => {
     if (activeWorkspaceTab?.id !== tabId) void setActiveLocalAppPreviewVisible(false)
     setSelectedProjectSkill(null)
-    updateChatWorkspace((prev) => workspaceSession.selectWorkspaceTab(prev, tabId))
+    // Workspace selection is view state only. Legacy tab.projectId remains
+    // readable for rollback, but the Revision 3 entry never follows it.
+    updateChatWorkspace((prev) => prev.workspaceTabs.some((tab) => tab.id === tabId)
+      ? { ...prev, activeWorkspaceTabId: tabId, activeLocalAppTabId: tabId, activeThreadId: '' }
+      : prev)
     goHome()
-  }, [activeWorkspaceTab?.id, goHome, setActiveLocalAppPreviewVisible, updateChatWorkspace, workspaceSession])
+  }, [activeWorkspaceTab?.id, goHome, setActiveLocalAppPreviewVisible, updateChatWorkspace])
 
   const inspectLocalApp = useCallback(async () => {
     setLocalAppDialogError('')
@@ -1669,6 +1827,11 @@ export function AppShell() {
       const runtime = await window.desktop?.startRuntime?.(localAppId, cause, normalizedConsumer)
       if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
     } catch (error) {
+      const conflict = parseRuntimeRootConflict(error)
+      if (conflict) {
+        setRuntimeDevelopmentConflict(conflict)
+        return
+      }
       const pathMissing = error instanceof Error && error.message === 'local-app-path-missing'
       setRuntimeStates((current) => mergeAcceptedRuntime(current, {
           runtimeDefinitionId: localAppId,
@@ -1752,8 +1915,15 @@ export function AppShell() {
   const buildLocalApp = useCallback((localAppId: string) => {
     const request = window.desktop?.buildRuntime?.(localAppId)
     void request?.then((result) => {
-      if (result.ok) setRuntimeStates((current) => mergeAcceptedRuntime(current, result.runtime))
-      else if (result.runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, result.runtime!))
+      if (result.ok) { setRuntimeStates((current) => mergeAcceptedRuntime(current, result.runtime)); return }
+      if (result.runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, result.runtime!))
+      if (result.conflict) {
+        setRuntimeDevelopmentConflict({
+          token: result.conflict.conflictToken,
+          runtimeName: result.conflict.conflictingRuntimeName,
+          ownerKind: result.conflict.conflictingOwnerKind,
+        })
+      }
     }).catch(() => undefined)
   }, [])
 
@@ -1763,12 +1933,6 @@ export function AppShell() {
       if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
     }).catch(() => undefined)
   }, [])
-
-  const startLocalAppDevelopment = useCallback((localAppId: string, workspaceTabId?: string) => {
-    const tab = chatWorkspace?.workspaceTabs.find((item) => item.runtimeDefinitionId === localAppId && item.id === (workspaceTabId ?? chatWorkspace.activeWorkspaceTabId))
-    const request = window.desktop?.startRuntimeDevelopment?.(localAppId, tab ? `tab:${tab.id}` : undefined)
-    void request?.then((runtime) => setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))).catch(() => undefined)
-  }, [chatWorkspace])
 
   const closeLocalAppTab = useCallback(async (tabId: string) => {
     const current = chatWorkspace
@@ -2759,6 +2923,7 @@ export function AppShell() {
         <div className={`app-shell${isWindows ? ' is-platform-win32' : ''}`} id="app-shell">
           <div className="app-body">
             <WorkspaceSaveErrorNotice error={workspaceSaveError} retrying={workspaceSaveRetrying} onRetry={() => void retryWorkspaceSave()} retryLabel={t('runtime.retryWorkspaceSave')} />
+            <RuntimeDevelopmentConflictNotice conflict={runtimeDevelopmentConflict} onFocus={() => void focusRuntimeDevelopmentConflict()} />
             <RuntimeOnlySidebar
               tabs={localTabs}
               activeTabId={activeWorkspaceTab.id}
@@ -2779,7 +2944,8 @@ export function AppShell() {
                 onRelocate={() => void relocateLocalApp(activeRuntimeDefinition.id)}
                 onBuild={() => buildLocalApp(activeRuntimeDefinition.id)}
                 onCancelBuild={() => cancelLocalAppBuild(activeRuntimeDefinition.id, runtimeStates[activeRuntimeDefinition.id]?.buildId)}
-                onDevelopment={() => startLocalAppDevelopment(activeRuntimeDefinition.id)}
+                runtimeDevelopment={activeWorkspaceRuntimeDevelopment}
+                onDevelopmentAction={runtimeDevelopmentEnabled ? () => void runRuntimeDevelopmentAction({ kind: 'workspace-runtime', workspaceTabId: activeWorkspaceTab.id }, activeWorkspaceRuntimeDevelopment) : undefined}
               />
             </main>
           </div>
@@ -2802,6 +2968,7 @@ export function AppShell() {
         <div className={`app-shell${isWindows ? ' is-platform-win32' : ''} is-shell-settings`} id="app-shell">
           <div className="app-body">
             <WorkspaceSaveErrorNotice error={workspaceSaveError} retrying={workspaceSaveRetrying} onRetry={() => void retryWorkspaceSave()} retryLabel={t('runtime.retryWorkspaceSave')} />
+            <RuntimeDevelopmentConflictNotice conflict={runtimeDevelopmentConflict} onFocus={() => void focusRuntimeDevelopmentConflict()} />
             <div className="app-workspace">
               <div className="app-workspace-top-drag draggable" aria-hidden />
               <div className="app-workspace-content">
@@ -2841,6 +3008,7 @@ export function AppShell() {
     >
       <div className="app-body" ref={appBodyRef}>
         <WorkspaceSaveErrorNotice error={workspaceSaveError} retrying={workspaceSaveRetrying} onRetry={() => void retryWorkspaceSave()} retryLabel={t('runtime.retryWorkspaceSave')} />
+        <RuntimeDevelopmentConflictNotice conflict={runtimeDevelopmentConflict} onFocus={() => void focusRuntimeDevelopmentConflict()} />
         <AppShellSidebar
           activeViewId={activeViewId}
           settingsCategory={settingsCategory}
@@ -2863,11 +3031,11 @@ export function AppShell() {
           runtimeDefinitions={chatWorkspace.runtimeDefinitions}
           activeWorkspaceTabId={chatWorkspace.activeWorkspaceTabId}
           runtimeStates={runtimeStates}
+          runtimeDevelopmentStates={runtimeDevelopmentStates}
           onNewRuntime={openLocalAppEntry}
           onSelectWorkspaceTab={selectWorkspaceTab}
           onCloseWorkspaceTab={closeLocalAppTab}
           onRenameWorkspaceTab={renameLocalAppTab}
-          onOpenWorkspaceTabChat={(tabId) => void window.projectChat?.openWorkspaceTabProjectChat(tabId)}
           onBuildWorkspaceRuntime={(tab) => {
             const runtime = runtimeStates[tab.runtimeDefinitionId]
             if (runtime?.status === 'building' || runtime?.buildStatus === 'building') cancelLocalAppBuild(tab.runtimeDefinitionId, runtime.buildId)
@@ -2877,7 +3045,13 @@ export function AppShell() {
             selectWorkspaceTab(tab.id)
             requestAnimationFrame(() => requestAnimationFrame(() => reloadLocalAppPreview(tab.id, tab.runtimeDefinitionId)))
           }}
-          onDevelopmentWorkspaceRuntime={(tab) => startLocalAppDevelopment(tab.runtimeDefinitionId, tab.id)}
+          onRuntimeDevelopmentAction={(tab, snapshot) => {
+            if (!runtimeDevelopmentEnabled) {
+              setWorkspaceSaveError(t('runtime.developmentLiveUnavailable'))
+              return
+            }
+            void runRuntimeDevelopmentAction({ kind: 'workspace-runtime', workspaceTabId: tab.id }, snapshot)
+          }}
           onViewWorkspaceRuntime={(tab) => setRuntimeDetailsTabId(tab.id)}
           onRestartWorkspaceRuntime={(tab) => restartLocalApp(tab.runtimeDefinitionId)}
           onStopWorkspaceRuntime={(tab) => stopLocalApp(tab.runtimeDefinitionId)}
@@ -2920,8 +3094,9 @@ export function AppShell() {
           onRelocateRuntime={activeRuntimeDefinition ? () => void relocateLocalApp(activeRuntimeDefinition.id) : undefined}
           onBuildRuntime={activeRuntimeDefinition ? () => buildLocalApp(activeRuntimeDefinition.id) : undefined}
           onCancelBuildRuntime={activeRuntimeDefinition ? () => cancelLocalAppBuild(activeRuntimeDefinition.id, runtimeStates[activeRuntimeDefinition.id]?.buildId) : undefined}
-          onDevelopmentRuntime={activeRuntimeDefinition ? () => startLocalAppDevelopment(activeRuntimeDefinition.id) : undefined}
-          onOpenRuntimeChatWindow={projectChatEnabled && activeWorkspaceTab ? () => void window.projectChat?.openWorkspaceTabProjectChat(activeWorkspaceTab.id) : undefined}
+          runtimeDevelopment={activeWorkspaceRuntimeDevelopment}
+          onRuntimeDevelopmentAction={activeWorkspaceTab ? (runtimeDevelopmentEnabled ? () => void runRuntimeDevelopmentAction({ kind: 'workspace-runtime', workspaceTabId: activeWorkspaceTab.id }, activeWorkspaceRuntimeDevelopment) : undefined) : undefined}
+          onOpenRuntimeDevelopmentThread={runtimeDevelopmentEnabled ? (threadId) => { void window.desktop?.openRuntimeDevelopmentThread?.(threadId) } : undefined}
           projectDefaultModelPick={projectDefaultModelPick}
           projectHomeModelPick={projectHomeModelPick}
           projectChatSnapshot={activeProjectChatSnapshot}

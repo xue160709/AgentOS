@@ -43,6 +43,7 @@ type AppSearchModalProps = {
   onInsertKnowledgeContext: (item: AgentKnowledgeSearchItem) => void
   onSelectMessage: (threadId: string, itemId?: string) => void
   onSelectThread: (threadId: string) => void
+  onOpenRuntimeDevelopmentThread?: (threadId: string) => void
 }
 
 type SearchHit =
@@ -105,6 +106,7 @@ export function AppSearchModal({
   onInsertKnowledgeContext,
   onSelectMessage,
   onSelectThread,
+  onOpenRuntimeDevelopmentThread,
 }: AppSearchModalProps) {
   const { locale, t } = useI18n()
   const [scope, setScope] = useState<AppSearchScope>(initialScope)
@@ -368,6 +370,11 @@ export function AppSearchModal({
       return
     }
     if (hit.kind === 'message') {
+      if (hit.message.metadata.scopeKind === 'runtime-development') {
+        onOpenRuntimeDevelopmentThread?.(hit.message.threadId)
+        onClose()
+        return
+      }
       onSelectMessage(hit.message.threadId, hit.message.itemId)
       onClose()
       return
@@ -994,7 +1001,7 @@ function knowledgeKindLabel(item: AgentKnowledgeSearchItem, t: (path: string) =>
 function actionLabelForHit(hit: SearchHit, t: (path: string) => string): string {
   if (hit.kind === 'file') return t('search.action.openFile')
   if (hit.kind === 'directory') return t('search.action.openDirectory')
-  if (hit.kind === 'message') return t('search.action.openMessage')
+  if (hit.kind === 'message') return hit.message.metadata.scopeKind === 'runtime-development' ? t('search.action.openRuntime') : t('search.action.openMessage')
   if ('knowledge' in hit) {
     if (hit.kind === 'memory') return t('search.action.openMemory')
     if (hit.kind === 'skill' || hit.kind === 'command') return t('search.action.runSkill')

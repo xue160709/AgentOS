@@ -16,12 +16,19 @@ import type {
   LocalAppRuntimeSnapshot,
   RuntimeDefinition,
   RuntimeEvent,
+  RuntimeServeOverride,
   RuntimeSnapshot,
   RuntimeStaticDeclaration,
   WorkspaceTab,
   ProjectFilePreviewResult,
 } from './components/types'
 import type { WorkspaceCommand, WorkspaceCommandResult } from './workspace-commands'
+import type {
+  OpenRuntimeDevelopmentResult,
+  RuntimeDevelopmentMainEvent,
+  RuntimeDevelopmentResult,
+  RuntimeDevelopmentTarget,
+} from './runtime-development-contract'
 import type {
   AgentModeFilesResult,
   AgentMcpGlobalSettings,
@@ -134,9 +141,16 @@ export type ProjectRuntimeResult =
   | { ok: true; status: 'not_initialized' | 'ready' | 'trust_required'; projectId: string; mountId: string; runtimeRoot: string; misplacedRuntime?: boolean; definition?: RuntimeDefinition; runtime: RuntimeSnapshot | null }
   | { ok: false; message: string; code?: string }
 
+/** Same-root conflict facts a browsing surface can render and act on. */
+export type RuntimeRootConflictInfo = {
+  conflictToken: string
+  conflictingRuntimeName: string
+  conflictingOwnerKind: 'project' | 'workspace'
+}
+
 export type RuntimeBuildResult =
   | { ok: true; runtime: RuntimeSnapshot }
-  | { ok: false; message: string; code?: string; runtime?: RuntimeSnapshot }
+  | { ok: false; message: string; code?: string; runtime?: RuntimeSnapshot; conflict?: RuntimeRootConflictInfo }
 
 export type DesktopAPI = {
   platform: NodeJS.Platform
@@ -279,7 +293,15 @@ export type DesktopAPI = {
   buildRuntime?: (runtimeDefinitionId: string) => Promise<RuntimeBuildResult>
   cancelRuntimeBuild?: (runtimeDefinitionId: string, buildId?: string) => Promise<RuntimeSnapshot | null>
   /** Explicit opt-in development mode for static definitions. */
+  setRuntimeServeOverride?: (
+    runtimeDefinitionId: string,
+    serveOverride: RuntimeServeOverride | null,
+  ) => Promise<RuntimeSnapshot | null>
   startRuntimeDevelopment?: (runtimeDefinitionId: string, consumerId?: string) => Promise<RuntimeSnapshot>
+  openRuntimeDevelopment?: (target: RuntimeDevelopmentTarget) => Promise<OpenRuntimeDevelopmentResult>
+  focusRuntimeDevelopmentConflict?: (conflictToken: string) => Promise<RuntimeDevelopmentResult<void>>
+  endRuntimeDevelopment?: (target: RuntimeDevelopmentTarget) => Promise<RuntimeDevelopmentResult<void>>
+  openRuntimeDevelopmentThread?: (threadId: string) => Promise<RuntimeDevelopmentResult<void>>
   createRuntimePreview?: (host: RuntimePreviewHost) => Promise<RuntimePreviewResult>
   getRuntimePreviewLayout?: (projectId: string) => Promise<RuntimePreviewLayout>
   saveRuntimePreviewLayout?: (projectId: string, size: RuntimePreviewLayoutSize) => Promise<RuntimePreviewLayout>
@@ -292,6 +314,7 @@ export type DesktopAPI = {
   closeRuntimePreview?: (previewId: string) => Promise<boolean>
   onRuntimePreviewNavigationState?: (handler: (state: RuntimePreviewNavigationState) => void) => () => void
   onRuntimeEvent?: (handler: (event: RuntimeEvent) => void) => () => void
+  onRuntimeDevelopmentEvent?: (handler: (event: RuntimeDevelopmentMainEvent) => void) => () => void
   ensureProjectRuntime?: (projectId: string, mountId: string) => Promise<ProjectRuntimeResult>
   trustProjectRuntime?: (projectId: string, mountId: string) => Promise<ProjectRuntimeResult>
   clearChatWorkspaceData?: () => Promise<void>

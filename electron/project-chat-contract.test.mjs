@@ -39,6 +39,7 @@ function loadRunnerModule() {
     if (specifier === './claude-agent-runner/input') return { normalizeSubmitAttachments: () => [], resolveWorkspaceCwd: (cwd, fallback) => cwd ?? fallback }
     if (specifier === './claude-agent-runner/mcp') return {}
     if (specifier === './claude-agent-runner/web-search') return {}
+    if (specifier === './chat-broker-core') return { runtimeMutationTargetAllowed: async () => true }
     if (specifier === './home-plugin-customization-prompt') return {}
     if (specifier === './project-runtime-prompt') return { resolveProjectAgentRuntimeContext: async () => null, buildProjectRuntimeSystemPrompt: () => '' }
     if (specifier === './safe-console') return { safeConsoleError() {}, safeConsoleInfo() {}, safeConsoleWarn() {} }
@@ -52,6 +53,16 @@ test('project chat error helper preserves the frozen error result contract', () 
   assert.deepEqual(projectChatError('thread-busy', 'Thread is busy.', true), {
     code: 'thread-busy', message: 'Thread is busy.', retryable: true,
   })
+})
+
+test('Runtime development contract narrows creation source and preserves shared thread base exports', () => {
+  const projectContract = readFileSync(resolve(testDir, '../src/project-chat-contract.ts'), 'utf8')
+  const runtimeContract = readFileSync(resolve(testDir, '../src/runtime-development-contract.ts'), 'utf8')
+  assert.match(projectContract, /export type \{ ChatThreadBase \} from '.\/components\/types'/)
+  assert.match(projectContract, /RuntimeDevelopmentThread,/)
+  assert.match(runtimeContract, /Omit<ChatThreadBase, 'creationSource'>/)
+  assert.match(runtimeContract, /Extract<[\s\S]*\{ kind: 'user' \| 'app-command' \}>/)
+  assert.doesNotMatch(runtimeContract, /bindingId:/)
 })
 
 test('Project Chat contract exposes the Runtime creation command and select-thread client event', () => {

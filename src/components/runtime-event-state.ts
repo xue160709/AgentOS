@@ -1,11 +1,13 @@
 import type { RuntimeEvent, RuntimeSnapshot } from './types'
 import type { ProjectChatRuntimeEditSnapshot } from '../project-chat-contract'
+import type { RuntimeDevelopmentErrorCode, RuntimeDevelopmentSnapshot } from '../runtime-development-contract'
 
 export const RUNTIME_EVENT_BATCH_WINDOW_MS = 75
 export const MAX_RUNTIME_LOG_LINES = 160
 export const MAX_QUEUED_RUNTIME_LOG_EVENTS = 160
 
 export type RuntimeStateMap = Record<string, RuntimeSnapshot>
+export type RuntimeDevelopmentStateMap = Record<string, RuntimeDevelopmentSnapshot>
 
 /**
  * One shared, user-facing projection of Main's edit-session snapshot.
@@ -23,6 +25,119 @@ export function runtimeEditStatus(
     return { message: t('runtime.editActive', { n: Math.max(1, edit.potentialRunCount) }), busy: true }
   }
   return null
+}
+
+export type RuntimeDevelopmentUiState = {
+  message: string
+  alert?: true
+  busy?: true
+  action: 'open' | 'end'
+  actionLabel: string
+  actionDisabled: boolean
+}
+
+export type RuntimeServeUiState = {
+  message: string
+  alert?: true
+  busy?: true
+  /** Primary Runtime-side action this state offers, if any. */
+  action?: 'start' | 'update' | 'retry'
+  actionLabel?: string
+}
+
+/**
+ * The Runtime's own state, kept separate from the development session state
+ * (`C-RSM-407`). A card shows both: "how this page is served right now" and
+ * "what the AI session is doing". Neither may replace the other.
+ */
+export function runtimeServeStatus(
+  t: (path: string, params?: Record<string, string | number>) => string,
+  runtime?: RuntimeSnapshot | null,
+): RuntimeServeUiState {
+  const status = runtime?.status ?? 'stopped'
+  if (!runtime || status === 'stopped') {
+    return { message: t('runtime.serveStopped'), action: 'start', actionLabel: t('runtime.startRuntime') }
+  }
+  if (status === 'path_missing') return { message: t('runtime.runtimePathMissing'), alert: true }
+  if (status === 'failed') {
+    return { message: t('runtime.runtimeFailed'), alert: true, action: 'retry', actionLabel: t('runtime.startRuntime') }
+  }
+  if (runtime.mode === 'static') {
+    const buildStatus = runtime.buildStatus ?? 'idle'
+    if (buildStatus === 'building') return { message: t('runtime.serveBuilding'), busy: true }
+    // `C-RSM-402` tier ③ reached through an explicit build: the page simply
+    // cannot have a saved preview, so say that instead of calling it a failure.
+    if (runtime.errorCode === 'build-produces-no-artifact') {
+      return { message: t('runtime.serveDevelopment'), action: 'start', actionLabel: t('runtime.startRuntime') }
+    }
+    if (buildStatus === 'build_failed') {
+      return { message: t('runtime.serveBuildFailed'), alert: true, action: 'retry', actionLabel: t('runtime.updatePreview') }
+    }
+    if (buildStatus === 'build_required') {
+      return { message: t('runtime.serveNotGenerated'), action: 'update', actionLabel: t('runtime.updatePreview') }
+    }
+    return runtime.stale
+      ? { message: t('runtime.serveArtifactStale'), action: 'update', actionLabel: t('runtime.updatePreview') }
+      : { message: t('runtime.serveArtifact') }
+  }
+  if (status === 'degraded') return { message: t('runtime.runtimeDegraded'), alert: true }
+  if (status === 'running') return { message: t('runtime.serveDevelopment') }
+  return { message: t('runtime.serveDevelopmentStarting'), busy: true }
+}
+
+/**
+ * Main's RuntimeDevelopmentSnapshot is the sole phase authority. Components
+ * may localize this projection but must not combine Runtime/Run state to guess
+ * whether development is active, saving, stale, or waiting for attention.
+ */
+export function runtimeDevelopmentStatus(
+  t: (path: string, params?: Record<string, string | number>) => string,
+  snapshot?: RuntimeDevelopmentSnapshot,
+): RuntimeDevelopmentUiState {
+  if (!snapshot) {
+    return { message: t('runtime.developmentIdle'), action: 'open', actionLabel: t('runtime.modifyWithAi'), actionDisabled: false }
+  }
+  const action = snapshot.canEnd ? 'end' : 'open'
+  const actionLabel = t(action === 'end' ? 'runtime.endModification' : 'runtime.modifyWithAi')
+  const actionDisabled = action === 'end' ? !snapshot.canEnd : snapshot.phase === 'saving' && !snapshot.canReopen
+  if (snapshot.errorCode) {
+    return { message: t(runtimeDevelopmentErrorMessageKey(snapshot.errorCode)), alert: true, action, actionLabel, actionDisabled }
+  }
+  if (snapshot.phase === 'opening') return { message: t('runtime.developmentOpening'), busy: true, action, actionLabel, actionDisabled }
+  if (snapshot.phase === 'live') {
+    return { message: snapshot.activeRunCount > 0 ? t('runtime.developmentEditing') : t('runtime.developmentLive'), busy: snapshot.activeRunCount > 0 ? true : undefined, action, actionLabel, actionDisabled }
+  }
+  if (snapshot.phase === 'exit_requested') return { message: snapshot.activeRunCount > 0 ? t('runtime.developmentFinishing') : t('runtime.developmentEnding'), busy: true, action, actionLabel, actionDisabled }
+  if (snapshot.phase === 'saving') return { message: t('runtime.developmentSaving'), busy: true, action, actionLabel, actionDisabled }
+  if (snapshot.phase === 'needs_attention') return { message: snapshot.waitingPromptCount > 0 ? t('runtime.developmentNeedsConfirmation') : t('runtime.developmentNeedsAttention'), alert: true, action, actionLabel, actionDisabled }
+  if (snapshot.phase === 'preview_update_failed') return { message: t('runtime.developmentPreviewFailed'), alert: true, action, actionLabel, actionDisabled }
+  return { message: t('runtime.developmentEnded'), action, actionLabel, actionDisabled }
+}
+
+function runtimeDevelopmentErrorMessageKey(code: RuntimeDevelopmentErrorCode): string {
+  const keys: Record<RuntimeDevelopmentErrorCode, string> = {
+    'runtime-development-conflict': 'runtime.developmentConflict',
+    'runtime-development-busy': 'runtime.developmentBusy',
+    'runtime-scope-stale': 'runtime.developmentStale',
+    'runtime-root-missing': 'runtime.developmentRootMissing',
+    'runtime-trust-required': 'runtime.developmentTrustRequired',
+    'runtime-live-preview-unavailable': 'runtime.developmentLiveUnavailable',
+    'runtime-save-unavailable': 'runtime.developmentSaveUnavailable',
+    'runtime-save-timeout': 'runtime.developmentSaveTimeout',
+    'runtime-build-failed': 'runtime.developmentPreviewFailed',
+  }
+  return keys[code]
+}
+
+/** Route + development generation fence for main-window late events. */
+export function applyRuntimeDevelopmentSnapshot(
+  current: RuntimeDevelopmentStateMap,
+  incoming: RuntimeDevelopmentSnapshot,
+): RuntimeDevelopmentStateMap {
+  const previous = current[incoming.runtimeScopeId]
+  if (previous && incoming.routeGeneration < previous.routeGeneration) return current
+  if (previous && incoming.routeGeneration === previous.routeGeneration && incoming.developmentGeneration < previous.developmentGeneration) return current
+  return { ...current, [incoming.runtimeScopeId]: incoming }
 }
 
 /**

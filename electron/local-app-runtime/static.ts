@@ -10,7 +10,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { copyFile, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
-import type { RuntimeStaticDeclaration } from '../../src/components/types'
+import type { RuntimeServeOverride, RuntimeStaticDeclaration } from '../../src/components/types'
 
 export const STATIC_PREVIEW_SCHEME = 'agentos-static'
 export const STATIC_ARTIFACT_VERSION = 1
@@ -135,6 +135,133 @@ export async function validateStaticOutput(
   }
 }
 
+/**
+ * Detection candidates, in priority order. Detection never invents a path or a
+ * command: only these fixed output roots and the two fixed npm scripts are
+ * considered, and every candidate still passes the containment checks in
+ * `validateStaticOutput`.
+ */
+export const DETECTED_STATIC_OUTPUT_ROOTS = ['out', 'dist', 'build'] as const
+export const DETECTED_STATIC_ENTRY_FILE = 'index.html'
+
+/**
+ * How a Runtime can be viewed. `C-RSM-402` freezes three serve tiers plus the
+ * unsupported case; a declaration, when present, always wins over detection.
+ */
+export type RuntimeServePlan =
+  | { kind: 'artifact'; declaration: RuntimeStaticDeclaration; source: 'declaration' | 'detected' }
+  | { kind: 'buildable'; declaration?: RuntimeStaticDeclaration; source: 'declaration' | 'detected' }
+  | { kind: 'production'; reason: 'server-bundle-present' | 'build-produces-no-artifact' }
+  | { kind: 'development'; reason: 'no-build-script' | 'no-start-script' }
+  | { kind: 'unsupported'; reason: 'no-runnable-script' }
+
+/**
+ * The one server-bundle marker detection is allowed to recognize. It is a fixed
+ * Next.js artifact path; other frameworks must build first rather than have
+ * their output location guessed.
+ */
+export const DETECTED_SERVER_BUNDLE_MARKER = '.next/BUILD_ID'
+
+export type RuntimeServeScripts = { hasBuildScript: boolean; hasStartScript: boolean; hasDevScript: boolean }
+
+/** The serve tier for a Runtime that cannot be viewed from files alone. */
+export function serverServePlan(
+  scripts: RuntimeServeScripts,
+  reason: 'server-bundle-present' | 'build-produces-no-artifact' | 'no-build-script',
+): RuntimeServePlan {
+  if (scripts.hasStartScript && reason !== 'no-build-script') {
+    return { kind: 'production', reason: reason === 'server-bundle-present' ? 'server-bundle-present' : 'build-produces-no-artifact' }
+  }
+  if (scripts.hasStartScript && reason === 'no-build-script') return { kind: 'development', reason: 'no-build-script' }
+  if (scripts.hasDevScript) {
+    return { kind: 'development', reason: reason === 'no-build-script' ? 'no-build-script' : 'no-start-script' }
+  }
+  return { kind: 'unsupported', reason: 'no-runnable-script' }
+}
+
+/** Synthesize the declaration a detected output directory is equivalent to. */
+export function detectedStaticDeclaration(outputRoot: string): RuntimeStaticDeclaration {
+  return {
+    mode: 'static',
+    buildCommand: 'npm run build',
+    outputRoot: normalizeStaticRelativePath(outputRoot),
+    entryFile: DETECTED_STATIC_ENTRY_FILE,
+  }
+}
+
+/** First fixed candidate that holds a usable, contained entry file. */
+export async function findDetectedStaticArtifact(canonicalRoot: string): Promise<RuntimeStaticDeclaration | null> {
+  for (const outputRoot of DETECTED_STATIC_OUTPUT_ROOTS) {
+    const declaration = detectedStaticDeclaration(outputRoot)
+    try {
+      await validateStaticOutput(canonicalRoot, declaration)
+      return declaration
+    } catch {
+      // Missing, not a directory, or escaping the root: try the next candidate.
+    }
+  }
+  return null
+}
+
+/**
+ * Resolve how a Runtime should be served. The order is frozen and must not be
+ * reordered: declaration, existing artifact, buildable, development, then
+ * unsupported.
+ */
+export async function detectRuntimeServePlan(input: {
+  canonicalRoot: string
+  declaration?: RuntimeStaticDeclaration
+} & RuntimeServeScripts): Promise<RuntimeServePlan> {
+  if (input.declaration) {
+    try {
+      await validateStaticOutput(input.canonicalRoot, input.declaration)
+      return { kind: 'artifact', declaration: input.declaration, source: 'declaration' }
+    } catch {
+      return { kind: 'buildable', declaration: input.declaration, source: 'declaration' }
+    }
+  }
+  const detected = await findDetectedStaticArtifact(input.canonicalRoot)
+  if (detected) return { kind: 'artifact', declaration: detected, source: 'detected' }
+  // An existing server bundle is the SSR equivalent of an existing artifact:
+  // serve it as it is instead of paying for another build.
+  if (input.hasStartScript && await hasServerBundle(input.canonicalRoot)) {
+    return { kind: 'production', reason: 'server-bundle-present' }
+  }
+  if (input.hasBuildScript) return { kind: 'buildable', source: 'detected' }
+  return serverServePlan(input, 'no-build-script')
+}
+
+async function hasServerBundle(canonicalRoot: string): Promise<boolean> {
+  const markerPath = path.resolve(canonicalRoot, ...DETECTED_SERVER_BUNDLE_MARKER.split('/'))
+  if (!isPathInside(canonicalRoot, markerPath)) return false
+  try {
+    const canonicalMarker = await realpath(markerPath)
+    if (!isPathInside(canonicalRoot, canonicalMarker)) return false
+    return (await stat(canonicalMarker)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A user override is the only thing allowed to outrank detection
+ * (`C-RSM-404`). It can force a serve tier but never invents a declaration:
+ * forcing `artifact` on a directory with no build path stays unsupported.
+ */
+export function applyServeOverride(
+  plan: RuntimeServePlan,
+  override: RuntimeServeOverride | undefined,
+  scripts: RuntimeServeScripts,
+): RuntimeServePlan {
+  // `artifact` only clears a previous `server` override; it cannot make a
+  // directory static that has no build path, and the surface reports that
+  // honestly instead of silently falling back. `server` means "keep it
+  // running" — production or development is still detection's call.
+  if (override !== 'server' || plan.kind === 'unsupported') return plan
+  if (plan.kind === 'production' || plan.kind === 'development') return plan
+  return serverServePlan(scripts, scripts.hasStartScript ? 'server-bundle-present' : 'no-build-script')
+}
+
 async function ensureSafeSourceTree(sourceRoot: string, containmentRoot: string, visiting = new Set<string>()): Promise<void> {
   const canonicalRoot = await realpath(sourceRoot)
   if (!isPathInside(containmentRoot, canonicalRoot)) throw new Error('static-output-symlink-escape')
@@ -249,6 +376,7 @@ export class StaticArtifactStore {
     sourceOutput: string,
     sourceFingerprint?: string,
     signal?: AbortSignal,
+    beforePointerCommit?: () => boolean,
   ): Promise<StaticArtifact> {
     const runtimePath = this.runtimePath(definitionId, canonicalRoot)
     const artifactsPath = path.join(runtimePath, 'artifacts')
@@ -273,6 +401,9 @@ export class StaticArtifactStore {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
       await writeFile(pointerTmp, `${JSON.stringify(pointer)}\n`, 'utf8')
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      // Main transaction authority is re-read at the last cancellable point;
+      // a stale development generation must never replace last-good.
+      if (beforePointerCommit && !beforePointerCommit()) throw new RuntimeBuildCommitFenceRejectedError()
       // The pointer rename is the atomic commit boundary. Once it succeeds,
       // callers must publish this artifact even if cancellation is requested
       // in the following in-memory publication window.
@@ -283,6 +414,10 @@ export class StaticArtifactStore {
       if (pointerTmp) await rm(pointerTmp, { force: true }).catch(() => undefined)
     }
   }
+}
+
+export class RuntimeBuildCommitFenceRejectedError extends Error {
+  constructor() { super('runtime-build-commit-fence-rejected'); this.name = 'RuntimeBuildCommitFenceRejectedError' }
 }
 
 export class StaticPreviewRegistry {
@@ -402,8 +537,13 @@ export async function fingerprintStaticSource(
   projectRoot: string,
   declaration: RuntimeStaticDeclaration,
 ): Promise<string> {
+  return fingerprintRuntimeSource(projectRoot, declaration.outputRoot)
+}
+
+/** Source-only fingerprint shared by static-capable and development-only sessions. */
+export async function fingerprintRuntimeSource(projectRoot: string, outputRoot?: string): Promise<string> {
   const hash = createHash('sha256')
-  const ignored = new Set(['.git', 'node_modules', '.next', declaration.outputRoot])
+  const ignored = new Set(['.git', 'node_modules', '.next', ...(outputRoot ? [outputRoot] : [])])
   const visit = async (directory: string, relative = ''): Promise<void> => {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {

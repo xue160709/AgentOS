@@ -35,6 +35,8 @@ import type {
 } from './types'
 import { getSettingsSidebarNav } from './app-shell-constants.ts'
 import { sortProjectsForSidebar } from './project-order'
+import { workspaceRuntimeScopeId, type RuntimeDevelopmentSnapshot } from '../runtime-development-contract'
+import { runtimeDevelopmentStatus } from './runtime-event-state'
 
 /** 侧栏单区块预览条数（超过则显示「展开显示」）/ Max items before "show more" in sidebar sections */
 const SIDEBAR_SECTION_PREVIEW_LIMIT = 5
@@ -77,14 +79,14 @@ type AppShellSidebarProps = {
   runtimeDefinitions: RuntimeDefinition[]
   activeWorkspaceTabId: string
   runtimeStates: Record<string, RuntimeSnapshot>
+  runtimeDevelopmentStates: Record<string, RuntimeDevelopmentSnapshot>
   onNewRuntime: (event?: ReactMouseEvent<HTMLElement>) => void | Promise<void>
   onSelectWorkspaceTab: (tabId: string) => void
   onCloseWorkspaceTab: (tabId: string) => void
   onRenameWorkspaceTab?: (tabId: string, title: string) => void | Promise<boolean>
-  onOpenWorkspaceTabChat: (tabId: string) => void
   onBuildWorkspaceRuntime: (tab: WorkspaceTab) => void
   onRefreshWorkspaceRuntime: (tab: WorkspaceTab) => void
-  onDevelopmentWorkspaceRuntime: (tab: WorkspaceTab) => void
+  onRuntimeDevelopmentAction: (tab: WorkspaceTab, snapshot?: RuntimeDevelopmentSnapshot) => void
   onViewWorkspaceRuntime: (tab: WorkspaceTab) => void
   onRestartWorkspaceRuntime: (tab: WorkspaceTab) => void
   onStopWorkspaceRuntime: (tab: WorkspaceTab) => void
@@ -134,14 +136,14 @@ export function AppShellSidebar({
   runtimeDefinitions,
   activeWorkspaceTabId,
   runtimeStates,
+  runtimeDevelopmentStates,
   onNewRuntime,
   onSelectWorkspaceTab,
   onCloseWorkspaceTab,
   onRenameWorkspaceTab,
-  onOpenWorkspaceTabChat,
   onBuildWorkspaceRuntime,
   onRefreshWorkspaceRuntime,
-  onDevelopmentWorkspaceRuntime,
+  onRuntimeDevelopmentAction,
   onViewWorkspaceRuntime,
   onRestartWorkspaceRuntime,
   onStopWorkspaceRuntime,
@@ -244,9 +246,10 @@ export function AppShellSidebar({
     event.stopPropagation()
     const rect = event.currentTarget.getBoundingClientRect()
     const runtime = runtimeStates[tab.runtimeDefinitionId]
+    const development = runtimeDevelopmentStates[workspaceRuntimeScopeId(tab.runtimeDefinitionId)]
+    const developmentUi = runtimeDevelopmentStatus(t, development)
     const definition = runtimeDefinitions.find((item) => item.id === tab.runtimeDefinitionId)
     const isBuilding = runtime?.status === 'building' || runtime?.buildStatus === 'building'
-    const isDevelopment = runtime?.mode === 'development' || runtime?.status === 'development'
     const canRestart = Boolean(runtime && ['running', 'development', 'degraded', 'failed', 'stopped'].includes(runtime.status))
     const canStop = Boolean(runtime && ['preparing', 'starting', 'running', 'development', 'degraded'].includes(runtime.status))
     openRuntimeMenu(event.currentTarget as HTMLElement, {
@@ -254,8 +257,7 @@ export function AppShellSidebar({
       y: event.clientY || rect.bottom,
       items: [
         { id: 'runtime-tab-open', label: t('runtime.openWorkbench'), onSelect: () => { closeContextMenu(); onSelectWorkspaceTab(tab.id) } },
-        { id: 'runtime-tab-chat', label: t('runtime.openChatWindow'), onSelect: () => { closeContextMenu(); onOpenWorkspaceTabChat(tab.id) } },
-        { id: 'runtime-tab-development', label: isDevelopment ? t('runtime.developmentModeActive') : t('runtime.enterDevelopmentMode'), accent: !isDevelopment, disabled: isDevelopment, separatorBefore: true, onSelect: () => { closeContextMenu(); onDevelopmentWorkspaceRuntime(tab) } },
+        { id: 'runtime-tab-development', label: developmentUi.actionLabel, accent: developmentUi.action === 'open', disabled: developmentUi.actionDisabled, separatorBefore: true, onSelect: () => { closeContextMenu(); onRuntimeDevelopmentAction(tab, development) } },
         { id: 'runtime-tab-build', label: isBuilding ? t('runtime.cancel') : t('runtime.rebuild'), disabled: definition?.mode !== 'static' && runtime?.mode !== 'static', onSelect: () => { closeContextMenu(); onBuildWorkspaceRuntime(tab) } },
         { id: 'runtime-tab-refresh', label: t('runtime.refresh'), disabled: !runtime?.readyUrl && !runtime?.previewUrl, onSelect: () => { closeContextMenu(); onRefreshWorkspaceRuntime(tab) } },
         { id: 'runtime-tab-view-runtime', label: t('runtime.viewRuntime'), separatorBefore: true, onSelect: () => { closeContextMenu(); onViewWorkspaceRuntime(tab) } },
@@ -689,7 +691,6 @@ export function AppShellSidebar({
                   {workspaceTabs.length > 0 ? (
                     <div className="local-app-sidebar-list runtime-tabs-list" aria-label={t('runtime.section')}>
                       {workspaceTabs.map((tab) => {
-                        const runtime = runtimeStates[tab.runtimeDefinitionId]
                         const editing = editingRuntimeTabId === tab.id
                         return <div className={`local-app-sidebar-row runtime-tab-row${activeWorkspaceTabId === tab.id ? ' is-active' : ''}`} key={tab.id} data-testid="runtime-tab">
                           {editing ? <input
@@ -723,7 +724,7 @@ export function AppShellSidebar({
                             }}
                           >
                             <IconInline name="laptop" />
-                            <span><strong>{tab.title}</strong>{workbenchStatusLabel(t, runtime?.status) ? <small>{workbenchStatusLabel(t, runtime?.status)}</small> : null}</span>
+                            <span>{tab.title}</span>
                           </button>}
                           {!editing ? <button type="button" className="runtime-tab-menu-trigger" aria-label={t('runtime.workbenchMenu', { title: tab.title })} title={t('runtime.workbenchMenu', { title: tab.title })} onClick={(event) => openRuntimeTabMenu(event, tab)}><IconInline name="moreHorizontal" /></button> : null}
                           {editing && runtimeTabRenameError ? <small className="runtime-tab-rename-error">{runtimeTabRenameError}</small> : null}
@@ -1201,13 +1202,4 @@ function formatThreadTime(timestamp: number, locale: AppLocale, t: (path: string
   if (diff < 3_600_000) return t('sidebar.minutesShort', { n: Math.max(1, Math.floor(diff / 60_000)) })
   if (diff < 86_400_000) return t('sidebar.hoursShort', { n: Math.floor(diff / 3_600_000) })
   return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric' }).format(timestamp)
-}
-
-function workbenchStatusLabel(t: (path: string) => string, status?: RuntimeSnapshot['status']): string {
-  if (!status || status === 'ready' || status === 'running') return ''
-  if (status === 'development') return t('runtime.developmentModeActive')
-  if (status === 'preparing' || status === 'starting' || status === 'building') return t('runtime.workbenchUpdating')
-  if (status === 'stale' || status === 'build_required') return t('runtime.workbenchUpdateAvailable')
-  if (status === 'failed' || status === 'build_failed' || status === 'degraded' || status === 'path_missing') return t('runtime.workbenchUpdateFailed')
-  return t('runtime.runtimeStopped')
 }

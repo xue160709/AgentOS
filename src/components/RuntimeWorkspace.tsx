@@ -2,8 +2,8 @@ import { useMemo } from 'react'
 import { useI18n } from '../i18n/i18n'
 import type { RuntimeDefinition, RuntimeSnapshot, WorkspaceTab } from './types'
 import { RuntimePreview } from './RuntimePreview'
-import { runtimeEditStatus } from './runtime-event-state'
-import type { ProjectChatRuntimeEditSnapshot } from '../project-chat-contract'
+import { runtimeDevelopmentStatus, runtimeServeStatus } from './runtime-event-state'
+import type { RuntimeDevelopmentSnapshot } from '../runtime-development-contract'
 
 export type RuntimeWorkspaceProps = {
   tab: WorkspaceTab
@@ -16,14 +16,14 @@ export type RuntimeWorkspaceProps = {
   onRelocate: () => void
   onBuild?: () => void
   onCancelBuild?: () => void
-  onDevelopment?: () => void
+  onDevelopmentAction?: () => void
   logsOpen?: boolean
   onLogsToggle?: () => void
   showToolbar?: boolean
-  runtimeEdit?: ProjectChatRuntimeEditSnapshot
+  runtimeDevelopment?: RuntimeDevelopmentSnapshot
 }
 
-export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart, onStop, onReload, onRelocate, onBuild, onCancelBuild, onDevelopment, logsOpen = false, onLogsToggle, showToolbar = true, runtimeEdit }: RuntimeWorkspaceProps) {
+export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart, onStop, onReload, onRelocate, onBuild, onCancelBuild, onDevelopmentAction, logsOpen = false, onLogsToggle, showToolbar = true, runtimeDevelopment }: RuntimeWorkspaceProps) {
   const { t } = useI18n()
   const status = runtime?.status ?? 'stopped'
   const staticMode = runtime?.mode ? runtime.mode === 'static' : definition.mode === 'static'
@@ -43,26 +43,28 @@ export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart,
     idle: 'runtime.runtimeStopped', ready: 'runtime.runtimeReady', stale: 'runtime.runtimeStale', build_required: 'runtime.runtimeBuildRequired', building: firstBuild ? 'runtime.runtimeFirstBuilding' : 'runtime.runtimeBuilding', build_failed: 'runtime.runtimeBuildFailed',
     preparing: 'runtime.runtimePreparing', starting: 'runtime.runtimeStarting', running: 'runtime.runtimeRunning', degraded: 'runtime.runtimeDegraded', failed: 'runtime.runtimeFailed', path_missing: 'runtime.runtimePathMissing', stopped: 'runtime.runtimeStopped',
   } as Record<string, string>)[displayStatus] ?? 'runtime.runtimeStopped')
-  const runtimeNeedsRecovery = ['failed', 'build_failed', 'path_missing', 'stopped'].includes(displayStatus)
-  // A terminal Runtime failure is more important than an in-flight Chat edit;
-  // never leave the workbench saying “正在更新” after its process has failed.
-  const editStatus = runtimeNeedsRecovery ? null : runtimeEditStatus(t, runtimeEdit)
+  const developmentStatus = runtimeDevelopmentStatus(t, runtimeDevelopment)
+  const serveStatus = runtimeServeStatus(t, runtime)
+  const serveAction = serveStatus.action === 'update' || serveStatus.action === 'retry'
+    ? (onBuild ?? onRetry)
+    : serveStatus.action === 'start' ? onRetry : undefined
   return <section className={`runtime-workspace runtime-workspace--${displayStatus}`} data-testid="runtime-workspace" aria-labelledby="runtime-workspace-title">
     {showToolbar ? <header className="local-app-workspace__toolbar">
       <div className="local-app-workspace__toolbar-title"><strong id="runtime-workspace-title">{tab.title || definition.name}</strong><span className="local-app-workspace__path" title={definition.rootPath}>{definition.rootPath}</span></div>
       <div className="local-app-workspace__actions">
-        <span className="local-app-runtime-compact-status" data-testid="runtime-status" role={editStatus?.alert ? 'alert' : 'status'} aria-busy={editStatus?.busy}>{editStatus?.message ?? label}</span>
+        <span className="local-app-runtime-compact-status" data-testid="runtime-serve-status" role={serveStatus.alert ? 'alert' : 'status'} aria-busy={serveStatus.busy}>{serveStatus.message}</span>
+        {serveAction && serveStatus.actionLabel ? <button type="button" className="btn btn-toolbar" data-testid="runtime-serve-action" onClick={serveAction}>{serveStatus.actionLabel}</button> : null}
+        {onDevelopmentAction ? <><span className="local-app-runtime-compact-status" data-testid="runtime-status" role={developmentStatus.alert ? 'alert' : 'status'} aria-busy={developmentStatus.busy}>{developmentStatus.message}</span>
+        <button type="button" className="btn btn-primary" data-testid={developmentStatus.action === 'end' ? 'runtime-end-development' : 'runtime-open-development'} aria-label={developmentStatus.actionLabel} onClick={onDevelopmentAction} disabled={developmentStatus.actionDisabled}>{developmentStatus.actionLabel}</button></> : null}
         {staticMode ? <button type="button" className="btn btn-primary" data-testid="runtime-build" onClick={onBuild ?? onRetry} disabled={!canStart}>{hasLastGood ? t('runtime.rebuild') : t('runtime.build')}</button> : null}
         <button type="button" className="btn btn-toolbar" data-testid="runtime-refresh" onClick={onReload} disabled={!runtime?.readyUrl && !runtime?.previewUrl}>{t('runtime.refresh')}</button>
         <button type="button" className="btn btn-toolbar" data-testid="runtime-logs" onClick={onLogsToggle} aria-expanded={logsOpen}>{t('runtime.logs')}</button>
         <button type="button" className="btn btn-toolbar" data-testid="runtime-restart" onClick={onRestart} disabled={!canRestart}>{t('runtime.restart')}</button>
-        {staticMode ? <button type="button" className="btn btn-ghost" data-testid="runtime-development" onClick={onDevelopment} disabled={!onDevelopment}>{t('runtime.developmentMode')}</button> : null}
         <button type="button" className="btn btn-ghost" data-testid={isBuilding ? 'runtime-cancel-build' : 'runtime-stop'} onClick={isBuilding ? (onCancelBuild ?? onStop) : onStop} disabled={!canStop}>{isBuilding ? t('runtime.cancel') : t('runtime.stop')}</button>
       </div>
     </header> : null}
-    {!showToolbar ? <span className="sr-only" data-testid="runtime-status" role="status">{label}</span> : null}
-    {status === 'degraded' && runtime?.detail ? <div className="local-app-runtime-degraded" role="status">{runtime.detail}</div> : null}
-    {(staticMode ? ['build_required', 'build_failed'].includes(displayStatus) : ['failed', 'path_missing', 'stopped'].includes(status)) ? <div className="local-app-runtime-recovery" role={status === 'failed' || status === 'path_missing' || displayStatus === 'build_failed' ? 'alert' : undefined}><div><strong>{label}</strong>{runtime?.detail ? <span>{runtime.detail}</span> : null}</div><div className="local-app-runtime-recovery__actions"><button type="button" className="btn btn-primary" data-testid="runtime-start" onClick={staticMode ? (onBuild ?? onRetry) : onRetry} disabled={!canStart}>{staticMode ? (hasLastGood ? t('runtime.rebuild') : t('runtime.build')) : t('runtime.start')}</button><button type="button" className="btn btn-ghost" onClick={onRestart} disabled={!canRestart}>{t('runtime.restart')}</button><button type="button" className="btn btn-ghost" onClick={onRelocate}>{t('runtime.relocate')}</button></div></div> : null}
+    {!showToolbar && onDevelopmentAction ? <span className="sr-only" data-testid="runtime-status" role={developmentStatus.alert ? 'alert' : 'status'} aria-busy={developmentStatus.busy}>{developmentStatus.message}</span> : null}
+    {(staticMode ? ['build_required', 'build_failed'].includes(displayStatus) : ['failed', 'path_missing', 'stopped'].includes(status)) ? <div className="local-app-runtime-recovery" role={status === 'failed' || status === 'path_missing' || displayStatus === 'build_failed' ? 'alert' : undefined}><div><strong>{label}</strong></div><div className="local-app-runtime-recovery__actions"><button type="button" className="btn btn-primary" data-testid="runtime-start" onClick={staticMode ? (onBuild ?? onRetry) : onRetry} disabled={!canStart}>{staticMode ? (hasLastGood ? t('runtime.rebuild') : t('runtime.build')) : t('runtime.start')}</button><button type="button" className="btn btn-ghost" onClick={onRestart} disabled={!canRestart}>{t('runtime.restart')}</button><button type="button" className="btn btn-ghost" onClick={onRelocate}>{t('runtime.relocate')}</button></div></div> : null}
     <div className="local-app-preview-stage"><RuntimePreview host={{ kind: 'workspace-tab', workspaceTabId: tab.id, runtimeDefinitionId: definition.id }} runtime={runtime} active /></div>
     {logsOpen ? <details className="local-app-runtime-log" data-testid="runtime-log" open><summary>{t('runtime.logs')} ({logs.length})</summary><pre>{logs.join('\n') || t('runtime.noLogs')}</pre></details> : null}
   </section>

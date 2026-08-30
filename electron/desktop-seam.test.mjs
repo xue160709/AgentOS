@@ -60,6 +60,29 @@ test('Runtime Chat creation is composed through the Project Chat seam and target
   assert.match(main, /startProjectRuntimeChat: async \(projectId: string\) => \{[\s\S]{0,900}manager\.open\(projectId\)[\s\S]{0,360}type: 'select-thread', projectId, threadId[\s\S]{0,300}broker\.submitRun\([\s\S]{0,140}\{ projectRuntimePrompt: true \}/)
 })
 
+test('Runtime development cutover keeps scopes independent and conflicts only at the Main-owned root lease', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const contract = readFileSync(resolve(root, 'src/runtime-development-contract.ts'), 'utf8')
+  const openStart = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openRuntimeDevelopment')
+  const focusStart = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.focusRuntimeDevelopmentConflict', openStart)
+  const focusEnd = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.endRuntimeDevelopment', focusStart)
+  const openHandler = main.slice(openStart, focusStart)
+  const focusHandler = main.slice(focusStart, focusEnd)
+
+  assert.match(contract, /\{ kind: 'project-runtime'; projectId: string; mountId: string \}/)
+  assert.match(contract, /\{ kind: 'workspace-runtime'; workspaceTabId: string \}/)
+  assert.match(main, /projectRuntimeScopeId\(projectId\)/)
+  assert.match(main, /workspaceRuntimeScopeId\(definition\.id\)/)
+  assert.match(openHandler, /runChatWorkspaceOperation\(async \(\) => resolveRuntimeDevelopmentTarget\(rawTarget, getChatWorkspaceStore\(\)\.read\(\)\)\)/)
+  assert.match(openHandler, /getByRoot\(definition\?\.canonicalRoot \?\? scope\.runtimeRoot\)/)
+  assert.match(openHandler, /currentLease\.runtimeScopeId !== resolvedTarget\.runtimeScopeId/)
+  assert.doesNotMatch(openHandler, /activeProjectId\s*:|activeWorkspaceTabId\s*:/)
+  assert.match(focusHandler, /runtimeDevelopmentConflictTokens\.delete\(rawToken\)/)
+  assert.match(focusHandler, /target\.show\(\); target\.focus\(\)/)
+  assert.doesNotMatch(focusHandler, /activeProjectId|activeWorkspaceTabId|save\(/)
+  assert.match(main, /mainWindow\.webContents\.send\(DESKTOP_EVENT_CHANNELS\.onRuntimeDevelopmentEvent, \{ type: 'snapshot', snapshot \}\)/)
+})
+
 test('Main uses one workspace coordinator and locks the Runtime trust commit before fresh read/save', () => {
   const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
   assert.match(main, /import \{ ChatWorkspaceCoordinator \} from '\.\/chat-workspace-coordinator'/)
@@ -82,7 +105,8 @@ test('Main uses one workspace coordinator and locks the Runtime trust commit bef
   }
   visit(source)
   // 8th save: the `FIX-WS-01` workspace command handler.
-  assert.equal(saves.length, 8)
+  // 9th save: the `R4-03` serve-override handler.
+  assert.equal(saves.length, 9)
   for (const save of saves) {
     let parent = save.parent; let wrapped = false
     while (parent) {
@@ -161,14 +185,15 @@ test('Static build keeps last-good Preview alive and cancellation uses the build
   assert.doesNotMatch(workspace, /\['build_required', 'build_failed', 'stale'\]/)
   assert.match(workspace, /hasLastGood \? t\('runtime\.rebuild'\) : t\('runtime\.build'\)/)
   const shellWorkspace = readFileSync(resolve(root, 'src/components/AppShellWorkspace.tsx'), 'utf8')
-  assert.match(shellWorkspace, /data-testid="runtime-open-chat-window"/)
+  assert.match(shellWorkspace, /runtime-open-development/)
   assert.doesNotMatch(shellWorkspace, /data-testid="runtime-build"/)
   const sidebar = readFileSync(resolve(root, 'src/components/AppShellSidebar.tsx'), 'utf8')
-  assert.match(sidebar, /id: 'runtime-tab-development'[\s\S]*?onDevelopmentWorkspaceRuntime\(tab\)/)
+  assert.match(sidebar, /id: 'runtime-tab-development'[\s\S]*?onRuntimeDevelopmentAction\(tab, development\)/)
   assert.match(sidebar, /id: 'runtime-tab-build'[\s\S]*?onBuildWorkspaceRuntime\(tab\)/)
   assert.match(sidebar, /id: 'runtime-tab-refresh'[\s\S]*?onRefreshWorkspaceRuntime\(tab\)/)
   const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
-  assert.match(appShell, /onDevelopmentRuntime=\{activeRuntimeDefinition \? \(\) => startLocalAppDevelopment\(activeRuntimeDefinition\.id\) : undefined\}/)
+  assert.match(appShell, /onRuntimeDevelopmentAction=\{activeWorkspaceTab \?[\s\S]*?kind: 'workspace-runtime', workspaceTabId: activeWorkspaceTab\.id/)
+  assert.doesNotMatch(appShell, /startLocalAppDevelopment|openWorkspaceTabProjectChat/)
   const projectHome = readFileSync(resolve(root, 'src/components/chat/ProjectHomeRuntimeView.tsx'), 'utf8')
   assert.match(projectHome, /project-runtime-cancel-build/)
   assert.match(projectHome, /onCancelBuild \?\? controller\.onStop/)

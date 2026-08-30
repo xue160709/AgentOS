@@ -4,6 +4,75 @@
 > 状态：Revision 3 BUILDABLE / Planned；Revision 2 已实现但未正式验收
 > 解释优先级：`protocol-v1.md`（网站线协议）→ 本文（进程/IPC/持久化）→ `design.md`（用户行为）→ work order。发现冲突必须停工更新规格，不能由实现者自行选择。
 
+## Revision 4 Technical Delta：RuntimeServePlan
+
+### T4.1 目标与最小改动路径
+
+把"这个 Runtime 怎么被查看"从 `package.json` 申报改为系统探测。关键实现选择：**探测器输出与既有 `StaticDeclaration` 同形的结论**，因此静态构建、last-good 产物库、静态 Preview registry、generation fence 这些既有链路一律不改，只是它们的输入不再只能来自声明块。
+
+### T4.2 RuntimeServePlan 合同
+
+```ts
+export type RuntimeServePlan =
+  | { kind: 'artifact'; declaration: StaticDeclaration; source: 'declaration' | 'detected' }
+  | { kind: 'buildable'; declaration?: StaticDeclaration; source: 'declaration' | 'detected' }
+  | { kind: 'production'; reason: 'server-bundle-present' | 'build-produces-no-artifact' }
+  | { kind: 'development'; reason: 'no-build-script' | 'no-start-script' }
+  | { kind: 'unsupported'; reason: 'no-package-json' | 'no-runnable-script' }
+```
+
+`production` 与 `development` 都是"保持运行"，区别只是执行 `npm run start` 还是 `npm run dev`。系统在两者之间永远优先 `production`。
+
+探测顺序（固定，不可重排）：
+
+1. `agentos` 声明块存在且合法 → 用它的 `outputRoot`/`entryFile`；入口文件存在则 `artifact`，否则 `buildable`。声明块非法仍然是硬错误，不降级。
+2. 无声明块 → 按 `out` → `dist` → `build` 顺序找 `<dir>/index.html`，第一个命中即 `artifact`，合成等价 declaration（`buildCommand` 固定 `npm run build`）。
+3. 未命中静态产物但存在 `.next/BUILD_ID` 且有 `scripts.start` → `production(server-bundle-present)`，直接启动，不重新构建。该标记文件是 Next.js 专有；其它框架不猜服务端产物位置。
+4. 有 `scripts.build` → `buildable`，`outputRoot` 待构建后再定。
+5. 无 `build` 脚本但有 `scripts.dev` → `development(no-build-script)`。
+6. 都没有 → `unsupported`。
+
+构建后重新探测：命中静态产物 → `artifact`；否则有 `scripts.start` → `production(build-produces-no-artifact)`；否则有 `scripts.dev` → `development(no-start-script)`。
+
+产物目录必须通过既有 `isSafeStaticRelativePath` 与 canonical containment 校验；探测只认 `npm run build` / `npm run dev` 两条固定命令，不执行 `package.json` 里的任何其他脚本。
+
+### T4.3 Definition 字段与覆盖
+
+- 新增 `serveOverride?: 'artifact' | 'server'`，持久化在 Definition 上，由用户显式设置，自动探测不推翻。`server` 只表达"保持运行"，具体跑 `start` 还是 `dev` 仍由探测择优。
+- 新增**不持久化**的 `serveScript?: 'dev' | 'start'`：Runtime 开发会话与旧 development 入口用它强制一次 dev 运行，绕过探测。它只存在于 manager 注册的运行期定义上，不进 workspace store 白名单。
+- `mode` 保留为派生值：`plan.kind === 'development' ? 'development' : 'static'`，供既有代码路径使用。
+- `agentos` 字段继续承载 declaration，来源可以是声明块或探测合成；`source` 只用于界面解释与日志，不参与安全判定。
+
+### T4.4 启动策略
+
+`LocalAppRuntimeManager.start()` 先解析 plan（含 override），再分支：
+
+| plan | 行为 | root 执行锁 |
+| --- | --- | --- |
+| `artifact` | 静态 Preview 伺服 last-good 或目录产物，零进程 | 不占 |
+| `buildable` | 取瞬时 build lease，构建一次，按结果转 `artifact` / `production` / `development` | 构建期间占 build lease |
+| `production` | spawn `npm run start`，`NODE_ENV=production` | 占 development lease |
+| `development` | spawn `npm run dev`，`NODE_ENV=development` | 占 development lease |
+| `unsupported` | 不启动，返回固定错误码 | 不占 |
+
+构建后重新探测：命中产物则提交 last-good；未命中则把 plan 记为 `development(build-produces-no-artifact)` 并按 dev 启动，不视为硬失败（`C-RSM-402` 第 ③ 档）。
+
+### T4.5 与开发会话的衔接
+
+`RuntimeDevelopmentRuntimeBridge.open()` 仍无条件进入 dev。`saveCapability` 改由 plan 决定：`artifact` / `buildable` → `static`；`development` → `development-only`；`unsupported` → `unavailable`。会话结束时重新探测：可静态化则构建一次回到 `artifact`，否则留在 dev 并如实告知。
+
+### T4.6 迁移
+
+存量 Definition 的 `mode` 可能是过时的 `development`。启动与 ensure 路径一律重新探测并以探测结论为准；只有 `serveOverride` 能压过探测。不需要数据迁移脚本，也不改动既有 Thread / 产物 / view state。
+
+### T4.7 冲突可见性（修复项）
+
+`startRuntime` / restore 路径的 root-conflict 必须携带占用者的 `runtimeScopeId` 返回 renderer，由既有冲突提示组件显示名称、归属与"切换到正在修改的 Runtime"。renderer 不得再静默吞掉该错误。
+
+### T4.8 卡片状态（修复项）
+
+renderer 同时渲染 Runtime 状态与开发会话状态两段；停止态提供启动入口；`unsupported` 与构建失败给出固定文案与重试。相关文案统一放在 `runtime.*` 命名空间。
+
 ## Revision 3 Technical Delta：RuntimeDevelopmentSession
 
 本节取代下方 Revision 2 的 `§12 RuntimeEditCoordinator` 与 `§17 WorkspaceTab → Project durable contract` 中涉及 Runtime 开发会话、同路径 Runtime 复用和 Workspace backing Project 的规则。Revision 2 的 Main-owned Broker、Runner、Transcript、权限、Diff、prompt owner、安全投影、网站协议与普通项目 Chat 继续有效。

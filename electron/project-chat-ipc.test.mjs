@@ -211,6 +211,17 @@ test('A Preview sender is denied by every project-chat invoke channel', async ()
   assert.deepEqual(harness.broker.calls, [])
 })
 
+test('A Runtime development capability is denied by every Project Chat invoke channel', async () => {
+  const harness = makeHarness()
+  harness.capabilities.registerRuntimeDevelopmentWindow(70, 'workspace:runtime-1', 1, 1)
+  for (const handler of Object.values(harness.router.handlers)) {
+    const result = await handler(event(70), { projectId: 'project-1' })
+    assert.equal(result.ok, false)
+    assert.equal(result.error.code, 'sender-not-authorized')
+  }
+  assert.equal(harness.broker.calls.length, 0)
+})
+
 test('Project Chat IPC whitelists broker inputs and passes the authorized owner id', async () => {
   const harness = makeHarness()
   harness.capabilities.registerProjectWindow(7, 'project-1', 3)
