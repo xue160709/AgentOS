@@ -171,7 +171,7 @@
     "runtimeBuildFailed": "构建失败，仍保留上次产物",
     "previewLoading": "正在加载预览…",
     "previewFailed": "预览加载失败",
-    "preview": "Runtime 就绪后将显示预览。",
+    "preview": "预览",
     "build": "构建",
     "rebuild": "重新构建",
     "developmentMode": "开发模式",
@@ -189,7 +189,6 @@
     "overview": "概览",
     "runtimeTab": "运行时",
     "status": "状态",
-    "preview": "预览",
     "noLogs": "暂无日志",
     "projectRuntime": "项目运行时",
     "resizePreviewWidth": "调整预览宽度；可用左右方向键微调",
@@ -197,7 +196,10 @@
     "resizePreviewBoth": "同时调整预览宽度和高度",
     "resetPreviewSizeHint": "双击恢复默认尺寸",
     "previewSizeSaving": "正在保存尺寸…",
-    "previewSizeSaveFailed": "尺寸保存失败，请重试"
+    "previewSizeSaveFailed": "尺寸保存失败，请重试",
+    "editFailed": "存在未完成修改，预览未更新",
+    "editSaving": "修改完成，正在保存最新预览",
+    "editActive": "正在修改项目 · {{n}} 个会话"
   },
   "projectChatWindow": {
     "aria": "项目对话",
@@ -371,6 +373,7 @@
     "confirmArchiveAria": "确认归档 {{title}}",
     "archiveAria": "归档 {{title}}",
     "confirmRemoveRunningTask": "该任务正在运行。移除后会先终止当前运行并归档这段对话：{{title}}。继续吗？",
+    "archiveBusyThread": "请先停止当前运行，再移除会话。",
     "confirm": "确认",
     "settings": "设置",
     "globalSettings": "全局设置",

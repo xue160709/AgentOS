@@ -1,6 +1,6 @@
 # Revision 2 Spec Package
 
-> 状态：Decision accepted；规格冻结；**M0–M2 与 M3-01 业务实现均已落盘并默认开启**；剩余 `FIX-WS-01`、`FIX-CHAT-01` 两张缺陷单与 `CHECK-02` 未完成。
+> 状态：Decision accepted；规格冻结；**M0–M2、M3-01 与两张缺陷单（`FIX-WS-01`、`FIX-CHAT-01`）业务实现均已落盘**；剩余 `CHECK-02` 独立 Development Check 与正式验收。
 >
 > 2026-08-29 由 `BUG-AUDIT-WS-02` 修正：本文此前长期写着"业务实现未开始"，与代码严重不符，已按事实更新。
 
@@ -26,16 +26,16 @@
 - 同项目多 thread 可并行；同一 thread busy 时拒绝第二次提交；v1 不做写入锁或自动合并。
 - 静态项目仅在可靠 Agent mutation 期间进入实时预览，成功 settle 后自动 build 一次；失败/取消不保存半成品。
 
-## 未完成的事实（阻塞 M0 Gate 与 `CHECK-02`）
+## 半迁移收口（已完成）
 
-`M0-05` 的 renderer cutover 是一次**半迁移**：thread 事实迁给了 Main，同时关闭了 renderer 唯一的 durable writer，但 project / sidebar / view 事实仍留在 renderer。由此产生的全部缺陷都是同一个根因，不是独立 bug：
+`M0-05` 的 renderer cutover 曾是一次**半迁移**：thread 事实迁给了 Main，同时关闭了 renderer 唯一的 durable writer，但 project / sidebar / view 事实仍留在 renderer。全部相关缺陷同源，已由两张单收口：
 
-| 单 | 覆盖 |
-| --- | --- |
-| `FIX-WS-01` | P0 新建项目不落盘且不可用；P0 项目移除/重定位/置顶/排序不落盘（含路径丢失恢复流程）；P1 侧栏与首页偏好不落盘；关闭 ownership audit |
-| `FIX-CHAT-01` | P0 侧边栏归档/置顶不落盘并被 snapshot 回滚；P0 归档运行中会话的文案/实现/broker 合同三方不一致；P1 readiness 三态 |
+| 单 | 覆盖 | 状态 |
+| --- | --- | --- |
+| `FIX-WS-01` | P0 新建项目不落盘且不可用；P0 项目移除/重定位/置顶/排序不落盘（含路径丢失恢复流程）；P1 侧栏与首页偏好不落盘；ownership audit | 已完成 |
+| `FIX-CHAT-01` | P0 侧边栏归档/置顶不落盘并被 snapshot 回滚；P0 归档运行中会话的文案/实现/broker 合同三方不一致；P1 readiness 三态 | 已完成 |
 
-顺序固定为 `FIX-WS-01 -> FIX-CHAT-01 -> CHECK-02`。
+工作区现在只有一条 durable 写路径：Main。renderer 只发意图并采纳回读后的权威快照，selection 仍归 renderer。剩余唯一门禁是 `CHECK-02`。
 
 ## 已识别的过度设计与处置
 
@@ -50,4 +50,4 @@
 完成后回报修改文件、合同映射、测试命令/退出码和未验证风险；遇到停止条件立即停工，不自行补设计。
 ```
 
-不要把整个 Revision 2 一次性交给 Terra。剩余两单 `FIX-WS-01` 与 `FIX-CHAT-01` 必须串行，前者通过后再发后者。
+不要把整个 Revision 2 一次性交给 Terra。剩余只有 `CHECK-02` 一单。

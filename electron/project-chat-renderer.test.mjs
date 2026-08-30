@@ -73,8 +73,44 @@ test('main Chat routes broker mode through Project Chat APIs and stops renderer 
   assert.match(chatPage, /activePrompt\?\.isOwnedByCaller/)
   assert.match(chatPage, /当前对话正在处理中，请等待完成后再发送。/)
   assert.doesNotMatch(chatPage, /saveChatWorkspace|persistChatWorkspaceState/)
-  assert.match(appShell, /if \(projectChatEnabled\) return\s+workspaceSession\.stage/)
+  // `FIX-CHAT-01`: probing is not legacy, so only an explicit legacy readiness
+  // may reach the Revision 1 durable writer.
+  assert.match(appShell, /if \(projectChatReadiness !== 'legacy'\) return\s+workspaceSession\.stage/)
   assert.match(appShell, /initializePermissionMode\(legacy\)/)
+})
+
+test('main sidebar routes thread and workspace mutations to Main-owned intents', () => {
+  const appShell = readFileSync(resolve(testDir, '../src/components/AppShell.tsx'), 'utf8')
+
+  // FIX-WS-01: project lifecycle and preferences are Main commands, never
+  // renderer reducers, and they are not branched on Project Chat readiness.
+  assert.doesNotMatch(
+    appShell,
+    /workspaceSession\.(addProject|removeProject|relocateProject|toggleProjectPinned|reorderProject|toggleSidebar|toggleProjectCollapsed|setProjectHomeViewMode)\b/,
+  )
+  for (const type of ['project.create', 'project.remove', 'project.relocate', 'project.setPinned', 'project.reorder']) {
+    assert.ok(appShell.includes(`type: '${type}'`), `missing workspace command ${type}`)
+  }
+  assert.match(appShell, /workspaceCommandClient\.queuePreferences\(/)
+  assert.doesNotMatch(appShell, /saveChatWorkspace\(/)
+
+  // FIX-CHAT-01: archive/pin go through the broker, and the legacy stop/cancel
+  // path is only reachable in explicit legacy mode.
+  assert.match(appShell, /threadIntentClient\.archive\(/)
+  assert.match(appShell, /threadIntentClient\.setPinned\(/)
+  const archiveStart = appShell.indexOf('const archiveThread = useCallback')
+  const archiveEnd = appShell.indexOf('const isThreadBusy = useCallback', archiveStart)
+  assert.ok(archiveStart >= 0 && archiveEnd > archiveStart)
+  const archive = appShell.slice(archiveStart, archiveEnd)
+  assert.ok(
+    archive.indexOf("projectChatReadinessRef.current === 'legacy'") < archive.indexOf('claudeChat.cancel'),
+    'implicit cancel must live inside the legacy branch only',
+  )
+  assert.ok(
+    archive.indexOf("projectChatReadinessRef.current === 'legacy'") < archive.indexOf('stopTaskHomePlugin'),
+    'implicit task stop must live inside the legacy branch only',
+  )
+  assert.match(archive, /if \(wasActive\) goHome\(\)/)
 })
 
 test('Project window reuses the snapshot Chat surface while persisting only local selected thread and draft', () => {

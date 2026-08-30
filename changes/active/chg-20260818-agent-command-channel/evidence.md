@@ -336,6 +336,53 @@
 - `FIX-CHAT-01` 原范围只覆盖 thread 一半，且其 allowlist 明确禁止改 `electron/main.ts`/broker/IPC，无法承载 P0 项目命令。因此拆分：新增 `FIX-WS-01` 承担 ownership 收口，`FIX-CHAT-01` 收窄为 thread mutation + busy 合同 + readiness 三态，顺序固定 `FIX-WS-01 -> FIX-CHAT-01 -> CHECK-02`。
 - 过度设计复核结论与处置见 `proposal.md` 的「Revision 2 范围复核（2026-08-29）」；其中 M1 网站入口的拆分建议为**待用户决策**，本轮未执行。
 
+### 2026-08-29 `FIX-WS-01` 实现与自检
+
+#### 交付
+
+- 新增 `src/workspace-commands.ts`：workspace 命令的**唯一纯定义**（判别联合、严格 parser、转换函数、回读断言）。`WorkspaceSession` 的 `addProject / removeProject / relocateProject / toggleProjectPinned / reorderProject` 改为委托同一批纯函数，Main 与 renderer 不再各有一份实现。
+- 新增通道 `chat-workspace:command`（`DESKTOP_INVOKE_CHANNELS.applyWorkspaceCommand`）、preload typed 转发、`electron/main.ts` handler：`isAuthorizedMainWindowInvoke` → 严格 parse → `runChatWorkspaceOperation` → `expectedRevision` 门槛 → `withNextWorkspaceRevision` → `save` → **回读校验** → 返回权威快照。
+- 新增 `src/components/workspace-command-client.ts`：串行提交、`workspace-conflict` 单次 fresh-read 重试、偏好 300ms 去抖合并、卸载前 flush，以及 `adoptAuthoritativeWorkspace`（采纳 Main 快照但保留 renderer 自有的 selection）。
+- `AppShell` 六个入口改为只发意图：`createProject` / `createProjectFromExistingPath` / `removeProject` / `relocateProject` / `toggleProjectPinned` / `reorderProject`，以及 `toggleSidebarCollapsed` / `toggleSidebarProjectCollapsed` / `setProjectHomeViewMode`（乐观本地 + 去抖命令）。命令路径**不按 `projectChatEnabled` 分支**，legacy 与 broker 共用。
+
+#### DTO 结构隔离（替代补投影字段）
+
+命令联合不含 `threads` / `projects` / `chatState` / `workspaceRevision` 等快照字段，未知键与 renderer 传入的项目 id 一律整条拒绝（`invalid-command`）。因此 `projectChatThreadToWorkspaceThread` 的降级字段（`creationSource` 归一为 `user`、丢 `skillPath`、attachment `path` 置空）**在结构上不可能**被写回 Main，`BUG-AUDIT-WS-02` 的 P1-2 按不变量关闭而不是补字段——补字段会把 `creationSource.bindingId` 等 website 元数据推进主窗口投影，扩大脱敏面。
+
+#### `ATDD-WS-201` 归属矩阵（关单形式）
+
+| mutation | 归属 | 介质 | 代码位置 |
+| --- | --- | --- | --- |
+| 项目创建/移除/重定位/置顶/排序 | Main durable command | `ChatWorkspaceStore` | `electron/main.ts` `applyWorkspaceCommand` handler；`src/workspace-commands.ts` |
+| 侧栏收起 / 项目折叠 / 项目首页页签 | Main durable command（`preferences.set`，去抖） | `ChatWorkspaceStore` | `AppShell.toggleSidebarCollapsed` / `toggleSidebarProjectCollapsed` / `applyProjectHomeViewMode` |
+| thread 归档/置顶 | Main broker intent | broker | `src/components/project-chat-thread-intents.ts` |
+| task-run thread seed | Main | broker | `electron/task-home-plugin-manager.ts` `runPort.ensureThread`（renderer `ensureTaskRunThread` 仅在 legacy 生效） |
+| workspaceTabs / runtimeDefinitions | Main 原子接口（既有） | `ChatWorkspaceStore` | `create/open/close/rename/relocateWorkspaceTab` |
+| hidden skill paths | renderer-local | `localStorage` | `AppShell.hideProjectSkill` |
+| 主窗口 selected project/thread/tab | renderer-local selection | 内存 | `adoptAuthoritativeWorkspace` 显式保留 |
+| 项目窗口 selected thread / draft / bounds | Main view-state（既有） | `ProjectChatViewStateStore` | `electron/project-chat-view-state-store.ts` |
+
+无剩余"待定"项。
+
+### 2026-08-29 `FIX-CHAT-01` 实现与自检
+
+- `archiveThread` / `toggleThreadPinned` 在非 legacy 下只调用 `window.projectChat.archiveThread` / `setThreadPinned`，DTO 使用 **target project 自己的 `routeGeneration`**（`ProjectChatSnapshotController.snapshot(projectId)`，缺失时 fresh-read），`stale-revision` 最多一次 fresh-read 重试，per-thread + per-action pending fence 防重复提交。成功后不再调用任何 renderer durable reducer。
+- busy 判定改为读 snapshot 的 `runs`（非终态）与 `pendingPrompts`，覆盖普通、`task-run`、`skill-run`；broker 路径下 `archiveThread` **移除**了原先的 `claudeChat.cancel` 与 `stopTaskHomePlugin` 前置调用，改为固定提示 `sidebar.archiveBusyThread`（中英文）。
+- 三方不一致的收敛方式：`sidebar.confirmRemoveRunningTask`（承诺"会先终止当前运行"）被限制在 legacy 分支——在那条路径上该承诺是**真实**的，因为 legacy 确实先停后归档。broker 路径不再展示该文案。
+- readiness 拆为 `projectChatReadiness: 'probing' | 'enabled' | 'legacy'`：只有 `window.projectChat` 缺失或 `getSnapshot` 抛出（通道未注册）才进入 `legacy`；`getSnapshot` 返回业务错误说明通道存在，判为 `enabled`。autosave 守卫改为 `if (projectChatReadiness !== 'legacy') return`，probing 期不再落入 legacy full-snapshot writer。
+- 归档只在被归档线程恰为当前选择时移动 selection（`if (wasActive) goHome()`）；非活动线程归档不再跳走当前会话。
+- 附带修复 `runtimeEditStatus` 的三条硬编码中文，改为 `runtime.editFailed / editSaving / editActive` i18n key（原为 `BUG-AUDIT-WS-02` 记录的 P2，本轮一并处理）。
+
+### 2026-08-29 自检结果与 allowlist 偏离
+
+- `npm run typecheck`：exit 0。
+- `node --test`：全部 41 个非网络套件 263/263 PASS；追加 `static-runtime` / `local-app-preview` / `agentos-external-task` 26/26 PASS，`claude-agent-runner-web-search` / `agentos-ticket-client` 20/20 PASS。合计 **309/309，0 fail**。
+- `electron/local-app-runtime.test.mjs` 在当前沙箱挂起（fixture 需要监听 `127.0.0.1`，与既有环境限制一致），**未纳入本轮结果**；本轮未修改该模块，需在允许回环监听的环境由 `CHECK-02` 复跑。
+- `npx vite build`：renderer 与 preload/main bundle 均 PASS。
+- 新增测试：`electron/workspace-commands.test.mjs`（14）、`electron/workspace-command-client.test.mjs`（16）。更新 source audit：`electron/desktop-seam.test.mjs`（workspace save 计数 7→8，仍全部包在 `runChatWorkspaceOperation` 内）、`electron/project-chat-renderer.test.mjs`（新增 "main sidebar routes thread and workspace mutations to Main-owned intents"，断言 `workspaceSession.*` 项目/偏好 reducer 在 `AppShell` 不可达、无 `saveChatWorkspace(`、隐式 cancel 只在 legacy 分支、`if (wasActive) goHome()`）。
+- **Allowlist 偏离（按规则先记录）**：`FIX-WS-01` 冻结的 write allowlist 未包含 `src/workspace-commands.ts`（共享纯模块）、`src/components/workspace-session.ts`（改为委托以消除双实现）；`FIX-CHAT-01` 未包含 `src/components/project-chat-thread-intents.ts`、`src/components/runtime-event-state.ts` 及三个 `runtimeEditStatus` 调用点。偏离理由：把持久化转换复制进 `electron/main.ts` 会制造 Main/renderer 两份实现，正是本轮要消灭的缺陷类别；i18n 修复无法只改 locale 文件。两张任务单的 allowlist 已同步补记。
+- 未执行：真实 Electron 双窗口 smoke、重启后落盘的 GUI 验证。二者留 `CHECK-02`，本轮不声称正式验收通过。
+
 ## Revision 1：实现与自检
 
 ### `ACC-01`

@@ -1,5 +1,7 @@
 # FIX-CHAT-01｜主侧边栏会话归档/置顶 Main-owned Cutover 修复
 
+> 状态：**已完成（2026-08-29）**。实现与自检见 `evidence.md`。allowlist 已按实际偏离补记（见下）。
+
 > 范围修订（2026-08-29，`BUG-AUDIT-WS-02`）：本单原先同时承担"thread mutation 修复"与"workspace/view-state ownership audit"。审计确认 ownership 缺口包含 P0 级的项目生命周期失效，且必须修改 Main/IPC——超出本单 allowlist。ownership 部分已整体移交 `FIX-WS-01`，本单收窄为 **thread mutation + busy 合同 + readiness 三态**，并依赖 `FIX-WS-01` 先完成。
 
 ## 缺陷结论
@@ -98,10 +100,19 @@ Project Chat production cutover 后，Main/broker 已是 thread/chat durable 事
 8. active thread 归档成功后只修正 main-window selection；inactive thread 归档不得跳走当前会话。
 9. source audit 锁定 `enabled` 分支不再调用 renderer thread durable reducers/full workspace save。
 
+## 实现偏离（2026-08-29，已实现并记录）
+
+两处与上方冻结合同不同的落地方式，理由如下；如判定不可接受，需另开工单回改。
+
+1. **`sidebar.confirmRemoveRunningTask` 未被改写，而是被限制在 legacy 分支。** 该文案承诺"会先终止当前运行并归档"，在 legacy 路径上是**真实**的（legacy 确实先 `claudeChat.cancel` / `stopTaskHomePlugin` 再归档）。三方不一致只存在于 broker 路径，因此 broker 路径改为固定提示 `sidebar.archiveBusyThread`（"请先停止当前运行，再移除会话。"），而 legacy 保留原确认框。删除该文案会让 legacy 失去准确提示。
+2. **`probing` 期间没有"禁用入口"，而是直接走 broker intent。** `window.projectChat` 在 probing 期已存在（只是 `getSnapshot` 尚未返回），broker IPC 完全可用，intent client 会自行 fresh-read 目标项目快照拿到 `routeGeneration`。真正的危害是"probing 落入 legacy durable writer"，这一点由 `if (projectChatReadiness !== 'legacy') return` 的 autosave 守卫与 `projectChatReadinessRef.current === 'legacy'` 的 mutation 守卫消除。禁用入口只会让启动瞬间的点击无响应，收益为负。
+
 ## Write allowlist
 
 - `src/components/AppShell.tsx`
 - `src/components/AppShellSidebar.tsx`
+- `src/components/project-chat-thread-intents.ts`（新增：busy 判定与 thread intent 提交；allowlist 补记）
+- `src/components/runtime-event-state.ts` 及 `RuntimeWorkspace.tsx` / `chat/ProjectHomeRuntimeView.tsx` / `chat/ProjectChatWindowPage.tsx`（`runtimeEditStatus` 硬编码中文改走 i18n；allowlist 补记）
 - `src/components/chat/ChatPage.tsx`（仅 readiness 三态的等价映射，不改提交语义）
 - `src/locales/zh.json`
 - `src/locales/en.json`

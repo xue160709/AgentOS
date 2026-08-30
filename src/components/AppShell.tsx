@@ -68,6 +68,8 @@ import type {
 import { AppShellSidebar } from './AppShellSidebar'
 import { AppShellWorkspace } from './AppShellWorkspace'
 import { type ChatPageHandle } from './chat/ChatPage'
+import { WorkspaceCommandClient, adoptAuthoritativeWorkspace } from './workspace-command-client'
+import { ProjectChatThreadIntentClient, isProjectThreadBusy, type ProjectChatReadiness } from './project-chat-thread-intents'
 import { configureProjectHomeRuntime, type ProjectHomeRuntimeContext } from './chat/ChatStartView'
 import { WorkspaceSession } from './workspace-session'
 import { ProjectChatSnapshotController, applyProjectChatSnapshot } from './workspace-session'
@@ -289,7 +291,12 @@ export function AppShell() {
   const [threadRunStates, setThreadRunStates] = useState<Record<string, ThreadRunState>>({})
   const [threadCompletionStates, setThreadCompletionStates] = useState<Record<string, ThreadCompletionState>>({})
   const [projectChatSnapshots, setProjectChatSnapshots] = useState<Record<string, ProjectChatSnapshot>>({})
-  const [projectChatEnabled, setProjectChatEnabled] = useState(false)
+  // `FIX-CHAT-01`: three states. `probing` must never fall back to the legacy
+  // durable writer, so only an explicit `legacy` re-enables Revision 1 paths.
+  const [projectChatReadiness, setProjectChatReadiness] = useState<ProjectChatReadiness>('probing')
+  const projectChatEnabled = projectChatReadiness !== 'legacy'
+  const projectChatReadinessRef = useRef<ProjectChatReadiness>('probing')
+  projectChatReadinessRef.current = projectChatReadiness
   const [pendingPairing, setPendingPairing] = useState<import('../project-chat-contract').AgentOSPairingPrompt | null>(null)
   const [selectedProjectSkill, setSelectedProjectSkill] = useState<SelectedProjectSkill | null>(null)
   const [hiddenSkillPathsByProject, setHiddenSkillPathsByProject] = useState<Record<string, string[]>>(() =>
@@ -308,6 +315,9 @@ export function AppShell() {
   const projectChatSnapshotControllerRef = useRef(new ProjectChatSnapshotController())
   const projectChatPermissionInitializedRef = useRef(false)
   const workspaceSessionRef = useRef<WorkspaceSession | null>(null)
+  const workspaceCommandClientRef = useRef<WorkspaceCommandClient | null>(null)
+  const threadIntentClientRef = useRef<ProjectChatThreadIntentClient | null>(null)
+  const refreshProjectChatSnapshotRef = useRef<(projectId: string) => Promise<ProjectChatSnapshot | null>>(async () => null)
   if (!workspaceSessionRef.current) {
     workspaceSessionRef.current = new WorkspaceSession({
       load: loadChatWorkspaceState,
@@ -342,6 +352,49 @@ export function AppShell() {
   const updateChatWorkspace = useCallback((update: (prev: ChatWorkspaceState) => ChatWorkspaceState) => {
     setChatWorkspace((prev) => (prev ? update(prev) : prev))
   }, [])
+
+  // --- Main-owned workspace commands (`FIX-WS-01`) / 主进程权威工作区命令 ---
+
+  const tRef = useRef(t)
+  tRef.current = t
+  const threadRunStatesRef = useRef(threadRunStates)
+  threadRunStatesRef.current = threadRunStates
+  const chatWorkspaceRef = useRef<ChatWorkspaceState | null>(null)
+  chatWorkspaceRef.current = chatWorkspace
+  if (!workspaceCommandClientRef.current) {
+    workspaceCommandClientRef.current = new WorkspaceCommandClient({
+      invoke: (command, expectedRevision) => {
+        const apply = window.desktop?.applyWorkspaceCommand
+        if (!apply) return Promise.resolve({ ok: false as const, code: 'workspace-unavailable' as const, message: '桌面接口不可用' })
+        return apply(command, expectedRevision)
+      },
+      refresh: () => Promise.resolve(window.desktop?.getChatWorkspace?.() ?? null).then((state) => state ?? null),
+      getWorkspace: () => chatWorkspaceRef.current,
+      adopt: (workspace, options) => {
+        setChatWorkspace((current) => {
+          const next = current ? adoptAuthoritativeWorkspace(current, workspace, options) : workspace
+          chatWorkspaceRef.current = next
+          return next
+        })
+      },
+      onError: (message) => setWorkspaceSaveError(message),
+    })
+  }
+  const workspaceCommandClient = workspaceCommandClientRef.current
+  if (!threadIntentClientRef.current) {
+    threadIntentClientRef.current = new ProjectChatThreadIntentClient({
+      api: () => window.projectChat,
+      getSnapshot: (projectId) => projectChatSnapshotControllerRef.current.snapshot(projectId),
+      refreshSnapshot: (projectId) => refreshProjectChatSnapshotRef.current(projectId),
+      onError: (message) => setHeaderStatus(message),
+      onBusy: () => setHeaderStatus(tRef.current('sidebar.archiveBusyThread')),
+    })
+  }
+  const threadIntentClient = threadIntentClientRef.current
+  useEffect(() => () => {
+    void workspaceCommandClient.flushPreferences()
+    workspaceCommandClient.dispose()
+  }, [workspaceCommandClient])
 
   const updateShowProjectSkillsInSidebar = useCallback((enabled: boolean) => {
     setShowProjectSkillsInSidebar(enabled)
@@ -455,13 +508,18 @@ export function AppShell() {
     }
   }, [])
 
-  const refreshProjectChatSnapshot = useCallback(async (projectId: string) => {
+  const refreshProjectChatSnapshot = useCallback(async (projectId: string): Promise<ProjectChatSnapshot | null> => {
     const api = window.projectChat
-    if (!api) return false
+    if (!api) {
+      setProjectChatReadiness('legacy')
+      return null
+    }
     try {
       const result = await api.getSnapshot(projectId)
-      if (!result.ok) return false
-      setProjectChatEnabled(true)
+      // A reachable channel proves the production composition is installed,
+      // even when this particular project is rejected.
+      setProjectChatReadiness('enabled')
+      if (!result.ok) return null
       acceptProjectChatSnapshot(result.value)
       if (!projectChatPermissionInitializedRef.current) {
         projectChatPermissionInitializedRef.current = true
@@ -469,11 +527,19 @@ export function AppShell() {
         const initialized = await api.initializePermissionMode(legacy)
         if (initialized.ok) window.localStorage.removeItem('codex-ui-template:claude-permission-mode')
       }
-      return true
+      return result.value
     } catch {
-      return false
+      // The channel is not registered: this build really is Revision 1.
+      setProjectChatReadiness('legacy')
+      return null
     }
   }, [acceptProjectChatSnapshot])
+
+  refreshProjectChatSnapshotRef.current = refreshProjectChatSnapshot
+
+  useEffect(() => {
+    if (!window.projectChat) setProjectChatReadiness('legacy')
+  }, [])
 
   useEffect(() => {
     if (!activeProject?.id) return
@@ -486,7 +552,7 @@ export function AppShell() {
     return api.onEvent((event) => {
       if (event.type === 'agentos-pairing') { setPendingPairing(event.pairing); return }
       if (event.type === 'open-project-preview') {
-        setChatWorkspace((current) => current ? workspaceSession.setProjectHomeViewMode(current, event.projectId, 'runtime') : current)
+        applyProjectHomeViewMode(event.projectId, 'runtime')
         selectProject(event.projectId)
         return
       }
@@ -544,10 +610,17 @@ export function AppShell() {
     setProjectRuntimeState((current) => current.runtime === runtime ? current : { ...current, runtime })
   }, [runtimeStates, projectRuntimeState.definition?.id, projectRuntimeState.runtime])
 
+  const applyProjectHomeViewMode = useCallback((projectId: string, mode: 'overview' | 'runtime') => {
+    updateChatWorkspace((prev) => prev.projects.some((project) => project.id === projectId)
+      ? { ...prev, projectHomeViewModes: { ...prev.projectHomeViewModes, [projectId]: mode } }
+      : prev)
+    workspaceCommandClient.queuePreferences({ projectHomeViewModes: { [projectId]: mode } })
+  }, [updateChatWorkspace, workspaceCommandClient])
+
   const setProjectHomeViewMode = useCallback((mode: 'overview' | 'runtime') => {
     if (!activeProject) return
-    updateChatWorkspace((prev) => workspaceSession.setProjectHomeViewMode(prev, activeProject.id, mode))
-  }, [activeProject, updateChatWorkspace, workspaceSession])
+    applyProjectHomeViewMode(activeProject.id, mode)
+  }, [activeProject, applyProjectHomeViewMode])
 
   const ensureTrustedProjectRuntime = useCallback(async (): Promise<RuntimeDefinition | null> => {
     const project = activeProject
@@ -1100,9 +1173,11 @@ export function AppShell() {
   // --- Autosave through Workspace Session / 通过 Workspace Session 自动保存 ---
   useEffect(() => {
     if (!chatWorkspace) return
-    if (projectChatEnabled) return
+    // Probing is not legacy: staging here would let a renderer mirror overwrite
+    // Main before the seam has answered.
+    if (projectChatReadiness !== 'legacy') return
     workspaceSession.stage(chatWorkspace)
-  }, [chatWorkspace, projectChatEnabled, workspaceSession])
+  }, [chatWorkspace, projectChatReadiness, workspaceSession])
 
   useEffect(() => {
     return () => {
@@ -1430,24 +1505,22 @@ export function AppShell() {
   )
 
   const createProjectFromExistingPath = useCallback(
-    (projectPath: string) => {
+    async (projectPath: string) => {
       const value = projectPath.trim()
       if (!value) return
-
-      const projectId = createId('project')
       const scratchDefault = t('project.scratchDefaultName')
-      const project = {
-        id: projectId,
-        name: pathBasename(value, scratchDefault),
-        path: value,
-      }
-
       setSelectedProjectSkill(null)
-      updateChatWorkspace((prev) => workspaceSession.addProject(prev, project))
+      // Main owns project creation. A renderer-only project is invisible to the
+      // broker (`project-not-found` on every submit) and is lost on restart.
+      const result = await workspaceCommandClient.submit(
+        { type: 'project.create', name: pathBasename(value, scratchDefault), path: value },
+        { preserveSelection: false },
+      )
+      if (!result.ok) return
       goHome()
       requestAnimationFrame(() => void chatRef.current?.focusComposer())
     },
-    [goHome, t, updateChatWorkspace, workspaceSession],
+    [goHome, t, workspaceCommandClient],
   )
 
   const createProject = useCallback(
@@ -1463,24 +1536,20 @@ export function AppShell() {
       if (!value) return
 
       if (mode === 'existing') {
-        createProjectFromExistingPath(value)
+        await createProjectFromExistingPath(value)
         return
       }
 
-      const projectId = createId('project')
-      const name = value
-      const project = {
-        id: projectId,
-        name,
-        path: `~/Projects/${name}`,
-      }
-
       setSelectedProjectSkill(null)
-      updateChatWorkspace((prev) => workspaceSession.addProject(prev, project))
+      const result = await workspaceCommandClient.submit(
+        { type: 'project.create', name: value, path: `~/Projects/${value}` },
+        { preserveSelection: false },
+      )
+      if (!result.ok) return
       goHome()
       requestAnimationFrame(() => void chatRef.current?.focusComposer())
     },
-    [createProjectFromExistingPath, goHome, updateChatWorkspace, t, workspaceSession],
+    [createProjectFromExistingPath, goHome, t, workspaceCommandClient],
   )
 
   const selectWorkspaceTab = useCallback((tabId: string) => {
@@ -2012,7 +2081,7 @@ export function AppShell() {
       }
       const saved = await saveInitialModelSettings()
       if (!saved) return
-      createProjectFromExistingPath(initialProjectPath)
+      await createProjectFromExistingPath(initialProjectPath)
     },
     [createProjectFromExistingPath, initialProjectPath, saveInitialModelSettings, t],
   )
@@ -2071,68 +2140,104 @@ export function AppShell() {
 
   const archiveThread = useCallback(
     async (threadId: string) => {
-      const target = chatWorkspace?.threads.find((thread) => thread.id === threadId)
+      const target = chatWorkspaceRef.current?.threads.find((thread) => thread.id === threadId)
       if (!target || target.archivedAt) return
+      const wasActive = chatWorkspaceRef.current?.activeThreadId === threadId
 
-      if (target.purpose === 'task-run' && target.homePluginSlug) {
-        const project = chatWorkspace?.projects.find((item) => item.id === target.projectId)
-        if (project?.path && window.desktop?.stopTaskHomePlugin) {
-          try {
-            await window.desktop.stopTaskHomePlugin(project.path, target.homePluginSlug)
-          } catch {
-            /* stop is best-effort when archiving a running task */
+      if (projectChatReadinessRef.current === 'legacy') {
+        // Revision 1 behavior, unchanged.
+        if (target.purpose === 'task-run' && target.homePluginSlug) {
+          const project = chatWorkspaceRef.current?.projects.find((item) => item.id === target.projectId)
+          if (project?.path && window.desktop?.stopTaskHomePlugin) {
+            try {
+              await window.desktop.stopTaskHomePlugin(project.path, target.homePluginSlug)
+            } catch {
+              /* stop is best-effort when archiving a running task */
+            }
+          }
+        } else if (target.purpose === 'skill-run') {
+          const requestId = threadRunStatesRef.current[target.id]?.requestId
+          if (requestId && !requestId.startsWith('pending-') && window.claudeChat) {
+            try {
+              await window.claudeChat.cancel(requestId)
+            } catch {
+              /* stop is best-effort when archiving a running Skill */
+            }
           }
         }
-      } else if (target.purpose === 'skill-run') {
-        const requestId = threadRunStates[target.id]?.requestId
-        if (requestId && !requestId.startsWith('pending-') && window.claudeChat) {
-          try {
-            await window.claudeChat.cancel(requestId)
-          } catch {
-            /* stop is best-effort when archiving a running Skill */
-          }
-        }
+        updateChatWorkspace((prev) => workspaceSession.archiveThread(prev, threadId))
+        setSelectedProjectSkill(null)
+        if (wasActive) goHome()
+        return
       }
 
-      updateChatWorkspace((prev) => workspaceSession.archiveThread(prev, threadId))
+      // Main owns the durable archive; no implicit cancel, and a busy thread is
+      // refused rather than silently orphaning its run.
+      const archived = await threadIntentClient.archive(target.projectId, threadId)
+      if (!archived) return
       setSelectedProjectSkill(null)
-      goHome()
+      // Only the archived thread's own selection may move.
+      if (wasActive) goHome()
     },
-    [chatWorkspace, goHome, threadRunStates, updateChatWorkspace, workspaceSession],
+    [goHome, threadIntentClient, updateChatWorkspace, workspaceSession],
   )
 
+  /**
+   * Busy is a snapshot fact in broker mode. Legacy keeps its own `task-run`
+   * confirm flow, so this reports false there.
+   */
+  const isThreadBusy = useCallback((threadId: string) => {
+    if (projectChatReadiness === 'legacy') return false
+    const thread = chatWorkspace?.threads.find((item) => item.id === threadId)
+    if (!thread) return false
+    return isProjectThreadBusy(projectChatSnapshots[thread.projectId], threadId)
+  }, [chatWorkspace?.threads, projectChatReadiness, projectChatSnapshots])
+
   const toggleThreadPinned = useCallback((threadId: string) => {
-    updateChatWorkspace((prev) => workspaceSession.toggleThreadPinned(prev, threadId))
-  }, [updateChatWorkspace, workspaceSession])
+    const target = chatWorkspaceRef.current?.threads.find((thread) => thread.id === threadId)
+    if (!target) return
+    if (projectChatReadinessRef.current === 'legacy') {
+      updateChatWorkspace((prev) => workspaceSession.toggleThreadPinned(prev, threadId))
+      return
+    }
+    // Explicit boolean target so a retry cannot flip twice.
+    void threadIntentClient.setPinned(target.projectId, threadId, !target.pinnedAt)
+  }, [threadIntentClient, updateChatWorkspace, workspaceSession])
 
   const toggleProjectPinned = useCallback((projectId: string) => {
-    updateChatWorkspace((prev) => workspaceSession.toggleProjectPinned(prev, projectId))
-  }, [updateChatWorkspace, workspaceSession])
+    // Explicit target value: a toggle intent would flip twice on a retry.
+    const pinned = !chatWorkspaceRef.current?.projects.find((project) => project.id === projectId)?.pinnedAt
+    void workspaceCommandClient.submit({ type: 'project.setPinned', projectId, pinned })
+  }, [workspaceCommandClient])
 
   const reorderProject = useCallback((projectId: string, targetProjectId: string, position: 'before' | 'after') => {
-    updateChatWorkspace((prev) =>
-      workspaceSession.reorderProject(prev, projectId, targetProjectId, position),
-    )
-  }, [updateChatWorkspace, workspaceSession])
+    void workspaceCommandClient.submit({ type: 'project.reorder', projectId, targetProjectId, position })
+  }, [workspaceCommandClient])
 
+  // Preferences stay optimistic for responsiveness and are merged into one
+  // debounced Main command; the flush on unmount keeps the last toggle.
   const toggleSidebarCollapsed = useCallback(() => {
-    updateChatWorkspace((prev) => workspaceSession.toggleSidebar(prev))
-  }, [updateChatWorkspace, workspaceSession])
+    const next = !chatWorkspaceRef.current?.sidebarPrefs.collapsed
+    updateChatWorkspace((prev) => ({ ...prev, sidebarPrefs: { ...prev.sidebarPrefs, collapsed: next } }))
+    workspaceCommandClient.queuePreferences({ sidebarCollapsed: next })
+  }, [updateChatWorkspace, workspaceCommandClient])
 
   const toggleSidebarProjectCollapsed = useCallback((projectId: string) => {
-    updateChatWorkspace((prev) => workspaceSession.toggleProjectCollapsed(prev, projectId))
-  }, [updateChatWorkspace, workspaceSession])
+    const current = chatWorkspaceRef.current?.sidebarPrefs.collapsedProjectIds ?? []
+    const next = current.includes(projectId) ? current.filter((id) => id !== projectId) : [...current, projectId]
+    updateChatWorkspace((prev) => ({ ...prev, sidebarPrefs: { ...prev.sidebarPrefs, collapsedProjectIds: next } }))
+    workspaceCommandClient.queuePreferences({ collapsedProjectIds: next })
+  }, [updateChatWorkspace, workspaceCommandClient])
 
   const removeProject = useCallback(
-    (projectId: string) => {
-      const projectDefinition = chatWorkspace?.runtimeDefinitions.find((definition) => definition.owner.kind === 'project' && definition.owner.projectId === projectId)
-      let didRemove = false
-      updateChatWorkspace((prev) => {
-        const next = workspaceSession.removeProject(prev, projectId)
-        didRemove = next !== prev
-        return next
-      })
-      if (!didRemove) return
+    async (projectId: string) => {
+      const projectDefinition = chatWorkspaceRef.current?.runtimeDefinitions.find((definition) => definition.owner.kind === 'project' && definition.owner.projectId === projectId)
+      const wasActive = chatWorkspaceRef.current?.activeProjectId === projectId
+      const result = await workspaceCommandClient.submit(
+        { type: 'project.remove', projectId },
+        { preserveSelection: !wasActive },
+      )
+      if (!result.ok) return
       if (projectDefinition) {
         const consumerId = `project-home:${projectId}:${projectRuntimeState.mountId}`
         void window.desktop?.releaseRuntime?.(projectDefinition.id, consumerId)
@@ -2142,7 +2247,7 @@ export function AppShell() {
       setSelectedProjectSkill((current) => (current?.projectId === projectId ? null : current))
       goHome()
     },
-    [chatWorkspace?.runtimeDefinitions, goHome, projectRuntimeState.mountId, updateChatWorkspace, workspaceSession],
+    [goHome, projectRuntimeState.mountId, workspaceCommandClient],
   )
 
   const revealProjectInFileManager = useCallback((projectPath: string) => {
@@ -2159,9 +2264,9 @@ export function AppShell() {
       }
       if (!value) return
 
-      updateChatWorkspace((prev) => workspaceSession.relocateProject(prev, projectId, value))
+      await workspaceCommandClient.submit({ type: 'project.relocate', projectId, path: value })
     },
-    [t, updateChatWorkspace, workspaceSession],
+    [t, workspaceCommandClient],
   )
 
   const hideProjectSkill = useCallback((projectId: string, skillPath: string) => {
@@ -2784,6 +2889,7 @@ export function AppShell() {
           onRunProjectSkill={runProjectSkill}
           onToggleThreadPinned={toggleThreadPinned}
           onArchiveThread={archiveThread}
+          isThreadBusy={isThreadBusy}
           onToggleProjectPinned={toggleProjectPinned}
           onReorderProject={reorderProject}
           onToggleSidebarProjectCollapsed={toggleSidebarProjectCollapsed}

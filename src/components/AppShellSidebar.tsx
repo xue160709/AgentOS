@@ -96,6 +96,8 @@ type AppShellSidebarProps = {
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onToggleThreadPinned: (threadId: string) => void
   onArchiveThread: (threadId: string) => void
+  /** True when Main will refuse the archive because the thread still has a run or prompt. */
+  isThreadBusy?: (threadId: string) => boolean
   onToggleProjectPinned: (projectId: string) => void
   onReorderProject: (projectId: string, targetProjectId: string, position: 'before' | 'after') => void
   onToggleSidebarProjectCollapsed: (projectId: string) => void
@@ -151,6 +153,7 @@ export function AppShellSidebar({
   onRunProjectSkill,
   onToggleThreadPinned,
   onArchiveThread,
+  isThreadBusy,
   onToggleProjectPinned,
   onReorderProject,
   onToggleSidebarProjectCollapsed,
@@ -457,6 +460,13 @@ export function AppShellSidebar({
   // --- Context menu factories (project / skill / thread rows) / 右键菜单构造（项目、技能、线程）---
 
   const requestArchive = (thread: WorkspaceThread, source: 'button' | 'menu') => {
+    // Broker mode refuses a busy thread regardless of purpose; the shell shows
+    // the "stop first" message instead of an auto-stop confirm.
+    if (isThreadBusy?.(thread.id)) {
+      setConfirmingArchiveThreadId(null)
+      void onArchiveThread(thread.id)
+      return
+    }
     const isRunningTask = thread.purpose === 'task-run' && Boolean(threadRunStates[thread.id])
     if (isRunningTask) {
       const confirmed = window.confirm(t('sidebar.confirmRemoveRunningTask', { title: thread.title }))

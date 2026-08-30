@@ -95,6 +95,12 @@ import type { RuntimeDefinition, RuntimeEvent, RuntimeSnapshot, WorkspaceTab } f
 import type { LocalAppDefinition, LocalAppRuntimeSnapshot } from '../src/components/types'
 import type { LocalAppDefinitionResult, LocalAppPreviewResult, LocalAppRelocationResult, RuntimeCreationResult, WorkspaceTabResult, WorkspaceTabCloseResult } from '../src/desktop-api'
 import { withNextWorkspaceRevision, workspaceRevisionOf } from '../src/workspace-snapshot-resolution'
+import {
+  applyWorkspaceCommand,
+  parseWorkspaceCommand,
+  workspaceCommandApplied,
+  type WorkspaceCommandResult,
+} from '../src/workspace-commands'
 import type {
   ActiveChatPickPayload,
   ClaudeChatAttachment,
@@ -1185,6 +1191,51 @@ if (gotSingleInstanceLock) {
         void taskHomePluginManager?.refreshFromWorkspace(saved)
         return saved
       })
+    })
+    // `FIX-WS-01`: the only durable writer for project lifecycle and workspace
+    // preferences. The renderer submits intents; Main derives durable content
+    // from its own store, saves under the revision gate and verifies by readback.
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.applyWorkspaceCommand, async (event, rawCommand: unknown, rawExpectedRevision: unknown): Promise<WorkspaceCommandResult> => {
+      if (!isAuthorizedMainWindowInvoke(event)) return { ok: false, code: 'invalid-command', message: '调用来源未授权' }
+      const parsed = parseWorkspaceCommand(rawCommand)
+      if (!parsed.ok) return parsed
+      const command = parsed.command
+      const expectedRevision = typeof rawExpectedRevision === 'number' && Number.isFinite(rawExpectedRevision)
+        ? Math.max(0, Math.floor(rawExpectedRevision))
+        : undefined
+      try {
+        return await runChatWorkspaceOperation(async (): Promise<WorkspaceCommandResult> => {
+          const current = getChatWorkspaceStore().read()
+          if (!current) return { ok: false, code: 'workspace-unavailable', message: '工作区尚未准备好，请重试' }
+          if (expectedRevision !== undefined && workspaceRevisionOf(current) !== expectedRevision) {
+            return { ok: false, code: 'workspace-conflict', message: '工作区已更新，请重试' }
+          }
+          const applied = applyWorkspaceCommand(current, command, {
+            now: Date.now(),
+            createProjectId: () => nextWorkspaceProjectId(current.projects),
+          })
+          if (!applied.ok) return applied
+          if (!applied.changed) return { ok: true, workspace: current, projectId: applied.projectId }
+          const proposed = withNextWorkspaceRevision(applied.state, workspaceRevisionOf(current))
+          try {
+            await getChatWorkspaceStore().save(proposed)
+            const persisted = getChatWorkspaceStore().read()
+            if (
+              !persisted ||
+              workspaceRevisionOf(persisted) !== workspaceRevisionOf(proposed) ||
+              !workspaceCommandApplied(persisted, command, applied.projectId)
+            ) {
+              throw new Error('workspace-command-readback-failed')
+            }
+            void taskHomePluginManager?.refreshFromWorkspace(persisted)
+            return { ok: true, workspace: persisted, projectId: applied.projectId }
+          } catch {
+            return { ok: false, code: 'workspace-save-failed', message: '工作区保存失败，请重试' }
+          }
+        })
+      } catch {
+        return { ok: false, code: 'workspace-save-failed', message: '工作区保存失败，请重试' }
+      }
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewLayout, (event, rawProjectId: unknown) => {
       if (!isAuthorizedMainWindowInvoke(event) || typeof rawProjectId !== 'string') throw new Error('runtime-preview-layout-not-authorized')

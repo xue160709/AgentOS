@@ -16,6 +16,13 @@ import {
   workspaceDurableFingerprint,
   workspaceRevisionOf,
 } from '../workspace-snapshot-resolution'
+import {
+  createWorkspaceProject,
+  relocateWorkspaceProject,
+  removeWorkspaceProject,
+  reorderWorkspaceProject,
+  setWorkspaceProjectPinned,
+} from '../workspace-commands'
 
 export type WorkspaceSessionOptions = {
   load: () => Promise<ChatWorkspaceState>
@@ -439,25 +446,8 @@ export class WorkspaceSession {
   }
 
   addProject(state: ChatWorkspaceState, input: AddWorkspaceProjectInput): ChatWorkspaceState {
-    if (state.projects.some((project) => project.id === input.id)) return state
-    const timestamp = input.createdAt ?? this.now()
-    const project: WorkspaceProject = {
-      id: input.id,
-      name: input.name,
-      path: input.path,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }
-    return withActiveWorkspaceTab({
-      ...state,
-      activeProjectId: input.id,
-      activeThreadId: '',
-      projects: [project, ...state.projects],
-      sidebarPrefs: {
-        ...state.sidebarPrefs,
-        projectOrderIds: [input.id, ...orderedProjectIds(state.projects, state.sidebarPrefs.projectOrderIds)],
-      },
-    }, '')
+    // Shared with the Main-owned `project.create` command so both writers agree.
+    return createWorkspaceProject(input, state, input.createdAt ?? this.now())
   }
 
   /** Add a trusted definition and its first view atomically after user confirmation. */
@@ -558,36 +548,11 @@ export class WorkspaceSession {
   }
 
   removeProject(state: ChatWorkspaceState, projectId: string): ChatWorkspaceState {
-    if (state.projects.length <= 1) return state
-    if (!state.projects.some((project) => project.id === projectId)) return state
-    const projects = state.projects.filter((project) => project.id !== projectId)
-    const projectHomeViewModes = { ...(state.projectHomeViewModes ?? {}) }
-    delete projectHomeViewModes[projectId]
-    return {
-      ...state,
-      projects,
-      threads: state.threads.filter((thread) => thread.projectId !== projectId),
-      runtimeDefinitions: (state.runtimeDefinitions ?? []).filter((definition) => definition.owner?.kind !== 'project' || definition.owner.projectId !== projectId),
-      projectHomeViewModes,
-      activeProjectId: state.activeProjectId === projectId ? projects[0]?.id ?? '' : state.activeProjectId,
-      activeThreadId: state.activeProjectId === projectId ? '' : state.activeThreadId,
-      sidebarPrefs: {
-        ...state.sidebarPrefs,
-        collapsedProjectIds: state.sidebarPrefs.collapsedProjectIds.filter((id) => id !== projectId),
-        projectOrderIds: state.sidebarPrefs.projectOrderIds.filter((id) => id !== projectId),
-      },
-    }
+    return removeWorkspaceProject(state, projectId)
   }
 
   relocateProject(state: ChatWorkspaceState, projectId: string, path: string): ChatWorkspaceState {
-    const timestamp = this.now()
-    let changed = false
-    const projects = state.projects.map((project) => {
-      if (project.id !== projectId) return project
-      changed = true
-      return { ...project, path, pathMissing: undefined, updatedAt: timestamp }
-    })
-    return changed ? { ...state, projects } : state
+    return relocateWorkspaceProject(state, projectId, path, this.now())
   }
 
   toggleThreadPinned(state: ChatWorkspaceState, threadId: string): ChatWorkspaceState {
@@ -603,22 +568,7 @@ export class WorkspaceSession {
   toggleProjectPinned(state: ChatWorkspaceState, projectId: string): ChatWorkspaceState {
     const target = state.projects.find((project) => project.id === projectId)
     if (!target) return state
-    const timestamp = this.now()
-    const currentOrder = orderedProjectIds(state.projects, state.sidebarPrefs.projectOrderIds)
-    return {
-      ...state,
-      projects: state.projects.map((project) =>
-        project.id === projectId
-          ? { ...project, pinnedAt: project.pinnedAt ? undefined : timestamp, updatedAt: timestamp }
-          : project,
-      ),
-      sidebarPrefs: {
-        ...state.sidebarPrefs,
-        projectOrderIds: target.pinnedAt
-          ? currentOrder
-          : [projectId, ...currentOrder.filter((id) => id !== projectId)],
-      },
-    }
+    return setWorkspaceProjectPinned(state, projectId, !target.pinnedAt, this.now())
   }
 
   reorderProject(
@@ -627,20 +577,7 @@ export class WorkspaceSession {
     targetProjectId: string,
     position: 'before' | 'after',
   ): ChatWorkspaceState {
-    if (projectId === targetProjectId) return state
-    const projectIds = new Set(state.projects.map((project) => project.id))
-    if (!projectIds.has(projectId) || !projectIds.has(targetProjectId)) return state
-    const currentOrder = orderedProjectIds(state.projects, state.sidebarPrefs.projectOrderIds)
-    const withoutDragged = currentOrder.filter((id) => id !== projectId)
-    const targetIndex = withoutDragged.indexOf(targetProjectId)
-    if (targetIndex === -1) return state
-    const insertIndex = position === 'before' ? targetIndex : targetIndex + 1
-    const nextOrder = [...withoutDragged.slice(0, insertIndex), projectId, ...withoutDragged.slice(insertIndex)]
-    if (nextOrder.join('\n') === currentOrder.join('\n')) return state
-    return {
-      ...state,
-      sidebarPrefs: { ...state.sidebarPrefs, projectOrderIds: nextOrder },
-    }
+    return reorderWorkspaceProject(state, projectId, targetProjectId, position)
   }
 
   toggleSidebar(state: ChatWorkspaceState): ChatWorkspaceState {
@@ -805,17 +742,6 @@ function touchProject(projects: WorkspaceProject[], projectId: string, timestamp
   return projects.map((project) =>
     project.id === projectId ? { ...project, updatedAt: timestamp } : project,
   )
-}
-
-function orderedProjectIds(projects: WorkspaceProject[], persistedOrder: readonly string[]): string[] {
-  const projectIds = new Set(projects.map((project) => project.id))
-  const ordered = persistedOrder.filter((id) => projectIds.has(id))
-  const orderedSet = new Set(ordered)
-  const remaining = projects
-    .filter((project) => !orderedSet.has(project.id))
-    .sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) || b.createdAt - a.createdAt)
-    .map((project) => project.id)
-  return [...ordered, ...remaining]
 }
 
 function titleFromPrompt(prompt: string, fallbackTitle: string): string {

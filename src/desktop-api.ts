@@ -21,6 +21,7 @@ import type {
   WorkspaceTab,
   ProjectFilePreviewResult,
 } from './components/types'
+import type { WorkspaceCommand, WorkspaceCommandResult } from './workspace-commands'
 import type {
   AgentModeFilesResult,
   AgentMcpGlobalSettings,
@@ -235,6 +236,12 @@ export type DesktopAPI = {
   ) => Promise<ProjectContextResult>
   getChatWorkspace?: () => Promise<ChatWorkspaceState | null>
   saveChatWorkspace?: (state: ChatWorkspaceState) => Promise<ChatWorkspaceState>
+  /**
+   * Main-owned durable workspace intents (`FIX-WS-01`). The renderer never
+   * sends snapshot content here; Main derives durable state from its own store
+   * and returns the persisted, readback-verified workspace.
+   */
+  applyWorkspaceCommand?: (command: WorkspaceCommand, expectedRevision?: number) => Promise<WorkspaceCommandResult>
   inspectLocalAppDirectory?: (rootPath: string) => Promise<LocalAppInspectResult>
   trustLocalAppDirectory?: (rootPath: string) => Promise<LocalAppDefinitionResult>
   createLocalApp?: (rootPath: string, expectedRevision?: number, title?: string) => Promise<LocalAppCreationResult>

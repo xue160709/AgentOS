@@ -48,13 +48,13 @@
 
 #### 缺陷收口（阻塞 M0 Gate 与 Development Check）
 
-- [ ] `FIX-WS-01`｜把项目生命周期（创建/移除/重定位/置顶/排序）与侧栏/首页偏好收进单一 Main-owned 命令通道，不按 `projectChatEnabled` 分支；命令 DTO 结构性拒绝 threads/projects 载荷；关闭 `ATDD-WS-201` ownership audit。任务单：[`FIX-WS-01`](changes/active/chg-20260818-agent-command-channel/work-orders/FIX-WS-01-workspace-ownership.md)。
-- [ ] `FIX-CHAT-01`｜依赖 `FIX-WS-01`。主侧边栏归档/置顶切到 Main-owned intent；对齐 busy 合同（覆盖全部 purpose、移除隐式 cancel、改写文案）；拆 `probing | enabled | legacy` 三态；补 Runtime snapshot 交错回归。任务单：[`FIX-CHAT-01`](changes/active/chg-20260818-agent-command-channel/work-orders/FIX-CHAT-01-sidebar-thread-mutations.md)。
-- [ ] 收尾｜`runtimeEditStatus` 三条状态文案硬编码中文（`src/components/runtime-event-state.ts`），未走 i18n；并入 `CHECK-02` 处理，不单独派单。
+- [~] `FIX-WS-01`｜单一 Main-owned 命令通道 `chat-workspace:command` 已落地（六个 variant + revision 门槛 + 回读校验 + DTO 结构性拒绝快照载荷），纯转换集中于 `src/workspace-commands.ts` 并由 `WorkspaceSession` 复用；`ATDD-WS-201` 归属矩阵已落盘。typecheck exit 0，新增目标测试 30/30，`vite build` PASS。正式验收待 `CHECK-02`。
+- [~] `FIX-CHAT-01`｜主侧边栏归档/置顶已走 broker intent（显式 boolean、目标项目自身 generation、pending fence、单次 stale 重试）；busy 判定改读 snapshot 事实并覆盖全部 purpose，broker 路径移除隐式 cancel 并新增固定提示；readiness 拆为 `probing | enabled | legacy`。两处实现偏离已在任务单记录。正式验收待 `CHECK-02`。
+- [x] 收尾｜`runtimeEditStatus` 三条状态文案已改走 i18n（`runtime.editFailed / editSaving / editActive`），中英文同步。
 
 #### 验证门禁
 
-- [ ] `CHECK-02`｜`FIX-WS-01` 与 `FIX-CHAT-01` 完成后执行独立 Development Check；必须覆盖单 writer、同 thread busy、项目生命周期落盘与重启回读、secret/IPC/deep-link 安全负例、幂等、窗口关闭、prompt owner、Runtime generation/last-good 和现有 Chat/Runtime 回归。
+- [ ] `CHECK-02`｜前置已完成，可执行独立 Development Check；必须覆盖单 writer、同 thread busy、项目生命周期落盘与重启回读、secret/IPC/deep-link 安全负例、幂等、窗口关闭、prompt owner、Runtime generation/last-good 和现有 Chat/Runtime 回归。
 - [ ] 正式 Acceptance｜仅在用户另行授权后逐条验证 `ATDD-CHAT-201`–`ATDD-A11Y-201`（含新增 `ATDD-CHAT-210`、`ATDD-WS-202`–`204`）；Development Check PASS 不自动等于正式验收。
 
 ### 1.2 Workspace Tab 与可复用 Runtime（Revision 5）— 已关闭

@@ -43,6 +43,7 @@ import type {
 } from '../src/claude-chat-types'
 import type { DesktopAPI, LocalAppCloseTabResult, LocalAppCreationResult, LocalAppDefinitionResult, LocalAppOpenTabResult, LocalAppPreviewResult, LocalAppRelocationResult, ProjectRuntimeResult, RuntimeCreationResult, RuntimeDefinitionResult, RuntimeInspectResult, RuntimePreviewHost, RuntimePreviewLayout, RuntimePreviewLayoutSize, RuntimePreviewNavigationState, RuntimePreviewResult, WorkspaceTabCloseResult, WorkspaceTabResult } from '../src/desktop-api'
 import type { LocalAppRuntimeEvent, LocalAppRuntimeSnapshot, RuntimeEvent, RuntimeSnapshot } from '../src/components/types'
+import type { WorkspaceCommand, WorkspaceCommandResult } from '../src/workspace-commands'
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
 import {
   type AnswerProjectPromptInput,
@@ -201,6 +202,9 @@ const desktopAdapter = {
   },
   saveChatWorkspace(state: unknown) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveChatWorkspace, state)
+  },
+  applyWorkspaceCommand(command: WorkspaceCommand, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.applyWorkspaceCommand, command, expectedRevision) as Promise<WorkspaceCommandResult>
   },
   inspectLocalAppDirectory(rootPath: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.inspectLocalAppDirectory, rootPath)

@@ -56,6 +56,7 @@ export const DESKTOP_INVOKE_CHANNELS = {
   removeProjectContextEntry: 'desktop:remove-project-context-entry',
   getChatWorkspace: 'chat-workspace:get',
   saveChatWorkspace: 'chat-workspace:save',
+  applyWorkspaceCommand: 'chat-workspace:command',
   inspectLocalAppDirectory: 'desktop:runtime:inspect',
   trustLocalAppDirectory: 'desktop:runtime:trust',
   createLocalApp: 'desktop:workspace-tab:create',

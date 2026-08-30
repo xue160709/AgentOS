@@ -60,7 +60,9 @@
 
 必须通过 `ATDD-CHAT-201`–`210`、`ATDD-WS-201`–`204`、`ATDD-WIN-201`–`203`、`ATDD-SEC-201`，才允许默认开启项目 Chat 窗口。任何 renderer full-snapshot 覆盖路径、broker mode 本地 durable thread mutation 或 probing 阶段误走 legacy writer 仍可达，则 M0/Release gate 不通过。
 
-> 事实修正（2026-08-29）：feature flag 已经默认开启（`AGENTOS_PROJECT_CHAT_BROKER_V2 !== '0'`），本门禁是在默认开启之后才被补全的。因此 `ATDD-WS-202`–`204` 与 `ATDD-CHAT-210` 属于**已上线后回补**的门禁项，在 `FIX-WS-01` / `FIX-CHAT-01` 完成前，M0 Gate 视为未通过。
+> 事实修正（2026-08-29）：feature flag 已经默认开启（`AGENTOS_PROJECT_CHAT_BROKER_V2 !== '0'`），本门禁是在默认开启之后才被补全的。`ATDD-WS-202`–`204` 与 `ATDD-CHAT-210` 属于**已上线后回补**的门禁项。
+>
+> 实现状态（2026-08-29）：`FIX-WS-01` 与 `FIX-CHAT-01` 已完成，`ATDD-CHAT-207`–`210`、`ATDD-WS-201`–`204` 均有 `DEV PASS` 级自动证据（见 `evidence.md`）。M0 Gate 的最终判定仍归 `CHECK-02`：`electron/local-app-runtime.test.mjs` 需在允许回环监听的环境复跑，重启后落盘与双窗口一致性需真实 Electron smoke。
 
 ### M1：网站入口
 

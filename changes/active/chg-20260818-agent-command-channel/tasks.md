@@ -18,7 +18,7 @@ not_needed:
   - quality_verifier: "语义冻结和实现完成后再进入风险检查；用户尚未发起正式验收"
 confirmation: user_confirmed_discovery
 acceptance_requested: false
-coverage_gate: implemented_pending_ownership_fixes
+coverage_gate: ownership_fixed_pending_development_check
 ---
 
 # Revision 2 Tasks
@@ -67,9 +67,9 @@ coverage_gate: implemented_pending_ownership_fixes
 - [x] `M3-01` owner: implementation_engineer｜依赖：`M0-06`｜任务单：**缺失（补记）**｜Workspace Tab durable backing Project：Main-only tab-id Chat API、canonical path repair/lazy backfill、重复 root 去重与安全 sender 负例已实现于 `electron/workspace-tab-project.ts`、`electron/workspace-tab-project-chat.ts`，并冻结在 `design.md` §3.5。**该实现未经 `work-orders/` 派单**，违反 work order 执行规则 1/3；2026-08-29 由 `BUG-AUDIT-WS-02` 补记，不追溯回滚，但后续同类实现必须先补任务单。正式验收待独立证据。
 - [x] `BUG-AUDIT-CHAT-01` owner: main_agent｜依赖：`M0-05B`、`M0-05`、`M2-02`｜写入：`evidence.md`、`acceptance.md`、`work-orders/FIX-CHAT-01-sidebar-thread-mutations.md`｜已确认主侧边栏 archive/pin 漏接 Main intent；broker mode 同时关闭 renderer autosave，使修改不落盘并被 Runtime/Project Chat snapshot 覆盖。已评估相邻 project/sidebar ownership 风险，未改业务代码。
 - [x] `BUG-AUDIT-WS-02` owner: main_agent｜依赖：`BUG-AUDIT-CHAT-01`｜写入：`evidence.md`、`acceptance.md`、`tasks.md`、`README.md`、`proposal.md`、`work-orders/**`｜按用户要求复核本 change 的缺陷面与过度设计。新发现 P0：broker 默认开启下**新建项目既不落盘也不可用**（renderer-only `addProject` + Main 无项目命令 + broker `project-not-found` + ChatPage 无条件走 broker）；项目移除/重定位/置顶/排序同样不落盘，且路径丢失恢复流程终点即在此路径上；归档运行中会话存在文案/实现/broker 合同三方不一致；readiness 用单一布尔表达 probing 与 legacy。同时完成过度设计复核并给出处置（见 `proposal.md` §Revision 2 范围复核）。已核实 `npm run typecheck` exit 0；未改业务代码。
-- [ ] `FIX-WS-01` owner: implementation_engineer｜依赖：`BUG-AUDIT-WS-02`｜任务单：`work-orders/FIX-WS-01-workspace-ownership.md`｜把项目生命周期（创建/移除/重定位/置顶/排序）与侧栏/首页偏好收进单一 Main-owned 命令通道，不按 `projectChatEnabled` 分支；命令 DTO 结构性拒绝 threads/projects 载荷；关闭 `ATDD-WS-201` ownership audit。
-- [ ] `FIX-CHAT-01` owner: implementation_engineer｜依赖：`FIX-WS-01`｜任务单：`work-orders/FIX-CHAT-01-sidebar-thread-mutations.md`｜**范围已收窄**：把主侧边栏归档/置顶切到 Main-owned intent，对齐 busy 合同（覆盖全部 purpose、移除隐式 cancel、改写文案），拆 `probing | enabled | legacy` 三态，补 Runtime snapshot 交错回归。ownership audit 已移交 `FIX-WS-01`。
-- [ ] `CHECK-02` owner: quality_verifier｜依赖：`M1-03`、`M1A-01`、`M2-02`、`FIX-WS-01`、`FIX-CHAT-01`｜任务单：`work-orders/CHECK-02-development-check.md`｜执行独立 Development Check；`FIX-WS-01` 与 `FIX-CHAT-01` 完成前保持阻塞，仅在用户另行明确授权时进入正式验收。
+- [x] `FIX-WS-01` owner: implementation_engineer｜依赖：`BUG-AUDIT-WS-02`｜任务单：`work-orders/FIX-WS-01-workspace-ownership.md`｜单一 Main-owned 命令通道 `chat-workspace:command` 已落地：`project.create/remove/relocate/setPinned/reorder` 与 `preferences.set` 六个 variant 走 `runChatWorkspaceOperation` + revision 门槛 + 回读校验，命令 DTO 结构性拒绝 threads/projects/未知键与 renderer 生成的项目 id；纯转换集中在 `src/workspace-commands.ts` 并由 `WorkspaceSession` 复用，消除双实现。`npm run typecheck` exit 0；`node --test electron/workspace-commands.test.mjs` 14/14；`node --test electron/workspace-command-client.test.mjs` 16/16；`npx vite build` PASS。ownership 归属矩阵已落盘 `evidence.md`，`ATDD-WS-201` 关闭。
+- [x] `FIX-CHAT-01` owner: implementation_engineer｜依赖：`FIX-WS-01`｜任务单：`work-orders/FIX-CHAT-01-sidebar-thread-mutations.md`｜主侧边栏归档/置顶已切到 broker intent（显式 boolean、target project 自己的 `routeGeneration`、per-thread pending fence、`stale-revision` 单次 fresh-read 重试）；busy 判定改为读 snapshot 的 run/prompt 事实并覆盖普通/`task-run`/`skill-run`，broker 路径移除隐式 `claudeChat.cancel` 与 `stopTaskHomePlugin` 并新增固定提示 `sidebar.archiveBusyThread`；readiness 拆为 `probing | enabled | legacy`，probing 不再落入 legacy full-snapshot writer；归档只在目标线程为当前选择时移动 selection。附带修复 `runtimeEditStatus` 的三条硬编码中文（改走 i18n）。`node --test electron/project-chat-renderer.test.mjs electron/desktop-seam.test.mjs` PASS，含新增 source audit。
+- [ ] `CHECK-02` owner: quality_verifier｜依赖：`M1-03`、`M1A-01`、`M2-02`、`FIX-WS-01`、`FIX-CHAT-01`｜任务单：`work-orders/CHECK-02-development-check.md`｜前置已全部完成，**不再阻塞**；执行独立 Development Check（需覆盖 `local-app-runtime.test.mjs` 在允许 loopback 监听的环境复跑，以及重启后落盘的真实 Electron smoke）。仅在用户另行明确授权时进入正式验收。
 
 ## Revision 1 已完成基线
 

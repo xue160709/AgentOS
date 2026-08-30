@@ -81,7 +81,8 @@ test('Main uses one workspace coordinator and locks the Runtime trust commit bef
     ts.forEachChild(node, visit)
   }
   visit(source)
-  assert.equal(saves.length, 7)
+  // 8th save: the `FIX-WS-01` workspace command handler.
+  assert.equal(saves.length, 8)
   for (const save of saves) {
     let parent = save.parent; let wrapped = false
     while (parent) {

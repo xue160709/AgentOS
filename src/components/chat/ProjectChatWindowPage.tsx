@@ -178,7 +178,7 @@ export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
   const threads = snapshot.threads.map(threadFromSnapshot)
   const activeThread = threads.find((thread) => thread.id === selectedThreadId)
   const isNewThread = creatingNewThread || !activeThread
-  const runtimeStatus = runtimeEditStatus(snapshot.runtimeEdit)
+  const runtimeStatus = runtimeEditStatus(t, snapshot.runtimeEdit)
 
   return (
     <main className="project-chat-window project-chat-window--ready" aria-label={t('projectChatWindow.projectAria', { project: project.name })}>

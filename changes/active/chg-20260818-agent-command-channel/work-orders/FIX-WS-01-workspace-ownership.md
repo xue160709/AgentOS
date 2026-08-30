@@ -1,5 +1,7 @@
 # FIX-WS-01｜Workspace Ownership 收口（项目生命周期与偏好）
 
+> 状态：**已完成（2026-08-29）**。实现与自检见 `evidence.md`。allowlist 已按实际偏离补记（见下）。
+
 ## 缺陷结论
 
 `M0-05` renderer cutover 把 **thread** 事实迁给 Main 独占，同时关闭了 renderer 唯一的 durable writer，但 **project / sidebar / view** 事实仍然只由 renderer `WorkspaceSession` 写入。这是一次半迁移，不是可延后的优化项：被关闭的写手和留在 renderer 的写入路径属于同一份 `ChatWorkspaceState`。
@@ -137,6 +139,8 @@ applyWorkspaceCommand(command, expectedRevision)
 
 ## Write allowlist
 
+- `src/workspace-commands.ts`（新增：命令联合、严格 parser 与纯转换的唯一定义；allowlist 补记）
+- `src/components/workspace-session.ts`（改为委托上述纯函数，消除 Main/renderer 双实现；allowlist 补记）
 - `src/desktop-api.ts`
 - `src/desktop-seam.ts`
 - `electron/preload.ts`

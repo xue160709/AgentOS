@@ -7,12 +7,21 @@ export const MAX_QUEUED_RUNTIME_LOG_EVENTS = 160
 
 export type RuntimeStateMap = Record<string, RuntimeSnapshot>
 
-/** One shared, user-facing projection of Main's edit-session snapshot. */
-export function runtimeEditStatus(edit?: ProjectChatRuntimeEditSnapshot): { message: string; alert?: true; busy?: true } | null {
+/**
+ * One shared, user-facing projection of Main's edit-session snapshot.
+ * Copy is localized by the caller: these strings reach both the workbench
+ * toolbar and the project window, so they must not be hardcoded here.
+ */
+export function runtimeEditStatus(
+  t: (path: string, params?: Record<string, string | number>) => string,
+  edit?: ProjectChatRuntimeEditSnapshot,
+): { message: string; alert?: true; busy?: true } | null {
   if (!edit) return null
-  if (edit.failedOrCancelledAfterMutation) return { message: '存在未完成修改，预览未更新', alert: true }
-  if (edit.buildOperationId || edit.settleOperationId) return { message: '修改完成，正在保存最新预览', busy: true }
-  if (edit.activeAgentLeaseCount > 0) return { message: `正在修改项目 · ${Math.max(1, edit.potentialRunCount)} 个会话`, busy: true }
+  if (edit.failedOrCancelledAfterMutation) return { message: t('runtime.editFailed'), alert: true }
+  if (edit.buildOperationId || edit.settleOperationId) return { message: t('runtime.editSaving'), busy: true }
+  if (edit.activeAgentLeaseCount > 0) {
+    return { message: t('runtime.editActive', { n: Math.max(1, edit.potentialRunCount) }), busy: true }
+  }
   return null
 }
 

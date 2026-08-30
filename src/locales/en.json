@@ -171,7 +171,7 @@
     "runtimeBuildFailed": "Build failed; last-good artifact retained",
     "previewLoading": "Loading preview…",
     "previewFailed": "Preview failed to load",
-    "preview": "The preview will appear when the Runtime is ready.",
+    "preview": "Preview",
     "build": "Build",
     "rebuild": "Rebuild",
     "developmentMode": "Development mode",
@@ -189,7 +189,6 @@
     "overview": "Overview",
     "runtimeTab": "Runtime",
     "status": "Status",
-    "preview": "Preview",
     "noLogs": "No logs yet",
     "projectRuntime": "Project Runtime",
     "resizePreviewWidth": "Resize preview width; use Left and Right arrows for fine adjustments",
@@ -197,7 +196,10 @@
     "resizePreviewBoth": "Resize preview width and height",
     "resetPreviewSizeHint": "Double-click to restore the default size",
     "previewSizeSaving": "Saving size…",
-    "previewSizeSaveFailed": "Could not save the size. Please retry."
+    "previewSizeSaveFailed": "Could not save the size. Please retry.",
+    "editFailed": "Unfinished changes; preview not updated",
+    "editSaving": "Changes complete; saving the latest preview",
+    "editActive": "Editing project · {{n}} session(s)"
   },
   "projectChatWindow": {
     "aria": "Project chat",
@@ -371,6 +373,7 @@
     "confirmArchiveAria": "Confirm archive {{title}}",
     "archiveAria": "Archive {{title}}",
     "confirmRemoveRunningTask": "This task is still running. Removing it will stop the current run and archive this chat: {{title}}. Continue?",
+    "archiveBusyThread": "Stop the current run before removing this chat.",
     "confirm": "Confirm",
     "settings": "Settings",
     "globalSettings": "Global settings",
