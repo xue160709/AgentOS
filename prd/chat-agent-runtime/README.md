@@ -1,5 +1,15 @@
 # 聊天与 Agent 运行时
 
+## Revision 3 Planned：Runtime 专用开发 Chat
+
+Runtime 开发将使用独立于普通对话信息架构的专用窗口：用户从 Project Runtime 或 Workspace Runtime 点击“用 AI 修改”进入，窗口固定当前 Runtime，不提供项目切换，并在窗口存续期间支持连续多轮 AI 修改。关闭窗口或主窗口“结束修改”只提交结束意图，不隐式取消仍运行的 Run；安全终态后由 Runtime 统一保存最新预览或进入失败恢复。
+
+Runtime 开发对话仍复用现有 durable Thread、Transcript、Claude Agent SDK、模型、权限、提问和 Diff，不建立第二套 Chatbot。Thread 需要持久绑定 Runtime scope：Project Runtime 使用项目与 `<project>/.agentos` 约束；Workspace Runtime 使用显式 Runtime root，不创建 synthetic Project、不改变 active Project。
+
+开发窗口只列当前 Runtime 的开发记录，并支持关闭重开、恢复最近对话和草稿。开发记录不混入普通项目对话列表；全局搜索可以返回带 Runtime 名称与归属的结果，打开后仍进入对应专用窗口。
+
+状态：BUILDABLE / Planned，未实现。完整设计与技术合同见 [`chg-20260818-agent-command-channel@3`](../../changes/active/chg-20260818-agent-command-channel/design.md)，正式场景见 `ATDD-RUNTIME-DEV-301`–`306`。
+
 ## 项目 `.agentos` Runtime prompt（Change revision 3：Current / as-built）
 
 Runtime system prompt 不是所有有效项目聊天的默认上下文。它只适用于独立项目 Chat 窗口发起的普通提交或编辑重提，以及项目主页「让 Agent 创建 Runtime 网页」按钮的 Main-owned 编排提交。路径固定为 `<project>/.agentos/`；它只约束创建或修改项目 Runtime 网页的组件、样式、脚本、资源、依赖及构建配置；Agent 的 cwd 仍是项目根，用户明确要求的非 Runtime 项目代码不被改写到 `.agentos/`。

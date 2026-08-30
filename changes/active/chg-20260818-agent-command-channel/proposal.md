@@ -1,14 +1,59 @@
 ---
 change_id: chg-20260818-agent-command-channel
-revision: 2
+revision: 3
 decision: accepted
 delivery: in_progress
 owner: main_agent
 confirmation_source: explicit_user_statement
-confirmed_scope: "2026-08-26：独立项目 Chat 窗口、网站与项目一对一绑定、授权网站可直接新建会话、agentos deep link + HTTPS 一次性 ticket、沿用当前权限；2026-08-27：静态项目只在修改期间自动进入实时预览，修改任务结束后自动生成已保存预览，日常界面隐藏开发模式与重启；同一项目允许多个 Agent 会话并行修改；后续修订为 v1 不实现写入协调机制；2026-08-27 用户要求基于事实统一并产出可交付 Terra 的 spec/TODO，Decision Brief 与三个建议默认选择据此转为 accepted"
+confirmed_scope: "Revision 2 已确认范围继续有效；2026-08-30 新增 C-RDS-301–309：Project Runtime 与 Workspace Runtime 独立；项目首页不跳工作台；一键打开 Runtime 专用开发 Chat；窗口级开发会话允许多轮修改；关闭窗口或主窗口结束动作统一请求收口；成功修改在会话结束时一次性更新已保存预览；失败保留 last-good；普通用户不接触 npm/dev/build 术语；Runtime 开发对话不混入普通对话列表但可持久恢复和全局搜索；同路径已有实时开发时阻止第二实例并提供显式切换；主按钮使用“用 AI 修改”，退出动作使用“结束修改”"
+spec_status: BUILDABLE
 ---
 
 # Agent 指令通道与独立项目 Chat 窗口
+
+## Revision 3：Runtime 专用开发会话（BUILDABLE / Planned）
+
+### 为什么修订
+
+Revision 2 把 Runtime 修改绑定到项目级 `EditSession`，并在每一轮满足三条件后自动 settle；Workspace Tab Chat 还会把 Runtime 目录绑定成一个可见 Project。真实走查与用户确认表明，这会把“查看 Runtime、用 AI 修改、完成后保存预览”拆成多个技术动作，并在 Project Runtime 与 Workspace Runtime 指向同一路径时产生跳转、状态串扰和 synthetic Project。
+
+Revision 3 把普通用户的核心任务收敛为一次 **Runtime 开发会话**：用户从当前 Runtime 一键打开专用独立 Chat，连续提出多轮修改；关闭窗口或在主窗口点击“结束修改”后，系统在安全边界内统一生成已保存预览。用户不需要理解静态模式、`npm run dev`、`npm run build`、端口或产物目录。
+
+### 已确认范围
+
+| ID | 已确认产品事实 | 来源 |
+| --- | --- | --- |
+| `C-RDS-301` | Project Runtime 与 Workspace Runtime 是两个独立产品对象；相同 canonical path 不是合并 Definition、Runtime、Host、Chat 或导航的依据 | 2026-08-30 用户明确选择“两个肯定完全分开” |
+| `C-RDS-302` | 项目首页在当前项目内显示 Runtime 卡片/入口与项目专属 Runtime，不自动跳到 Workspace Tab；Workspace Tab 只承载用户显式添加的验证型 Runtime | 2026-08-30 用户说明项目首页是正常主路径，工作台手动添加 `.agentos` 只是少见验证路径 |
+| `C-RDS-303` | 两个表面都提供一键 Runtime 开发入口；点击后打开各自作用域的独立 Chat，并自动准备实时开发，不要求用户分别操作模式和 Chat | 2026-08-30 用户明确描述“一点击就弹出独立窗口 Chat，然后直接修改” |
+| `C-RDS-304` | Runtime 开发会话以窗口生命周期聚合多轮修改；窗口保持打开时不在每轮 Run 后反复退出实时开发和构建 | 2026-08-30 用户明确描述在独立窗口连续让 AI 工作、看效果后再关闭 |
+| `C-RDS-305` | 关闭开发窗口与主窗口“结束修改”是同一个收口意图；关闭视图不直接取消仍运行的 AI，安全终态后再退出开发；成功修改只在会话结束时自动更新一次已保存预览，失败不覆盖 last-good | 用户本轮关闭即退出的意图 + Revision 2 已确认的“关闭不取消任务 / 失败保留 last-good”正式边界 |
+| `C-RDS-306` | Runtime 开发 Chat 在界面上与普通项目对话分开，专用于开发该 Runtime；底层继续复用现有 Thread、Transcript、Claude Agent SDK、权限和 Diff，不建立第二套聊天运行时 | 2026-08-30 用户倾向“独立窗口就是用于开发 Runtime” + Revision 2 不建立第二套 Chatbot 的正式边界 |
+| `C-RDS-307` | Runtime 开发对话不混入普通项目对话列表；用户从对应 Runtime 卡片/详情继续开发，对话持久可恢复，并可在全局搜索中以 Runtime 开发结果识别 | 2026-08-30 用户接受建议默认 |
+| `C-RDS-308` | 两个独立 Runtime 指向同一路径时，若一个已占用实时开发资源，第二个启动请求被阻止并提供“切换到正在修改的 Runtime”；不静默复用进程或合并对象 | 2026-08-30 用户接受建议默认 |
+| `C-RDS-309` | 面向普通用户的主按钮使用“用 AI 修改”，收口动作使用“结束修改”；“开发模式”以及 npm/dev/build 等术语只进入高级详情 | 2026-08-30 用户接受建议默认 |
+
+### Revision 3 取代的 Revision 2 规则
+
+以下 Revision 2 规则仅在冲突部分被取代；网站配对、Ticket、Main-owned Chat broker、权限、安全、同 thread busy、prompt owner 与 late-event fence 保持有效：
+
+- “Workspace Tab 必须通过可见 backing Project 打开 Chat”被取代。Workspace Runtime Chat 不得创建 synthetic Project、改变当前 Project 或把 `<runtime>/.agentos` 再派生为 Runtime 根。
+- “Workspace Tab 与项目首页共享一个项目 RuntimeInstance”被取代。两者分别拥有 Definition、实例、Host、Chat 与用户状态；相同路径只构成资源冲突信号。
+- “每个成功 Agent Run 终态后立即 settle/build”被收窄：显式 Runtime 开发会话存续期间保持实时开发，结束会话后只收口一次；非 Runtime 专用的后台/外部任务仍沿用 Revision 2 的 run-owned 收口规则。
+- “通用项目 Chat 窗口承担 Runtime 开发入口”被取代。Runtime 开发使用专用窗口上下文；普通项目 Chat 与 Runtime 开发记录在信息架构上分开。
+
+### 非目标
+
+- 不为普通用户暴露 npm 命令、端口、HMR、静态协议或产物目录。
+- 不在独立 Runtime 开发窗口中复制完整 Preview；主窗口继续承载页面，开发窗口只显示紧凑状态与“查看预览/回到主窗口”。
+- 不把关闭窗口解释为强制取消正在运行的 AI，也不自动构建失败或取消后的半成品。
+- 不允许相同目录的两个独立 Runtime 同时启动两套实时开发资源，也不把显式切换解释为对象合并或所有权迁移。
+
+### 已确认的默认收口
+
+- Runtime 开发记录只在对应 Runtime 专用窗口中浏览和继续，不混排进普通项目对话列表；全局搜索可以返回结果，但必须标记 Runtime 名称与归属，打开结果仍进入专用窗口。
+- 同路径实时资源冲突采用“阻止第二实例 + 显式切换”作为第一版，不实现进程复用；切换只改变用户当前查看/操作的入口，不改变两个 RuntimeDefinition 的独立身份。
+- 主动作固定为“用 AI 修改”，结束动作为“结束修改”；状态文案沿用“正在准备、AI 正在修改、正在保存最新预览、预览未更新”。
 
 ## Revision 2：从应用内通道扩展到网站入口
 

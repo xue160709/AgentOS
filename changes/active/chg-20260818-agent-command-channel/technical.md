@@ -1,8 +1,336 @@
-# Agent 指令通道与独立项目 Chat 窗口｜技术规格
+# Agent 指令通道、独立项目 Chat 与 Runtime 开发会话｜技术规格
 
-> Change：`chg-20260818-agent-command-channel` Revision 2  
-> 状态：Accepted / In implementation（M0-01–M0-05E 已完成，M0-05F production composition 开始）
+> Change：`chg-20260818-agent-command-channel` Revision 3
+> 状态：Revision 3 BUILDABLE / Planned；Revision 2 已实现但未正式验收
 > 解释优先级：`protocol-v1.md`（网站线协议）→ 本文（进程/IPC/持久化）→ `design.md`（用户行为）→ work order。发现冲突必须停工更新规格，不能由实现者自行选择。
+
+## Revision 3 Technical Delta：RuntimeDevelopmentSession
+
+本节取代下方 Revision 2 的 `§12 RuntimeEditCoordinator` 与 `§17 WorkspaceTab → Project durable contract` 中涉及 Runtime 开发会话、同路径 Runtime 复用和 Workspace backing Project 的规则。Revision 2 的 Main-owned Broker、Runner、Transcript、权限、Diff、prompt owner、安全投影、网站协议与普通项目 Chat 继续有效。
+
+### T3.1 目标、范围与 as-built 缺口
+
+Revision 3 是跨 Main/renderer、SQLite/JSON、BrowserWindow、SDK Run 与 Runtime process 的 L 级修改；实施风险按 V3 处理，但本轮只写文档，验证等级为 V0。
+
+| 缺口 | as-built 证据 | Revision 3 要求 |
+| --- | --- | --- |
+| 相同 root + mode 被别名为一个 runtime owner | `electron/local-app-runtime/index.ts:1482-1522,1607-1617` | Definition、snapshot、consumer 与 Chat 身份始终按 Runtime scope 隔离；同 root 只进入执行资源冲突门 |
+| Workspace Chat 创建/修复 visible Project | `electron/workspace-tab-project.ts:30-75`、`workspace-tab-project-chat.ts` | Workspace Runtime thread 不依赖 Project；不再写 `WorkspaceTab.projectId` |
+| durable Thread 强制 `project_id NOT NULL` | `electron/chat-workspace-store.ts:384-409,459-498` | 新增 Runtime-scoped thread metadata，不制造 sentinel/synthetic Project |
+| Coordinator 按 project 聚合并在所有 Run 终态后自动 settle | `electron/runtime-edit-coordinator.ts:42-70,217-304` | 显式 Runtime 窗口会话只有 `exitRequested` 后才能 settle；普通非 Runtime Run 保留旧策略 |
+| Project Chat window close 只 flush view state | `electron/project-chat-window-manager.ts:121-123` | Runtime 开发窗口 close 同步登记结束意图，再销毁视图；不取消 Run |
+
+上述证据是 `STATIC / UNTESTED` 代码审计；已有 GUI 探查的跳转与 synthetic Project 复现记录在 `evidence.md`，本技术规格不把文档审计冒充实现验证。
+
+### T3.2 稳定身份与作用域解析
+
+Runtime 开发不使用 canonical path、active project、Workspace Tab backing Project 或 renderer query 作为身份。Main 从入口权威对象解析以下稳定 key：
+
+```ts
+type RuntimeScopeId = `project:${string}` | `workspace:${string}`
+
+type RuntimeScopeRef =
+  | {
+      kind: 'project-runtime'
+      runtimeScopeId: `project:${string}`
+      projectId: string
+      runtimeDefinitionId?: string // .agentos 尚未创建时允许缺省
+    }
+  | {
+      kind: 'workspace-runtime'
+      runtimeScopeId: `workspace:${string}`
+      runtimeDefinitionId: string
+    }
+
+type ResolvedRuntimeScope = RuntimeScopeRef & {
+  owner: RuntimeOwner
+  displayName: string
+  cwd: string
+  runtimeRoot: string
+  canonicalRoot?: string
+  routeGeneration: number
+  capability: 'static-with-dev' | 'static-only' | 'development-only' | 'uninitialized' | 'invalid'
+}
+```
+
+- Project Runtime 的产品身份从项目创建起就是 `project:<projectId>`；`.agentos` 不存在时可以先打开创建 Chat，Definition 生成后由 Main 在同一 scope 内绑定，不迁移 Thread 或窗口身份。
+- Workspace Runtime 的 scope 是 `workspace:<runtimeDefinitionId>`；关闭 Tab 不改变 scope，显式删除 Definition 后历史仍可只读访问，但不可继续提交。
+- Project scope 每次 submit fresh-read Project，`cwd=<project root>`、`runtimeRoot=<project>/.agentos`；Workspace scope fresh-read Definition，`cwd=runtimeRoot=canonical root`。
+- renderer 不能提交或覆盖 cwd、runtimeRoot、canonicalRoot、owner、routeGeneration、capability 或 Runtime prompt eligibility。
+- 路径缺失、Project/Definition 删除、Workspace relocation 或 Project path 改变会提升 `routeGeneration`；旧 window、Run、prompt、settle 与 build callback 全部失效。
+
+### T3.3 Thread、Transcript 与持久化
+
+Runtime 开发复用现有 Transcript 联合、纯 reducer、Claude Agent SDK runner、sessionId、model、permission、prompt 和 file diff。为避免破坏普通 Project Thread 与制造假 Project，抽取共享基类并新增同一 Main writer 管理的 Runtime thread collection：
+
+```ts
+type ChatThreadBase = {
+  id: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  pinnedAt?: number
+  archivedAt?: number
+  creationSource: ProjectThreadCreationSource
+  chatState: ChatState
+}
+
+type RuntimeDevelopmentThread = ChatThreadBase & {
+  purpose: 'runtime-development'
+  runtimeScopeId: RuntimeScopeId
+  runtimeDefinitionId?: string
+  runtimeOwner: RuntimeOwner
+  creationSource: Extract<ProjectThreadCreationSource, { kind: 'user' | 'app-command' }>
+}
+```
+
+- `WorkspaceThread[]` 继续只包含普通项目线程；新增 `runtimeDevelopmentThreads[]`，两者共享 reducer、rollout/transcript serializer 和 Broker core，但列表查询与窗口 snapshot 分开。
+- SQLite 新增 `runtime_development_threads` 表和 `idx_runtime_threads_scope_updated`，不把 workspace Runtime 填入 `threads.project_id`。Project-owned Runtime 行可保存 owner projectId 作为完整性字段，但不进入 `threads` 外键或普通项目列表。
+- JSON fallback 使用独立 `runtime-development-workspace.json` 原子文件；SQLite 与 sidecar 共享单调 `runtimeThreadRevision`。旧版本写普通 workspace 时不会删除 Runtime thread 表/sidecar，避免 rollback 丢记录。
+- schema migration 只把既有 `threads` 归为普通 Project Thread，不猜测或重分类历史 app-command Thread。既有 `WorkspaceTab.projectId` 与已生成 Project/Thread 原样保留，字段转为 deprecated read-only；Revision 3 不自动删除可能属于用户的数据。
+- 新代码停止调用 `ensureWorkspaceTabProject()` / `openWorkspaceTabProjectChat()`；未来 Runtime 开发只写 Runtime thread collection。旧函数保留一个 release 兼容周期但入口不可达，随后删除。
+- 全局搜索同时索引两类 collection。Runtime 结果包含 `scopeKind=runtime-development`、`runtimeScopeId`、Runtime 名称与 `ownerKind`；点击由 Main 打开专用窗口。普通项目对话查询必须明确过滤 Project Thread，不能靠 renderer 隐藏。
+- Runtime Definition 删除后 Thread/Transcript 不级联删除；专用窗口显示“Runtime 已移除”，禁用 submit，仍允许搜索、查看与显式归档。
+
+### T3.4 单一 Chat Broker 与 capability
+
+从 `ProjectChatBroker` 抽取一个 Main-owned `ChatBrokerCore`，保留现有 Project facade，并新增 Runtime facade；这不是第二套 Chatbot：两个 facade 使用同一个串行 writer、Runner、event sink、reducer、Transcript serializer、permission service 与 prompt registry。
+
+```text
+ProjectChat facade ─┐
+                    ├─ ChatBrokerCore ─ Store / Runner / reducer / prompt registry
+RuntimeChat facade ─┘
+```
+
+- `requestId -> {scopeKind, scopeId, threadId, routeGeneration, developmentGeneration}` 在 runner accepted 前由 Main 冻结；事件只路由到这一份记录。
+- 同一 Thread 仍只允许一个 active Run，不同 Runtime Thread 可以并行；一个 RuntimeDevelopmentSession 聚合其 scope 下全部 active Run。
+- Runtime submit 只能引用同一 capability scope 中的 `runtime-development` Thread；Project API 看不到也不能修改 Runtime Thread。
+- Project Runtime 使用项目上下文读取能力，但 Runtime prompt 固定目标 `.agentos`；Workspace Runtime 的 discovery、附件相对路径与文件搜索都以 Runtime root 为界。
+- scope 只是路由与上下文合同，不额外提升现有 app-global permission，也不冒充 OS sandbox。Main 对 Edit/Write/NotebookEdit 的目标做 runtimeRoot containment；无法可靠归因或 root 外 diff 不计入可保存修改并进入 `needs_attention`。原始 Bash 仍受现有权限策略，Revision 3 不宣称具备宿主级强隔离。
+
+新增 renderer capability profile：
+
+```ts
+type RuntimeDevelopmentCapability = {
+  kind: 'runtime-development'
+  webContentsId: number
+  runtimeScopeId: RuntimeScopeId
+  routeGeneration: number
+}
+```
+
+- Runtime 开发窗口使用固定 `--agentos-window-kind=runtime-development`，preload 只暴露 Runtime Chat typed API；不暴露 `window.desktop`、普通 Project Chat 或任意路径 API。
+- query 中的 `runtimeScopeId` 只用于 renderer 路由显示，不是授权。Main 必须以 webContents capability 覆盖/校验 scope。
+- Runtime prompt owner 候选只有当前 scope 的 visible Runtime window。窗口关闭后 prompt 暂无 owner，主窗口只显示“需要你的确认”和重新打开入口；重开后转移一次，迟到回答由 promptId + generation 拒绝。
+
+### T3.5 Main-window 与 Runtime-window API
+
+主窗口只发送它已经持有的页面对象，不直接发送 root：
+
+```ts
+type RuntimeDevelopmentTarget =
+  | { kind: 'project-runtime'; projectId: string; mountId: string }
+  | { kind: 'workspace-runtime'; workspaceTabId: string }
+
+type RuntimeDevelopmentResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: { code: RuntimeDevelopmentErrorCode; message: string; retryable: boolean } }
+
+type OpenRuntimeDevelopmentResult =
+  | { ok: true; value: { runtimeScopeId: RuntimeScopeId; developmentGeneration: number } }
+  | {
+      ok: false
+      error:
+        | { code: 'runtime-development-conflict'; message: string; retryable: false; conflictToken: string; conflictingRuntimeName: string }
+        | { code: Exclude<RuntimeDevelopmentErrorCode, 'runtime-development-conflict'>; message: string; retryable: boolean }
+    }
+
+type RuntimeDevelopmentMainAPI = {
+  openRuntimeDevelopment(target: RuntimeDevelopmentTarget): Promise<OpenRuntimeDevelopmentResult>
+  focusRuntimeDevelopmentConflict(conflictToken: string): Promise<RuntimeDevelopmentResult<void>>
+  endRuntimeDevelopment(target: RuntimeDevelopmentTarget): Promise<RuntimeDevelopmentResult<void>>
+}
+```
+
+- Main 对 project target 复核 project-home host/mount，对 workspace target 复核 Workspace Tab → workspace-owned Definition；任何 owner 不匹配都在副作用前拒绝。
+- `conflictToken` 是 Main-memory、单 sender、短期、一次性凭证；renderer 不获得冲突 Runtime 的路径或可伪造的 ownership 参数。显式切换只聚焦已占用者的正确主界面和开发窗口，不改 activeProjectId、不重写 Runtime owner。
+- Runtime 窗口 API 复用 create/select/submit/fork/edit/cancel/answer/diff/model/attachment 能力，但 scope 从 capability 获取；窗口 payload 只允许 thread/request/prompt/changeSet 等 scope 内标识。
+- 项目 `.agentos` 未初始化时，“让 AI 创建”调用同一个 open API，然后在该 scope 新建 `runtime-development` Thread 并提交既有受控创建 prompt；普通“用 AI 修改”只打开/恢复窗口，不自动发送 prompt。
+
+### T3.6 RuntimeDevelopmentWindowManager
+
+- 新增 `RuntimeDevelopmentWindowManager`，以 `runtimeScopeId` 为 Map key；同 scope 重复打开只 show/focus，不创建第二窗口。
+- 复用现有 Chat renderer 组件和通用 window primitive，但标题固定包含 Runtime 名称与“项目/工作台”归属，页面不提供项目切换。
+- view state 独立保存 `{schemaVersion, runtimeScopeId, selectedThreadId?, draft, bounds, updatedAt}`；selected Thread 必须属于该 scope。
+- native `close` 事件先同步调用 coordinator `requestExit(scopeId, generation, 'window-close')`，再 flush view state 并销毁视图。requestExit 只改 Main 内存且幂等，不等待 Run/build，不调用 cancel。
+- `closed/destroyed` 只注销 capability、presence 和窗口引用；不得再次创建 exit generation。load 失败释放刚取得的窗口/session consumer，并保留可恢复错误。
+- 从 `saving` 或 `needs_attention` 重新打开会调用 `reenter`：提升 developmentGeneration、清除旧 exit intent、取消尚未提交的旧 save operation，并使旧 callback 失效。
+
+### T3.7 RuntimeDevelopmentSession 状态机
+
+Main 新增 `RuntimeDevelopmentCoordinator`。现有 `RuntimeEditCoordinator` 保留给普通项目 Chat、Website/后台任务的 run-owned settle；Runtime-scoped Run 只能登记到新 coordinator，禁止双登记。
+
+```ts
+type RuntimeDevelopmentPhase =
+  | 'opening'
+  | 'live'
+  | 'exit_requested'
+  | 'needs_attention'
+  | 'saving'
+  | 'closed'
+  | 'preview_update_failed'
+
+type RuntimeDevelopmentSession = {
+  runtimeScopeId: RuntimeScopeId
+  runtimeDefinitionId?: string
+  routeGeneration: number
+  developmentGeneration: number
+  phase: RuntimeDevelopmentPhase
+  exitRequested: boolean
+  entryFingerprint?: string
+  activeRunIds: Set<string>
+  waitingPromptIds: Set<string>
+  mutationCountByRun: Map<string, number>
+  failedMutationRunIds: Set<string>
+  rootLeaseId?: string
+  settleOperationId?: string
+  buildOperationId?: string
+  autoSaveAttemptedGeneration?: number
+}
+```
+
+事务和转换规则：
+
+1. `open`：Main 解析 scope、取得同路径独占修改租约、建立 `opening` session 并打开窗口；可用 dev script 时准备实时服务。static-only 可以进入可修改状态但继续显示 last-good；uninitialized 先按“父目录 realpath + 固定 `.agentos` 子路径”锁定 prospective root 并只打开 Chat，目录出现后重新 canonicalize，冲突才允许继续。
+2. `ready`：实时服务 ready、static-only 已判定或 uninitialized Chat 可用后进入 `live`。准备失败进入 `needs_attention`，但不删除 Thread/草稿。
+3. `submit`：只允许 `live`；accepted 后将 requestId 加入 `activeRunIds`。Plan Run 可进入 Transcript，但不计 potential writer 或 mutation。
+4. `mutation`：只统计 runtimeRoot 内可靠 diff；记录到具体 requestId。窗口仍开时永不自动 settle/build。
+5. `requestExit`：`live/opening` 幂等变为 `exit_requested` 并禁止新 submit。active Run 继续；waiting prompt 使可见 phase 为 `needs_attention`，必须重开后回答。
+6. `terminal`：移除 active Run。失败/取消且该 Run 已产生 mutation 时加入 `failedMutationRunIds`；无 mutation 的失败不阻止其它成功修改保存。
+7. `settle gate`：必须同时满足 exitRequested、无 active Run/agent lease/waiting prompt、无 failedMutationRun、源码 fingerprint 连续 1,500ms 稳定且总等待不超过 30,000ms。净 fingerprint 等于 entryFingerprint 时按无修改关闭。
+8. `save`：每个 developmentGeneration 最多自动尝试一次。支持静态保存时，在同一 root execution lease 内停止临时 dev、切换为 build、执行 Main 验证的固定声明并在 commit 前再次校验 scope + routeGeneration + developmentGeneration + operationId；成功才原子发布新 last-good。
+9. `failure`：mutation Run 失败/取消、稳定等待超时或声明失效进入 `needs_attention`；build 失败进入 `preview_update_failed`。两者都保留源码/Diff/Thread 和上一版 last-good，自动路径不重试。
+10. `reenter`：从 exit/saving/error 状态重新打开会提升 generation。旧 settle/build 即使稍后成功也不能发布 snapshot、切 Preview、关闭新会话或释放新 lease。
+11. `closed`：清除 session 临时计数和 Chat lease。Project/static-capable Runtime 返回 last-good；development-only Workspace 只结束 Chat session，Workspace Tab consumer 仍可保持查看服务。
+
+“重新保存”是显式用户动作：它提升 generation 或创建新的 save attempt，不绕过失败栅栏。关闭窗口不是 cancel；用户在 Transcript 中显式取消 Run 才调用 runner cancel。
+
+### T3.8 同路径执行资源与 RuntimeManager
+
+`LocalAppRuntimeManager` 不再通过 `ownerByDedupeKey` 把多个 Definition 映射到一个 snapshot/consumer 集合。每个 Definition 始终以自身 id 读写 supervisor、artifact 与事件；新增 Main-owned `RuntimeRootExecutionRegistry`：
+
+```ts
+type RuntimeRootLease = {
+  leaseId: string
+  canonicalRoot: string
+  runtimeDefinitionId: string
+  runtimeScopeId: RuntimeScopeId
+  kind: 'development' | 'build'
+  generation: number
+}
+```
+
+- `kind='development'` 表示独占修改周期，不要求一定存在 dev process；因此 static-only 与 uninitialized 创建同样会阻止另一 Runtime 同时修改该 root。canonical root 只作为排他资源 key，不作为产品 identity。静态 last-good Preview 不占执行租约。
+- acquire 在 Main 串行队列内执行：同 scope/definition 重复请求幂等；另一 definition 已持有时返回 conflict，不 stop/kill/alias/attach 到对方进程。
+- 同 definition 从 development → build 使用原子 lease transition；transition 前停止该 definition 的 dev process，失败则保持 last-good 并释放/恢复到明确状态。
+- `stopOwnedDevelopmentRuntimes(root)` 不再作为进入开发的抢占策略。精确 Next dev lock 清理只处理不属于另一活动 registry lease 的陈旧/外部锁，并继续受现有有限 PID ownership 检查。
+- Workspace development-only service 在 Chat session 关闭后若仍有 Tab consumer，继续持有 development root lease；因此相同 root 的另一 Runtime 仍收到 conflict。最后 consumer 释放或用户停止 Runtime 后才释放。
+- Runtime removal/relocation、trust revoke 与 app quit 必须先使 lease 进入 stopping，等待受管 process tree 有界退出后释放。active Run/session 时 relocation/remove 返回 `runtime-development-busy`，不偷偷迁移 scope。
+- 路径级 TrustStore 可以继续共享 canonical-root 授权，但这只是安全授权，不得复用 Definition、snapshot、Thread、window 或用户状态；撤销时界面必须说明同路径所有 Runtime 都会停止。
+
+### T3.9 退出、崩溃、恢复与 late event
+
+- DevelopmentSession 是 Main-memory 活跃事务，不跨 app restart 恢复；Thread、Transcript、view state、last-good 与源码是 durable 事实。
+- `before-quit` 设置全局 quitting fence：不启动新的 settle/build，取消未提交的自动 save，按现有 app shutdown 规则终止 Runner/受管进程。源码可能已变但 last-good 不变；下次启动由静态 fingerprint 显示 stale，不能宣称保存成功。
+- 窗口关闭后 active Run 的事件仍由 request route 写同一 Thread；不存在 renderer 时不会丢 Transcript。Run 到 terminal 后 coordinator 继续收口或显示主窗口恢复状态。
+- 每个异步 callback 必须同时校验 `runtimeScopeId + routeGeneration + developmentGeneration + requestId/operationId`。只校验 buildId、Runtime generation 或当前 active project 均不足。
+- Project/Definition 失效或 root changed 时立即提升 routeGeneration、取消 pending save、关闭 Preview consumer并进入 `needs_attention`；旧路径结果不得写入新 scope。
+- prompt owner 转移、window cleanup、build commit 和 root lease release 都是幂等操作；重复 close、双击结束、close+主窗口结束并发只产生一个 exit intent。
+
+### T3.10 Snapshot、错误与用户语言
+
+Main 为主窗口和 Runtime 窗口投影同一份 `RuntimeDevelopmentSnapshot`；Header、卡片、placeholder 与专用窗口不得自行组合 Runtime/Run 状态：
+
+```ts
+type RuntimeDevelopmentSnapshot = {
+  runtimeScopeId: RuntimeScopeId
+  runtimeDefinitionId?: string
+  routeGeneration: number
+  developmentGeneration: number
+  phase: RuntimeDevelopmentPhase
+  activeRunCount: number
+  waitingPromptCount: number
+  hasChanges: boolean
+  canSubmit: boolean
+  canReopen: boolean
+  canEnd: boolean
+  userMessage?: string
+  errorCode?: RuntimeDevelopmentErrorCode
+}
+
+type RuntimeDevelopmentErrorCode =
+  | 'runtime-development-conflict'
+  | 'runtime-development-busy'
+  | 'runtime-scope-stale'
+  | 'runtime-root-missing'
+  | 'runtime-trust-required'
+  | 'runtime-live-preview-unavailable'
+  | 'runtime-save-unavailable'
+  | 'runtime-save-timeout'
+  | 'runtime-build-failed'
+```
+
+- 默认主动作/accessible name 为“用 AI 修改”，活跃态收口动作为“结束修改”。
+- 技术名词、root、端口、command、operationId 和 stack 不进入默认错误消息；高级日志继续脱敏。
+- 冲突只显示 Runtime 名称与归属，并提供“切换到正在修改的 Runtime”；不自动导航。
+- `canSubmit=false` 必须与 Main 拒绝条件一致；`exit_requested/saving` 不允许 renderer 乐观追加新用户消息。
+
+### T3.11 迁移、实施顺序与回滚
+
+1. 先新增共享 Thread base、Runtime thread store/codec/search metadata 与迁移测试；普通 Project Thread 路径保持不变。
+2. 抽取 `ChatBrokerCore`，让现有 Project facade 全量回归通过，再增加 Runtime facade/capability/scoped read。
+3. 实现 `RuntimeRootExecutionRegistry` 并移除 path dedupe alias；先用 manager tests 证明不同 Definition snapshot/consumer 隔离和 conflict。
+4. 实现纯 `RuntimeDevelopmentCoordinator`、bridge 与 generation-fenced artifact commit；不接 UI。
+5. 接入 Runtime window/view-state/presence/close transaction，再替换项目首页与 Workspace 入口。
+6. 最后停用 Workspace backing Project 入口和旧 Runtime-scoped auto-settle 路由；普通非 Runtime run-owned settle 保留。
+
+回滚 flag 必须同时关闭新入口和 Runtime facade，但不得删除 `runtime_development_threads`、sidecar、last-good 或旧 synthetic Project 数据。回滚版本不能识别 Runtime Thread 时数据保持在新表/sidecar，恢复新版本后继续可读。禁止在回滚中把 Runtime Thread 转成普通 Project Thread。
+
+### T3.12 流程审查 Findings 与测试门禁
+
+#### Findings（实现前已知）
+
+| Severity | 证据 | 用户症状 | 根因 | 规格修复 |
+| --- | --- | --- | --- | --- |
+| P0 | STATIC / UNTESTED，`local-app-runtime/index.ts:1482-1617` | 同路径两个入口状态串扰或打开错误 Runtime | path+mode alias 兼任产品 identity | Definition 独立 + root execution lease |
+| P0 | RUNTIME / REPRODUCED，见 `evidence.md`；STATIC `workspace-tab-project.ts:30-75` | Workspace Chat 生成 Project，并派生错误 `.agentos/.agentos` | Chat 只能绑定 project_id | Runtime thread collection + scope capability |
+| P1 | STATIC / UNTESTED，`runtime-edit-coordinator.ts:217-304` | 每轮修改后 dev/build 反复切换 | settle gate 没有 window exit intent | 显式 session + exitRequested gate |
+| P1 | STATIC / UNTESTED，`project-chat-window-manager.ts:121-123` | 关窗后无法表达结束修改或看到恢复状态 | close 只有 view cleanup | 同步 requestExit + Main snapshot |
+| P1 | STATIC / UNTESTED，`chat-workspace-store.ts:384-409` | Runtime 对话只能混入项目或造假项目 | thread schema 强制 project FK | 独立 metadata collection，共享 chat core |
+
+#### P0 自动化
+
+- scope resolver：project/workspace/uninitialized、owner mismatch、path missing、relocation generation。
+- store/codec：Runtime Thread round-trip、普通列表过滤、global search metadata、SQLite/sidecar fallback、旧版本回滚不删除。
+- broker/capability：scope spoof、wrong window、subframe、Preview、跨 Runtime threadId 全拒绝；同 runner/reducer 单写。
+- root registry：同 scope 幂等、同 root 不同 definition conflict、显式 switch 不转移 owner、dev→build 原子 transition、last consumer release。
+- coordinator transition：open→live→多轮→exit→save；无修改；active Run close；waiting prompt close/reopen；failed-with-mutation；failed-without-mutation；timeout；double exit；reenter during save；late build result。
+- artifact integration：generation 在 commit 前检查，build fail/abort 保留 last-good，development-only 不伪造保存。
+
+#### P1 / Electron smoke
+
+- Project Runtime 与 Workspace Runtime 指向同一路径：项目首页不跳 Tab，第二实时实例被阻止，显式切换聚焦正确窗口。
+- “用 AI 修改”打开专用窗口；普通列表无 Runtime Thread，全局搜索结果可回到同一 Thread。
+- 连续两轮修改期间不 build；running/waiting 时关闭窗口，主窗口状态正确，重开后 prompt/focus 只转移一次。
+- close 与主窗口“结束修改”并发只收口一次；保存中重开，旧结果不切 Preview。
+- app quit/restart 后 Transcript 和 draft 可恢复、last-good 未被未知半成品覆盖、stale 可见。
+- development-only Workspace 结束 Chat 后仍可查看；停止最后 consumer 后同路径租约释放。
+
+正式验收仍需用户另行授权。实现阶段至少运行目标 Node tests、`npm run typecheck`、`npm run test:electron`、`npm run build` 和上述真实 Electron smoke；受限环境无法绑定 loopback 时必须如实记录，不得把单测替代 GUI 路径。
+
+---
+
+## Revision 2 已实现技术基线（未正式验收）
 
 ## 1. 实现目标与迁移边界
 

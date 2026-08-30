@@ -3,6 +3,62 @@
 > 唯一验收事实源。当前为 2026-06-23 as-built 初始 PRD 同步；由 project-verify 逐条执行并回写实现状态。
 > 对应 TODO：§14 产品 PRD 初始化与后续差距。
 
+## Revision 3（BUILDABLE / Planned，未实现）
+
+> 来源：`changes/active/chg-20260818-agent-command-channel@3`。本节只定义 Runtime 专用开发 Chat 的计划合同；普通项目 Chat、Website task 与 Revision 2 未被点名的窗口/权限/安全规则继续有效。
+
+### 需求：Runtime 开发窗口固定正确的 Runtime scope
+
+#### `ATDD-RUNTIME-DEV-301` 场景：两个入口打开各自专用窗口
+
+- GIVEN 用户从 Project Runtime 或 Workspace Runtime 点击开发入口
+- WHEN Main 解析调用 sender、RuntimeDefinition 与 owner
+- THEN 打开或聚焦该 Runtime 唯一的开发窗口，窗口固定 `runtimeDefinitionId + owner scope`，不从 active project、相似路径或已有 Workspace Tab 猜测目标
+- AND Project 与 Workspace Runtime 即使 root 相同也不互相聚焦窗口、不切换主窗口页面或共享 Chat selection
+
+### 需求：Runtime 开发对话持久但不建立第二套 Chatbot
+
+#### `ATDD-RUNTIME-DEV-302` 场景：关闭重开恢复 Runtime 开发记录
+
+- GIVEN Runtime 开发窗口中已有一个或多个开发 Thread、selected thread 与未提交 draft
+- WHEN 用户关闭并重新打开同一 Runtime 开发窗口，或应用重启后重新进入
+- THEN 窗口只列出绑定当前 Runtime scope 的开发 Thread，并恢复最近选择与 draft；Thread、Transcript、模型、权限、Diff 与 Run 仍由现有 Main broker 单一写入
+- AND Runtime 开发 Thread 不进入普通项目对话列表；全局搜索结果明确显示 Runtime 名称与项目/工作台归属，打开结果进入对应 Runtime 专用窗口
+- AND 不创建第二套 SDK、Transcript、任务历史或 renderer durable writer
+
+### 需求：关闭窗口是可延迟的结束意图
+
+#### `ATDD-RUNTIME-DEV-303` 场景：运行中关闭不取消并在终态后收口
+
+- GIVEN Runtime 开发窗口存在 running Run，且用户关闭窗口或在主窗口点击“结束修改”
+- WHEN Main 接收结束意图
+- THEN 只幂等设置该 DevelopmentSession 的 `exitRequested` 并关闭/隐藏视图，不取消 Run、不删除 Thread/草稿/Transcript
+- AND 主窗口持续显示“AI 正在完成修改”；Run 安全终态后 Main 才向对应 Runtime 请求一次最终收口
+
+#### `ATDD-RUNTIME-DEV-304` 场景：等待权限或回答时可重新打开
+
+- GIVEN 用户请求“结束修改”时 Run 正等待权限或 AskUserQuestion
+- WHEN 开发窗口已关闭且 prompt 尚未终态
+- THEN Main 不构建未知半成品，Runtime 卡片/主窗口显示需要确认并提供重新打开；重新打开后交互 owner 只转移一次，迟到回答无效
+
+### 需求：显式开发会话期间不按单轮 Run 收口
+
+#### `ATDD-RUNTIME-DEV-305` 场景：连续多轮修改只在结束时请求保存
+
+- GIVEN 同一 RuntimeDevelopmentSession 的窗口保持打开
+- WHEN 第一轮成功修改后用户继续提交下一轮
+- THEN 第一轮终态不会触发最终 build/stop，实时预览继续；只有 exitRequested 且全部相关 Run 安全终态后才产生一次最新 generation 的 settle intent
+- AND settle/build 期间重新打开开发或提交新修改会提升 generation，旧结果不能关闭新会话或宣布预览已更新
+
+### 需求：Workspace Runtime Chat 不生成可见 Project
+
+#### `ATDD-RUNTIME-DEV-306` 场景：Workspace scope 以 Runtime root 运作
+
+- GIVEN Workspace Runtime 绑定用户显式选择的目录且当前另有 active Project
+- WHEN 用户打开其 Runtime 开发窗口并提交修改
+- THEN Thread/Run 使用受 Main 校验的 Runtime root 与 workspace owner scope，不创建 synthetic Project、不改变 activeProjectId、不把 root 再追加 `.agentos`
+- AND renderer 不能提交或覆盖 cwd、Runtime root、owner scope 或等价资格字段
+
 ## 项目 `.agentos` Runtime prompt（Change revision 3：已实现 / 待正式 GUI 验收）
 
 > Revision 3 自动化 Development Check 已单独通过；真实 GUI 验收尚未执行，自动化结果不替代正式 Acceptance。

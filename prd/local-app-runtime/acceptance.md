@@ -4,6 +4,58 @@
 >
 > 项目首页 Claude 分栏、Agent 沙箱工具代理和生产级 OS Sandbox Provider 不属于本切片通过条件。
 
+## Revision 6 验收增量（BUILDABLE / Planned，未实现）
+
+> 来源：`chg-20260818-agent-command-channel@3`。本节只定义用户可观察完成条件，不记录通过状态；普通列表展示、同路径冲突策略与按钮文案已由用户确认。
+
+### C-021：Project 与 Workspace Runtime 独立
+
+- GIVEN 一个 project-owned Runtime 与一个 workspace-owned Runtime 指向相同 canonical path
+- WHEN 用户分别进入项目首页 Runtime 与 Workspace Tab
+- THEN 两者保持不同 Definition、Runtime 用户状态、Preview host、DevelopmentSession 与 Chat scope；任一入口不自动激活、创建或跳转到另一入口
+- AND 若一个 Runtime 已占用该目录的实时开发资源，第二个启动请求被阻止并显示冲突来源与“切换到正在修改的 Runtime”；只有用户显式选择才切换，且不得合并对象或用户状态
+
+### C-022：项目首页 Runtime 卡片留在项目内
+
+- GIVEN 项目 `<project>/.agentos/` 已初始化、未初始化、正在开发或需要恢复
+- WHEN 用户进入项目 Overview、打开 Runtime 卡片/详情或返回该项目
+- THEN 项目内持续显示该 Runtime 的可理解状态与入口，点击后仍留在当前项目；不得创建隐藏 Workspace Tab、切换 activeProject 或把 Preview 覆盖成其它工作台
+- AND 已初始化 Runtime 提供“用 AI 修改”，未初始化创建入口完成后进入同一 Runtime 修改旅程
+
+### C-023：Workspace Runtime 一键开发且不创建 synthetic Project
+
+- GIVEN 用户在 Workspace Tab 查看显式选择的 Runtime 目录
+- WHEN 用户点击“用 AI 修改”
+- THEN Main 只按该 Workspace Runtime owner/root 打开或聚焦专用开发窗口并准备实时效果，不创建可见 Project、不改变 activeProjectId、不把 root 再派生为 `<root>/.agentos`
+
+### C-024：窗口存续期间连续多轮开发
+
+- GIVEN RuntimeDevelopmentSession 已打开并有一个或多个 Runtime 开发 Run
+- WHEN 单轮 Run 成功、用户继续提交下一轮或在主窗口查看实时效果
+- THEN 同一 DevelopmentSession 保持 live，普通文件变化持续进入实时预览，不因单轮成功自动 build、停止或退回 last-good
+- AND 用户界面不要求操作或理解 `npm run dev`、端口、HMR、static、build 或 artifact
+
+### C-025：关闭窗口与主窗口结束动作统一收口
+
+- GIVEN 用户关闭 Runtime 开发窗口，或在主窗口执行“结束修改”
+- WHEN 当前无修改、有成功修改、仍有运行中 Run，或等待权限/回答
+- THEN 两个入口幂等设置同一 exit intent；无修改直接释放开发资源；运行中 Run 不被隐式取消并在主窗口继续显示状态；等待确认提供重新打开入口
+- AND 所有相关 Run 到达安全终态后才继续保存或失败恢复，关闭视图不删除对话、草稿、源码或 Diff
+
+### C-026：成功只保存一次，失败保留上一版
+
+- GIVEN 用户请求“结束修改”时存在成功修改，或存在失败/取消后的修改，或保存期间出现新 generation
+- WHEN Runtime 收口
+- THEN 支持已保存预览的最新 generation 在源码稳定后最多执行一次固定保存；成功原子切换新 last-good
+- AND 失败/取消后的半成品不自动保存，保存失败继续显示上一版并保留修改；新 generation 使旧保存结果失效且不得关闭新会话或覆盖新预览
+
+### C-027：Development-only Workspace Runtime 不伪造静态结果
+
+- GIVEN Workspace Runtime 只能通过受管服务查看且没有可靠静态保存能力
+- WHEN 用户结束 Runtime 开发会话
+- THEN 系统结束 Chat 开发周期但可以保留查看页面所需的受管服务，不显示“已保存预览已更新”，并用普通用户语言说明该页面需要保持运行才能查看
+- AND 无可靠 dev 或静态声明时不猜命令、不进入虚假成功态
+
 ## 项目专属 `.agentos` Runtime（Change revision 3：已实现 / 待正式 GUI 验收）
 
 > Revision 3 自动化 Development Check 已单独通过；真实 GUI 正式验收尚未执行，自动化结果不替代正式 Acceptance。

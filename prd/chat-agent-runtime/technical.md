@@ -1,5 +1,35 @@
 # 聊天与 Agent 运行时技术文档
 
+## Revision 3 Planned：Runtime-scoped Chat Broker
+
+状态：BUILDABLE / Planned，未实现。完整技术合同见 [`chg-20260818-agent-command-channel@3`](../../changes/active/chg-20260818-agent-command-channel/technical.md) 的 `T3.2`–`T3.12`。
+
+### 单一聊天核心
+
+- 从现有 `ProjectChatBroker` 抽取单实例 `ChatBrokerCore`；Project facade 与 Runtime facade 共用 Main 串行 writer、Runner/event sink、Transcript reducer、SDK session、权限、prompt 和 Diff，不创建第二套 Chatbot。
+- 新 `RuntimeDevelopmentThread` 使用现有 ChatThread base，固定 `purpose='runtime-development'` 并绑定 `runtimeScopeId`、Runtime owner 与可选 `runtimeDefinitionId`。
+- Runtime Thread 使用独立 metadata collection/table 和 JSON sidecar，不写入强制 `project_id` 的普通 `threads` 表。普通项目列表从数据查询层排除 Runtime Thread；全局搜索明确返回 Runtime 名称、归属和专用窗口 route。
+- 旧 Project Thread 不猜测迁移；既有 Workspace backing Project/Thread 不自动删除或改写，避免覆盖用户数据。
+
+### capability、cwd 与事件路由
+
+- Runtime 开发 BrowserWindow 注册固定 `{kind:'runtime-development', runtimeScopeId, routeGeneration}` capability；query 不是授权，preload 不暴露 desktop 或普通 Project Chat API。
+- Project Runtime submit 由 Main fresh-read `cwd=<project root>`、`runtimeRoot=<project>/.agentos`；Workspace Runtime 使用 canonical Runtime root。renderer 不能传 owner、cwd、root、generation 或 prompt eligibility。
+- Runner accepted 前冻结 `requestId -> scope/thread/routeGeneration/developmentGeneration`；事件、prompt 回答、Diff、cancel 和 late terminal 只能写该 route。
+- Runtime window 关闭先同步登记 `exitRequested`，再 flush view state 和注销 capability。active Run 继续写 durable Transcript；waiting prompt 暂无 owner，主窗口提供重开入口，重开后只转移一次。
+- Main 对 Edit/Write/NotebookEdit 目标执行 runtimeRoot containment；无法可靠归因或 root 外 diff 不计入可保存修改并进入恢复态。Runtime scope 不提升既有权限，也不宣称 OS 级强隔离。
+
+### 存储、搜索与恢复
+
+- view state 按 runtimeScope 保存 selected Thread、draft 与 bounds；关闭/重启可恢复。Runtime Definition 删除后历史只读保留，submit 禁用。
+- SQLite Runtime thread table 与独立 JSON sidecar 使用单调 `runtimeThreadRevision`，旧版本保存普通 workspace 时不得删除；回滚不把 Runtime Thread 转成 Project Thread。
+- app quit 不执行未知半成品 build；Thread/Transcript/draft/last-good 保留。旧 scope generation 的 event、prompt 与 build callback 全部拒绝。
+
+### 测试门禁
+
+- 自动化覆盖 scope spoof、wrong window/subframe/Preview、跨 Runtime threadId、store round-trip/rollback、普通列表过滤、global search route、close/reopen prompt owner 和 late-event fence。
+- Electron smoke 覆盖 Project/Workspace 同路径但窗口与历史独立、普通列表无 Runtime Thread、全局搜索回到专用窗口、running/waiting 关窗不取消，以及保存中重开不被旧结果覆盖。
+
 ## 项目 `.agentos` Runtime prompt（Change revision 3：Current / as-built）
 
 Main 只在两种资格来源满足时调用 Runtime prompt builder：（1）对应独立项目 Chat 窗口的 sender capability 发起普通提交或编辑重提；（2）main-window capability 发起的「让 Agent 创建 Runtime 网页」专用编排。Main 从权威项目路径以 `projectRuntimeRoot(project.path)` 派生 `runtimeRoot`，再追加项目 Runtime 网页的文件、资源、依赖和构建配置必须位于绝对 `<project>/.agentos/` 的语义。
@@ -8,11 +38,11 @@ Main 只在两种资格来源满足时调用 Runtime prompt builder：（1）对
 
 主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求和路径失效项目不得注入。renderer 不得传入 `runtimeRoot`、prompt scope 或等价资格标记；Main 从 sender capability / 专用编排判定 eligibility。创建按钮 IPC 只接受 main-window capability，并负责打开或聚焦对应项目独立 Chat 窗口、在其中创建并选中线程并提交请求；主窗口不得产生空对话副作用。prompt 不授予任何额外能力，Agent cwd 保持项目根。项目 run 结束后，Runtime 页面可只读检测「`.agentos` 缺失且项目根新增疑似网页工程」并提示目标路径；检测不得移动/复制/删除文件或自动重试。该反馈与 Agent run 终态、静态 last-good 和 Workspace Runtime 生命周期相互独立。
 
-## Revision 2 计划合同（Accepted / Planned）
+## Revision 2 已实现基线（未正式验收）
 
-Revision 2 将 renderer-local Chat 写入路径迁移为 Main-owned `ProjectChatBroker`。该计划尚未落地；完整冻结合同见 [`../../changes/active/chg-20260818-agent-command-channel/technical.md`](../../changes/active/chg-20260818-agent-command-channel/technical.md)，网站线协议见同目录 `protocol-v1.md`。
+Revision 2 已将 renderer-local Chat 写入路径迁移为 Main-owned `ProjectChatBroker`，业务实现已落盘但正式 GUI 验收尚未执行；完整冻结合同见 [`../../changes/active/chg-20260818-agent-command-channel/technical.md`](../../changes/active/chg-20260818-agent-command-channel/technical.md)，网站线协议见同目录 `protocol-v1.md`。
 
-计划新增的关键边界：
+已实现的关键边界：
 
 | 边界 | 冻结决定 |
 | --- | --- |
@@ -25,7 +55,7 @@ Revision 2 将 renderer-local Chat 写入路径迁移为 Main-owned `ProjectChat
 | 网站 | safeStorage 加密 Binding credential；fixed HTTPS well-known Ticket；accepted 只表示 thread durable + runner 返回 requestId |
 | Runtime | 可靠 before-tool lease/actual diff 才记 mutation；三条件 settle，1,500ms stable / 30,000ms max；旧 generation 不切 last-good；仅独立项目 Chat 普通/编辑重提或 Main-owned 创建编排可注入 `.agentos` 路径约束 |
 
-迁移必须按 `M0 contracts/broker/window` → `M1 binding/deep-link` 与 `M2 runtime settle` 执行。M0 完成前不得让旧 renderer writer 与 broker 同时写 workspace；Revision 2 完成后，下面“同一线程新请求会取消前一个活跃请求”的 as-built 行为将改为 `thread-busy`。
+历史实施顺序为 `M0 contracts/broker/window` → `M1 binding/deep-link` 与 `M2 runtime settle`。当前 Main broker 已默认开启，同 thread busy 返回 `thread-busy`；下方更早期“新请求取消前一个请求”的描述仅是 Revision 1 历史基线，不得作为 Revision 3 实现依据。
 
 ## 代码入口
 

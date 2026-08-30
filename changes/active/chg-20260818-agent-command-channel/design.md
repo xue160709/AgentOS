@@ -1,8 +1,152 @@
-# Agent 指令通道与独立项目 Chat 窗口｜产品设计规格
+# Agent 指令通道、独立项目 Chat 与 Runtime 开发会话｜产品设计规格
 
-> Change：`chg-20260818-agent-command-channel` Revision 2  
-> 状态：Accepted / Planned，未实现  
+> Change：`chg-20260818-agent-command-channel` Revision 3
+> 状态：BUILDABLE / Planned；Revision 2 已实现但未正式验收，Revision 3 未实现
 > 本文只冻结用户可观察行为；技术接口见 `technical.md`，网站协议见 `protocol-v1.md`，正式场景见 `acceptance.md`。
+
+## Revision 3 Planned Delta：Runtime 专用开发会话
+
+本节在 Runtime 开发、Workspace Tab Chat 和 Project/Workspace Runtime 关系上优先于下方 Revision 2。未被本节点名的 Website Binding、Ticket、通用 Project Chat、安全与权限合同继续有效。
+
+### 1. 方案摘要
+
+普通用户只需要完成“查看页面 → 用 AI 修改 → 看效果 → 结束修改”四件事。系统内部仍可使用开发服务器和静态构建，但界面只表达“已保存预览、实时修改、正在保存、预览未更新”。
+
+```text
+项目 Runtime 卡片 / Workspace Runtime
+              ↓ 一键开发
+      Runtime 专用 Chat 窗口
+              ↓ 多轮 AI 修改 + 主窗口实时预览
+   关闭窗口 / 主窗口“结束修改”
+              ↓
+    无修改：直接退出实时开发
+    成功修改：后台保存一次最新预览
+    失败修改：保留上一版并允许继续修复
+```
+
+### 2. 核心原则
+
+1. **按用户意图分对象，不按路径合并。** Project Runtime 属于项目，Workspace Runtime 属于工作台；路径相同只触发资源冲突检查。
+2. **开发入口就是任务入口。** 用户不需要先切模式再找 Chat；一次动作同时打开正确的 Runtime Chat 并准备可编辑预览。
+3. **窗口级会话，不是 Run 级模式。** 窗口打开期间允许连续多轮修改，最后统一收口，避免每轮 dev → build → dev。
+4. **关闭是结束意图，不是强制取消。** 运行中的 AI 继续完成；系统记住 `exitRequested`，到安全终态后收口。
+5. **源码结果与预览结果分开。** AI 修改成功不等于预览保存成功；build 失败保留源码、Diff 和 last-good。
+6. **底层复用，界面分区。** Runtime 开发对话复用现有 Thread/Transcript/SDK/权限/Diff，但不与普通对话混成同一工作区。
+
+### 3. 产品对象与关系
+
+#### 3.1 RuntimeDefinition 与 Runtime Host
+
+- Project Runtime：固定 `<project>/.agentos/`、`owner=project(projectId)`、`host=project-home`。
+- Workspace Runtime：用户显式目录、`owner=workspace`、`host=workspace-tab`。
+- 两个 Definition 即使 canonical root 相同也不互相跳转、不共享用户状态、不复用 Chat 身份。若一个已占用该目录的实时开发资源，另一个启动请求被阻止并显示“切换到正在修改的 Runtime”；第一版不静默复用底层进程。
+
+#### 3.2 RuntimeDevelopmentSession
+
+`RuntimeDevelopmentSession` 是每个 Runtime 产品作用域至多一个的 Main-owned 活跃开发周期。已初始化 Runtime 的作用域绑定 RuntimeDefinition；项目 `.agentos` 尚未创建时先使用稳定的 project-runtime slot，Definition 出现后原位绑定，不迁移窗口或对话。它不是持久任务历史；最低状态为：
+
+```text
+opening → live → exit_requested → saving → closed
+              ↘ needs_attention  ↗    ↘ preview_update_failed
+```
+
+- `opening`：窗口已打开，系统并行准备实时预览；Composer 可先输入，不要求等待命令完成。
+- `live`：窗口保持开发 lease，多轮 Run 共享同一开发周期；普通文件变化交给实时预览。
+- `exit_requested`：用户已关闭窗口或在主窗口点击“结束修改”；新提交停止，已运行 Run 不被隐式取消。
+- `needs_attention`：AI 等待权限/回答，或产生修改后失败/取消；主窗口显示原因和重新打开入口。
+- `saving`：没有未终态 Run，且本会话存在成功修改；系统等待源码稳定后最多生成一次已保存预览。
+- `closed`：实时开发资源释放；Project Runtime 回到 last-good，支持静态保存的 Workspace Runtime 回到其 last-good。
+- `preview_update_failed`：保存失败但源码和 Diff 保留，主窗口继续显示上一版并提供继续修复。
+
+会话以 `runtimeScopeId + developmentGeneration` 隔离，并在已初始化后携带 `runtimeDefinitionId`。结束/构建期间出现重新进入或新修改时提升 generation，旧回调不得切换预览或关闭新会话。
+
+#### 3.3 Runtime 开发对话
+
+- Runtime 开发对话是 durable Thread 的专用用途，绑定稳定 `runtimeScopeId` 与 Runtime owner scope；已初始化时同时绑定 `runtimeDefinitionId`。
+- Project Runtime 对话可复用所属项目的权限、上下文和项目根 cwd，但 Runtime 写入范围固定为 `<project>/.agentos/`。
+- Workspace Runtime 对话以显式 Runtime 目录为 cwd 和写入范围，不创建可见 Project、不切换 activeProjectId，也不把该目录再追加 `.agentos`。
+- 开发窗口只列出当前 Runtime 的开发对话，支持继续最近一次和新建开发对话。
+- Runtime 开发 Thread 不进入普通项目对话列表；用户从对应 Runtime 卡片/详情继续。全局搜索可以返回并明确标记 Runtime 开发结果，打开后仍进入对应专用窗口。
+- 无论从专用窗口还是全局搜索进入，只有一个 durable Thread/Transcript 事实源。
+
+### 4. 信息架构与页面职责
+
+#### 4.1 项目首页
+
+- Overview 中持续显示该项目的 Runtime 卡片/入口，至少表达当前预览是否可查看、是否正在开发或需要处理。
+- 点击卡片或 Runtime 入口只在当前项目内打开项目 Runtime 详情，不激活、不创建也不导航到 Workspace Tab。
+- Runtime 详情承载 Preview、状态与恢复动作；主操作固定为“用 AI 修改”，触发后打开该项目的 Runtime 专用 Chat。
+- `.agentos` 未创建时，原“让 Agent 创建 Runtime”仍走同一专用窗口，并在创建成功后进入同一开发会话模型。
+
+#### 4.2 Workspace Runtime
+
+- Workspace Tab 的默认任务是快速查看用户显式选择目录的效果；主窗口保持 Preview 和浏览导航。
+- “用 AI 修改”打开该 Workspace Runtime 的专用 Chat，不生成 synthetic Project，不改变用户当前选择的项目。
+- Workspace Runtime 不探测或接管任意项目的 `.agentos`；用户恰好选择该目录也只形成独立 Workspace Runtime。
+
+#### 4.3 Runtime 开发窗口
+
+- 标题和头部明确显示 Runtime 名称与归属（项目或工作台），不提供项目切换。
+- 复用完整 Composer、Transcript、模型、权限、提问、Diff、取消和回滚能力。
+- 只显示紧凑开发状态与“查看预览/回到主窗口”；完整 Preview、日志和恢复控制留在主窗口。
+- 关闭窗口提交结束意图。关闭动作本身不删除对话、草稿、源码或正在运行的任务。
+
+### 5. 端到端流程与失败恢复
+
+#### 5.1 进入开发
+
+1. 用户从 Project Runtime 或 Workspace Runtime 点击开发入口。
+2. Main 按入口权威解析 RuntimeDefinition 和 owner，不从 active project 或路径相似度猜测。
+3. 若同一 canonical root 已被另一 Runtime 的实时开发会话占用，系统不启动第二实例，显示冲突来源与“切换到正在修改的 Runtime”；用户显式切换后聚焦现有入口，但两个 Definition 的身份和历史仍独立。
+4. 无冲突时，系统创建或恢复该 Runtime 的 DevelopmentSession，打开/聚焦其唯一开发窗口，并准备实时预览。
+5. 用户可以立即描述需求；实时预览尚未就绪时显示“正在准备可编辑预览”，不暴露 npm。
+
+#### 5.2 连续修改
+
+- DevelopmentSession 存续期间，Agent 每轮成功后更新主窗口实时效果，但不自动执行最终静态保存。
+- 用户可在同一或新的 Runtime 开发对话继续修改；会话级状态聚合该 Runtime 下仍可能写入的 Run。
+- 等待权限或回答时，开发窗口持有交互 owner；窗口已关闭则 Main 把提醒显示在 Runtime 卡片/主窗口，并提供重新打开。
+
+#### 5.3 结束修改
+
+- 开发窗口关闭与主窗口“结束修改”调用同一 Main command，并幂等设置 `exitRequested`。
+- 没有任何成功修改：释放开发 lease，不构建，回到进入前的可用预览。
+- 有未终态 Run：窗口可关闭，Run 在后台继续；主窗口显示“AI 正在完成修改”，到达终态后再决定保存或提示处理。
+- 全部相关 Run 成功且存在修改：等待源码稳定，最多生成一次已保存预览；成功后原子切换并释放临时开发资源。
+- 失败/取消且已修改：不自动保存半成品；保留源码、Diff 与 last-good，显示“修改未完成，预览未更新”，提供继续修改。
+- 保存失败：关闭开发资源，显示上一份 last-good 与“修改已保留，预览未更新”，提供继续修复或重试保存。
+
+#### 5.4 能力差异
+
+- Project `.agentos` Runtime 的创建合同必须提供可保存预览；因此结束成功开发后应能回到静态 last-good。
+- 支持静态保存的 Workspace Runtime 使用相同结束流程。
+- Development-only Workspace Runtime 没有可生成的静态页面：结束的是 AI 开发会话，不强制停止其查看页面所需的受管服务，也不谎称“已保存预览已更新”；界面只说明该页面需要保持运行才能查看。
+- 无可靠 dev 或静态声明时不猜命令，不进入虚假开发态。
+
+### 6. 可见状态与动作
+
+| 用户状态 | 主窗口主要反馈 | 主动作 |
+| --- | --- | --- |
+| 可查看 | 已保存预览/页面可用 | 用 AI 修改 |
+| 正在准备 | 正在准备可编辑预览 | 查看状态；可关闭窗口请求退出 |
+| AI 修改中 | AI 正在修改 · 实时效果更新中 | 查看开发窗口 / 结束修改 |
+| 等待确认 | 需要你的确认 | 重新打开开发窗口 |
+| 正在结束 | 正在保存最新预览 | 查看进度；重新进入会使旧保存失效 |
+| 修改未完成 | 预览未更新，修改仍保留 | 继续修改 |
+| 保存失败 | 修改已保留，继续显示上一版 | 继续修复 / 重试保存 |
+
+`npm run dev`、`npm run build`、端口、ready、artifact、generation 只进入高级详情或日志。Header、Runtime 卡片、Preview placeholder、开发窗口与 Sidebar 必须消费同一个 Main snapshot，不能分别解释状态。
+
+### 7. 已确认收口与 BUILDABLE Gate
+
+- Runtime 开发对话不混入普通项目对话列表；全局搜索结果带 Runtime 身份并回到专用窗口。
+- 同路径冲突采用“阻止第二实例 + 显式切换”，不共享身份、不静默复用实时进程。
+- 主动作及稳定 accessible name 使用“用 AI 修改”，收口动作为“结束修改”。
+- 产品分叉与 P0/P1 ATDD 已冻结；Workspace Runtime thread scope、同路径资源占用、window close/exitRequested、generation/build fence 与回滚合同已写入 `technical.md` 的 `T3.2`–`T3.12`。Revision 3 的 BUILDABLE Gate 已通过；实施仍须生成精确 work order，不能复用旧 M2/M3 任务单。
+
+---
+
+## Revision 2 已实现基线（未正式验收）
 
 ## 1. 产品目标
 

@@ -1,6 +1,6 @@
 ---
 change_id: chg-20260818-agent-command-channel
-revision: 2
+revision: 3
 task_level: Heavy
 level_basis: "网站授权与身份边界、跨窗口共享会话、平台 deep link、主进程协调和预览 Runtime 跨模块契约"
 professional_gaps:
@@ -16,12 +16,54 @@ not_needed:
   - market_researcher: "这是现有产品的本地运行时扩展，不依赖市场事实"
   - visual_interface_designer: "独立窗口严格复用现有 Chatbot，本轮只设计流程和状态"
   - quality_verifier: "语义冻结和实现完成后再进入风险检查；用户尚未发起正式验收"
-confirmation: user_confirmed_discovery
+confirmation: user_confirmed
 acceptance_requested: false
-coverage_gate: ownership_fixed_pending_development_check
+coverage_gate: buildable
 ---
 
-# Revision 2 Tasks
+# Revision 3 Tasks
+
+## Runtime 专用开发会话（2026-08-30）
+
+- [x] `INVESTIGATE-RUNTIME-03`｜来源：用户要求从普通用户视角找项目首页与工作台 Runtime 卡点｜owner=`main_agent + REAL explorers`｜write_mode=`response_only`
+  - 覆盖：项目首页定位/状态/跳转/恢复；工作台验证、模式理解、Chat、同路径对象冲突。
+  - 结果：实测项目 Runtime 异步跳到 Workspace Tab；状态同时出现“运行中/启动/加载中”；工作台 Chat 绑定 synthetic Project；同一路径形成三套身份。只读走查，未触发构建、启停或代码修改。
+
+- [x] `CONFIRM-RUNTIME-03`｜来源 `C-RDS-301`–`C-RDS-309`｜owner=`user`｜write_mode=`response_only`
+  - 确认：Project/Workspace Runtime 完全分开；项目首页不跳工作台；一键打开 Runtime 专用独立 Chat；普通用户无需理解 npm 模式；窗口级多轮开发；关闭/主窗口结束后统一收口；Runtime 对话不混入普通列表但可全局搜索；同路径冲突阻止第二实例并提供切换；使用“用 AI 修改/结束修改”。
+  - 未确认：无产品分叉；剩余技术合同不由产品确认代替。
+
+- [x] `SPEC-RUNTIME-03`｜来源 `CONFIRM-RUNTIME-03`｜owner=`main_agent`｜write_mode=`writer`
+  - 编排：`task_level=Heavy`；`deadline=本轮 product-spec 完成`；`attempt=1`；`instance_id=main`；`exact_write_allowlist=changes/active/chg-20260818-agent-command-channel/{proposal.md,design.md,acceptance.md,tasks.md,evidence.md,README.md}, changes/INDEX.md, prd/local-app-runtime/{README.md,design.md,acceptance.md}, prd/chat-agent-runtime/{README.md,acceptance.md}`；`diff_baseline=本轮写入前 HEAD 与干净 worktree`
+  - 修改：升 Revision 3，冻结 RuntimeDevelopmentSession、Runtime 专用 Thread、两类 Runtime 隔离、结束/失败/恢复和用户语言。
+  - 保持：Revision 2 网站、broker、权限、安全与通用 Chat 合同不变；不改业务代码，不签发正式验收。
+  - 完成条件：Change、两个正式 PRD 模块的 Planned/Acceptance 语义一致，未决项不写成 GWT。
+
+- [x] `DECIDE-RUNTIME-03`｜来源：2026-08-30 用户“接受默认”｜owner=`user + main_agent`｜write_mode=`response_only`
+  - 决策：Runtime 对话不混入普通列表但可全局搜索；同路径实时资源冲突阻止第二实例并提供显式切换；主动作“用 AI 修改”、收口动作“结束修改”。
+  - 完成条件：三项已进入 `C-RDS-307`–`C-RDS-309` 与正式 PRD/Acceptance；产品决策 Gate 关闭。
+
+- [x] `TECH-RUNTIME-03`｜来源 `C-RDS-301`–`C-RDS-309`｜owner=`main_agent`｜write_mode=`writer`｜依赖：`DECIDE-RUNTIME-03`
+  - 编排：`deadline=本轮完成技术合同后停止，不进入实现`；`attempt=1`；`instance_id=main`；`exact_write_allowlist=changes/active/chg-20260818-agent-command-channel/{technical.md,proposal.md,design.md,tasks.md,evidence.md,README.md}, changes/INDEX.md, prd/local-app-runtime/{README.md,design.md,technical.md,acceptance.md}, prd/chat-agent-runtime/{README.md,technical.md,acceptance.md}`；`diff_baseline=用户确认默认后的当前 dirty diff；明确排除用户删除的 TODO.md 与新增 AGENTS.md`
+  - 完成：冻结 RuntimeScopeId、Runtime thread sidecar/table、单一 ChatBrokerCore、Runtime capability/window、RuntimeDevelopmentSession、root execution lease、退出/恢复/late-event 与回滚合同。
+  - 保持：复用 Main broker core、Thread/Transcript/SDK/权限/Diff；不为 Workspace Runtime 创建 synthetic Project 或第二套聊天引擎；不写业务代码、不执行正式验收。
+  - 验证：V0 文档 diff/reference 检查与 `git diff --check`；Interaction Flow Review 覆盖 close/background Run/prompt/reenter/app quit。
+
+- [ ] `DEV-P0-RUNTIME-03`｜来源 `C-RDS-301`–`C-RDS-309`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`TECH-RUNTIME-03`、Revision 3 达到 BUILDABLE
+  - 写入：由实施前 work order 根据稳定技术规格给出精确 allowlist；当前不授权业务代码。
+  - 修改：完成 Runtime owner 隔离、一键专用窗口、窗口级开发会话、结束收口、Workspace 无 synthetic Project 与主窗口一致状态。
+  - 保持：last-good 原子切换、失败/取消不保存半成品、运行中 Run 关闭窗口不取消、Preview sandbox。
+
+- [ ] `ATDD-P0-RUNTIME-03`｜来源 `ATDD-RDS-301`–`ATDD-RDS-306`｜owner=`quality_verifier`｜write_mode=`response_only`｜依赖：`DEV-P0-RUNTIME-03`
+  - 目标：产出并执行 P0 自动化与真实 Electron 路径；正式验收仍需用户另行授权。
+
+- [ ] `DEV-P1-RUNTIME-03`｜来源 `ATDD-RDS-307`–`ATDD-RDS-309`｜owner=`implementation_engineer`｜write_mode=`writer`｜依赖：`DEV-P0-RUNTIME-03`
+  - 修改：持久开发记录、pending prompt/关闭恢复、app quit、capability matrix、可访问状态与迁移。
+
+- [ ] `ATDD-P1-RUNTIME-03`｜来源 `ATDD-RDS-307`–`ATDD-RDS-309`｜owner=`quality_verifier`｜write_mode=`response_only`｜依赖：`DEV-P1-RUNTIME-03`
+  - 目标：覆盖重开/重启、dev-only Workspace、build 失败、late event、焦点与状态一致性。
+
+## Revision 2 已完成/待验收基线
 
 ## 实时预览交互优化（2026-08-27）
 
@@ -69,7 +111,7 @@ coverage_gate: ownership_fixed_pending_development_check
 - [x] `BUG-AUDIT-WS-02` owner: main_agent｜依赖：`BUG-AUDIT-CHAT-01`｜写入：`evidence.md`、`acceptance.md`、`tasks.md`、`README.md`、`proposal.md`、`work-orders/**`｜按用户要求复核本 change 的缺陷面与过度设计。新发现 P0：broker 默认开启下**新建项目既不落盘也不可用**（renderer-only `addProject` + Main 无项目命令 + broker `project-not-found` + ChatPage 无条件走 broker）；项目移除/重定位/置顶/排序同样不落盘，且路径丢失恢复流程终点即在此路径上；归档运行中会话存在文案/实现/broker 合同三方不一致；readiness 用单一布尔表达 probing 与 legacy。同时完成过度设计复核并给出处置（见 `proposal.md` §Revision 2 范围复核）。已核实 `npm run typecheck` exit 0；未改业务代码。
 - [x] `FIX-WS-01` owner: implementation_engineer｜依赖：`BUG-AUDIT-WS-02`｜任务单：`work-orders/FIX-WS-01-workspace-ownership.md`｜单一 Main-owned 命令通道 `chat-workspace:command` 已落地：`project.create/remove/relocate/setPinned/reorder` 与 `preferences.set` 六个 variant 走 `runChatWorkspaceOperation` + revision 门槛 + 回读校验，命令 DTO 结构性拒绝 threads/projects/未知键与 renderer 生成的项目 id；纯转换集中在 `src/workspace-commands.ts` 并由 `WorkspaceSession` 复用，消除双实现。`npm run typecheck` exit 0；`node --test electron/workspace-commands.test.mjs` 14/14；`node --test electron/workspace-command-client.test.mjs` 16/16；`npx vite build` PASS。ownership 归属矩阵已落盘 `evidence.md`，`ATDD-WS-201` 关闭。
 - [x] `FIX-CHAT-01` owner: implementation_engineer｜依赖：`FIX-WS-01`｜任务单：`work-orders/FIX-CHAT-01-sidebar-thread-mutations.md`｜主侧边栏归档/置顶已切到 broker intent（显式 boolean、target project 自己的 `routeGeneration`、per-thread pending fence、`stale-revision` 单次 fresh-read 重试）；busy 判定改为读 snapshot 的 run/prompt 事实并覆盖普通/`task-run`/`skill-run`，broker 路径移除隐式 `claudeChat.cancel` 与 `stopTaskHomePlugin` 并新增固定提示 `sidebar.archiveBusyThread`；readiness 拆为 `probing | enabled | legacy`，probing 不再落入 legacy full-snapshot writer；归档只在目标线程为当前选择时移动 selection。附带修复 `runtimeEditStatus` 的三条硬编码中文（改走 i18n）。`node --test electron/project-chat-renderer.test.mjs electron/desktop-seam.test.mjs` PASS，含新增 source audit。
-- [ ] `CHECK-02` owner: quality_verifier｜依赖：`M1-03`、`M1A-01`、`M2-02`、`FIX-WS-01`、`FIX-CHAT-01`｜任务单：`work-orders/CHECK-02-development-check.md`｜前置已全部完成，**不再阻塞**；执行独立 Development Check（需覆盖 `local-app-runtime.test.mjs` 在允许 loopback 监听的环境复跑，以及重启后落盘的真实 Electron smoke）。仅在用户另行明确授权时进入正式验收。
+- [ ] `CHECK-02` owner: quality_verifier｜依赖：`M1-03`、`M1A-01`、`M2-02`、`FIX-WS-01`、`FIX-CHAT-01`｜任务单：`work-orders/CHECK-02-development-check.md`｜**Revision 3 合同取代后暂停作为整包关闭门禁**。仍可验证未受影响的 Revision 2 网站、broker、权限与安全范围，但旧 M2/M3 预期不得证明 Runtime 开发体验通过，也不能关闭 Change；Revision 3 需由 `ATDD-P0/P1-RUNTIME-03` 另行覆盖。仅在用户另行明确授权时进入正式验收。
 
 ## Revision 1 已完成基线
 

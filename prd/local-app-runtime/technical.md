@@ -1,5 +1,37 @@
 # Workspace Runtime 技术文档
 
+## Revision 6 Planned：独立执行租约与 RuntimeDevelopmentSession
+
+状态：BUILDABLE / Planned，未实现。完整冻结合同见 [`chg-20260818-agent-command-channel@3`](../../changes/active/chg-20260818-agent-command-channel/technical.md) 的 `Revision 3 Technical Delta`。
+
+### Runtime identity 与同路径资源
+
+- Main 使用 `RuntimeScopeId = project:<projectId> | workspace:<runtimeDefinitionId>` 作为开发窗口、Thread 与 DevelopmentSession 身份；canonical root 不是产品 identity。
+- Project Runtime 在 `.agentos` 尚未生成时也可用 project scope 打开创建 Chat；Definition 创建后绑定到同一 scope，不迁移历史。
+- `LocalAppRuntimeManager` 不再按 root+mode 把多个 Definition 别名为一个 runtime。Definition、snapshot、consumer、artifact 和事件始终按 definition id 隔离。
+- canonical root 只进入 `RuntimeRootExecutionRegistry`。同 scope 重复 acquire 幂等；同 root 的另一个 Definition 已持有 development/build lease 时返回 `runtime-development-conflict`，不得 stop、kill、attach 或静默复用对方进程。
+- 显式“切换到正在修改的 Runtime”只聚焦持有者，不改变 Definition owner、activeProject 或用户状态。development-only Workspace 的 Tab consumer 若仍需服务，会继续持有租约。
+
+### 会话与保存
+
+- 新 `RuntimeDevelopmentCoordinator` 按 RuntimeScope 聚合窗口存续期内的多轮 Run；只有 Main-owned `exitRequested`、无 active/waiting/failed-mutation Run、源码稳定且 generation 当前时才能保存。
+- 关闭开发窗口与主窗口“结束修改”调用同一幂等 exit command。视图可以销毁，Runner 不被隐式取消；主窗口消费同一 RuntimeDevelopmentSnapshot。
+- 支持静态保存时每 generation 最多自动 build 一次，并在 artifact commit 前校验 scope、routeGeneration、developmentGeneration 与 operationId；失败或迟到结果不替换 last-good。
+- 无净修改直接关闭；mutation Run 失败/取消、fingerprint timeout 或声明失效不自动 build。development-only Workspace 结束 Chat session，但由现有 Tab consumer 决定服务是否继续。
+- app quit 不启动自动 save；停止受管进程后保留源码、Thread 和 last-good，下次启动通过 fingerprint 显示 stale。
+
+### Main API 与状态
+
+- 主窗口只提交 `{kind:'project-runtime', projectId, mountId}` 或 `{kind:'workspace-runtime', workspaceTabId}`；Main fresh-read owner/root/capability，renderer 不能提交路径、命令、模式或 generation。
+- 用户动作固定为“用 AI 修改/结束修改”。默认 UI 不显示 npm、端口、artifact 或 operationId。
+- Runtime 卡片、Preview placeholder、Header 与专用窗口使用同一 Main snapshot。`opening/live/exit_requested/needs_attention/saving/closed/preview_update_failed` 的按钮可用性必须由 Main 给出。
+
+### 迁移与门禁
+
+- 停止调用 WorkspaceTab → backing Project 入口；旧 `WorkspaceTab.projectId`、synthetic Project 与历史普通 Thread 原样保留一个兼容周期，不自动删除或重分类。
+- TrustStore 可以继续按 canonical root 表达安全授权，但不得因此复用 Runtime identity；撤销前必须说明同路径 Runtime 会全部停止。
+- P0 必须覆盖 owner 隔离、root lease conflict、dev→build transition、close/background settle、late build fence、last-good；P1/Electron smoke 覆盖同路径显式切换、重开 prompt、app restart 和 development-only 生命周期。
+
 ## 项目专属 `.agentos` Runtime（Change revision 3：Current / as-built）
 
 | 边界 | 冻结决定 |

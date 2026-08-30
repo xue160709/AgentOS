@@ -1,9 +1,25 @@
-# Revision 2 实施验收计划
+# Revision 3 实施验收计划
 
-> 状态：实现已落盘，验收未执行  
-> 正式 GWT 唯一事实源：`prd/chat-agent-runtime/acceptance.md` 的 `Revision 2`。本文只提供实现任务与证据的稳定 ID、覆盖方式和通过门槛，不复制另一套产品结论。
+> 状态：Revision 3 BUILDABLE / Planned，未实现；Revision 2 实现已落盘但未正式验收
+> 正式 GWT 唯一事实源：`prd/chat-agent-runtime/acceptance.md` 的 `Revision 3` 与 `prd/local-app-runtime/acceptance.md` 的 `Revision 6`。本文只提供实现任务与证据的稳定 ID、覆盖方式和通过门槛，不复制另一套产品结论。
 >
 > **同步义务（2026-08-29 补）**：本表新增任何 ID 时，必须在同一轮把对应 GWT 写入 `prd/chat-agent-runtime/acceptance.md`。`BUG-AUDIT-WS-02` 复核发现 `ATDD-CHAT-207`–`209` 与 `ATDD-WS-201` 曾只存在于本表、未进入 PRD，使"唯一事实源"声明失效。该批已回补。缺少 PRD 对应场景的 ID 不得进入 Development Check。
+
+## 0. Revision 3 P0/P1 覆盖矩阵
+
+| ID | 优先级 | 能力 | 必须证明 | 最低证据 |
+| --- | --- | --- | --- | --- |
+| `ATDD-RDS-301` | P0 | Runtime owner 隔离 | Project/Workspace Runtime 即使同路径也不共享 Definition、用户状态、Chat 或导航；实时资源冲突时阻止第二实例并只在用户确认后切换 | Main contract + renderer integration + Electron smoke |
+| `ATDD-RDS-302` | P0 | 一键进入 Runtime 开发 | 两个入口的“用 AI 修改”都按当前 Runtime owner 打开正确的专用窗口并准备实时预览；不依赖 active project，不要求用户操作 npm 模式 | IPC/owner integration + Electron smoke |
+| `ATDD-RDS-303` | P0 | 窗口级多轮开发 | 开发窗口存续期间连续 Run 共享 DevelopmentSession，不在每轮成功后 build/stop；主窗口实时效果连续 | coordinator integration + real Runtime smoke |
+| `ATDD-RDS-304` | P0 | 关闭/结束收口 | 关闭窗口和主窗口结束命令幂等；运行中 Run 不被取消，终态后只保存一次；无修改不构建 | state-machine tests + Electron close/background smoke |
+| `ATDD-RDS-305` | P0 | 失败与 last-good | 失败/取消后的半成品不自动保存；build 失败继续显示上一版，源码/Diff 可继续；新 generation 使旧结果失效 | coordinator/runtime integration + static fixture |
+| `ATDD-RDS-306` | P0 | Workspace Chat 不造 Project | Workspace Runtime 开发窗口以 Runtime root 为作用域，不创建 synthetic Project、不改变 activeProjectId、不派生 `<root>/.agentos` | store readback + IPC negative + Electron smoke |
+| `ATDD-RDS-307` | P1 | 开发对话持久与分区 | Runtime 开发 Thread 可关闭重开、恢复最近记录和草稿，且不进入普通项目对话列表；全局搜索结果标明 Runtime 身份并打开专用窗口 | codec/migration + dual-window/search UI test |
+| `ATDD-RDS-308` | P1 | 等待确认与中断恢复 | 窗口关闭后 pending permission/answer 在主窗口可见并可重新打开处理；app quit 不构建未知半成品 | prompt-owner integration + restart smoke |
+| `ATDD-RDS-309` | P1 | 能力矩阵与用户语言 | Project Runtime 成功退出回到 last-good；static-capable Workspace 同步保存；development-only Workspace 结束 Chat 但保持查看所需服务且不宣称已保存；普通界面只使用“用 AI 修改/结束修改” | capability fixtures + UI copy assertions |
+
+Revision 3 未实现，以上只定义计划合同，不记录通过状态。`CHECK-02` 不得再以 Revision 2 的 M2/M3 语义关闭整个 Change。
 
 ## 1. 通过规则
 

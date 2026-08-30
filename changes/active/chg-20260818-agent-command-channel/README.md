@@ -1,6 +1,6 @@
-# Revision 2 Spec Package
+# Revision 3 Spec Package
 
-> 状态：Decision accepted；规格冻结；**M0–M2、M3-01 与两张缺陷单（`FIX-WS-01`、`FIX-CHAT-01`）业务实现均已落盘**；剩余 `CHECK-02` 独立 Development Check 与正式验收。
+> 状态：Revision 3 `BUILDABLE / Planned`，尚未实施；Revision 2 的 M0–M2、M3-01 与两张缺陷单业务实现已落盘但未正式验收。Revision 3 已取代其中 Runtime 开发会话、Workspace backing Project 与 Project/Workspace Runtime 共享语义，旧 `CHECK-02` 不能关闭整个 Change。
 >
 > 2026-08-29 由 `BUG-AUDIT-WS-02` 修正：本文此前长期写着"业务实现未开始"，与代码严重不符，已按事实更新。
 
@@ -19,6 +19,11 @@
 
 ## 当前统一事实
 
+- Revision 3 把 Project Runtime 与 Workspace Runtime 定义为完全独立对象；相同路径不自动合并、跳转或共享 Chat 身份。
+- Runtime 开发入口一键打开专用独立 Chat，并在窗口存续期间维持可连续多轮修改的 RuntimeDevelopmentSession；普通用户不需要理解 npm/dev/build。
+- 关闭开发窗口或主窗口结束动作提交同一个收口意图：不取消仍运行的 AI，成功修改在安全终态后最多保存一次预览，失败保留 last-good。
+- Runtime 开发对话不混入普通项目对话列表，但可持久恢复并在全局搜索中以 Runtime 身份出现；底层继续复用现有 Thread/Transcript/SDK/权限/Diff。
+- 同路径已有 Runtime 正在实时修改时阻止第二实例并提供显式切换；主动作固定为“用 AI 修改”，收口动作为“结束修改”。
 - Chat 已是 Main-owned 单一事实源，每项目唯一独立 Chat 窗口已上线；feature flag `AGENTOS_PROJECT_CHAT_BROKER_V2` **默认开启**，`0` 只是回滚逃生口。
 - 网站配对/Ticket、Preview 窄捕获、Runtime edit 收口（M1 / M1a / M2）均已实现。
 - v1 权限保持当前 app-global 选择，只把权威持久化迁到 Main；没有 project-level permission。
@@ -35,7 +40,7 @@
 | `FIX-WS-01` | P0 新建项目不落盘且不可用；P0 项目移除/重定位/置顶/排序不落盘（含路径丢失恢复流程）；P1 侧栏与首页偏好不落盘；ownership audit | 已完成 |
 | `FIX-CHAT-01` | P0 侧边栏归档/置顶不落盘并被 snapshot 回滚；P0 归档运行中会话的文案/实现/broker 合同三方不一致；P1 readiness 三态 | 已完成 |
 
-工作区现在只有一条 durable 写路径：Main。renderer 只发意图并采纳回读后的权威快照，selection 仍归 renderer。剩余唯一门禁是 `CHECK-02`。
+工作区现在只有一条 durable 写路径：Main。renderer 只发意图并采纳回读后的权威快照，selection 仍归 renderer。该 Revision 2 收口事实继续保留；Revision 3 的 `DECIDE-RUNTIME-03 → TECH-RUNTIME-03` 已完成，下一门是精确 work order 后的 `DEV/ATDD-RUNTIME-03`。
 
 ## 已识别的过度设计与处置
 
@@ -50,4 +55,4 @@
 完成后回报修改文件、合同映射、测试命令/退出码和未验证风险；遇到停止条件立即停工，不自行补设计。
 ```
 
-不要把整个 Revision 2 一次性交给 Terra。剩余只有 `CHECK-02` 一单。
+Revision 3 已达到 BUILDABLE，但不得把现有 `CHECK-02` 或旧 M2/M3 work order 当作新方案实施入口。`TECH-RUNTIME-03` 已完成；实施前必须根据 `technical.md T3.11` 生成精确 Revision 3 work order 和 allowlist。

@@ -1,5 +1,56 @@
 # Workspace Runtime 产品设计
 
+## Revision 6 Planned：Runtime 卡片与窗口级开发会话
+
+本节是已确认但未实现的 Planned Delta；它不改写下方 Current/as-built。完整跨模块设计见 [`chg-20260818-agent-command-channel@3`](../../changes/active/chg-20260818-agent-command-channel/design.md) 的 Revision 3。
+
+### 对象与归属
+
+```text
+Project Runtime   -> <project>/.agentos -> project owner   -> project-home
+Workspace Runtime -> 用户显式目录       -> workspace owner -> workspace-tab
+                         │
+                         └─ 路径相同只表示资源冲突，不表示同一 Runtime
+```
+
+- 每个 Runtime 产品作用域独立拥有 Runtime、Preview host、DevelopmentSession 与开发 Chat；项目 `.agentos` 未创建时先使用稳定 project-runtime slot，Definition 出现后原位绑定。
+- Project Runtime 在项目 Overview 显示卡片/入口，点击后仍留在当前项目；不得激活或创建 Workspace Tab。
+- Workspace Runtime 面向临时查看和验证；打开其开发 Chat 不创建 synthetic Project、不改变 activeProject，也不再追加 `.agentos`。
+- 同路径已有一个 Runtime 占用实时开发资源时，第二个启动请求被阻止并提供“切换到正在修改的 Runtime”；第一版不静默复用底层进程。
+
+### 主旅程
+
+```text
+可查看页面
+  → 点击“用 AI 修改”
+  → 打开 Runtime 专用 Chat + 准备实时效果
+  → 连续多轮 AI 修改，主窗口即时查看
+  → 关闭窗口 / 主窗口“结束修改”
+  → 无修改直接退出；成功修改保存一次；失败保留上一版并允许继续
+```
+
+- 窗口存续期间 DevelopmentSession 持有开发 lease；单轮 Run 成功只更新实时效果，不触发最终 build。
+- 关闭窗口提交幂等 `exitRequested`，不是取消。仍在运行的 AI 继续，主窗口显示后台状态；安全终态后再收口。
+- 有成功修改且支持已保存预览时，结束会话后等待源码稳定并最多保存一次。失败/取消后的半成品不自动保存。
+- 保存失败继续显示 last-good，并提供继续修复；新开发 generation 使迟到保存结果失效。
+- Project `.agentos` 创建合同必须支持已保存预览。Development-only Workspace Runtime 结束的是 AI 开发会话，不强制停止查看页面所需服务。
+
+### 页面职责与用户语言
+
+- Runtime 卡片/详情：显示页面是否可查看、是否正在开发、是否需要确认或恢复，并提供当前唯一主动作。
+- 主窗口 Preview：承载实时或已保存页面、导航和恢复；不因打开 Chat 跳转到另一 Runtime surface。
+- Runtime 开发窗口：复用 Composer、Transcript、权限、提问与 Diff，只显示当前 Runtime 的开发对话、紧凑状态和回到主窗口入口；不复制完整 Preview。
+- Runtime 开发记录不进入普通项目对话列表；全局搜索结果标记 Runtime 名称与归属，打开后回到对应专用窗口。
+- 普通用户文案只使用“已保存预览、正在准备、AI 正在修改、正在保存最新预览、预览未更新”。npm、端口、artifact 与 generation 仅进入高级详情。
+
+### 已确认收口与 BUILDABLE Gate
+
+- Runtime 开发对话不混入普通项目对话列表，但保留持久恢复和带 Runtime 标识的全局搜索入口。
+- 同路径实时资源冲突采用“阻止第二实例 + 显式切换”；切换不合并 Definition、历史或用户状态。
+- 主动作和稳定 accessible name 使用“用 AI 修改”，收口动作为“结束修改”。
+
+产品分叉与 Runtime-scoped Thread、同路径执行租约、窗口结束和 generation/build fence 技术合同均已冻结，Revision 6 已进入 BUILDABLE；实施仍需独立 work order。
+
 ## 项目专属 `.agentos` Runtime（Change revision 3：Current / as-built）
 
 项目 Runtime 是项目页的派生能力，不是可移动的 Workspace Tab。它固定在 `<project>/.agentos/`，持久 owner 为 `project` 与单一 `projectId`，并只能由 `project-home` 承载。Workspace Runtime 仍是用户显式选择目录的 `workspace` owner 对象；它不探测项目 `.agentos/`。

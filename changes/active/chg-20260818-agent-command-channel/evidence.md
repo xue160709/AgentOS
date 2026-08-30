@@ -1,5 +1,78 @@
 # Evidence
 
+## Revision 3：Runtime 专用开发会话（2026-08-30）
+
+### 用户确认来源
+
+- `explicit_user_statement`：项目首页 Runtime 固定属于项目自己的 `.agentos`，工作台手动添加该目录只是少见的验证行为；两者“肯定是完全分开”，项目首页不得自动跳到工作台。
+- `explicit_user_statement`：普通用户点击一次即打开独立 Chat，由 AI 直接修改并看到效果；用户不需要理解静态、`npm run dev` 或 build。
+- `explicit_user_statement`：独立窗口打开期间用于开发 Runtime；看完效果后关闭窗口应自然退出开发，也可从主窗口退出；结束时生成静态产物并显示。
+- `explicit_user_statement`：用户先表达 Runtime 开发对话倾向与普通对话分开；当时是否同时出现在普通项目对话列表尚未选择，随后由“接受默认”完成收口。
+- `explicit_user_statement`：2026-08-30 用户回复“接受默认”，确认 Runtime 开发对话不混入普通项目对话列表但可全局搜索、同路径实时资源冲突阻止第二实例并提供显式切换、主动作“用 AI 修改”与收口动作“结束修改”；原 `Q-RDS-301`–`Q-RDS-303` 全部关闭为 `C-RDS-307`–`C-RDS-309`。
+- `confirmed_artifact`：Revision 2 `ATDD-WIN-202` 已冻结“关闭窗口不取消运行中 Run”；Revision 2 Final settle 已冻结失败/取消不自动 build、last-good 失败回退和 generation fence。Revision 3 在此安全边界内把“关闭”升级为可延迟完成的结束意图。
+
+### REAL 体验探索证据
+
+- Project Runtime 两次复现：`data → 运行时` 先显示项目页，随后异步切到 `agentos-intelligence-workbench` Workspace Tab；持久 activeProject/activeWorkspaceTab 也实际改变，不是 Preview 遮挡。
+- 项目页同时显示“运行中”“启动运行时”“正在加载预览”，刷新禁用且日志为空；工作台同路径页面实际可用，但壳层仍报告 loading/开发服务退出。
+- 工作台“打开对话窗口”实际打开 synthetic Project Chat，窗口不说明 Runtime 路径、模式或修改归属；同名 synthetic Project 又派生 `/data/.agentos/.agentos` 并提示未初始化。
+- Runtime 详情弹层被原生 Preview 覆盖；静态→dev、dev→静态、构建失败与启停动作未安全触发，明确记为未测，不作为已实现证据。
+
+### as-built 冲突与复用依据
+
+- `electron/local-app-runtime/index.ts` 当前按 canonical root + mode 去重 supervisor，使不同 owner 的 Definition 在同路径下发生别名状态串扰；Revision 3 要求 owner 域隔离。
+- `electron/workspace-tab-project.ts` / `workspace-tab-project-chat.ts` 当前为 Workspace Tab 创建可见 backing Project；Revision 3 取代该用户模型，但保留“复用现有 Chat 基础设施、Main 权威持久化”的方向。
+- `electron/runtime-edit-coordinator.ts` 当前在所有 potential run 终态后自动 settle，属于 Run 聚合；Revision 3 需要在显式 RuntimeDevelopmentSession 存续时由窗口级 lease 延迟最终收口。
+- `electron/project-chat-window-manager.ts` 当前 close 只 flush view state；Revision 3 需要 Main-owned `exitRequested`，同时继续遵守“关闭不取消 Run”。
+- `src/components/types.ts` 已有 durable Thread `purpose`，可小改扩展 Runtime 开发用途；不需要建立第二套 Transcript/SDK。
+
+### ORCH-006
+
+- skill: `product-problem-investigation` + `user-perspective-review`
+- actual_execution: `mixed`
+- actors: `main=DONE@INVESTIGATE-RUNTIME-03/main`；`runtime_reproduction=DONE@INVESTIGATE-RUNTIME-03/runtime_reproduction`；`static_runtime_contract=DONE@INVESTIGATE-RUNTIME-03/static_runtime_contract`；证据指针：本节 REAL 体验探索、主会话只读代码审计
+
+### ORCH-007
+
+- skill: `product-spec` + `change-package`
+- actual_execution: `main_direct`
+- actors: `main=DONE@SPEC-RUNTIME-03/main`；证据指针：Revision 3 proposal/design/acceptance/PRD diff 与文档引用核对
+
+### ORCH-008
+
+- skill: `change-package`
+- actual_execution: `main_direct`
+- actors: `main=DONE@DECIDE-RUNTIME-03/main`；证据指针：用户“接受默认”、`C-RDS-307`–`C-RDS-309` 与同步后的 PRD/Acceptance diff
+
+## TECH-RUNTIME-03（2026-08-30）
+
+### as-built 审计
+
+- `verified_as_built / STATIC`：`electron/local-app-runtime/index.ts:1482-1522,1607-1617` 使用 canonical root + mode 的 dedupe owner，多个 Definition 会读取同一 supervisor snapshot/consumer；Revision 3 以 Definition 独立 + canonical-root execution lease 取代。
+- `verified_as_built / STATIC`：`electron/workspace-tab-project.ts:30-75` 与 `workspace-tab-project-chat.ts` 会匹配或创建 Project 并写 `WorkspaceTab.projectId`；Revision 3 Runtime Chat 不再调用该入口，旧数据不自动删除。
+- `verified_as_built / STATIC`：`electron/chat-workspace-store.ts:384-409,459-498` 的普通 thread 表强制 `project_id NOT NULL`；Revision 3 使用 Runtime thread metadata table + JSON sidecar，共享 Transcript/Broker core，不用 sentinel Project。
+- `verified_as_built / STATIC`：`electron/runtime-edit-coordinator.ts:42-70,217-304` 按 project 聚合且无 window exit gate；Revision 3 新 coordinator 按 RuntimeScope 聚合，并把 `exitRequested` 纳入 settle 必要条件。
+- `verified_as_built / STATIC`：`electron/project-chat-window-manager.ts:121-123` close 只 flush/cleanup；Revision 3 Runtime window close 在销毁视图前同步登记幂等 exit intent。
+- `confirmed_artifact`：技术合同已写入 `technical.md T3.1`–`T3.12`，正式模块同步到 `prd/local-app-runtime/technical.md` 与 `prd/chat-agent-runtime/technical.md`；没有业务代码、测试或正式验收状态变更。
+
+### Interaction Flow Review
+
+- 覆盖 journey：用 AI 修改 → opening/live → 多轮 Run → close/结束修改 → background terminal → save/last-good；另覆盖 waiting prompt、failed mutation、build failure、reenter during save、same-root conflict、app quit/restart。
+- 核心 fence：所有 callback 同时校验 `runtimeScopeId + routeGeneration + developmentGeneration + requestId/operationId`；close 不 cancel，reenter 提升 generation，app quit 不启动自动 save。
+- 实现前 findings：P0 path alias 与 synthetic Project；P1 run-owned auto-settle、close 无 exit transaction、project-only thread schema。证据等级和测试门禁见 `technical.md T3.12`。
+
+### ORCH-009
+
+- skill: `change-package`
+- actual_execution: `main_direct`
+- actors: `main=DONE@TECH-RUNTIME-03/main`；证据指针：Revision 3 `technical.md T3.1`–`T3.12`、正式 PRD technical diff、`tasks.md` BUILDABLE gate
+
+### ORCH-010
+
+- skill: `interaction-flow-review`
+- actual_execution: `main_direct`
+- actors: `main=DONE@TECH-RUNTIME-03/main`；证据指针：`technical.md T3.7`–`T3.12` 状态机、late-event 不变量、findings 与自动化/Electron smoke 门禁
+
 ## Revision 2：Discovery
 
 ### 用户确认来源（2026-08-26）

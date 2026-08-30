@@ -1,5 +1,15 @@
 # Workspace Runtime
 
+## Revision 6 Planned：独立 Runtime 与一键 AI 开发会话
+
+Project Runtime 与 Workspace Runtime 将按用户意图保持为两个独立域，即使 canonical path 相同也不合并 Definition、运行状态、Host、Chat 或导航。项目首页固定管理 `<project>/.agentos/` 并在当前项目内显示 Runtime 卡片/详情；Workspace Runtime 只管理用户显式选择的验证目录，不创建或切换 synthetic Project。
+
+两类 Runtime 使用一致的普通用户旅程：点击“用 AI 修改”即打开当前 Runtime 专用独立 Chat，并自动准备实时效果；窗口打开期间可以连续多轮让 AI 修改，不在每轮后反复切换模式或构建。关闭开发窗口或在主窗口点击“结束修改”后，系统在不取消运行中 AI 的前提下安全收口：成功修改最多生成一次新的已保存预览；失败、取消或构建失败继续展示上一份 last-good，并保留源码和 Diff 供继续修复。
+
+用户界面只表达“已保存预览、实时修改、正在保存、预览未更新”，主动作固定为“用 AI 修改”，收口动作为“结束修改”，不要求理解 `npm run dev`、`npm run build`、端口或产物目录。Runtime 开发记录不混入普通项目对话列表，但可以在全局搜索中以 Runtime 身份找到；同路径已有实时修改时阻止第二实例并提供显式切换。Development-only Workspace Runtime 在结束 AI 开发会话后可继续保持查看页面所需的受管服务，但不得谎称生成了已保存预览。
+
+状态：BUILDABLE / Planned，未实现，正式验收未执行。产品设计见 [`design.md`](design.md) 的 Revision 6，技术合同见 [`technical.md`](technical.md)，Acceptance 见 `C-021`–`C-027`。来源为 [`chg-20260818-agent-command-channel@3`](../../changes/active/chg-20260818-agent-command-channel/proposal.md)。
+
 ## 项目专属 `.agentos` Runtime（Change revision 3：Current / as-built）
 
 本合同覆盖早期「项目首页与 Workspace Tab 共用 Runtime」的范围。系统现在有两个互不替代的 Runtime 域：
