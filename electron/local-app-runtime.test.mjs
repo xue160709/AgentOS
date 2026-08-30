@@ -554,7 +554,7 @@ test('Runtime conservatively runs npm ci when lock digest record is missing desp
   await supervisor.stop(started.localAppId, 'user')
 })
 
-test('Runtime manager keeps same-root Definitions isolated and conflicts before a second spawn', async () => {
+test('Runtime manager lends a live same-root Runtime instead of spawning a second one', async () => {
   const root = mkdtempSync(`${tmpdir()}/local-app-runtime-`)
   mkdirSync(resolve(root, 'node_modules'))
   writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
@@ -580,13 +580,16 @@ test('Runtime manager keeps same-root Definitions isolated and conflicts before 
   manager.register(first)
   manager.register(second)
   const runningA = await manager.start(first.id, 'tab:tab-a')
-  await assert.rejects(
-    manager.start(second.id, 'project-home:project-1:mount-1'),
-    (error) => error?.code === 'runtime-development-conflict',
-  )
+  const borrowed = await manager.start(second.id, 'project-home:project-1:mount-1')
   assert.equal(spawnCount, 1)
-  assert.equal(manager.get(second.id), null)
-  assert.equal(events.some((event) => event.runtimeDefinitionId === second.id), false)
+  assert.equal(borrowed.status, 'running')
+  assert.equal(borrowed.runtimeDefinitionId, second.id)
+  assert.equal(borrowed.readyUrl, runningA.readyUrl)
+  assert.equal(borrowed.sharedRootRuntime.runtimeDefinitionId, first.id)
+  assert.equal(events.some((event) => event.runtimeDefinitionId === second.id), true)
+  // The borrowed consumer keeps the holder alive, so the root only returns to
+  // an exclusive start once the borrower has left as well.
+  assert.equal((await manager.stop(second.id, 'user')).status, 'stopped')
   assert.equal((await manager.release(first.id, 'tab:tab-a')).status, 'stopped')
 
   const runningB = await manager.start(second.id, 'project-home:project-1:mount-1')
@@ -919,4 +922,144 @@ test('Running-process crash uses bounded recovery without changing generation', 
   assert.equal(recovered.generation, first.generation)
   assert.equal(children.length, 2)
   await supervisor.stop(first.localAppId, 'user')
+})
+
+test('Runtime manager shares one same-root instance between a Workspace Tab and the project Runtime', async () => {
+  const root = realpathSync(mkdtempSync(`${tmpdir()}/local-app-runtime-shared-`))
+  mkdirSync(resolve(root, 'node_modules'))
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
+  let spawnCount = 0
+  const events = []
+  const manager = new runtime.LocalAppRuntimeManager({
+    allocatePort: async () => 45500 + spawnCount,
+    fetch: async () => ({ status: 200 }),
+    defaults: { readinessTimeoutMs: 100, probeIntervalMs: 1, probeTimeoutMs: 10 },
+    onEvent: (event) => events.push(event),
+    spawn: () => {
+      spawnCount += 1
+      const child = new EventEmitter()
+      child.pid = 999900 - spawnCount; child.exitCode = null; child.signalCode = null
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+      child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {}
+      queueMicrotask(() => child.stdout.emit('data', `ready at http://127.0.0.1:${45499 + spawnCount}/`))
+      return child
+    },
+  })
+  const holder = { ...definition(root), id: 'runtime-workspace', name: 'Intelligence workbench', owner: { kind: 'workspace' } }
+  const borrower = { ...definition(root), id: 'runtime-project', name: 'data', owner: { kind: 'project', projectId: 'project-data' } }
+  manager.register(holder)
+  manager.register(borrower)
+
+  const held = await manager.start(holder.id, 'tab:workspace')
+  assert.equal(held.status, 'running')
+  const borrowed = await manager.start(borrower.id, 'project-home:project-data:mount-1')
+  assert.equal(spawnCount, 1)
+  assert.equal(borrowed.status, 'running')
+  assert.equal(borrowed.runtimeDefinitionId, borrower.id)
+  assert.equal(borrowed.readyUrl, held.readyUrl)
+  assert.deepEqual(borrowed.sharedRootRuntime, { runtimeDefinitionId: holder.id, name: 'Intelligence workbench' })
+  assert.equal(manager.get(borrower.id).readyUrl, held.readyUrl)
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 1)
+  assert.ok(events.some((event) => event.runtimeDefinitionId === borrower.id && event.sharedRootRuntime))
+
+  // Restarting from the borrower restarts the one process both views show.
+  const restarted = await manager.restart(borrower.id)
+  assert.equal(spawnCount, 2)
+  assert.equal(restarted.runtimeDefinitionId, borrower.id)
+  assert.equal(restarted.status, 'running')
+  assert.ok(restarted.generation > borrowed.generation)
+  assert.notEqual(restarted.runtimeId, borrowed.runtimeId)
+  assert.equal(restarted.readyUrl, manager.get(holder.id).readyUrl)
+
+  // Leaving the shared Runtime never stops the holder or releases its lease.
+  const left = await manager.stop(borrower.id, 'user')
+  assert.equal(left.status, 'stopped')
+  assert.equal(left.runtimeDefinitionId, borrower.id)
+  assert.equal(manager.get(borrower.id), null)
+  assert.equal(manager.get(holder.id).status, 'running')
+  assert.equal(spawnCount, 2)
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 1)
+
+  assert.equal((await manager.release(holder.id, 'tab:workspace')).status, 'stopped')
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 0)
+})
+
+test('Runtime manager keeps a shared root alive until the last borrowed consumer releases', async () => {
+  const root = realpathSync(mkdtempSync(`${tmpdir()}/local-app-runtime-shared-release-`))
+  mkdirSync(resolve(root, 'node_modules'))
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
+  let spawnCount = 0
+  const manager = new runtime.LocalAppRuntimeManager({
+    allocatePort: async () => 45600 + spawnCount,
+    fetch: async () => ({ status: 200 }),
+    defaults: { readinessTimeoutMs: 100, probeIntervalMs: 1, probeTimeoutMs: 10 },
+    spawn: () => {
+      spawnCount += 1
+      const child = new EventEmitter()
+      child.pid = 999800 - spawnCount; child.exitCode = null; child.signalCode = null
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+      child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {}
+      queueMicrotask(() => child.stdout.emit('data', `ready at http://127.0.0.1:${45599 + spawnCount}/`))
+      return child
+    },
+  })
+  const holder = { ...definition(root), id: 'runtime-workspace', name: 'Workbench', owner: { kind: 'workspace' } }
+  const borrower = { ...definition(root), id: 'runtime-project', name: 'data', owner: { kind: 'project', projectId: 'project-data' } }
+  manager.register(holder)
+  manager.register(borrower)
+  await manager.start(holder.id, 'tab:workspace')
+  await manager.start(borrower.id, 'project-home:project-data:mount-1')
+
+  // The holder's own tab can close first; the borrowed consumer keeps the
+  // single instance (and its lease) alive.
+  assert.equal((await manager.release(holder.id, 'tab:workspace')).status, 'running')
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 1)
+  assert.equal(manager.get(borrower.id).status, 'running')
+
+  assert.equal((await manager.release(borrower.id, 'project-home:project-data:mount-1')).status, 'stopped')
+  assert.equal(manager.get(borrower.id), null)
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 0)
+  assert.equal(spawnCount, 1)
+})
+
+test('Runtime manager borrows a live same-root Runtime without ever spawning one', async () => {
+  const root = realpathSync(mkdtempSync(`${tmpdir()}/local-app-runtime-borrow-`))
+  mkdirSync(resolve(root, 'node_modules'))
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'fixture' } }))
+  let spawnCount = 0
+  const manager = new runtime.LocalAppRuntimeManager({
+    allocatePort: async () => 45700,
+    fetch: async () => ({ status: 200 }),
+    defaults: { readinessTimeoutMs: 100, probeIntervalMs: 1, probeTimeoutMs: 10 },
+    spawn: () => {
+      spawnCount += 1
+      const child = new EventEmitter()
+      child.pid = 999700 - spawnCount; child.exitCode = null; child.signalCode = null
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+      child.stdout.setEncoding = () => {}; child.stderr.setEncoding = () => {}
+      queueMicrotask(() => child.stdout.emit('data', 'ready at http://127.0.0.1:45700/'))
+      return child
+    },
+  })
+  const holder = { ...definition(root), id: 'runtime-workspace', name: 'Workbench', owner: { kind: 'workspace' } }
+  const borrower = { ...definition(root), id: 'runtime-project', name: 'data', owner: { kind: 'project', projectId: 'project-data' } }
+  manager.register(holder)
+  manager.register(borrower)
+
+  // Nothing is running yet: borrowing must stay spawn-free and report nothing.
+  assert.equal(await manager.borrowSharedRoot(borrower.id, 'project-home:project-data:mount-1'), null)
+  assert.equal(spawnCount, 0)
+  assert.equal(manager.getRootExecutionRegistry().leases().length, 0)
+
+  const held = await manager.start(holder.id, 'tab:workspace')
+  const borrowed = await manager.borrowSharedRoot(borrower.id, 'project-home:project-data:mount-1')
+  assert.equal(spawnCount, 1)
+  assert.equal(borrowed.status, 'running')
+  assert.equal(borrowed.readyUrl, held.readyUrl)
+  assert.equal(borrowed.sharedRootRuntime.runtimeDefinitionId, holder.id)
+
+  // An untrusted definition never borrows.
+  manager.register({ ...borrower, trustStatus: 'revoked' })
+  assert.equal(await manager.borrowSharedRoot(borrower.id, 'project-home:project-data:mount-1'), null)
+  await manager.stopAll('app-quit')
 })

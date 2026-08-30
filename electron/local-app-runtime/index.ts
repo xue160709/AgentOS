@@ -1569,6 +1569,50 @@ export class LocalAppRuntimeSupervisor {
   }
 }
 
+/**
+ * A live-enough process for a second definition to borrow. Anything else
+ * (failed, stopped, building) leaves the root free for a real start.
+ */
+const SHAREABLE_ROOT_STATUSES: ReadonlySet<LocalAppRuntimeStatus> = new Set(['preparing', 'starting', 'running', 'degraded'])
+
+/**
+ * One definition borrowing another definition's process on the same root.
+ * The borrower owns no lease and no process; it owns only its own consumers
+ * and a stable projected identity so every id-keyed path (events, previews,
+ * renderer state) keeps working under the borrower's own definition id.
+ */
+type SharedRootJoin = {
+  holderDefinitionId: string
+  holderRuntimeId: string
+  runtimeId: string
+  generation: number
+  consumerIds: Set<string>
+}
+
+function sharedRootRuntimeId(definitionId: string, generation: number): string {
+  return `shared-${definitionId}-${generation}`
+}
+
+function sharedRootSnapshotEvent(snapshot: LocalAppRuntimeSnapshot, timestamp: number): LocalAppRuntimeEvent {
+  return {
+    type: 'snapshot',
+    runtimeDefinitionId: snapshot.runtimeDefinitionId,
+    localAppId: snapshot.runtimeDefinitionId,
+    runtimeId: snapshot.runtimeId,
+    generation: snapshot.generation,
+    status: snapshot.status,
+    mode: snapshot.mode,
+    readyUrl: snapshot.readyUrl,
+    previewUrl: snapshot.previewUrl,
+    port: snapshot.port,
+    phase: snapshot.phase,
+    errorCode: snapshot.errorCode,
+    detail: snapshot.detail,
+    sharedRootRuntime: snapshot.sharedRootRuntime,
+    timestamp,
+  }
+}
+
 export class LocalAppRuntimeManager {
   private readonly supervisor: LocalAppRuntimeSupervisor
   private readonly rootExecutionRegistry: RuntimeRootExecutionRegistry
@@ -1580,14 +1624,20 @@ export class LocalAppRuntimeManager {
   private readonly pendingDefinitionStops = new Map<string, Promise<void>>()
   private readonly buildOperations = new Map<string, Promise<LocalAppRuntimeSnapshot>>()
   private readonly listeners = new Set<(event: LocalAppRuntimeEvent) => void>()
+  private readonly sharedRootJoins = new Map<string, SharedRootJoin>()
+  private readonly lastProjectedGeneration = new Map<string, number>()
+  private readonly now: () => number
+  private readonly externalOnEvent?: (event: LocalAppRuntimeEvent) => void
 
   constructor(options: RuntimeManagerOptions = {}) {
     this.rootExecutionRegistry = options.rootExecutionRegistry ?? new RuntimeRootExecutionRegistry()
+    this.now = options.now ?? Date.now
+    this.externalOnEvent = options.onEvent
     this.supervisor = new LocalAppRuntimeSupervisor({
       ...options,
       onEvent: (event) => {
-        options.onEvent?.(event)
-        for (const listener of this.listeners) listener(event)
+        this.deliverEvent(event)
+        this.deliverSharedRootProjections(event)
       },
     })
   }
@@ -1606,7 +1656,10 @@ export class LocalAppRuntimeManager {
       // start() to reuse the old process; defer the bounded stop until the
       // caller starts the replacement definition.
       const existingLease = this.leaseByDefinition.get(definition.id)
-      const pending = existingLease
+      const pending = this.sharedRootJoins.has(definition.id)
+        // A borrowed Runtime owns neither lease nor process: leaving is the stop.
+        ? this.leaveSharedRoot(definition.id).then(() => undefined)
+        : existingLease
         ? this.rootExecutionRegistry.stopAndRelease(existingLease, () => this.supervisor.stop(definition.id, 'user')).then((result) => {
             if (!result.ok) throw result.error.cause
             if (this.leaseByDefinition.get(definition.id)?.leaseId === existingLease.leaseId) this.leaseByDefinition.delete(definition.id)
@@ -1618,6 +1671,9 @@ export class LocalAppRuntimeManager {
   }
 
   get(localAppId: string): LocalAppRuntimeSnapshot | null {
+    const join = this.sharedRootJoins.get(localAppId)
+    const holder = join ? this.supervisor.snapshot(join.holderDefinitionId) : null
+    if (join && holder) return this.projectSharedSnapshot(localAppId, join, holder)
     return this.supervisor.snapshot(localAppId)
   }
 
@@ -1656,7 +1712,17 @@ export class LocalAppRuntimeManager {
       ? { ...effectiveDefinition, mode: 'development' as const, agentos: undefined, serveScript }
       : effectiveDefinition
     const isDevelopment = servedDefinition.mode === 'development'
-    if (isDevelopment) await this.acquireExecutionLease(servedDefinition, 'development')
+    if (isDevelopment) {
+      // The root stays a single execution mutex. A second definition pointed
+      // at the same directory (a Workspace Tab and the owning project's
+      // Runtime page) borrows the live instance as one more consumer instead
+      // of failing the whole start with a root conflict.
+      const shared = await this.joinSharedRoot(servedDefinition, consumerId)
+      if (shared) return shared
+      await this.acquireExecutionLease(servedDefinition, 'development')
+    } else {
+      await this.leaveSharedRoot(localAppId)
+    }
 
     const consumers = this.consumers.get(localAppId) ?? new Set<string>()
     if (consumerId) consumers.add(consumerId)
@@ -1715,6 +1781,8 @@ export class LocalAppRuntimeManager {
     consumerId: string | undefined,
     options: RuntimeStartOptions,
   ): Promise<LocalAppRuntimeSnapshot> {
+    const shared = await this.joinSharedRoot(definition, consumerId)
+    if (shared) return shared
     await this.acquireExecutionLease(definition, 'development')
     const consumers = this.consumers.get(localAppId) ?? new Set<string>()
     if (consumerId) consumers.add(consumerId)
@@ -1732,6 +1800,10 @@ export class LocalAppRuntimeManager {
   }
 
   async stop(localAppId: string, reason: LocalAppRuntimeSnapshot['stopReason'] = 'user'): Promise<LocalAppRuntimeSnapshot | null> {
+    // Stopping a borrowed Runtime means leaving it: this definition owns no
+    // process, so the holder and every other viewer keep running.
+    const left = await this.leaveSharedRoot(localAppId, reason)
+    if (left) return left
     const lease = this.leaseByDefinition.get(localAppId)
     if (!lease) return this.supervisor.stop(localAppId, reason)
     let snapshot: LocalAppRuntimeSnapshot | null = this.supervisor.snapshot(localAppId)
@@ -1744,6 +1816,8 @@ export class LocalAppRuntimeManager {
   }
 
   restart(localAppId: string): Promise<LocalAppRuntimeSnapshot> {
+    const join = this.sharedRootJoins.get(localAppId)
+    if (join) return this.restartSharedRoot(localAppId, join)
     const definition = this.definitions.get(localAppId)
     if (!definition) return Promise.reject(new Error('local-app-definition-missing'))
     const consumers = this.consumers.get(localAppId) ?? new Set<string>()
@@ -1778,6 +1852,8 @@ export class LocalAppRuntimeManager {
   }
 
   async release(localAppId: string, consumerId: string): Promise<LocalAppRuntimeSnapshot | null> {
+    const join = this.sharedRootJoins.get(localAppId)
+    if (join) return this.releaseSharedRoot(localAppId, join, consumerId)
     const consumers = this.consumers.get(localAppId)
     if (!consumers?.delete(consumerId)) return this.supervisor.snapshot(localAppId)
     if (consumers.size > 0) return this.supervisor.detachConsumer(localAppId, consumerId)
@@ -1798,6 +1874,18 @@ export class LocalAppRuntimeManager {
       try { await this.stop(definitionId, reason) } catch (error) { failures.push(error) }
     }
     if (failures.length > 0) throw failures[0]
+  }
+
+  /**
+   * Spawn-free borrow of a live same-root Runtime. A surface that only wants
+   * to show a directory that is already being served calls this instead of
+   * `start`: it never launches a process, and returns null when there is
+   * nothing to borrow.
+   */
+  async borrowSharedRoot(localAppId: string, consumerId?: string): Promise<LocalAppRuntimeSnapshot | null> {
+    const definition = this.definitions.get(localAppId)
+    if (!definition || definition.trustStatus !== 'trusted') return null
+    return this.joinSharedRoot(definition, consumerId)
   }
 
   getRootExecutionRegistry(): RuntimeRootExecutionRegistry {
@@ -1878,6 +1966,160 @@ export class LocalAppRuntimeManager {
     this.pendingLeaseGeneration.delete(definition.id)
     this.leaseByDefinition.set(definition.id, result.lease)
     return result.lease
+  }
+
+  /**
+   * Borrow the live Runtime that already holds this root's development lease.
+   * Returns null when nothing is borrowable, leaving the caller on the normal
+   * acquire-and-spawn path (and dropping any stale join first).
+   */
+  private async joinSharedRoot(definition: LocalAppDefinition, consumerId?: string): Promise<LocalAppRuntimeSnapshot | null> {
+    let canonicalRoot = definition.canonicalRoot ?? definition.rootPath
+    try {
+      canonicalRoot = await canonicalizeLocalAppRoot(canonicalRoot)
+    } catch {
+      await this.leaveSharedRoot(definition.id)
+      return null
+    }
+    const lease = this.rootExecutionRegistry.getByRoot(canonicalRoot)
+    const holderId = lease && lease.kind === 'development' && lease.state === 'active' && lease.runtimeDefinitionId !== definition.id
+      ? lease.runtimeDefinitionId
+      : undefined
+    const holder = holderId ? this.supervisor.snapshot(holderId) : null
+    if (!holderId || !holder || !SHAREABLE_ROOT_STATUSES.has(holder.status)) {
+      await this.leaveSharedRoot(definition.id)
+      return null
+    }
+    if (this.sharedRootJoins.get(definition.id)?.holderDefinitionId !== holderId) await this.leaveSharedRoot(definition.id)
+    const join = this.sharedRootJoins.get(definition.id) ?? this.createSharedRootJoin(definition.id, holderId, holder.runtimeId)
+    this.sharedRootJoins.set(definition.id, join)
+    // The borrowed consumer is accounted under the holder, so the holder's own
+    // release path cannot stop a process this definition is still showing.
+    const holderConsumers = this.consumers.get(holderId) ?? new Set<string>()
+    if (consumerId) {
+      holderConsumers.add(consumerId)
+      join.consumerIds.add(consumerId)
+    }
+    this.consumers.set(holderId, holderConsumers)
+    for (const id of holderConsumers) this.supervisor.attachConsumer(holderId, id)
+    const snapshot = this.projectSharedSnapshot(definition.id, join, this.supervisor.snapshot(holderId) ?? holder)
+    this.deliverEvent(sharedRootSnapshotEvent(snapshot, this.now()))
+    return snapshot
+  }
+
+  private createSharedRootJoin(definitionId: string, holderDefinitionId: string, holderRuntimeId: string): SharedRootJoin {
+    const generation = this.nextProjectedGeneration(definitionId)
+    return {
+      holderDefinitionId,
+      holderRuntimeId,
+      runtimeId: sharedRootRuntimeId(definitionId, generation),
+      generation,
+      consumerIds: new Set<string>(),
+    }
+  }
+
+  /** Projected generations only ever move forward for a given definition. */
+  private nextProjectedGeneration(definitionId: string): number {
+    const previous = Math.max(
+      this.lastProjectedGeneration.get(definitionId) ?? 0,
+      this.supervisor.snapshot(definitionId)?.generation ?? 0,
+    )
+    const generation = previous + 1
+    this.lastProjectedGeneration.set(definitionId, generation)
+    return generation
+  }
+
+  /** A new holder process must reach the borrower as a new runtime identity. */
+  private syncSharedGeneration(definitionId: string, join: SharedRootJoin, holderRuntimeId: string): void {
+    if (!holderRuntimeId || join.holderRuntimeId === holderRuntimeId) return
+    join.holderRuntimeId = holderRuntimeId
+    join.generation = this.nextProjectedGeneration(definitionId)
+    join.runtimeId = sharedRootRuntimeId(definitionId, join.generation)
+  }
+
+  private projectSharedSnapshot(definitionId: string, join: SharedRootJoin, holder: LocalAppRuntimeSnapshot): LocalAppRuntimeSnapshot {
+    this.syncSharedGeneration(definitionId, join, holder.runtimeId)
+    return {
+      ...holder,
+      runtimeDefinitionId: definitionId,
+      localAppId: definitionId,
+      runtimeId: join.runtimeId,
+      generation: join.generation,
+      sharedRootRuntime: this.sharedRootRuntimeRef(join),
+    }
+  }
+
+  private sharedRootRuntimeRef(join: SharedRootJoin): { runtimeDefinitionId: string; name: string } {
+    const holder = this.definitions.get(join.holderDefinitionId)
+    return { runtimeDefinitionId: join.holderDefinitionId, name: holder?.name.trim() || join.holderDefinitionId }
+  }
+
+  private deliverEvent(event: LocalAppRuntimeEvent): void {
+    this.externalOnEvent?.(event)
+    for (const listener of this.listeners) listener(event)
+  }
+
+  /** Every holder event is republished under each borrower's own identity. */
+  private deliverSharedRootProjections(event: LocalAppRuntimeEvent): void {
+    const holderId = event.runtimeDefinitionId || event.localAppId
+    if (!holderId) return
+    for (const [definitionId, join] of this.sharedRootJoins) {
+      if (join.holderDefinitionId !== holderId) continue
+      this.syncSharedGeneration(definitionId, join, event.runtimeId)
+      this.deliverEvent({
+        ...event,
+        runtimeDefinitionId: definitionId,
+        localAppId: definitionId,
+        runtimeId: join.runtimeId,
+        generation: join.generation,
+        sharedRootRuntime: this.sharedRootRuntimeRef(join),
+      })
+    }
+  }
+
+  private async leaveSharedRoot(
+    definitionId: string,
+    reason: LocalAppRuntimeSnapshot['stopReason'] = 'user',
+  ): Promise<LocalAppRuntimeSnapshot | null> {
+    const join = this.sharedRootJoins.get(definitionId)
+    if (!join) return null
+    this.sharedRootJoins.delete(definitionId)
+    const holder = this.supervisor.snapshot(join.holderDefinitionId)
+    for (const consumerId of [...join.consumerIds]) {
+      join.consumerIds.delete(consumerId)
+      await this.release(join.holderDefinitionId, consumerId).catch(() => undefined)
+    }
+    const snapshot: LocalAppRuntimeSnapshot = {
+      runtimeDefinitionId: definitionId,
+      localAppId: definitionId,
+      runtimeId: join.runtimeId,
+      generation: join.generation,
+      status: 'stopped',
+      mode: holder?.mode,
+      restartAttempt: 0,
+      stopReason: reason,
+      updatedAt: this.now(),
+      logs: [],
+    }
+    this.deliverEvent(sharedRootSnapshotEvent(snapshot, this.now()))
+    return snapshot
+  }
+
+  private async releaseSharedRoot(definitionId: string, join: SharedRootJoin, consumerId: string): Promise<LocalAppRuntimeSnapshot | null> {
+    if (!join.consumerIds.delete(consumerId)) {
+      const current = this.supervisor.snapshot(join.holderDefinitionId)
+      return current ? this.projectSharedSnapshot(definitionId, join, current) : null
+    }
+    const holder = await this.release(join.holderDefinitionId, consumerId)
+    if (join.consumerIds.size === 0) return this.leaveSharedRoot(definitionId, 'last-consumer')
+    return holder ? this.projectSharedSnapshot(definitionId, join, holder) : null
+  }
+
+  /** Restarting a borrowed Runtime restarts the one process every viewer shows. */
+  private async restartSharedRoot(definitionId: string, join: SharedRootJoin): Promise<LocalAppRuntimeSnapshot> {
+    const holder = await this.restart(join.holderDefinitionId)
+    const current = this.sharedRootJoins.get(definitionId)
+    return current ? this.projectSharedSnapshot(definitionId, current, holder) : holder
   }
 
   private async releaseDevelopmentLeaseBeforeStaticStart(definitionId: string): Promise<void> {

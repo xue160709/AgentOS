@@ -183,6 +183,8 @@
     "serveUnsupported": "This directory is not a runnable web project",
     "serveNotGenerated": "No preview generated yet",
     "serveStopped": "Stopped",
+    "serveShared": "Sharing the running instance of \u201c{{name}}\u201d",
+    "leaveShared": "Leave shared runtime",
     "updatePreview": "Update preview",
     "startRuntime": "Start",
     "viewMode": "How to view",

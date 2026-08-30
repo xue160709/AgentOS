@@ -183,6 +183,8 @@
     "serveUnsupported": "这个目录不是可运行的网页工程",
     "serveNotGenerated": "还没有生成预览",
     "serveStopped": "已停止",
+    "serveShared": "与「{{name}}」共享同一个运行实例",
+    "leaveShared": "离开共享",
     "updatePreview": "更新预览",
     "startRuntime": "启动",
     "viewMode": "查看方式",

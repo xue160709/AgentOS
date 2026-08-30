@@ -1968,6 +1968,13 @@ if (gotSingleInstanceLock) {
           if (!bound.ok) return bound
           localAppRuntimeManager?.register(existing)
           await registerProjectRuntimeHost({ projectId: project.id, mountId: normalizedMountId, canonicalRoot: inspected.canonicalRoot, runtimeDefinitionId: existing.id })
+          // This directory may already be served by another definition (a
+          // Workspace Tab on the same root). Borrowing is spawn-free: it only
+          // attaches this page to the instance that is already running, so the
+          // page shows it instead of reporting a stopped Runtime.
+          try {
+            await localAppRuntimeManager?.borrowSharedRoot(existing.id, projectRuntimeConsumerId({ projectId: project.id, mountId: normalizedMountId }))
+          } catch { /* borrowing is best effort; the page can still start its own */ }
           return { ok: true, status: 'ready', projectId: project.id, mountId: normalizedMountId, runtimeRoot, definition: existing, runtime: localAppRuntimeManager?.get(existing.id) ?? null }
         }
         if (existingMatchesRoot && existing) {

@@ -81,7 +81,13 @@ export function runtimeServeStatus(
       : { message: t('runtime.serveArtifact') }
   }
   if (status === 'degraded') return { message: t('runtime.runtimeDegraded'), alert: true }
-  if (status === 'running') return { message: t('runtime.serveDevelopment') }
+  if (status === 'running') {
+    // A borrowed Runtime is running, but not by this definition: say whose
+    // instance it is instead of implying this view owns the process.
+    return runtime.sharedRootRuntime
+      ? { message: t('runtime.serveShared', { name: runtime.sharedRootRuntime.name }) }
+      : { message: t('runtime.serveDevelopment') }
+  }
   return { message: t('runtime.serveDevelopmentStarting'), busy: true }
 }
 
@@ -185,6 +191,9 @@ export function applyRuntimeEvent(current: RuntimeStateMap, event: RuntimeEvent)
     errorCode: event.errorCode ?? previous?.errorCode,
     detail: event.detail ?? previous?.detail,
     previewStatus: event.phase === 'preview' ? event.previewStatus : previous?.previewStatus,
+    // Sharing is a property of the event's own runtime identity: never
+    // inherited, so leaving a shared root clears the label immediately.
+    sharedRootRuntime: event.sharedRootRuntime,
     logs: event.line !== undefined
       ? [...(previous?.logs ?? []).slice(-(MAX_RUNTIME_LOG_LINES - 1)), `[${event.stream ?? 'runtime'}] ${event.line}`]
       : previous?.logs,

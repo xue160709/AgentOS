@@ -39,6 +39,8 @@ export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart,
   const isBuilding = staticMode && displayStatus === 'building'
   const firstBuild = isBuilding && !runtime?.artifactId && !runtime?.previewUrl
   const hasLastGood = Boolean(runtime?.artifactId && runtime?.previewUrl)
+  // Borrowed Runtime: this tab owns no process, so stopping only leaves it.
+  const shared = runtime?.sharedRootRuntime
   const label = t(({
     idle: 'runtime.runtimeStopped', ready: 'runtime.runtimeReady', stale: 'runtime.runtimeStale', build_required: 'runtime.runtimeBuildRequired', building: firstBuild ? 'runtime.runtimeFirstBuilding' : 'runtime.runtimeBuilding', build_failed: 'runtime.runtimeBuildFailed',
     preparing: 'runtime.runtimePreparing', starting: 'runtime.runtimeStarting', running: 'runtime.runtimeRunning', degraded: 'runtime.runtimeDegraded', failed: 'runtime.runtimeFailed', path_missing: 'runtime.runtimePathMissing', stopped: 'runtime.runtimeStopped',
@@ -60,7 +62,7 @@ export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart,
         <button type="button" className="btn btn-toolbar" data-testid="runtime-refresh" onClick={onReload} disabled={!runtime?.readyUrl && !runtime?.previewUrl}>{t('runtime.refresh')}</button>
         <button type="button" className="btn btn-toolbar" data-testid="runtime-logs" onClick={onLogsToggle} aria-expanded={logsOpen}>{t('runtime.logs')}</button>
         <button type="button" className="btn btn-toolbar" data-testid="runtime-restart" onClick={onRestart} disabled={!canRestart}>{t('runtime.restart')}</button>
-        <button type="button" className="btn btn-ghost" data-testid={isBuilding ? 'runtime-cancel-build' : 'runtime-stop'} onClick={isBuilding ? (onCancelBuild ?? onStop) : onStop} disabled={!canStop}>{isBuilding ? t('runtime.cancel') : t('runtime.stop')}</button>
+        <button type="button" className="btn btn-ghost" data-testid={isBuilding ? 'runtime-cancel-build' : 'runtime-stop'} onClick={isBuilding ? (onCancelBuild ?? onStop) : onStop} disabled={!canStop}>{isBuilding ? t('runtime.cancel') : shared ? t('runtime.leaveShared') : t('runtime.stop')}</button>
       </div>
     </header> : null}
     {!showToolbar && onDevelopmentAction ? <span className="sr-only" data-testid="runtime-status" role={developmentStatus.alert ? 'alert' : 'status'} aria-busy={developmentStatus.busy}>{developmentStatus.message}</span> : null}

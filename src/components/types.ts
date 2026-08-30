@@ -129,9 +129,18 @@ export type RuntimeSnapshot = {
   logs?: string[]
   /** Preview state is kept separate from the managed process state. */
   previewStatus?: PreviewStatus
+  /**
+   * Set when this view is served by another definition's process on the same
+   * root. The Runtime is borrowed, not owned: this definition holds no root
+   * lease, and leaving it never stops the shared process.
+   */
+  sharedRootRuntime?: SharedRootRuntimeRef
   /** @deprecated Read-only compatibility for Revision 1 event payloads. */
   localAppId?: string
 }
+
+/** Identity of the definition whose process is serving a borrowed Runtime. */
+export type SharedRootRuntimeRef = { runtimeDefinitionId: string; name: string }
 
 export type RuntimeEvent = {
   type: 'snapshot' | 'status' | 'log' | 'ready' | 'exit'
@@ -157,6 +166,8 @@ export type RuntimeEvent = {
   phase?: RuntimeSnapshot['phase']
   errorCode?: string
   previewStatus?: PreviewStatus
+  /** Mirrors `RuntimeSnapshot.sharedRootRuntime` for a borrowed Runtime. */
+  sharedRootRuntime?: SharedRootRuntimeRef
   timestamp: number
   /** @deprecated Read-only compatibility for Revision 1 event payloads. */
   localAppId?: string
