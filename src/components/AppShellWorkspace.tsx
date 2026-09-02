@@ -3,9 +3,10 @@
  * Center pane coordinating Chat/Docs/Settings routes plus auxiliary drawers.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
+import { sameModelPick } from '../model-pick'
 import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ChatModelPick, ClaudeAgentStatusSnapshot, ProjectFileSearchItem } from '../claude-chat-types'
 import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../app-events'
 import type {
@@ -20,7 +21,7 @@ import type {
   SettingsCategoryId,
   ThreadRunState,
   WorkspaceProject,
-  WorkspaceThread,
+  ThreadMetadata,
   RuntimeDefinition,
   RuntimeSnapshot,
   WorkspaceTab,
@@ -28,17 +29,22 @@ import type {
 import { AgentModeMenu } from './AgentModeMenu'
 import { AppAgentStatusPopover } from './AppAgentStatusPopover'
 import { AppFileTreePane, type AppFileTreePaneHandle } from './AppFileTreePane'
-import { AppSearchModal } from './AppSearchModal'
+// Opened only from the search shortcut; keep it out of first paint.
+const AppSearchModal = lazy(async () => ({ default: (await import('./AppSearchModal')).AppSearchModal }))
 import { AppWorkspaceSidePanel, type WorkspaceSidePanelTab } from './AppWorkspaceSidePanel'
 import { ChatPage, type ChatPageHandle } from './chat/ChatPage'
 import { DocsPage } from './DocsPage'
 import { ProjectFilePreviewOverlay, type ProjectFilePreviewOverlayState } from './ProjectFilePreviewOverlay'
-import { SettingsPage } from './setting/SettingsPage'
+// Settings pulls in the whole agent/MCP/skills configuration subtree (the
+// single largest renderer route). It is only reachable from an explicit
+// navigation, so it must not sit in the first-paint bundle.
+const SettingsPage = lazy(async () => ({ default: (await import('./setting/SettingsPage')).SettingsPage }))
 import { useWorkspaceAgentMode } from './useWorkspaceAgentMode'
 import type { AgentModeSettingsResult, HomePluginRunItem } from '../desktop-types'
 import { projectContent } from '../project-content'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
-import type { ProjectChatSnapshot } from '../project-chat-contract'
+import type { ChatBrokerSnapshotSource } from './chat/broker-snapshot-source'
+import { useThreadChatSelector } from './chat/thread-chat-state-store'
 import type { RuntimeDevelopmentSnapshot } from '../runtime-development-contract'
 import { runtimeDevelopmentStatus } from './runtime-event-state'
 
@@ -101,7 +107,7 @@ type AppShellWorkspaceProps = {
   activeViewId: AppViewId
   settingsCategory: SettingsCategoryId
   activeProject: WorkspaceProject
-  activeThread: WorkspaceThread | undefined
+  activeThread: ThreadMetadata | undefined
   activeWorkspaceTab?: WorkspaceTab
   activeRuntimeDefinition?: RuntimeDefinition
   activeRuntime?: RuntimeSnapshot | null
@@ -118,9 +124,10 @@ type AppShellWorkspaceProps = {
   onOpenRuntimeDevelopmentThread?: (threadId: string) => void
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
-  projectChatSnapshot?: ProjectChatSnapshot
+  /** Broker 快照 seam：传 store 而不是快照对象，避免每条 delta 都换一次 prop。 */
+  projectChatSnapshots?: ChatBrokerSnapshotSource
   projectChatEnabled: boolean
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
   threadRunStates: Record<string, ThreadRunState>
@@ -171,7 +178,7 @@ export function AppShellWorkspace({
   onOpenRuntimeDevelopmentThread,
   projectDefaultModelPick,
   projectHomeModelPick,
-  projectChatSnapshot,
+  projectChatSnapshots,
   projectChatEnabled,
   threads,
   projects,
@@ -221,19 +228,21 @@ export function AppShellWorkspace({
   const autoContextRefreshKeysRef = useRef<Set<string>>(new Set())
   const agentMode = useWorkspaceAgentMode(activeProject)
   const activeThreadRunning = Boolean(activeThread && threadRunStates[activeThread.id])
+  // 只订阅会话身份，不订阅 items：一次流式回答里这两个值不变，因此这里不会重渲染。
+  const activeThreadSessionId = useThreadChatSelector(activeThread?.id, (chatState) => chatState.sessionId)
+  const activeThreadModelPick = useThreadChatSelector(activeThread?.id, (chatState) => chatState.modelPick, sameModelPick)
   const agentStatusRequest = useMemo(
     () => ({
       threadId: activeThread?.id,
-      sessionId: activeThread?.chatState.sessionId,
-      modelPick: activeThread?.chatState.modelPick ?? projectHomeModelPick ?? projectDefaultModelPick,
+      sessionId: activeThreadSessionId,
+      modelPick: activeThreadModelPick ?? projectHomeModelPick ?? projectDefaultModelPick,
       cwd: activeProject.path,
     }),
-    [activeProject.path, activeThread?.chatState.modelPick, activeThread?.chatState.sessionId, activeThread?.id, projectDefaultModelPick, projectHomeModelPick],
+    [activeProject.path, activeThreadModelPick, activeThreadSessionId, activeThread?.id, projectDefaultModelPick, projectHomeModelPick],
   )
 
   /** 与 ChatPage.showThreadView 一致：有消息或插件定制线程时视为对话流，否则为项目首页 / Mirrors ChatPage.showThreadView */
-  const chatItems = activeThread?.chatState.items ?? []
-  const hasThreadMessages = chatItems.length > 0
+  const hasThreadMessages = useThreadChatSelector(activeThread?.id, (chatState) => chatState.items.length > 0)
   const showConversationFlow =
     hasThreadMessages ||
     activeThread?.purpose === 'home-plugin-customization' ||
@@ -346,7 +355,7 @@ export function AppShellWorkspace({
 
   useEffect(() => {
     const threadId = activeThread?.id
-    const sessionId = activeThread?.chatState.sessionId?.trim()
+    const sessionId = activeThreadSessionId?.trim()
     if (activeViewId !== 'home' || !threadId || !sessionId || activeThreadRunning) return
     if (
       agentStatusSnapshot?.threadId === threadId &&
@@ -362,7 +371,7 @@ export function AppShellWorkspace({
     void refreshAgentStatus(true)
   }, [
     activeProject.path,
-    activeThread?.chatState.sessionId,
+    activeThreadSessionId,
     activeThread?.id,
     activeThreadRunning,
     activeViewId,
@@ -620,7 +629,7 @@ export function AppShellWorkspace({
             activeThread={activeThread}
             projectDefaultModelPick={projectDefaultModelPick}
             projectHomeModelPick={projectHomeModelPick}
-            projectChatSnapshot={projectChatSnapshot}
+            projectChatSnapshots={projectChatSnapshots}
             projectChatEnabled={projectChatEnabled}
             agentStatusSnapshot={agentStatusSnapshot}
             threads={threads}
@@ -657,14 +666,18 @@ export function AppShellWorkspace({
             onStopProjectSkillRun={onStopProjectSkillRun}
           />
           {!isRuntimeActive ? <DocsPage hidden={activeViewId !== 'docs'} /> : null}
-          {!isRuntimeActive ? <SettingsPage
-            hidden={activeViewId !== 'settings'}
-            settingsCategory={settingsCategory}
-            activeProject={activeProject}
-            showProjectSkillsInSidebar={showProjectSkillsInSidebar}
-            onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
-            onOpenAgentSettings={openAgentSettings}
-          /> : null}
+          {!isRuntimeActive && activeViewId === 'settings' ? (
+            <Suspense fallback={null}>
+              <SettingsPage
+                hidden={false}
+                settingsCategory={settingsCategory}
+                activeProject={activeProject}
+                showProjectSkillsInSidebar={showProjectSkillsInSidebar}
+                onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
+                onOpenAgentSettings={openAgentSettings}
+              />
+            </Suspense>
+          ) : null}
           {filePreview ? (
             <ProjectFilePreviewOverlay preview={filePreview} onClose={() => setFilePreview(null)} />
           ) : null}
@@ -687,6 +700,7 @@ export function AppShellWorkspace({
         />
       </div>
       {searchOpen ? (
+        <Suspense fallback={null}>
         <AppSearchModal
           activeProject={activeProject}
           projects={projects}
@@ -703,6 +717,7 @@ export function AppShellWorkspace({
           onSelectThread={onSelectThread}
           onOpenRuntimeDevelopmentThread={onOpenRuntimeDevelopmentThread}
         />
+        </Suspense>
       ) : null}
     </div>
   )

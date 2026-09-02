@@ -17,6 +17,8 @@ import { useI18n } from '../../i18n/i18n'
 import { IconInline } from '../../icon-inline'
 import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { ChatPage } from './ChatPage'
+import { useBrokerSnapshotSource } from './broker-snapshot-source'
+import { usePublishedThreadChatStates } from './thread-chat-state-store'
 import {
   createRuntimeChatBridge,
   runtimeChatApi,
@@ -114,6 +116,10 @@ export function RuntimeDevelopmentWindowPage() {
 
   const snapshot = state.kind === 'ready' ? state.snapshot : undefined
   const threads = useMemo(() => (snapshot ? runtimeChatThreads(snapshot) : []), [snapshot])
+  // 与主窗口共用一条读取路径：ChatPage 只从 store 与 broker seam 取数据。
+  const scopeId = state.kind === 'ready' ? state.context.runtimeScopeId : ''
+  const brokerSnapshots = useBrokerSnapshotSource(scopeId, snapshot)
+  usePublishedThreadChatStates(scopeId, threads)
   const liveThreads = useMemo(() => threads.filter((thread) => !thread.archivedAt).sort((a, b) => b.updatedAt - a.updatedAt), [threads])
   const threadRunStates = useMemo(() => (snapshot ? runtimeChatRunStates(snapshot) : {}), [snapshot])
   useEffect(() => {
@@ -183,7 +189,7 @@ export function RuntimeDevelopmentWindowPage() {
         {status ? <p className="chat-window__status" role="status">{status}</p> : null}
       </div>
       <ChatPage
-        hidden={false} activeProject={owner} activeThread={isNewThread ? undefined : activeThread} projectChatSnapshot={state.snapshot} projectChatEnabled
+        hidden={false} activeProject={owner} activeThread={isNewThread ? undefined : activeThread} projectChatSnapshots={brokerSnapshots} projectChatEnabled
         chatBridge={chatBridge} submitBlockedReason={submitBlockedReason} agentStatusSnapshot={null}
         threads={threads} projects={[owner]} projectOrderIds={[owner.id]} threadRunStates={threadRunStates} onStatusChange={setStatus}
         onNewThread={() => undefined} onForkThread={() => undefined} onCreateProject={() => undefined} onSelectProject={() => undefined} onSelectThread={selectThread}

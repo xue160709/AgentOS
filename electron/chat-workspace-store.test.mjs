@@ -438,3 +438,68 @@ test('shared rollout reader preserves the valid prefix of an ordinary Project Th
     assert.equal(restored.threads[0].chatState.items[0].content, 'old content')
   })
 })
+
+test('streaming stages in memory, survives reads, and flushes the newest delta', async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath, { durableFlushDelayMs: 60_000 })
+    const workspacePath = join(userDataPath, 'chat-workspace.json')
+
+    // One committed baseline: what a crash mid-stream must fall back to.
+    await store.save(createWorkspaceState({ threads: [createThread('thread-old', 100)] }))
+    const committedRaw = readFileSync(workspacePath, 'utf8')
+
+    const stageDelta = (length) => {
+      const thread = createThread('thread-old', 100 + length)
+      thread.chatState.items = [
+        ...thread.chatState.items,
+        { type: 'message', id: 'assistant-1', role: 'assistant', content: 'x'.repeat(length), status: 'streaming', createdAt: 100 },
+      ]
+      store.stage(createWorkspaceState({ threads: [thread] }))
+    }
+    for (let index = 1; index <= 6; index += 1) stageDelta(index)
+
+    assert.equal(readFileSync(workspacePath, 'utf8'), committedRaw, 'staged deltas must not touch disk')
+    assert.equal(store.hasPendingDurableWrite(), true)
+
+    // Broadcasts and snapshot reads run on this path while a run streams: a read
+    // must not roll the transcript back to the last durable commit, nor retire
+    // the staged write that the next fold builds on.
+    const observed = store.read()
+    const item = observed.threads[0].chatState.items.find((entry) => entry.id === 'assistant-1')
+    assert.equal(item.content.length, 6, 'a read during streaming must still see the staged delta')
+    assert.equal(store.hasPendingDurableWrite(), true, 'reading must not retire the staged write')
+
+    await store.flushPending()
+    assert.equal(store.hasPendingDurableWrite(), false)
+
+    const reopened = new ChatWorkspaceStore(userDataPath).read()
+    const persisted = reopened.threads[0].chatState.items.find((entry) => entry.id === 'assistant-1')
+    assert.equal(persisted.content.length, 6, 'flush must persist the newest staged delta')
+  })
+})
+
+test('a staged write is retired by its deadline, and an explicit save supersedes it', async () => {
+  const { ChatWorkspaceStore } = loadChatWorkspaceStore()
+  await withTempUserData(async (userDataPath) => {
+    const store = new ChatWorkspaceStore(userDataPath, { durableFlushDelayMs: 10 })
+
+    // Nothing staged: flushing is a no-op and writes no snapshot.
+    await store.flushPending()
+    assert.equal(existsSync(join(userDataPath, 'chat-workspace.json')), false)
+
+    // The scheduled timer commits without an explicit flush.
+    store.stage(createWorkspaceState({ threads: [createThread('thread-old', 100)] }))
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.equal(store.hasPendingDurableWrite(), false, 'the deadline must retire the staged write on its own')
+    await store.flushPending()
+
+    // A later explicit save carries the staged mutations and replaces them.
+    store.stage(createWorkspaceState({ threads: [createThread('thread-old', 200)] }))
+    await store.save(createWorkspaceState({ threads: [createThread('thread-new', 400)] }))
+    assert.equal(store.hasPendingDurableWrite(), false, 'save must retire the staged write')
+
+    const restored = new ChatWorkspaceStore(userDataPath).read()
+    assert.deepEqual(restored.threads.map((thread) => thread.id), ['thread-new'])
+  })
+})

@@ -28,7 +28,7 @@ import type {
   ThreadCompletionState,
   ThreadRunState,
   WorkspaceProject,
-  WorkspaceThread,
+  ThreadMetadata,
   RuntimeDefinition,
   RuntimeSnapshot,
   WorkspaceTab,
@@ -62,7 +62,7 @@ type AppShellSidebarProps = {
   settingsCategory: SettingsCategoryId
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
   threadRunStates: Record<string, ThreadRunState>
   threadCompletionStates: Record<string, ThreadCompletionState>
   activeProjectId: string
@@ -446,7 +446,7 @@ export function AppShellSidebar({
   // --- Data prep: visible threads grouped & sorted per project / 数据准备：按项目分组并排序未归档线程 ---
 
   const visibleThreads = threads.filter((thread) => !thread.archivedAt)
-  const threadsByProject = new Map<string, WorkspaceThread[]>()
+  const threadsByProject = new Map<string, ThreadMetadata[]>()
   for (const thread of visibleThreads) {
     const list = threadsByProject.get(thread.projectId) ?? []
     list.push(thread)
@@ -461,7 +461,7 @@ export function AppShellSidebar({
 
   // --- Context menu factories (project / skill / thread rows) / 右键菜单构造（项目、技能、线程）---
 
-  const requestArchive = (thread: WorkspaceThread, source: 'button' | 'menu') => {
+  const requestArchive = (thread: ThreadMetadata, source: 'button' | 'menu') => {
     // Broker mode refuses a busy thread regardless of purpose; the shell shows
     // the "stop first" message instead of an auto-stop confirm.
     if (isThreadBusy?.(thread.id)) {
@@ -575,7 +575,7 @@ export function AppShellSidebar({
     })
   }
 
-  const openThreadMenu = (event: ReactMouseEvent, thread: WorkspaceThread) => {
+  const openThreadMenu = (event: ReactMouseEvent, thread: ThreadMetadata) => {
     setSkillTip(null)
     event.preventDefault()
     event.stopPropagation()

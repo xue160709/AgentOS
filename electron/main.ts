@@ -50,6 +50,7 @@ import { probeMcpServer } from './claude-agent-runner/mcp-probe'
 import { testWebSearchProviderSettings } from './claude-agent-runner/web-search'
 import { ClaudeAgentSettingsStore } from './claude-agent-settings'
 import { ChatWorkspaceStore } from './chat-workspace-store'
+import { migrateAttachmentThumbnails, shrinkAttachmentThumbnail } from './chat-attachment-thumbnail'
 import { ChatWorkspaceCoordinator } from './chat-workspace-coordinator'
 import { DesktopPreferencesStore } from './desktop-preferences-store'
 import { loadMainProcessEnv } from './env-loader'
@@ -517,6 +518,34 @@ function getAgentModeSettingsStore() {
     throw new Error('Agent Mode settings store is not ready.')
   }
   return agentModeSettingsStore
+}
+
+/**
+ * 一次性迁移：把历史上写进 dataUrl 的原图压成缩略图。
+ * Workspaces written before the thumbnail policy stored full-resolution images
+ * in `dataUrl`, which every workspace read, write, and broker snapshot then
+ * copied. Shrink them once at startup; an already-compliant workspace performs
+ * no write.
+ */
+async function runAttachmentThumbnailMigration(): Promise<void> {
+  const store = chatWorkspaceStore
+  if (!store) return
+  try {
+    await runChatWorkspaceOperation(async () => {
+      const current = store.read()
+      if (!current) return
+      const migrated = migrateAttachmentThumbnails(current)
+      if (!migrated.changed) return
+      await store.save(migrated.state)
+      console.info('[attachments] thumbnail migration', {
+        shrunk: migrated.shrunkCount,
+        bytesSaved: migrated.bytesSaved,
+      })
+    })
+  } catch (error) {
+    // A failed migration must never block startup; it retries next launch.
+    console.warn('[attachments] thumbnail migration failed', error)
+  }
 }
 
 function getChatWorkspaceStore() {
@@ -1294,6 +1323,9 @@ async function prepareForAppQuit(): Promise<void> {
   runtimeDevelopmentCoordinator?.setQuitting()
   runtimeDevelopmentConflictTokens.clear()
   localAppQuitCleanup = (async () => {
+    // Mid-run deltas are staged in memory; commit them before the process goes
+    // away so an in-flight transcript is not lost on quit.
+    await chatWorkspaceStore?.flushPending().catch(() => undefined)
     speechRecognitionService?.dispose()
     disposeProjectFileWatchers()
     await Promise.race([
@@ -1375,6 +1407,7 @@ if (gotSingleInstanceLock) {
     agentModeSettingsStore = new AgentModeSettingsStore(userDataPath)
     chatWorkspaceStore = new ChatWorkspaceStore(userDataPath)
     chatWorkspaceCoordinator = new ChatWorkspaceCoordinator()
+    void runAttachmentThumbnailMigration()
     localAppTrustStore = new LocalAppTrustStore(userDataPath)
     localAppRuntimeManager = new LocalAppRuntimeManager({
       preparationRecordPath: path.join(userDataPath, 'local-app-preparation.json'),
@@ -2830,6 +2863,8 @@ async function readChatAttachments(filePaths: string[], allowImages: boolean): P
         const imageSize = image.isEmpty() ? undefined : image.getSize()
         const dimensions =
           imageSize && imageSize.width > 0 && imageSize.height > 0 ? `${imageSize.width} x ${imageSize.height}` : ''
+        // `base64` carries the full image to the Agent and is dropped before the
+        // workspace is persisted; `dataUrl` is the durable UI thumbnail.
         attachments.push({
           id: createAttachmentId(attachments.length),
           kind: 'image',
@@ -2838,7 +2873,7 @@ async function readChatAttachments(filePaths: string[], allowImages: boolean): P
           mimeType: imageMimeType,
           size: stat.size,
           base64,
-          dataUrl: `data:${imageMimeType};base64,${base64}`,
+          dataUrl: shrinkAttachmentThumbnail(`data:${imageMimeType};base64,${base64}`),
           preview: dimensions,
         })
       }

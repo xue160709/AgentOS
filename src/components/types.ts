@@ -404,6 +404,13 @@ export type WorkspaceThread = ChatThreadBase & {
   skillTitle?: string
 }
 
+/**
+ * 壳层线程元数据：不含 `chatState`。
+ * 渲染进程的对话内容由 `ThreadChatStateStore` 持有，流式 delta 不再进入 AppShell 的 React state。
+ * `WorkspaceThread` 可直接赋给它，反之不行——这样任何仍需要对话内容的读取点都会在编译期暴露。
+ */
+export type ThreadMetadata = Omit<WorkspaceThread, 'chatState'>
+
 /** 新建线程时的瞬时行为；不进入持久化线程数据。 / Ephemeral behavior for creating a thread. */
 export type CreateWorkspaceThreadOptions = {
   activate?: boolean
@@ -497,6 +504,12 @@ export type ChatWorkspaceState = {
   workspaceSchemaVersion?: number
   snapshotComplete?: boolean
 }
+
+/**
+ * 壳层工作区投影：与 `ChatWorkspaceState` 同构，但线程只保留元数据。
+ * 落盘与主进程契约仍然使用 `ChatWorkspaceState`；两者之间由 hydrate/adopt 显式转换。
+ */
+export type WorkspaceMetadataState = Omit<ChatWorkspaceState, 'threads'> & { threads: ThreadMetadata[] }
 
 /** 某项目的技能列表加载状态 / Loaded slash skills for one project */
 export type ProjectSkillListState = {

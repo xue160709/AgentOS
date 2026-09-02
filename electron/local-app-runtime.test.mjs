@@ -66,7 +66,16 @@ test('Project Runtime root is derived from the project and rejects a canonical s
   assert.equal(runtime.isContainedInProject(canonicalProjectRoot, resolve(canonicalProjectRoot, '.agentos-real')), true)
 })
 
-async function waitForPath(path, { present = true, timeoutMs = 5_000 } = {}) {
+/**
+ * 这些等待是正确性断言（进程最终退出 / 文件最终出现），不是性能断言。
+ * These waits assert *that* a process exits or a file appears, not how fast.
+ * The node test runner executes files in parallel, so a loaded machine can push
+ * a real spawn past a tight bound and turn a correct run red. The bound only
+ * needs to be short enough to fail a genuinely stuck process.
+ */
+const PROCESS_WAIT_TIMEOUT_MS = 20_000
+
+async function waitForPath(path, { present = true, timeoutMs = PROCESS_WAIT_TIMEOUT_MS } = {}) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (existsSync(path) === present) return
@@ -91,7 +100,7 @@ function isPidAlive(pid) {
   }
 }
 
-async function waitForPidGone(pid, timeoutMs = 5_000) {
+async function waitForPidGone(pid, timeoutMs = PROCESS_WAIT_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (!isPidAlive(pid)) return
@@ -100,7 +109,7 @@ async function waitForPidGone(pid, timeoutMs = 5_000) {
   assert.equal(isPidAlive(pid), false, `expected PID to exit: ${pid}`)
 }
 
-async function waitForChildExit(child, timeoutMs = 5_000) {
+async function waitForChildExit(child, timeoutMs = PROCESS_WAIT_TIMEOUT_MS) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return
   await new Promise((resolve) => {
     let timer

@@ -638,3 +638,53 @@ test('ephemeral runtime-edit rebroadcast fresh-reads without saving or advancing
   assert.equal(harness.broadcasts.at(-1).workspaceRevision, 0)
   assert.equal(harness.broadcasts.at(-1).snapshot.runtimeEdit.potentialRunCount, 1)
 })
+
+test('mid-run deltas stage in memory and only the terminal event commits durably', async () => {
+  let state = workspace()
+  const durableSaves = []
+  const stagedWrites = []
+  // A store that separates the two write kinds the broker may choose.
+  const store = {
+    read: () => state,
+    current: () => state,
+    save: async (next) => { durableSaves.push(next); state = next; return state },
+    stage: (next) => { stagedWrites.push(next); state = next; return state },
+  }
+  const harness = makeHarness(state, { store })
+  const created = await harness.broker.createThread({ projectId: 'project-1', title: 'Streaming', source: 'user' })
+  const threadId = created.value.threadId
+  const submitted = await harness.broker.submitRun({ projectId: 'project-1', threadId, text: 'go' })
+  const requestId = submitted.value.requestId
+
+  const durableBeforeStream = durableSaves.length
+  for (let index = 1; index <= 12; index += 1) {
+    harness.broker.publish({ type: 'assistant_delta', requestId, messageId: 'message-1', text: `chunk-${index}` })
+  }
+  harness.broker.publish({ type: 'tool_start', requestId, toolUseId: 'tool-1', name: 'Read', status: 'running' })
+  await harness.broker.idle()
+
+  assert.equal(durableSaves.length, durableBeforeStream, 'mid-run events must not trigger a durable workspace write')
+  assert.ok(stagedWrites.length >= 13, 'each mid-run event stages the in-memory projection')
+  // Renderers still see every delta: broadcasts read from the staged projection.
+  const streamed = state.threads.find((thread) => thread.id === threadId)
+  assert.ok(streamed.chatState.items.some((item) => item.type === 'message' && item.role === 'assistant'))
+
+  harness.broker.publish({ type: 'result', requestId, sessionId: 'session-1', result: 'done' })
+  await harness.broker.idle()
+  assert.equal(durableSaves.length, durableBeforeStream + 1, 'the terminal event commits the run durably')
+})
+
+test('a store without the staging seam keeps saving durably on every event', async () => {
+  let state = workspace()
+  const durableSaves = []
+  // Legacy/Runtime stores expose only read+save; the broker must not regress them.
+  const store = { read: () => state, save: async (next) => { durableSaves.push(next); state = next; return state } }
+  const harness = makeHarness(state, { store })
+  const created = await harness.broker.createThread({ projectId: 'project-1', title: 'Streaming', source: 'user' })
+  const submitted = await harness.broker.submitRun({ projectId: 'project-1', threadId: created.value.threadId, text: 'go' })
+
+  const before = durableSaves.length
+  harness.broker.publish({ type: 'assistant_delta', requestId: submitted.value.requestId, messageId: 'message-1', text: 'chunk' })
+  await harness.broker.idle()
+  assert.equal(durableSaves.length, before + 1)
+})

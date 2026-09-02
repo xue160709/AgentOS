@@ -14,6 +14,7 @@ import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ChatHistorySearch
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
 import { projectContent } from '../project-content'
+import { threadChatStore } from './chat/thread-chat-state-store'
 import type {
   AppSearchHighlightRange,
   AppSearchResult,
@@ -22,7 +23,7 @@ import type {
   ProjectSkillRunRequest,
   ThreadRunState,
   WorkspaceProject,
-  WorkspaceThread,
+  ThreadMetadata,
 } from './types'
 
 const MAX_SECTION_RESULTS = 8
@@ -32,7 +33,7 @@ const MESSAGE_SEARCH_DEBOUNCE_MS = 120
 type AppSearchModalProps = {
   activeProject: WorkspaceProject
   projects: WorkspaceProject[]
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
   projectSkills: AgentContextSlashItem[]
   threadRunStates: Record<string, ThreadRunState>
   initialScope: AppSearchScope
@@ -53,7 +54,7 @@ type SearchHit =
     })
   | (AppSearchResult & {
       kind: 'chat' | 'task'
-      thread: WorkspaceThread
+      thread: ThreadMetadata
     })
   | (AppSearchResult & {
       kind: 'message'
@@ -745,7 +746,7 @@ function buildThreadHits({
   recentDays: number | undefined
   t: (path: string, vars?: Record<string, string | number>) => string
   threadRunStates: Record<string, ThreadRunState>
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
 }): SearchHit[] {
   return threads
     .filter((thread) => (projectScope === 'all' || thread.projectId === activeProject.id) && (includeArchived || !thread.archivedAt))
@@ -965,8 +966,8 @@ function recencyScore(updatedAt: number): number {
   return Math.max(0, 40 - ageDays)
 }
 
-function firstUserPrompt(thread: WorkspaceThread): string {
-  const item = thread.chatState.items.find((item) => item.type === 'message' && item.role === 'user')
+function firstUserPrompt(thread: ThreadMetadata): string {
+  const item = threadChatStore.read(thread.id).items.find((item) => item.type === 'message' && item.role === 'user')
   if (!item || item.type !== 'message') return ''
   return compactText(item.content, 120)
 }
@@ -977,7 +978,7 @@ function compactText(value: string, maxLength: number): string {
   return `${compact.slice(0, maxLength - 1).trimEnd()}…`
 }
 
-function threadPurposeLabel(thread: WorkspaceThread, t: (path: string) => string): string {
+function threadPurposeLabel(thread: ThreadMetadata, t: (path: string) => string): string {
   if (thread.purpose === 'home-plugin-customization') return t('search.purpose.homePlugin')
   if (thread.purpose === 'home-plugin-card-customization') return t('search.purpose.homePluginCard')
   if (thread.purpose === 'task-run') return t('search.purpose.task')

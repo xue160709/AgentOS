@@ -2,9 +2,9 @@
  * Agent Mode card home surface rendered from per-card Home Plugins.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
-import { A2uiSurface, basicCatalog, MarkdownContext, type ReactComponentImplementation } from '@a2ui/react/v0_9'
-import { MessageProcessor, type A2uiClientAction, type A2uiMessage, type SurfaceModel } from '@a2ui/web_core/v0_9'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import type { A2uiMessage } from '@a2ui/web_core/v0_9'
+import type { A2uiCardSurfaceProps } from './A2uiCardSurface'
 import type { AgentContextSlashItem, ChatModelPick, ClaudeAgentSettingsSnapshot, ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
 import type {
   AgentMcpServerConfig,
@@ -33,11 +33,11 @@ import {
   validateModelPick,
   type ModelPickMenuRow,
 } from '../../model-pick'
-import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
+import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadMetadata, ThreadRunState, WorkspaceProject } from '../types'
 import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { sortProjectsForSidebar } from '../project-order'
 import { formatBytes } from './format'
-import { renderMarkdown } from './markdown'
+import { threadChatStore } from './thread-chat-state-store'
 
 type ProjectHomeSurfaceProps = {
   project: WorkspaceProject
@@ -52,7 +52,7 @@ type ProjectHomeSurfaceProps = {
   onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
   onAgentSettingsPanelChange: (panel: AgentSettingsPanelId) => void
   onCloseAgentSettings: () => void
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
   threadRunStates: Record<string, ThreadRunState>
   hiddenSkillPaths: string[]
   onStartDataCardDraft: () => void
@@ -1256,9 +1256,7 @@ function HomePluginCard({
           ) : taskCard ? (
             <TaskHomeCardView task={taskCard} projectPath={projectPath} />
           ) : (
-            <MarkdownContext.Provider value={(text) => Promise.resolve(renderMarkdown(text))}>
-              <A2uiCardSurface messages={messages} projectPath={projectPath} onEdit={onEdit} />
-            </MarkdownContext.Provider>
+            <A2uiCardSurface messages={messages} projectPath={projectPath} onEdit={onEdit} />
           )}
         </div>
       </div>
@@ -1428,7 +1426,7 @@ function SkillHomeCard({
   skill: AgentContextSlashItem
   size: HomePluginCardSize
   projectId: string
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
   threadRunStates: Record<string, ThreadRunState>
   fixedModelLabel: string
   onRun: (projectId: string, skill: ProjectSkillRunRequest) => void
@@ -1562,88 +1560,18 @@ function skillModelLabelForCard(
   return modelRowForPick(modelRows, validPick)?.headline ?? validPick.anthropicModel
 }
 
-function A2uiCardSurface({
-  messages,
-  projectPath,
-  onEdit,
-}: {
-  messages: A2uiMessage[]
-  projectPath: string
-  onEdit: () => void
-}) {
-  const surfacesRef = useRef<SurfaceModel<ReactComponentImplementation>[]>([])
-  const [surfaces, setSurfaces] = useState<SurfaceModel<ReactComponentImplementation>[]>([])
-  const [revision, setRevision] = useState(0)
+/**
+ * The A2UI runtime (@a2ui/react + web_core + lit) is the largest dependency the
+ * project home pulls in, and only A2UI-rendered cards need it. Load it on
+ * demand so the home shell paints without it.
+ */
+const A2uiCardSurfaceLazy = lazy(async () => ({ default: (await import('./A2uiCardSurface')).A2uiCardSurface }))
 
-  const handleAction = useCallback(
-    (action: A2uiClientAction) => {
-      if (action.name === 'customize_home' || action.name === 'edit_home_card') {
-        onEdit()
-        return
-      }
-      if (action.name === 'refresh_home') {
-        window.dispatchEvent(new CustomEvent('project-home:refresh'))
-        return
-      }
-      if (action.name === 'task_run') {
-        const slug = resolveActionText(action.context?.slug)
-        if (!slug) return
-        const runTaskHomePlugin = window.desktop?.runTaskHomePlugin
-        if (!runTaskHomePlugin) return
-        void runTaskHomePlugin(projectPath, slug).finally(() => {
-          window.dispatchEvent(new CustomEvent('project-home:refresh'))
-        })
-        return
-      }
-      if (action.name === 'task_stop') {
-        const slug = resolveActionText(action.context?.slug)
-        if (!slug) return
-        const stopTaskHomePlugin = window.desktop?.stopTaskHomePlugin
-        if (!stopTaskHomePlugin) return
-        void stopTaskHomePlugin(projectPath, slug).finally(() => {
-          window.dispatchEvent(new CustomEvent('project-home:refresh'))
-        })
-        return
-      }
-      if (action.name === 'open_file') {
-        const rawPath = resolveActionPath(action.context?.filePath ?? action.context?.path)
-        const safePath = rawPath ? normalizeProjectRelativePath(rawPath) : ''
-        if (!safePath) return
-        const targetPath = `${projectPath}/${safePath}`
-        if (window.desktop?.openPath) {
-          void window.desktop.openPath(targetPath).catch(() => window.desktop?.showItemInFolder?.(targetPath))
-        } else {
-          void window.desktop?.showItemInFolder?.(targetPath)
-        }
-      }
-    },
-    [onEdit, projectPath],
-  )
-
-  const processor = useMemo(() => new MessageProcessor<ReactComponentImplementation>([basicCatalog], handleAction), [handleAction])
-
-  useEffect(() => {
-    try {
-      Array.from(processor.model.surfacesMap.keys()).forEach((id) => processor.model.deleteSurface(id))
-      processor.processMessages(messages)
-      const next = Array.from(processor.model.surfacesMap.values())
-      surfacesRef.current = next
-      setSurfaces(next)
-      setRevision((value) => value + 1)
-    } catch (error) {
-      console.error(error)
-      setSurfaces([])
-    }
-  }, [messages, processor])
-
-  useEffect(() => () => processor.model.dispose(), [processor])
-
+function A2uiCardSurface(props: A2uiCardSurfaceProps) {
   return (
-    <div className="project-home-surface">
-      {surfaces.map((surface) => (
-        <A2uiSurface key={`${surface.id}:${revision}`} surface={surface} />
-      ))}
-    </div>
+    <Suspense fallback={<div className="project-home-surface" aria-busy="true" />}>
+      <A2uiCardSurfaceLazy {...props} />
+    </Suspense>
   )
 }
 
@@ -3780,17 +3708,17 @@ function normalizeHomeCardLayout(value: unknown): HomeCardLayout {
 }
 
 function latestSkillThread(
-  threads: WorkspaceThread[],
+  threads: ThreadMetadata[],
   skillPath: string,
-  predicate: (thread: WorkspaceThread) => boolean = () => true,
-): WorkspaceThread | undefined {
+  predicate: (thread: ThreadMetadata) => boolean = () => true,
+): ThreadMetadata | undefined {
   return threads
     .filter((thread) => thread.purpose === 'skill-run' && thread.skillPath === skillPath && !thread.archivedAt && predicate(thread))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
 
-function latestThreadMessageStatus(thread: WorkspaceThread): 'done' | 'error' | 'cancelled' | undefined {
-  const assistant = [...thread.chatState.items]
+function latestThreadMessageStatus(thread: ThreadMetadata): 'done' | 'error' | 'cancelled' | undefined {
+  const assistant = [...threadChatStore.read(thread.id).items]
     .reverse()
     .find((item) => item.type === 'message' && item.role === 'assistant')
   if (!assistant || assistant.type !== 'message') return undefined
@@ -3822,17 +3750,7 @@ function normalizeComparablePath(value: string): string {
   return value.replace(/\\/g, '/').replace(/\/+$/, '')
 }
 
-function resolveActionPath(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (!isRecord(value)) return ''
-  return resolveActionPath(value.path)
-}
 
-function resolveActionText(value: unknown): string {
-  if (typeof value === 'string') return value.trim()
-  if (!isRecord(value)) return ''
-  return resolveActionText(value.value ?? value.slug ?? value.path)
-}
 
 function normalizeProjectRelativePath(value: string): string {
   const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '').trim()

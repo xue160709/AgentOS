@@ -106,13 +106,35 @@ const CodeBlock = memo(function CodeBlock({ code, language }: { code: string; la
   )
 })
 
+/**
+ * 流式期间图表源码每个 delta 都在变；等它稳定下来再渲染。
+ * While a reply streams, the fenced block grows on every delta and marked hands
+ * us a new, still-incomplete diagram each time. Rendering each one runs the
+ * whole mermaid parse plus its repair candidates and throws the result away, so
+ * wait for the source to settle first.
+ */
+const MERMAID_SETTLE_MS = 320
+
+function useSettledValue<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value)
+
+  useEffect(() => {
+    if (Object.is(settled, value)) return
+    const timer = window.setTimeout(() => setSettled(value), delayMs)
+    return () => window.clearTimeout(timer)
+  }, [delayMs, settled, value])
+
+  return settled
+}
+
 const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: string }) {
   const { t } = useI18n()
   const reactId = useId()
+  const settledCode = useSettledValue(code, MERMAID_SETTLE_MS)
   const baseId = useMemo(() => `mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, '')}`, [reactId])
   const [renderState, setRenderState] = useState<MermaidRenderState>('rendering')
   const [svg, setSvg] = useState('')
-  const [renderedCode, setRenderedCode] = useState(code)
+  const [renderedCode, setRenderedCode] = useState(settledCode)
   const [wasRepaired, setWasRepaired] = useState(false)
   const [error, setError] = useState('')
   const [copySourceState, setCopySourceState] = useState<CopyState>('idle')
@@ -123,14 +145,14 @@ const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: string }) 
 
     setRenderState('rendering')
     setSvg('')
-    setRenderedCode(code)
+    setRenderedCode(settledCode)
     setWasRepaired(false)
     setError('')
 
     void import('mermaid')
       .then(({ default: mermaid }) => {
         mermaid.initialize(getMermaidConfig())
-        const candidates = buildMermaidRenderCandidates(code)
+        const candidates = buildMermaidRenderCandidates(settledCode)
         return renderMermaidCandidate(mermaid, baseId, candidates)
       })
       .then(({ svg: renderedSvg, source, repaired }) => {
@@ -154,7 +176,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: string }) 
     return () => {
       cancelled = true
     }
-  }, [baseId, code])
+  }, [baseId, settledCode])
 
   const copySource = () => {
     setCopySourceState('copying')

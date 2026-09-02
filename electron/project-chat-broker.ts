@@ -46,6 +46,12 @@ import {
 export type ProjectChatBrokerStore = {
   read(): ChatWorkspaceState | null
   save(state: ChatWorkspaceState): Promise<ChatWorkspaceState>
+  /** In-memory projection of the last committed state; used on the stream hot path. */
+  current?(): ChatWorkspaceState | null
+  /** Memory-only commit with a deferred durable write; used for mid-run deltas. */
+  stage?(state: ChatWorkspaceState): ChatWorkspaceState
+  /** Force any staged mutation to disk. */
+  flushPending?(): Promise<void>
 }
 
 export type ProjectChatBrokerRunner = ChatBrokerRunner & {
@@ -103,16 +109,21 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
     options.runner.setRuntimeEditHook?.(options.runtimeEditCoordinator)
     this.core = options.core ?? new ChatBrokerCore({ runner: options.runner, now: this.now, runExclusive: options.runExclusive })
     this.unregisterCoreFacade = this.core.registerFacade('project', {
+      // Stream hot path: Main is the only writer while the app runs, so the
+      // in-memory projection is authoritative here. read() would re-parse the
+      // whole workspace JSON on every coalesced delta.
       readThread: (projectId, threadId) => {
-        const state = this.options.store.read()
+        const state = this.workspaceProjection()
         const thread = state?.threads.find((candidate) => candidate.id === threadId && candidate.projectId === projectId)
         return thread ? { chatState: thread.chatState } : null
       },
-      saveThreadChatState: async (projectId, threadId, chatState, updatedAt) => {
-        const state = this.options.store.read()
+      saveThreadChatState: async (projectId, threadId, chatState, updatedAt, options) => {
+        const state = this.workspaceProjection()
         const thread = state?.threads.find((candidate) => candidate.id === threadId && candidate.projectId === projectId)
         if (!state || !thread) return false
-        await this.saveMutation({ ...state, threads: state.threads.map((candidate) => candidate.id === thread.id ? { ...candidate, updatedAt, chatState } : candidate) })
+        const next = { ...state, threads: state.threads.map((candidate) => candidate.id === thread.id ? { ...candidate, updatedAt, chatState } : candidate) }
+        // Mid-run deltas stage; the run's terminal event commits durably.
+        await this.saveMutation(next, { durable: options?.durable !== false })
         return true
       },
       broadcast: (projectId) => this.broadcastProjectSnapshot(projectId),
@@ -416,7 +427,8 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
   refreshPromptOwners(projectId?: string): Promise<void> { return this.core.refreshPromptOwners('project', projectId) }
   /** Ephemeral Main projection only: no workspace write or revision increment. */
   broadcastProjectSnapshot(projectId: string): void {
-    const state = this.options.store.read()
+    // Runs once per chat event; the projection already carries staged deltas.
+    const state = this.workspaceProjection()
     if (state?.projects.some((project) => project.id === projectId)) this.broadcastSnapshot(state, projectId)
   }
   onWebContentsUnavailable(webContentsId: number): Promise<void> { return this.core.refreshPromptOwners('project', undefined, webContentsId) }
@@ -453,8 +465,18 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
     this.options.runtimeEditCoordinator?.registerAcceptedRun({ projectId, requestId, permissionMode })
   }
 
-  private async saveMutation(state: ChatWorkspaceState): Promise<ChatWorkspaceState> {
-    return this.options.store.save({ ...state, workspaceRevision: state.workspaceRevision + 1 })
+  private async saveMutation(state: ChatWorkspaceState, options?: { durable?: boolean }): Promise<ChatWorkspaceState> {
+    const next = { ...state, workspaceRevision: state.workspaceRevision + 1 }
+    if (options?.durable === false && this.options.store.stage) return this.options.store.stage(next)
+    return this.options.store.save(next)
+  }
+
+  /**
+   * Workspace as Main last committed it. Falls back to a disk read only before
+   * the first read of the session.
+   */
+  private workspaceProjection(): ChatWorkspaceState | null {
+    return this.options.store.current?.() ?? this.options.store.read()
   }
 
   private appendFailedRun(state: ChatWorkspaceState, threadId: string, run: ProjectChatRunSnapshot): ChatWorkspaceState {

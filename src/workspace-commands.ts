@@ -13,7 +13,7 @@
  * its own store, so a redacted renderer projection can never be written back.
  */
 
-import type { ChatWorkspaceState, ProjectHomeViewMode, WorkspaceProject } from './components/types'
+import type { ChatWorkspaceState, ProjectHomeViewMode, WorkspaceMetadataState, WorkspaceProject } from './components/types'
 
 export type WorkspaceCommand =
   | { type: 'project.create'; name: string; path: string }
@@ -188,15 +188,15 @@ export function orderedWorkspaceProjectIds(
   return [...ordered, ...remaining]
 }
 
-function withActiveWorkspaceTab(state: ChatWorkspaceState, activeWorkspaceTabId: string): ChatWorkspaceState {
-  return { ...state, activeWorkspaceTabId, activeLocalAppTabId: activeWorkspaceTabId }
+function withActiveWorkspaceTab<S extends WorkspaceMetadataState>(state: S, activeWorkspaceTabId: string): S {
+  return { ...state, activeWorkspaceTabId, activeLocalAppTabId: activeWorkspaceTabId } as S
 }
 
-export function createWorkspaceProject(
+export function createWorkspaceProject<S extends WorkspaceMetadataState>(
   input: { id: string; name: string; path: string },
-  state: ChatWorkspaceState,
+  state: S,
   now: number,
-): ChatWorkspaceState {
+): S {
   if (state.projects.some((project) => project.id === input.id)) return state
   const project: WorkspaceProject = {
     id: input.id,
@@ -217,7 +217,7 @@ export function createWorkspaceProject(
   }, '')
 }
 
-export function removeWorkspaceProject(state: ChatWorkspaceState, projectId: string): ChatWorkspaceState {
+export function removeWorkspaceProject<S extends WorkspaceMetadataState>(state: S, projectId: string): S {
   if (state.projects.length <= 1) return state
   if (!state.projects.some((project) => project.id === projectId)) return state
   const projects = state.projects.filter((project) => project.id !== projectId)
@@ -238,30 +238,30 @@ export function removeWorkspaceProject(state: ChatWorkspaceState, projectId: str
       collapsedProjectIds: state.sidebarPrefs.collapsedProjectIds.filter((id) => id !== projectId),
       projectOrderIds: state.sidebarPrefs.projectOrderIds.filter((id) => id !== projectId),
     },
-  }
+  } as S
 }
 
-export function relocateWorkspaceProject(
-  state: ChatWorkspaceState,
+export function relocateWorkspaceProject<S extends WorkspaceMetadataState>(
+  state: S,
   projectId: string,
   path: string,
   now: number,
-): ChatWorkspaceState {
+): S {
   let changed = false
   const projects = state.projects.map((project) => {
     if (project.id !== projectId) return project
     changed = true
     return { ...project, path, pathMissing: undefined, updatedAt: now }
   })
-  return changed ? { ...state, projects } : state
+  return changed ? { ...state, projects } as S : state
 }
 
-export function setWorkspaceProjectPinned(
-  state: ChatWorkspaceState,
+export function setWorkspaceProjectPinned<S extends WorkspaceMetadataState>(
+  state: S,
   projectId: string,
   pinned: boolean,
   now: number,
-): ChatWorkspaceState {
+): S {
   const target = state.projects.find((project) => project.id === projectId)
   if (!target) return state
   if (Boolean(target.pinnedAt) === pinned) return state
@@ -275,15 +275,15 @@ export function setWorkspaceProjectPinned(
       ...state.sidebarPrefs,
       projectOrderIds: pinned ? [projectId, ...currentOrder.filter((id) => id !== projectId)] : currentOrder,
     },
-  }
+  } as S
 }
 
-export function reorderWorkspaceProject(
-  state: ChatWorkspaceState,
+export function reorderWorkspaceProject<S extends WorkspaceMetadataState>(
+  state: S,
   projectId: string,
   targetProjectId: string,
   position: 'before' | 'after',
-): ChatWorkspaceState {
+): S {
   if (projectId === targetProjectId) return state
   const projectIds = new Set(state.projects.map((project) => project.id))
   if (!projectIds.has(projectId) || !projectIds.has(targetProjectId)) return state
@@ -294,7 +294,7 @@ export function reorderWorkspaceProject(
   const insertIndex = position === 'before' ? targetIndex : targetIndex + 1
   const nextOrder = [...withoutDragged.slice(0, insertIndex), projectId, ...withoutDragged.slice(insertIndex)]
   if (nextOrder.join('\n') === currentOrder.join('\n')) return state
-  return { ...state, sidebarPrefs: { ...state.sidebarPrefs, projectOrderIds: nextOrder } }
+  return { ...state, sidebarPrefs: { ...state.sidebarPrefs, projectOrderIds: nextOrder } } as S
 }
 
 export function setWorkspacePreferences(

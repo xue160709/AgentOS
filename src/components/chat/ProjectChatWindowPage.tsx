@@ -10,6 +10,8 @@ import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import type { ThreadRunState, TranscriptItem, WorkspaceProject, WorkspaceThread } from '../types'
 import { ProjectChatSnapshotController } from '../workspace-session'
 import { ChatPage } from './ChatPage'
+import { useBrokerSnapshotSource } from './broker-snapshot-source'
+import { usePublishedThreadChatStates } from './thread-chat-state-store'
 import { runtimeEditStatus } from '../runtime-event-state'
 import { useI18n } from '../../i18n/i18n'
 import { IconInline } from '../../icon-inline'
@@ -131,6 +133,10 @@ export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
   }, [flushViewState, projectId, queueViewState, refreshSnapshot])
 
   const snapshot = state.kind === 'ready' ? state.snapshot : undefined
+  // 与主窗口共用一条读取路径：ChatPage 只从 store 与 broker seam 取数据。
+  const brokerSnapshots = useBrokerSnapshotSource(projectId, snapshot)
+  const windowThreads = useMemo(() => (snapshot ? snapshot.threads.map(threadFromSnapshot) : []), [snapshot])
+  usePublishedThreadChatStates(projectId, windowThreads)
   useEffect(() => {
     if (!snapshot) return
     if (creatingNewThread) return
@@ -175,7 +181,7 @@ export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
   if (state.kind === 'error' || !snapshot) return <main className="chat-window" aria-label={t('projectChatWindow.aria')}><p role="alert">{t('projectChatWindow.unavailable')}</p></main>
 
   const project = projectFromSnapshot(snapshot)
-  const threads = snapshot.threads.map(threadFromSnapshot)
+  const threads = windowThreads
   const activeThread = threads.find((thread) => thread.id === selectedThreadId)
   const isNewThread = creatingNewThread || !activeThread
   const runtimeStatus = runtimeEditStatus(t, snapshot.runtimeEdit)
@@ -208,7 +214,7 @@ export function ProjectChatWindowPage({ projectId }: { projectId: string }) {
         {status ? <p className="chat-window__status" role="status">{status}</p> : null}
       </div>
       <ChatPage
-        hidden={false} activeProject={project} activeThread={activeThread} projectChatSnapshot={snapshot} projectChatEnabled agentStatusSnapshot={null}
+        hidden={false} activeProject={project} activeThread={activeThread} projectChatSnapshots={brokerSnapshots} projectChatEnabled agentStatusSnapshot={null}
         threads={threads} projects={[project]} projectOrderIds={[projectId]} threadRunStates={runStatesFromSnapshot(snapshot)} onStatusChange={setStatus}
         onNewThread={() => undefined} onForkThread={() => undefined} onCreateProject={() => undefined} onSelectProject={() => undefined} onSelectThread={selectThread}
         onThreadChatStateChange={() => undefined} onThreadPromptSubmit={() => undefined} onThreadRunStateChange={() => undefined} onThreadCompletionStateChange={() => undefined}

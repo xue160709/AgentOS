@@ -38,6 +38,20 @@ const MAX_HISTORY_SEARCH_LIMIT = 64
 const SEARCH_DOCUMENT_BODY_LIMIT = 12_000
 const SEARCH_DOCUMENT_TOOL_LIMIT = 2_400
 const SEARCH_SNIPPET_LENGTH = 180
+/**
+ * Upper bound on how long a staged (streaming) mutation may stay memory-only.
+ * A durable `save()` rewrites every rollout file and rebuilds the search index,
+ * so running it once per coalesced delta (up to 20/s) costs tens of milliseconds
+ * of blocked Main per event and grows with the whole workspace. Streaming writes
+ * are staged instead and flushed on this interval, plus unconditionally on the
+ * run's terminal event and before quit.
+ */
+const DEFAULT_DURABLE_FLUSH_DELAY_MS = 5_000
+
+export type ChatWorkspaceStoreOptions = {
+  /** Test seam: shorten the staged-write flush interval. */
+  durableFlushDelayMs?: number
+}
 
 type ProjectRow = {
   id: string
@@ -138,11 +152,16 @@ export class ChatWorkspaceStore {
   private readonly historySearchIndex: HistorySearchIndex
   private sqliteAvailable: boolean | null = null
   private currentState: ChatWorkspaceState | null = null
+  private pendingDurableState: ChatWorkspaceState | null = null
+  private durableFlushHandle: ReturnType<typeof setTimeout> | null = null
+  private durableChain: Promise<void> = Promise.resolve()
+  private readonly durableFlushDelayMs: number
 
-  constructor(userDataPath: string) {
+  constructor(userDataPath: string, options: ChatWorkspaceStoreOptions = {}) {
     this.filePath = path.join(userDataPath, WORKSPACE_FILE_NAME)
     this.dbPath = path.join(userDataPath, WORKSPACE_DB_NAME)
     this.sessionsDir = path.join(userDataPath, SESSIONS_DIR_NAME)
+    this.durableFlushDelayMs = options.durableFlushDelayMs ?? DEFAULT_DURABLE_FLUSH_DELAY_MS
     this.historySearchIndex = new HistorySearchIndex({
       dbPath: this.dbPath,
       canUseSqlite: () => this.canUseSqlite(),
@@ -153,6 +172,10 @@ export class ChatWorkspaceStore {
   }
 
   read(): ChatWorkspaceState | null {
+    // A staged streaming mutation is strictly newer than anything on disk.
+    // Re-reading here would both hand out a transcript rolled back to the last
+    // durable commit and overwrite the projection the next fold builds on.
+    if (this.pendingDurableState) return this.currentState
     const fromJson = this.readJsonSnapshot()
     // The JSON mirror is a complete snapshot. In the common case it has the
     // same revision as SQLite, so compare only the tiny SQLite cursor first
@@ -195,8 +218,76 @@ export class ChatWorkspaceStore {
   }
 
   async save(state: unknown): Promise<ChatWorkspaceState> {
+    const toSave = this.normalizeForSave(state)
+    // An explicit save carries the staged mutations with it, so drop the
+    // deferred write rather than letting it re-run behind this one.
+    this.pendingDurableState = null
+    this.cancelDurableFlush()
+    this.currentState = toSave
+    await this.enqueueDurable(() => this.writeDurable(toSave))
+    return toSave
+  }
+
+  /**
+   * Hot-path commit for streaming mutations. Updates the in-memory projection
+   * that `current()` serves and defers the durable write behind a throttle, so
+   * a burst of deltas costs one rollout+index write instead of one per event.
+   * Callers that need durability now must follow with `flushPending()`.
+   */
+  stage(state: unknown): ChatWorkspaceState {
+    const toSave = this.normalizeForSave(state)
+    this.currentState = toSave
+    this.pendingDurableState = toSave
+    if (this.durableFlushHandle === null) {
+      this.durableFlushHandle = setTimeout(() => {
+        this.durableFlushHandle = null
+        void this.flushPending().catch(() => undefined)
+      }, this.durableFlushDelayMs)
+      this.durableFlushHandle.unref?.()
+    }
+    return toSave
+  }
+
+  /** Write any staged mutation to disk now. Safe to call when nothing is staged. */
+  async flushPending(): Promise<void> {
+    this.cancelDurableFlush()
+    const pending = this.pendingDurableState
+    if (!pending) {
+      // Still join the chain so callers observe in-flight writes.
+      await this.enqueueDurable(async () => {})
+      return
+    }
+    this.pendingDurableState = null
+    await this.enqueueDurable(() => this.writeDurable(pending))
+  }
+
+  /** True while a streaming mutation has not reached disk yet. */
+  hasPendingDurableWrite(): boolean {
+    return this.pendingDurableState !== null
+  }
+
+  private normalizeForSave(state: unknown): ChatWorkspaceState {
     const normalized = normalizeChatWorkspaceState(state)
-    const toSave = workspaceRevisionOf(normalized) > 0 ? normalized : withNextWorkspaceRevision(normalized)
+    return workspaceRevisionOf(normalized) > 0 ? normalized : withNextWorkspaceRevision(normalized)
+  }
+
+  private cancelDurableFlush(): void {
+    if (this.durableFlushHandle === null) return
+    clearTimeout(this.durableFlushHandle)
+    this.durableFlushHandle = null
+  }
+
+  /** Serialize durable writes so a scheduled flush cannot interleave with save(). */
+  private enqueueDurable(operation: () => Promise<void>): Promise<void> {
+    const next = this.durableChain.then(operation, operation)
+    this.durableChain = next.then(
+      () => undefined,
+      () => undefined,
+    )
+    return next
+  }
+
+  private async writeDurable(toSave: ChatWorkspaceState): Promise<void> {
     const savedAt = Date.now()
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await mkdir(this.sessionsDir, { recursive: true })
@@ -218,8 +309,6 @@ export class ChatWorkspaceStore {
     if (!databaseSaved && !jsonSaved) {
       throw new Error('workspace-save-failed')
     }
-    this.currentState = toSave
-    return toSave
   }
 
   searchChatHistory(projectId: string, query: string, options: ChatHistorySearchOptions = {}): ChatHistorySearchResult {

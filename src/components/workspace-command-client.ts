@@ -7,7 +7,7 @@
  * project/thread unless the command itself was about that.
  */
 
-import type { ChatWorkspaceState, ProjectHomeViewMode } from './types'
+import type { ChatWorkspaceState, ProjectHomeViewMode, WorkspaceMetadataState } from './types'
 import type { WorkspaceCommand, WorkspaceCommandResult } from '../workspace-commands'
 
 export const WORKSPACE_PREFERENCES_DEBOUNCE_MS = 300
@@ -22,7 +22,8 @@ export type WorkspaceCommandClientOptions = {
   invoke: (command: WorkspaceCommand, expectedRevision?: number) => Promise<WorkspaceCommandResult>
   /** Authoritative fresh read used once when a command hits `workspace-conflict`. */
   refresh?: () => Promise<ChatWorkspaceState | null>
-  getWorkspace: () => ChatWorkspaceState | null
+  /** 只用于取 `workspaceRevision`；壳层持有的是元数据投影。 */
+  getWorkspace: () => WorkspaceMetadataState | null
   adopt: (workspace: ChatWorkspaceState, options: { preserveSelection: boolean }) => void
   onError: (message: string) => void
   schedule?: (callback: () => void, delayMs: number) => unknown
@@ -39,11 +40,11 @@ export type WorkspaceCommandOutcome =
  * `preserveSelection` is false only when the command intentionally moves it
  * (creating a project, or removing the project currently selected).
  */
-export function adoptAuthoritativeWorkspace(
-  current: ChatWorkspaceState,
-  next: ChatWorkspaceState,
+export function adoptAuthoritativeWorkspace<S extends WorkspaceMetadataState>(
+  current: WorkspaceMetadataState,
+  next: S,
   options: { preserveSelection: boolean },
-): ChatWorkspaceState {
+): S {
   if (!options.preserveSelection) return next
   // An empty thread/tab id is the project home: a deliberate renderer-owned
   // selection, not a missing one. Main is never told when the user leaves a
@@ -63,7 +64,7 @@ export function adoptAuthoritativeWorkspace(
     activeThreadId: threadStillExists ? current.activeThreadId : next.activeThreadId,
     activeWorkspaceTabId,
     activeLocalAppTabId: activeWorkspaceTabId,
-  }
+  } as S
 }
 
 function mergePreferencePatch(

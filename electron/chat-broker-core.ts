@@ -60,7 +60,11 @@ export type ChatBrokerThreadRecord = { chatState: ChatState }
 
 export type ChatBrokerFacadeAdapter = {
   readThread(scopeId: string, threadId: string): ChatBrokerThreadRecord | null | Promise<ChatBrokerThreadRecord | null>
-  saveThreadChatState(scopeId: string, threadId: string, chatState: ChatState, updatedAt: number): Promise<boolean>
+  /**
+   * `options.durable === false` marks a mid-run streaming write: the facade may
+   * keep it in memory and defer the disk write. Terminal events are durable.
+   */
+  saveThreadChatState(scopeId: string, threadId: string, chatState: ChatState, updatedAt: number, options?: { durable?: boolean }): Promise<boolean>
   broadcast(scopeId: string): void | Promise<void>
   isRouteCurrent(route: ChatBrokerRequestRoute): boolean | Promise<boolean>
   promptOwnerCandidates?(route: ChatBrokerRequestRoute): number[]
@@ -373,9 +377,10 @@ export class ChatBrokerCore {
     const now = this.now()
     const chatState = foldChatRunEvent(thread.chatState, event, { now, assistantMessageId: route.assistantMessageId, requestStartedAt: run.startedAt })
     if (event.type === 'assistant_delta') route.assistantMessageId = event.messageId
-    if (!(await adapter.saveThreadChatState(route.scopeId, route.threadId, chatState, now))) return
+    const terminalEvent = event.type === 'result' || event.type === 'error' || event.type === 'cancelled'
+    if (!(await adapter.saveThreadChatState(route.scopeId, route.threadId, chatState, now, { durable: terminalEvent }))) return
 
-    if (event.type === 'result' || event.type === 'error' || event.type === 'cancelled') {
+    if (terminalEvent) {
       const phase = event.type === 'result' ? 'succeeded' : event.type === 'error' ? 'failed' : 'cancelled'
       this.runs.set(event.requestId, {
         ...run,

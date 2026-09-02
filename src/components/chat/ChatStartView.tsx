@@ -7,7 +7,7 @@ import { useSyncExternalStore, type ReactNode } from 'react'
 import type { ClaudeAgentStatusSnapshot } from '../../claude-chat-types'
 import { useI18n } from '../../i18n/i18n'
 import type { HomePluginRunItem } from '../../desktop-types'
-import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadRunState, WorkspaceProject, WorkspaceThread } from '../types'
+import type { AgentSettingsPanelId, FileTreeNode, ProjectSkillRunRequest, ThreadMetadata, ThreadRunState, WorkspaceProject } from '../types'
 import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { ProjectHomeProjectSelector, ProjectHomeSurface } from './ProjectHomeSurface'
 import { ProjectHomeRuntimeView, type ProjectHomeRuntimeController } from './ProjectHomeRuntimeView'
@@ -48,7 +48,7 @@ type ChatStartViewProps = {
   onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
   onAgentSettingsPanelChange: (panel: AgentSettingsPanelId) => void
   onCloseAgentSettings: () => void
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
   threadRunStates: Record<string, ThreadRunState>
   hiddenSkillPaths: string[]
   heading?: string

@@ -53,6 +53,7 @@ import type {
   ChatWorkspaceState,
   CreateWorkspaceThreadOptions,
   TranscriptItem,
+  WorkspaceMetadataState,
   ProjectSkillRunRequest,
   ProjectSkillListState,
   SelectedProjectSkill,
@@ -73,6 +74,12 @@ import { ProjectChatThreadIntentClient, isProjectThreadBusy, type ProjectChatRea
 import { configureProjectHomeRuntime, type ProjectHomeRuntimeContext } from './chat/ChatStartView'
 import { WorkspaceSession } from './workspace-session'
 import { ProjectChatSnapshotController, applyProjectChatSnapshot } from './workspace-session'
+import {
+  adoptWorkspaceChatStates,
+  hydrateWorkspaceChatStates,
+  threadChatStore,
+} from './chat/thread-chat-state-store'
+import { BrokerSnapshotStore } from './chat/broker-snapshot-source'
 import type { ProjectChatSnapshot } from '../project-chat-contract'
 import { RuntimeOnboardingDialog } from './RuntimeOnboardingDialog'
 import { AgentOSPairingDialog } from './AgentOSPairingDialog'
@@ -330,7 +337,7 @@ export function AppShell() {
   const [canBack, setCanBack] = useState(false)
   const [canForward, setCanForward] = useState(false)
   const [headerStatus, setHeaderStatus] = useState(() => translate(getInitialLocale(), 'shell.headerDefault'))
-  const [chatWorkspace, setChatWorkspace] = useState<ChatWorkspaceState | null>(null)
+  const [chatWorkspace, setChatWorkspace] = useState<WorkspaceMetadataState | null>(null)
   const [localAppInspect, setLocalAppInspect] = useState<RuntimeInspectResult | null>(null)
   const [localAppChooserOpen, setLocalAppChooserOpen] = useState(false)
   const [localAppDialogBusy, setLocalAppDialogBusy] = useState(false)
@@ -357,7 +364,10 @@ export function AppShell() {
   const [projectHomeDraftModelPicks, setProjectHomeDraftModelPicks] = useState<Record<string, ChatModelPick>>({})
   const [threadRunStates, setThreadRunStates] = useState<Record<string, ThreadRunState>>({})
   const [threadCompletionStates, setThreadCompletionStates] = useState<Record<string, ThreadCompletionState>>({})
-  const [projectChatSnapshots, setProjectChatSnapshots] = useState<Record<string, ProjectChatSnapshot>>({})
+  // Broker 快照放在外部 store：每条 delta 都会重发整份快照，但 `runs`/`pendingPrompts`
+  // 通常没变，订阅方按片段比较后不会重渲染。
+  const projectChatSnapshotStoreRef = useRef(new BrokerSnapshotStore<ProjectChatSnapshot>())
+  const projectChatSnapshotStore = projectChatSnapshotStoreRef.current
   // `FIX-CHAT-01`: three states. `probing` must never fall back to the legacy
   // durable writer, so only an explicit `legacy` re-enables Revision 1 paths.
   const [projectChatReadiness, setProjectChatReadiness] = useState<ProjectChatReadiness>('probing')
@@ -419,8 +429,13 @@ export function AppShell() {
 
   // --- Workspace mutation helpers (centralized `setChatWorkspace`) / 工作区变更辅助（统一走 setChatWorkspace）---
 
-  const updateChatWorkspace = useCallback((update: (prev: ChatWorkspaceState) => ChatWorkspaceState) => {
+  const updateChatWorkspace = useCallback((update: (prev: WorkspaceMetadataState) => WorkspaceMetadataState) => {
     setChatWorkspace((prev) => (prev ? update(prev) : prev))
+  }, [])
+
+  /** 主进程权威快照进入壳层的唯一入口：对话内容落进 store，React state 只留元数据。 */
+  const adoptAuthoritativeSnapshot = useCallback((workspace: ChatWorkspaceState) => {
+    setChatWorkspace(adoptWorkspaceChatStates(workspace))
   }, [])
 
   useEffect(() => {
@@ -474,7 +489,7 @@ export function AppShell() {
   tRef.current = t
   const threadRunStatesRef = useRef(threadRunStates)
   threadRunStatesRef.current = threadRunStates
-  const chatWorkspaceRef = useRef<ChatWorkspaceState | null>(null)
+  const chatWorkspaceRef = useRef<WorkspaceMetadataState | null>(null)
   chatWorkspaceRef.current = chatWorkspace
   if (!workspaceCommandClientRef.current) {
     workspaceCommandClientRef.current = new WorkspaceCommandClient({
@@ -486,11 +501,13 @@ export function AppShell() {
       refresh: () => Promise.resolve(window.desktop?.getChatWorkspace?.() ?? null).then((state) => state ?? null),
       getWorkspace: () => chatWorkspaceRef.current,
       adopt: (workspace, options) => {
-        setChatWorkspace((current) => {
-          const next = current ? adoptAuthoritativeWorkspace(current, workspace, options) : workspace
-          chatWorkspaceRef.current = next
-          return next
-        })
+        // store.reset 会唤醒订阅者，必须留在 setState updater 之外（updater 必须是纯函数）。
+        const current = chatWorkspaceRef.current
+        const next = adoptWorkspaceChatStates(
+          current ? adoptAuthoritativeWorkspace(current, workspace, options) : workspace,
+        )
+        chatWorkspaceRef.current = next
+        setChatWorkspace(next)
       },
       onError: (message) => setWorkspaceSaveError(message),
     })
@@ -517,6 +534,11 @@ export function AppShell() {
   }, [])
 
   const updateThreadRunState = useCallback((threadId: string, state: ThreadRunState | null) => {
+    // Revision 1：delta 不再推进 `updatedAt`，否则侧栏会按 delta 频率重排。
+    // 运行结束是这条线程真正的「最近活动」时刻，在这里补一次即可保持排序语义。
+    if (!state && projectChatReadinessRef.current === 'legacy') {
+      updateChatWorkspace((prev) => touchWorkspaceThread(prev, threadId, Date.now()))
+    }
     setThreadRunStates((prev) => {
       const current = prev[threadId]
       if (!state) {
@@ -534,7 +556,7 @@ export function AppShell() {
       }
       return { ...prev, [threadId]: state }
     })
-  }, [])
+  }, [updateChatWorkspace])
 
   const updateThreadCompletionState = useCallback((threadId: string, completedAt: number | null) => {
     setThreadCompletionStates((prev) => {
@@ -589,7 +611,6 @@ export function AppShell() {
   const runtimeDetailsDefinition = runtimeDetailsTab
     ? chatWorkspace?.runtimeDefinitions.find((item) => item.id === runtimeDetailsTab.runtimeDefinitionId)
     : undefined
-  const activeProjectChatSnapshot = activeProject ? projectChatSnapshots[activeProject.id] : undefined
   const projectHomeModelPick = activeProject
     ? projectHomeDraftModelPicks[activeProject.id] ?? projectDefaultModelPick
     : undefined
@@ -601,10 +622,25 @@ export function AppShell() {
 
   const acceptProjectChatSnapshot = useCallback((snapshot: ProjectChatSnapshot) => {
     projectChatSnapshotControllerRef.current.adopt(snapshot)
-    setProjectChatSnapshots((current) => ({ ...current, [snapshot.projectId]: snapshot }))
-    setChatWorkspace((current) => current ? applyProjectChatSnapshot(current, snapshot) : current)
-    setThreadRunStates((current) => {
-      const next = { ...current }
+    projectChatSnapshotStore.set(snapshot.projectId, snapshot)
+    // 运行中只有时间戳在动，壳层不需要重渲染；终止快照里 run 不再活跃，精确时间戳照常落地。
+    const hasActiveRun = snapshot.runs.some(
+      (run) => run.phase !== 'succeeded' && run.phase !== 'failed' && run.phase !== 'cancelled',
+    )
+    // store 写入会唤醒订阅者，必须留在 setState updater 之外。
+    const current = chatWorkspaceRef.current
+    if (current) {
+      const next = applyProjectChatSnapshot(current, snapshot, {
+        store: threadChatStore,
+        deferTimestampOnlyUpdates: hasActiveRun,
+      })
+      if (next !== current) {
+        chatWorkspaceRef.current = next
+        setChatWorkspace(next)
+      }
+    }
+    setThreadRunStates((currentRunStates) => {
+      const next: Record<string, ThreadRunState> = { ...currentRunStates }
       for (const thread of snapshot.threads) delete next[thread.id]
       for (const run of snapshot.runs) {
         if (run.phase === 'succeeded' || run.phase === 'failed' || run.phase === 'cancelled') continue
@@ -615,7 +651,7 @@ export function AppShell() {
           updatedAt: run.finishedAt ?? run.startedAt,
         }
       }
-      return next
+      return sameThreadRunStates(currentRunStates, next) ? currentRunStates : next
     })
     for (const run of snapshot.runs) {
       const status = run.phase === 'waiting_permission'
@@ -627,7 +663,7 @@ export function AppShell() {
             : run.phase
       agentCommandChannel.reportThreadStatus(run.threadId, status, run.error?.code)
     }
-  }, [])
+  }, [projectChatSnapshotStore])
 
   const refreshProjectChatSnapshot = useCallback(async (projectId: string): Promise<ProjectChatSnapshot | null> => {
     const api = window.projectChat
@@ -1089,12 +1125,12 @@ export function AppShell() {
   useEffect(() => {
     let cancelled = false
     void workspaceSession.load().then((state) => {
-      if (!cancelled) setChatWorkspace(state)
+      if (!cancelled) adoptAuthoritativeSnapshot(state)
     })
     return () => {
       cancelled = true
     }
-  }, [workspaceSession])
+  }, [adoptAuthoritativeSnapshot, workspaceSession])
 
   // Runtime event scope is checked by runtimeDefinitionId/runtimeId/generation; old generations are discarded.
   useEffect(() => {
@@ -1330,7 +1366,14 @@ export function AppShell() {
     // Probing is not legacy: staging here would let a renderer mirror overwrite
     // Main before the seam has answered.
     if (projectChatReadiness !== 'legacy') return
-    workspaceSession.stage(chatWorkspace)
+    // 磁盘格式不变：落盘前把 store 里的对话内容装回线程。
+    const stage = () => {
+      const current = chatWorkspaceRef.current
+      if (current) workspaceSession.stage(hydrateWorkspaceChatStates(current))
+    }
+    stage()
+    // Revision 1 由渲染进程持有耐久副本，因此对话内容变化也必须驱动一次 staging。
+    return threadChatStore.subscribe(stage)
   }, [chatWorkspace, projectChatReadiness, workspaceSession])
 
   useEffect(() => {
@@ -1351,22 +1394,27 @@ export function AppShell() {
 
   const handleWorkspaceCleared = useCallback(() => {
     workspaceSession.clear()
-    setChatWorkspace(createDefaultChatWorkspaceState())
+    adoptAuthoritativeSnapshot(createDefaultChatWorkspaceState())
     setProjectSkillStates({})
     setThreadRunStates({})
     setSelectedProjectSkill(null)
     setHomeModeResetKey((value) => value + 1)
     setHeaderStatus(t('shell.headerDefault'))
     window.location.hash = ''
-  }, [t, workspaceSession])
+  }, [adoptAuthoritativeSnapshot, t, workspaceSession])
 
   // --- Chat/workspace reducers: merge transcript updates and CRUD threads/projects / 归约器：合并聊天内容并增删改线程与项目 ---
 
+  /**
+   * 流式写入口。对话内容只进 `ThreadChatStateStore`，不再触发壳层的 `setState`；
+   * 线程时间戳交给运行状态变化那一刻统一推进，避免每条 delta 重排侧栏。
+   */
   const updateThreadChatState = useCallback(
     (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => {
-      updateChatWorkspace((prev) => workspaceSession.updateThreadChatState(prev, threadId, update))
+      const projectId = chatWorkspaceRef.current?.threads.find((thread) => thread.id === threadId)?.projectId
+      threadChatStore.set(threadId, update, projectId)
     },
-    [updateChatWorkspace, workspaceSession],
+    [],
   )
 
   const selectThread = useCallback(
@@ -1404,19 +1452,17 @@ export function AppShell() {
       const threadId = createId('thread')
       const draftProjectId = projectId ?? activeProject?.id
       const shouldClearHomeDraft = activate && Boolean(draftProjectId && projectHomeDraftModelPicks[draftProjectId])
-      updateChatWorkspace((prev) => {
-        const targetProjectId = projectId ?? prev.activeProjectId
-        const defaultModelPick = targetProjectId === activeProject?.id
-          ? (activate ? projectHomeDraftModelPicks[targetProjectId] : undefined) ?? projectDefaultModelPick
-          : projectHomeDraftModelPicks[targetProjectId]
-        return workspaceSession.addThread(prev, {
-          id: threadId,
-          projectId: targetProjectId,
-          title: options.title?.trim() || t('thread.newThreadTitle'),
-          chatState: createEmptyChatState(defaultModelPick),
-          activate,
-        })
-      })
+      const targetProjectId = projectId ?? chatWorkspaceRef.current?.activeProjectId ?? ''
+      const defaultModelPick = targetProjectId === activeProject?.id
+        ? (activate ? projectHomeDraftModelPicks[targetProjectId] : undefined) ?? projectDefaultModelPick
+        : projectHomeDraftModelPicks[targetProjectId]
+      threadChatStore.set(threadId, createEmptyChatState(defaultModelPick), targetProjectId)
+      updateChatWorkspace((prev) => workspaceSession.addThread(prev, {
+        id: threadId,
+        projectId: targetProjectId,
+        title: options.title?.trim() || t('thread.newThreadTitle'),
+        activate,
+      }))
       if (shouldClearHomeDraft && draftProjectId) {
         setProjectHomeDraftModelPick(draftProjectId, undefined)
       }
@@ -1467,14 +1513,17 @@ export function AppShell() {
     (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => {
       setSelectedProjectSkill(null)
       const threadId = createId('thread')
+      const project = chatWorkspaceRef.current?.projects.find((item) => item.id === projectId)
+      threadChatStore.set(
+        threadId,
+        { model: model ?? 'Claude Agent', modelPick, cwd: project?.path, items },
+        projectId,
+      )
       updateChatWorkspace((prev) =>
-        workspaceSession.forkThread(prev, {
+        workspaceSession.addThread(prev, {
           id: threadId,
           projectId,
           title,
-          items,
-          model,
-          modelPick,
         }),
       )
       void window.claudeChat?.newThread(threadId)
@@ -1488,13 +1537,13 @@ export function AppShell() {
     (projectId: string, initialPrompt: string) => {
       setSelectedProjectSkill(null)
       const threadId = createId('thread')
+      threadChatStore.set(threadId, createEmptyChatState(), projectId)
       updateChatWorkspace((prev) =>
         workspaceSession.addThread(prev, {
           id: threadId,
           projectId,
           title: deriveDataCardThreadTitle(initialPrompt, t),
           purpose: 'home-plugin-card-customization',
-          chatState: createEmptyChatState(),
         }),
       )
       goHome()
@@ -1532,7 +1581,6 @@ export function AppShell() {
           title: t('thread.homePluginCardEditTitle', { name: item.manifest.name }),
           purpose: 'home-plugin-card-customization',
           homePluginSlug: item.slug,
-          chatState: createEmptyChatState(),
         })
       })
       goHome()
@@ -1577,7 +1625,7 @@ export function AppShell() {
         { source: 'skill-explicit', pick: skill.modelPick },
         { source: 'project-draft', pick: projectHomeDraftModelPicks[projectId] },
         { source: 'project-default', pick: projectModelPick },
-        { source: 'active-thread', pick: activeThread?.projectId === projectId ? activeThread.chatState.modelPick : undefined },
+        { source: 'active-thread', pick: activeThread?.projectId === projectId ? threadChatStore.read(activeThread.id).modelPick : undefined },
       ]
       if (!snapshot) {
         const selected = firstDefinedModelPickCandidate(candidates)
@@ -1784,7 +1832,7 @@ export function AppShell() {
       // definition. Publish the tab before asking Main to start its process.
       localAppFocusTabIdRef.current = result.tab.id
       flushSync(() => {
-        setChatWorkspace(result.workspace)
+        adoptAuthoritativeSnapshot(result.workspace)
         setLocalAppInspect(null)
         setLocalAppChooserOpen(false)
       })
@@ -1885,7 +1933,7 @@ export function AppShell() {
       }
       localAppFocusTabIdRef.current = result.tab.id
       flushSync(() => {
-        setChatWorkspace(result.workspace)
+        adoptAuthoritativeSnapshot(result.workspace)
         setLocalAppChooserOpen(false)
         setLocalAppInspect(null)
       })
@@ -1955,7 +2003,7 @@ export function AppShell() {
       // Only publish the authoritative post-commit snapshot.  Main closes the
       // Preview and releases the Runtime consumer after this durable commit;
       // there is intentionally no optimistic renderer deletion/release path.
-      flushSync(() => setChatWorkspace(result.workspace))
+      flushSync(() => adoptAuthoritativeSnapshot(result.workspace))
       persistChatWorkspaceStateToLocalStorage(result.workspace)
       setWorkspaceSaveError(result.warning ?? '')
       setRuntimeStates((current) => {
@@ -1985,7 +2033,7 @@ export function AppShell() {
         setWorkspaceSaveError(result.message)
         return false
       }
-      flushSync(() => setChatWorkspace(result.workspace))
+      flushSync(() => adoptAuthoritativeSnapshot(result.workspace))
       persistChatWorkspaceStateToLocalStorage(result.workspace)
       return true
     } catch (error) {
@@ -2031,7 +2079,7 @@ export function AppShell() {
       }
       // Main returned the authoritative committed snapshot. Publishing it
       // avoids overwriting concurrent chat/project changes with stale React state.
-      flushSync(() => setChatWorkspace(result.workspace))
+      flushSync(() => adoptAuthoritativeSnapshot(result.workspace))
       persistChatWorkspaceStateToLocalStorage(result.workspace)
       setLocalAppInspect(null)
       if (result.warning) {
@@ -2063,7 +2111,7 @@ export function AppShell() {
         : null
       if (!nextWorkspace) return
       setChatWorkspace(nextWorkspace)
-      workspaceSession.stage(nextWorkspace)
+      workspaceSession.stage(hydrateWorkspaceChatStates(nextWorkspace))
       try {
         await workspaceSession.flush()
       } catch (error) {
@@ -2352,10 +2400,10 @@ export function AppShell() {
    */
   const isThreadBusy = useCallback((threadId: string) => {
     if (projectChatReadiness === 'legacy') return false
-    const thread = chatWorkspace?.threads.find((item) => item.id === threadId)
+    const thread = chatWorkspaceRef.current?.threads.find((item) => item.id === threadId)
     if (!thread) return false
-    return isProjectThreadBusy(projectChatSnapshots[thread.projectId], threadId)
-  }, [chatWorkspace?.threads, projectChatReadiness, projectChatSnapshots])
+    return isProjectThreadBusy(projectChatSnapshotStore.get(thread.projectId), threadId)
+  }, [projectChatReadiness, projectChatSnapshotStore])
 
   const toggleThreadPinned = useCallback((threadId: string) => {
     const target = chatWorkspaceRef.current?.threads.find((thread) => thread.id === threadId)
@@ -2459,6 +2507,7 @@ export function AppShell() {
         prompt,
         defaultThreadTitleSet,
         t('thread.newThreadTitle'),
+        (id) => threadChatStore.read(id).items.some((item) => item.type === 'message' && item.role === 'user'),
       ),
     )
   }, [updateChatWorkspace, t, workspaceSession])
@@ -3099,7 +3148,7 @@ export function AppShell() {
           onOpenRuntimeDevelopmentThread={runtimeDevelopmentEnabled ? (threadId) => { void window.desktop?.openRuntimeDevelopmentThread?.(threadId) } : undefined}
           projectDefaultModelPick={projectDefaultModelPick}
           projectHomeModelPick={projectHomeModelPick}
-          projectChatSnapshot={activeProjectChatSnapshot}
+          projectChatSnapshots={projectChatSnapshotStore}
           projectChatEnabled={projectChatEnabled}
           threads={chatWorkspace.threads}
           projects={chatWorkspace.projects}
@@ -3146,6 +3195,44 @@ export function AppShell() {
 }
 
 // --- File-level utilities (pure helpers below `AppShell`) / 文件级工具函数（`AppShell` 下方的纯函数）---
+
+/**
+ * Broker 每条 delta 都重发一份 run 列表；运行中的 run 字段其实没变。
+ * 不比较就返回新对象，会让整棵壳层树按 delta 频率重渲染。
+ */
+/** Revision 1 的「最近活动」时间戳补写；Revision 2+ 由 broker 快照携带。 */
+function touchWorkspaceThread(
+  state: WorkspaceMetadataState,
+  threadId: string,
+  timestamp: number,
+): WorkspaceMetadataState {
+  const thread = state.threads.find((item) => item.id === threadId)
+  if (!thread || thread.updatedAt >= timestamp) return state
+  return {
+    ...state,
+    projects: state.projects.map((project) =>
+      project.id === thread.projectId ? { ...project, updatedAt: timestamp } : project,
+    ),
+    threads: state.threads.map((item) => (item.id === threadId ? { ...item, updatedAt: timestamp } : item)),
+  }
+}
+
+function sameThreadRunStates(
+  left: Record<string, ThreadRunState>,
+  right: Record<string, ThreadRunState>,
+): boolean {
+  const leftKeys = Object.keys(left)
+  if (leftKeys.length !== Object.keys(right).length) return false
+  for (const key of leftKeys) {
+    const a = left[key]
+    const b = right[key]
+    if (!b) return false
+    if (a.requestId !== b.requestId || a.status !== b.status || a.startedAt !== b.startedAt || a.updatedAt !== b.updatedAt) {
+      return false
+    }
+  }
+  return true
+}
 
 function deriveDataCardThreadTitle(prompt: string, t: (path: string, vars?: Record<string, string | number>) => string): string {
   const normalized = prompt.replace(/\s+/g, ' ').trim()
