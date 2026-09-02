@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="change-status" content="implementing">
+<meta name="change-revision" content="4">
+<meta name="change-stage" content="实施中">
+<title>Runtime 开发会话与伺服探测 · 汇报</title>
+<style>
+:root{
+  --bg:#faf9f6;--ink:#1d1d1f;--muted:#6e6e73;--line:#e3e1db;
+  --accent:#0f62fe;--warn:#c0392b;--ok:#1e7a46;--card:#ffffff;--soft:#f1efe9;
+}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#161618;--ink:#ececee;--muted:#9b9ba1;--line:#333336;
+  --accent:#6ea8ff;--warn:#ff7b6b;--ok:#5cc98a;--card:#1f1f22;--soft:#26262a;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.65 "PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",system-ui,sans-serif;
+  padding:2.5rem 1.25rem 4rem}
+main{max-width:880px;margin:0 auto}
+h1{font-size:1.5rem;margin:0 0 .25rem}
+.sub{color:var(--muted);font-size:.85rem;margin-bottom:2rem}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:1.4rem 1.6rem;margin-bottom:1.4rem}
+h2{font-size:1.05rem;margin:0 0 .8rem;letter-spacing:.02em}
+h3{font-size:.92rem;margin:1.1rem 0 .4rem}
+p{margin:.4rem 0}
+ul{margin:.4rem 0;padding-left:1.3rem}
+li{margin:.3rem 0}
+table{border-collapse:collapse;width:100%;font-size:.88rem;margin:.6rem 0}
+th,td{border:1px solid var(--line);padding:.4rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+.badge{display:inline-block;font:600 .68rem/1.4 ui-monospace,monospace;border-radius:4px;
+  padding:0 .35rem;vertical-align:middle;margin-left:.3rem;border:1px solid var(--line);color:var(--muted)}
+.badge.warn{color:var(--warn);border-color:var(--warn)}
+.badge.ok{color:var(--ok);border-color:var(--ok)}
+.decide{border-left:4px solid var(--accent)}
+.decide li strong{color:var(--accent)}
+.inferred{color:var(--muted)}
+.voice{border-left:3px solid var(--line);margin:.6rem 0;padding:.3rem .9rem;color:var(--muted);font-style:italic}
+.voice b{font-style:normal;color:var(--ink);font-weight:600}
+figure{margin:1rem 0}
+figcaption{font-size:.8rem;color:var(--muted);margin-top:.35rem}
+.figs{display:flex;flex-wrap:wrap;gap:1rem}
+.figs figure{flex:1 1 340px;margin:0}
+svg text{font:12px "PingFang SC",system-ui,sans-serif;fill:var(--ink)}
+svg .m{fill:var(--muted)}
+svg .box{fill:var(--soft);stroke:var(--line)}
+svg .hot{stroke:var(--accent)}
+svg .edge{stroke:var(--muted);fill:none;marker-end:url(#a)}
+footer{color:var(--muted);font-size:.8rem;margin-top:2rem;border-top:1px solid var(--line);padding-top:1rem}
+footer a{color:var(--accent);text-decoration:none}
+.p0{color:var(--warn);font-weight:700}
+</style>
+</head>
+<body>
+<main>
+<h1>Runtime 开发会话与伺服探测</h1>
+<p class="sub">chg-20260818-agent-command-channel · Revision 4 · 实施中 · 已确认范围签署于 2026-08-30</p>
+
+<section class="decide">
+<h2>需要你决定什么</h2>
+<ul>
+<li><strong>决定 1 — 修复范围</strong>：8-31 用户视角评审发现 11 项体验缺口，其中 <b>2 项是已确认合同的实现差距</b>（探测结论在工作台侧不可见不可覆盖；opening 阶段输入框被整体禁用）。建议先修 F1／F2／F4／F5 四项（均有精确行号，可直接开 work order），其余进 backlog——接受这个切法吗？</li>
+<li><strong>决定 2 — 容错修复批次</strong>：8-31 容错状态机审查新发现 21 组问题（R-01〜R-21，见下表），其中 <b>9 项 P1</b>。建议第一批修 R-01（production 失败无路可走）、R-02（构建失败零反馈）、R-04（首屏假状态）、R-07（停止后状态回跳）、R-08（半成品被当成功产物）——接受吗？</li>
+<li><strong>决定 3 — 两个产品裁决</strong>：①构建进行中用户切走页面，构建应该<b>继续</b>还是<b>中止</b>？（现状：静默杀掉，用户以为成功了）②「停止」是否立即作废旧一代事件（结构性修复 R-07）？</li>
+<li><strong>决定 4 — 验收方式</strong>：全部发现与正式验收仍是 UNTESTED / 未执行。是否授权一轮真实 GUI 走查，同时覆盖正式验收与评审复核？</li>
+</ul>
+</section>
+
+<section>
+<h2>要解决什么问题（定稿）</h2>
+<p>你 8-30 实测确认的三个事实：导入的项目永远不会带 <code>agentos</code> 声明块，全部退化成常驻 dev；常驻 dev 使同目录两个 Runtime 争抢执行锁，<b>项目首页卡片因此无法运行</b>；普通用户不应接触 npm / build / 端口术语。</p>
+<p>目标：平时看的是构建产物，只有让 AI 改的时候才跑 dev——对自建 <code>.agentos</code> 和导入目录一视同仁。</p>
+</section>
+
+<section>
+<h2>打算怎么做（已收敛，R3+R4 已落码）</h2>
+<div class="figs">
+<figure>
+<svg viewBox="0 0 360 260" role="img" aria-label="四档伺服探测判定树">
+<defs><marker id="a" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7z" fill="currentColor" opacity=".55"/></marker></defs>
+<rect class="box" x="100" y="8" width="160" height="30" rx="6"/><text x="180" y="28" text-anchor="middle">系统探测目录事实</text>
+<path class="edge" d="M180 38 V56"/>
+<rect class="box hot" x="10" y="60" width="160" height="34" rx="6"/><text x="90" y="74" text-anchor="middle">① 已有静态产物</text><text x="90" y="88" text-anchor="middle" class="m">直接伺服 · 零进程</text>
+<rect class="box" x="190" y="60" width="160" height="34" rx="6"/><text x="270" y="74" text-anchor="middle">② 已有服务端产物</text><text x="270" y="88" text-anchor="middle" class="m">npm run start</text>
+<rect class="box" x="10" y="112" width="160" height="34" rx="6"/><text x="90" y="126" text-anchor="middle">③ 有构建脚本</text><text x="90" y="140" text-anchor="middle" class="m">构建一次 → 回 ①</text>
+<rect class="box" x="190" y="112" width="160" height="34" rx="6"/><text x="270" y="126" text-anchor="middle">④ 都不成立</text><text x="270" y="140" text-anchor="middle" class="m">npm run dev（仅此档）</text>
+<rect class="box" x="70" y="180" width="220" height="34" rx="6"/><text x="180" y="194" text-anchor="middle">探测结论可见、可手动覆盖</text><text x="180" y="208" text-anchor="middle" class="m">覆盖持久化，探测不推翻用户选择</text>
+<path class="edge" d="M90 146 V178"/><path class="edge" d="M270 146 V178"/>
+<text x="180" y="242" text-anchor="middle" class="m">C-RSM-401〜407（已确认）</text>
+</svg>
+<figcaption>浏览态按目录事实分档，dev 只留给开发会话与第④档。</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 360 260" role="img" aria-label="开发会话旅程">
+<rect class="box" x="10" y="10" width="150" height="30" rx="6"/><text x="85" y="30" text-anchor="middle">可查看页面</text>
+<path class="edge" d="M160 25 H198"/>
+<rect class="box hot" x="200" y="10" width="150" height="30" rx="6"/><text x="275" y="30" text-anchor="middle">点「用 AI 修改」</text>
+<path class="edge" d="M275 40 V62"/>
+<rect class="box" x="120" y="64" width="220" height="34" rx="6"/><text x="230" y="78" text-anchor="middle">专用 Chat 窗口 + 实时预览</text><text x="230" y="92" text-anchor="middle" class="m">连续多轮修改，主窗口即时查看</text>
+<path class="edge" d="M230 98 V120"/>
+<rect class="box" x="120" y="122" width="220" height="30" rx="6"/><text x="230" y="142" text-anchor="middle">关窗 / 「结束修改」（不取消 AI）</text>
+<path class="edge" d="M180 152 V176"/><path class="edge" d="M300 152 V176"/>
+<rect class="box" x="60" y="178" width="150" height="34" rx="6"/><text x="135" y="192" text-anchor="middle">成功：保存一次</text><text x="135" y="206" text-anchor="middle" class="m">已保存预览更新</text>
+<rect class="box" x="230" y="178" width="120" height="34" rx="6"/><text x="290" y="192" text-anchor="middle">失败：保留上一版</text><text x="290" y="206" text-anchor="middle" class="m">源码与 Diff 可续修</text>
+<text x="180" y="242" text-anchor="middle" class="m">C-RDS-301〜309（已确认）</text>
+</svg>
+<figcaption>普通用户全程不接触 npm 术语；收口只发生在会话结束。</figcaption>
+</figure>
+</div>
+</section>
+
+<section>
+<h2>要动哪些地方（进度 + 评审发现）</h2>
+<p>R3（开发会话）与 R4（四档探测）任务清单全部完成，Development Check 与 GUI smoke 通过<span class="badge ok">已落码</span>；正式 GUI 验收未全量执行<span class="badge warn">待验收</span>。</p>
+<h3>8-31 用户视角评审：11 项缺口（SIMULATED 静态走查，无 REAL 证据）</h3>
+<table>
+<tr><th>#</th><th>发现</th><th>严重度</th><th>性质</th></tr>
+<tr><td>F1</td><td>Main 算出的具体失败原因（userMessage）在界面层无任何消费者，用户只见「修改需要处理」</td><td class="p0">P0</td><td>已复核</td></tr>
+<tr><td>F2</td><td>首次构建失败文案谎称「继续显示上一版」，实际从未有过任何版本（两处渲染点）</td><td>P1</td><td>已复核</td></tr>
+<tr><td>F3</td><td>「让 AI 创建」：点击前零预期；创建 prompt 以用户名义伪装提交；写错位置的检测在常见项目结构下失效且提醒无动作</td><td>P1</td><td>已复核</td></tr>
+<tr><td>F4</td><td>信任对话框展示的命令 ≠ 实际执行；探测结论与覆盖入口在工作台侧完全缺失 —— <b>C-RSM-404/405 合同差距</b></td><td>P1</td><td>已复核</td></tr>
+<tr><td>F5</td><td>opening 阶段整个输入框被禁用 —— <b>与 design.md「可先输入」承诺直接矛盾</b></td><td>P1</td><td>已复核</td></tr>
+<tr><td>F6</td><td>未信任目录报权限错后，唯一可见按钮点击即重复同一错误，解除入口不指路（死循环）</td><td>P1</td><td>静态</td></tr>
+<tr><td>F7</td><td>关窗无「AI 后台继续」提示；会话状态纯内存，重启后警示无痕消失</td><td>P2</td><td>静态</td></tr>
+<tr><td>F8</td><td>对不支持目录点「已保存预览」覆盖无任何反馈；为此写好的解释文案是死文案</td><td>P2</td><td>已复核</td></tr>
+<tr><td>F9</td><td>工具栏同屏 8–9 个控件，「保持运行」常驻选项冲淡核心心智</td><td>P2</td><td>静态</td></tr>
+<tr><td>F10</td><td>PRD 标 Planned 但代码已实现；三处死代码/死文案</td><td>P3</td><td>静态</td></tr>
+<tr><td>F11</td><td class="inferred">「结束修改」成功瞬间双状态链可能短暂矛盾（「已结束」+「预览可更新」并存）<span class="badge">推断</span></td><td class="inferred">待验证</td><td class="inferred">INFERRED</td></tr>
+</table>
+<h3>8-31 容错状态机审查：21 组（静态代码审查，双独立视角交叉）</h3>
+<p>直接回答四个容错追问——<b>build 失败后</b>：前置失败零反馈（R-02）、失败文案谎称有备份（R-05）、取消后立刻重建是空操作（R-10）；<b>启动时显示什么</b>：先闪「未初始化」再闪「已停止」才到真状态（R-04）；<b>静态页失效</b>：裸文本 404、界面毫不知情（R-03）——但外部删项目 out/ 不影响预览（这层守住了）；<b>npm run start 失败</b>：界面内没有任何一条路能脱困（R-01）。</p>
+<table>
+<tr><th>#</th><th>发现</th><th>严重度</th></tr>
+<tr><td>R-01</td><td>production 档失败后，启动/重启/两种覆盖/构建全部无效——界面内无脱困路径</td><td class="p0">P1</td></tr>
+<tr><td>R-02</td><td>构建的 8 种前置失败（目录丢失、配置损坏…）被静默吞掉，点按钮零反应</td><td class="p0">P1</td></tr>
+<tr><td>R-03</td><td>产物在磁盘上失效后：裸文本 404，卡片仍写「已保存预览」，无重建引导</td><td class="p0">P1</td></tr>
+<tr><td>R-04</td><td>打开项目首屏依次闪两段假状态（未初始化 → 已停止 → 真实），按钮均可误点</td><td class="p0">P1</td></tr>
+<tr><td>R-06</td><td>快速切换项目时，B 项目的页面短暂显示 A 项目的路径与状态</td><td class="p0">P1</td></tr>
+<tr><td>R-07</td><td>点「停止」后状态可能跳回「运行中」或跳成「启动失败」（事件赛跑无防护）</td><td class="p0">P1</td></tr>
+<tr><td>R-08</td><td>构建中强退应用 → 半成品页面被下次启动当成「已保存预览」</td><td class="p0">P1</td></tr>
+<tr><td>R-09</td><td>构建中切走页面 → 构建被静默杀掉，回来后无任何说明，用户以为成功了</td><td class="p0">P1</td></tr>
+<tr><td>R-10〜R-21</td><td>取消后重建空操作、误报「预览更新失败」、失败态按钮全灰/死按钮、旧错误黏滞不清除、改源码永不提示可更新、失败红字被晚到事件冲掉等 12 组</td><td>P2/P3</td></tr>
+</table>
+<p class="inferred">全部为静态代码审查（有精确行号），未真机复现<span class="badge">未验证</span>；守住的底线：last-good 在一切失败路径下不丢、产物副本隔离、防旧构建覆盖新构建的栅栏完整。明细见 exploration.md §7。</p>
+</section>
+
+<section>
+<h2>代价和风险</h2>
+<h3>用户会怎么感受这些缺口<span class="badge">模拟心声 E4 · 非真实用户语录</span></h3>
+<div class="voice"><b>F1 失败不知因：</b>「它说『需要处理』，但没说要处理什么。我得重新点进去翻聊天记录才知道。」</div>
+<div class="voice"><b>F2 假备份：</b>「它说『继续显示上一版』，可我从来没见过任何版本——是我操作错了吗？」</div>
+<div class="voice"><b>F4 信任时刻：</b>「它说要跑 npm run build……我 out/ 里已经有构建好的东西了，为什么还要再构建？」（秒开后）「它到底跑没跑那个命令？」</div>
+<div class="voice"><b>F5 死等：</b>「窗口都打开了，我想先把需求打出来，怎么打不了字。」</div>
+<div class="voice"><b>F6 权限死循环：</b>「它说没有权限，可我点的按钮就叫『用 AI 修改』——那这个按钮为什么还能点？」</div>
+<div class="voice"><b>F7 重启断裂：</b>「昨天还提示『需要处理』，今天怎么又是『可以开始修改』了？是修好了，还是那个提示本来就不重要？」</div>
+<h3>做得对的（应保留）</h3>
+<ul>
+<li>同路径冲突闭环完整：检测 → 阻止 → 点名占用者 → 一键切换；零进程浏览态是你 8-30 实测问题的<b>根因修复</b>。</li>
+<li>术语纪律彻底：普通路径文案零 npm/端口泄漏；关窗不取消 AI 的承诺代码层真实兑现。</li>
+<li>已有产物零进程直开、last-good 与信任持久化、stale 检测诚实。</li>
+</ul>
+<h3>剩余风险</h3>
+<ul>
+<li>正式 GUI 验收未执行——以上「已落码」不等于验收通过。</li>
+<li>评审全部为静态证据：真实耗时、时序（F11）、重启观感均 <b>未验证</b>，需 REAL 走查升级。</li>
+<li class="inferred">考虑过把评审发现直接写入正式 PRD——因均属候选（agent_proposal）而排除，先落 exploration.md §5 待你圈定范围。</li>
+</ul>
+</section>
+
+<footer>
+chg-20260818-agent-command-channel · revision 4 · 实施中 · 范围签署 2026-08-30（对话确认，记录于 proposal.md）<br>
+<a href="product.md">product.md</a> · <a href="design.md">design.md</a> · <a href="exploration.md">exploration.md</a> · <a href="Paintpoints.md">Paintpoints.md</a> · <a href="mockup.html">mockup.html</a> · <a href="proposal.md">proposal.md</a> · <a href="tasks.md">tasks.md</a>
+</footer>
+</main>
+</body>
+</html>

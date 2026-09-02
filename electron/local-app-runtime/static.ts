@@ -8,6 +8,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto'
+import type { Dirent } from 'node:fs'
 import { copyFile, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import type { RuntimeServeOverride, RuntimeStaticDeclaration } from '../../src/components/types'
@@ -330,6 +331,8 @@ export class StaticArtifactStore {
   private readonly basePath: string
   private readonly now: () => number
   private nonce = 0
+  /** Artifact ids whose commit is between the staging rename and the pointer rename. */
+  private readonly committing = new Set<string>()
 
   constructor(userDataPath: string, now: () => number = Date.now) {
     this.basePath = path.join(userDataPath, 'runtime-static')
@@ -357,6 +360,10 @@ export class StaticArtifactStore {
       if (!isPathInside(canonicalRuntime, canonicalArtifact)) return null
       const entry = await realpath(path.resolve(canonicalArtifact, ...pointer.entryFile.split('/')))
       if (!isPathInside(canonicalArtifact, entry) || !(await stat(entry)).isFile()) return null
+      // Only the pointed artifact is ever served again. Copies left behind by
+      // earlier builds (or by versions that never pruned) are reclaimed here so
+      // an existing install heals on its next load instead of only on rebuild.
+      await this.pruneArtifacts(runtimePath, pointer.artifactId)
       return {
         artifactId: pointer.artifactId,
         rootPath: canonicalArtifact,
@@ -385,6 +392,8 @@ export class StaticArtifactStore {
     const temporaryRoot = path.join(artifactsPath, `.staging-${artifactId}`)
     const artifactRoot = path.join(artifactsPath, artifactId)
     let pointerTmp: string | undefined
+    let committed = false
+    this.committing.add(artifactId)
     try {
       await copyStaticOutput(sourceOutput, temporaryRoot, canonicalRoot)
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
@@ -408,11 +417,62 @@ export class StaticArtifactStore {
       // callers must publish this artifact even if cancellation is requested
       // in the following in-memory publication window.
       await rename(pointerTmp, path.join(runtimePath, 'last-good.json'))
+      committed = true
+      // The pointer now names the only artifact that can ever be loaded again;
+      // every previous copy of this definition is dead weight (each one is a
+      // full static export, easily hundreds of MB). Reclaim it best-effort:
+      // a prune failure must never turn a committed build into a failure.
+      await this.pruneArtifacts(runtimePath, artifactId)
       return artifact
     } finally {
+      this.committing.delete(artifactId)
       await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined)
       if (pointerTmp) await rm(pointerTmp, { force: true }).catch(() => undefined)
+      // A copy that was renamed into place but never pointed to (fence
+      // rejection, abort, pointer write failure) is unreachable: nothing loads
+      // it and the previous last-good is untouched. Drop it instead of leaking
+      // one full export per failed build.
+      if (!committed) await rm(artifactRoot, { recursive: true, force: true }).catch(() => undefined)
     }
+  }
+
+  /**
+   * Delete the committed artifacts of one definition that nothing can reach.
+   *
+   * Reachable, and therefore never deleted: `keepArtifactId` (the caller's own
+   * artifact), whatever `last-good.json` names at this moment, and any commit
+   * that has renamed its staging copy but not yet its pointer. The on-disk
+   * pointer is re-read here rather than trusted from the caller, so a caller
+   * holding a stale pointer (a load that overlapped a concurrent commit)
+   * cannot delete the newer artifact that pointer now names.
+   *
+   * Also skipped: `.staging-*` directories, whose owning commit removes them
+   * in its own `finally`, and any name that is not a well-formed artifact id.
+   *
+   * Errors are swallowed throughout: pruning reclaims space, it is never part
+   * of the commit contract, and a failure must not fail a committed build.
+   */
+  private async pruneArtifacts(runtimePath: string, keepArtifactId: string): Promise<void> {
+    const artifactsPath = path.join(runtimePath, 'artifacts')
+    let entries: Dirent[]
+    try {
+      entries = await readdir(artifactsPath, { withFileTypes: true })
+    } catch {
+      return
+    }
+    const keep = new Set([keepArtifactId])
+    try {
+      const pointer = JSON.parse(await readFile(path.join(runtimePath, 'last-good.json'), 'utf8')) as StaticArtifactPointer
+      if (typeof pointer.artifactId === 'string') keep.add(pointer.artifactId)
+    } catch {
+      // No readable pointer: fall back to the caller's artifact alone.
+    }
+    await Promise.all(entries.map(async (entry) => {
+      if (!entry.isDirectory()) return
+      const name = entry.name
+      if (keep.has(name) || !safeArtifactId(name) || this.committing.has(name)) return
+      await rm(path.join(artifactsPath, name), { recursive: true, force: true }).catch(() => undefined)
+    }))
   }
 }
 

@@ -1,0 +1,519 @@
+<title>AgentOS 性能体检</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #F4F6F9;
+    --surface: #FFFFFF;
+    --surface-2: #EBEFF4;
+    --line: #D6DCE5;
+    --line-strong: #B9C2CF;
+    --ink: #17202B;
+    --ink-2: #4A5665;
+    --ink-3: #7A8797;
+    --accent: #245C8A;
+    --accent-soft: #DCE8F3;
+    --bar: #3B78AE;
+    --bar-lazy: #B9CFE3;
+    --crit: #B3261E;
+    --crit-soft: #FBE9E7;
+    --high: #B4530A;
+    --high-soft: #FCEEDF;
+    --med: #8A6A0C;
+    --med-soft: #F8F0D2;
+    --low: #2F6F4E;
+    --low-soft: #DFF0E6;
+    --code-bg: #EEF2F6;
+    --shadow: 0 1px 2px rgba(23,32,43,.06), 0 4px 16px rgba(23,32,43,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121820;
+      --surface: #1A222C;
+      --surface-2: #222C38;
+      --line: #2E3A48;
+      --line-strong: #435162;
+      --ink: #E7ECF2;
+      --ink-2: #B3BECB;
+      --ink-3: #7F8C9B;
+      --accent: #7FB3E0;
+      --accent-soft: #1F3348;
+      --bar: #6FA6DA;
+      --bar-lazy: #35506B;
+      --crit: #F28B82;
+      --crit-soft: #3A1F1E;
+      --high: #F1A560;
+      --high-soft: #3B2A18;
+      --med: #E3C25A;
+      --med-soft: #3A3218;
+      --low: #7FCB9F;
+      --low-soft: #1B3527;
+      --code-bg: #0F151C;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121820;
+    --surface: #1A222C;
+    --surface-2: #222C38;
+    --line: #2E3A48;
+    --line-strong: #435162;
+    --ink: #E7ECF2;
+    --ink-2: #B3BECB;
+    --ink-3: #7F8C9B;
+    --accent: #7FB3E0;
+    --accent-soft: #1F3348;
+    --bar: #6FA6DA;
+    --bar-lazy: #35506B;
+    --crit: #F28B82;
+    --crit-soft: #3A1F1E;
+    --high: #F1A560;
+    --high-soft: #3B2A18;
+    --med: #E3C25A;
+    --med-soft: #3A3218;
+    --low: #7FCB9F;
+    --low-soft: #1B3527;
+    --code-bg: #0F151C;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    font-family: "Manrope", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    text-wrap: balance;
+    margin: 0;
+    line-height: 1.2;
+  }
+  code, pre, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .88em;
+  }
+  code {
+    background: var(--code-bg);
+    padding: .1em .4em;
+    border-radius: 4px;
+    color: var(--ink);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    margin: 0;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .page { max-width: 1080px; margin: 0 auto; padding: 40px 24px 80px; }
+  .eyebrow {
+    font-size: 12px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+    font-family: "Manrope", system-ui, sans-serif;
+  }
+  header h1 { font-size: 36px; font-weight: 800; margin-top: 8px; letter-spacing: -.01em; }
+  header .lede { color: var(--ink-2); max-width: 68ch; margin-top: 12px; font-size: 16px; }
+  header .meta { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 14px; color: var(--ink-3); font-size: 13px; }
+  header .meta span b { color: var(--ink-2); font-weight: 500; }
+
+  section { margin-top: 48px; }
+  section > h2 { font-size: 22px; font-weight: 700; padding-bottom: 10px; border-bottom: 1px solid var(--line-strong); margin-bottom: 20px; }
+  section > h2 small { font-family: "IBM Plex Sans", system-ui, sans-serif; font-weight: 400; color: var(--ink-3); font-size: 14px; margin-left: 10px; }
+  .prose { max-width: 70ch; color: var(--ink-2); }
+  .prose p { margin: 0 0 12px; }
+
+  /* verdict + tiles */
+  .verdict {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--crit);
+    border-radius: 8px;
+    padding: 18px 22px;
+    box-shadow: var(--shadow);
+    margin-top: 28px;
+  }
+  .verdict h2 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+  .verdict p { margin: 0; color: var(--ink-2); max-width: 78ch; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 16px; }
+  .tile {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px 12px;
+    box-shadow: var(--shadow);
+  }
+  .tile .label { font-size: 12px; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; font-weight: 600; font-family: "Manrope", system-ui, sans-serif; }
+  .tile .value { font-family: "Manrope", system-ui, sans-serif; font-size: 28px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .tile .value small { font-size: 14px; font-weight: 600; color: var(--ink-3); margin-left: 3px; }
+  .tile .note { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; line-height: 1.45; }
+  .tile.bad .value { color: var(--crit); }
+  .tile.warn .value { color: var(--high); }
+  .tile.ok .value { color: var(--low); }
+
+  /* severity pills */
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: "Manrope", system-ui, sans-serif;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px; line-height: 1.4;
+  }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill.crit { color: var(--crit); background: var(--crit-soft); }
+  .pill.high { color: var(--high); background: var(--high-soft); }
+  .pill.med { color: var(--med); background: var(--med-soft); }
+  .pill.low { color: var(--low); background: var(--low-soft); }
+  .pill.ok { color: var(--low); background: var(--low-soft); }
+
+  /* findings */
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    margin-bottom: 18px;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 6px 1fr;
+  }
+  .finding .stripe { background: var(--line-strong); }
+  .finding.crit .stripe { background: var(--crit); }
+  .finding.high .stripe { background: var(--high); }
+  .finding.med .stripe { background: var(--med); }
+  .finding.low .stripe { background: var(--low); }
+  .finding .body { padding: 18px 22px 20px; min-width: 0; }
+  .finding .head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 8px; }
+  .finding .head h3 { font-size: 18px; font-weight: 700; flex: 1 1 auto; min-width: 240px; }
+  .finding .head .id { color: var(--ink-3); font-weight: 600; font-family: "Manrope", system-ui, sans-serif; font-size: 13px; }
+  .finding .impact { color: var(--ink-2); max-width: 78ch; margin: 0 0 14px; }
+  .finding h4 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); margin: 16px 0 8px; font-weight: 700; }
+  .finding ul { margin: 0; padding-left: 20px; color: var(--ink-2); }
+  .finding li { margin: 4px 0; max-width: 80ch; }
+  .finding li b { color: var(--ink); font-weight: 600; }
+  .fix {
+    background: var(--accent-soft);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-top: 6px;
+  }
+  .fix ol { margin: 0; padding-left: 20px; color: var(--ink); }
+  .fix li { margin: 4px 0; max-width: 80ch; }
+  .fix li b { font-weight: 600; }
+
+  /* tables */
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: "Manrope", system-ui, sans-serif; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); background: var(--surface-2); font-weight: 700; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td .mono { color: var(--ink-2); }
+
+  /* chain diagram */
+  .chain { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 8px; }
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    position: relative;
+    box-shadow: var(--shadow);
+    min-width: 0;
+  }
+  .step .n { font-family: "Manrope", system-ui, sans-serif; font-size: 11px; font-weight: 700; color: var(--ink-3); letter-spacing: .08em; }
+  .step .t { font-weight: 600; margin-top: 2px; font-size: 14px; }
+  .step .d { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; line-height: 1.45; }
+  .step .c { margin-top: 8px; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--crit); font-weight: 500; }
+  .step.hot { border-color: var(--crit); }
+  .chain-note { font-size: 13px; color: var(--ink-3); margin-top: 12px; max-width: 80ch; }
+  .lane { margin-top: 22px; }
+  .lane .lane-title { display: flex; align-items: center; gap: 10px; font-family: "Manrope", system-ui, sans-serif; font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+  .lane .lane-title .freq { font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 12px; color: var(--ink-3); }
+
+  /* bar chart */
+  .chart { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px 14px; box-shadow: var(--shadow); }
+  .chart .title { font-weight: 600; font-size: 14px; }
+  .chart .sub { font-size: 12.5px; color: var(--ink-3); margin-bottom: 14px; }
+  .bars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 7px 12px; align-items: center; }
+  .bars .name { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+  .bars .track { height: 14px; background: var(--surface-2); border-radius: 3px; position: relative; overflow: hidden; }
+  .bars .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--bar); border-radius: 0 3px 3px 0; }
+  .bars .fill.lazy { background: var(--bar-lazy); }
+  .bars .val { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .legend { display: flex; gap: 18px; margin-top: 12px; font-size: 12.5px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 14px; height: 10px; border-radius: 2px; background: var(--bar); display: inline-block; }
+  .legend i.lazy { background: var(--bar-lazy); }
+
+  /* plan */
+  .plan td:first-child { font-family: "Manrope", system-ui, sans-serif; font-weight: 700; white-space: nowrap; }
+  .good { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+  .good div { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: 13.5px; color: var(--ink-2); }
+  .good div b { color: var(--ink); font-weight: 600; display: block; margin-bottom: 2px; }
+  footer { margin-top: 56px; color: var(--ink-3); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 14px; max-width: 80ch; }
+  @media (prefers-reduced-motion: no-preference) { .bars .fill { transition: width .4s ease; } }
+</style>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">Performance Audit · Electron + React 桌面端</div>
+    <h1>AgentOS 性能体检</h1>
+    <p class="lede">对 <code>homepage-test</code> 分支做的一次静态代码审查加真实数据测量。结论先行：应用最重的成本不在渲染，而在“每收到一批流式 token 就把整个工作区读一遍、存三遍、再广播一遍”。其它问题（首屏包体、AppShell 巨型组件、CSS 体积）都是第二梯队。</p>
+    <div class="meta">
+      <span>仓库 <b>CodeX-UI-Template (AgentOS 0.1.17)</b></span>
+      <span>日期 <b>2026-09-02</b></span>
+      <span>测量数据源 <b>~/Library/Application Support/AgentOS</b></span>
+      <span>方法 <b>代码追踪 + Node 计时 + sqlite3 计时 + 产物体积</b></span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <h2>总体判断：一条主进程热路径决定了整体手感</h2>
+    <p>Agent 回复流式输出时，主进程 broker 对<b>每一个</b>合并后的 delta 事件（50ms 窗口，最高约 20 次/秒）都会同步读取 5MB 的工作区 JSON 两次、重写全部 63 个会话 rollout 文件、同步 spawn 三次 <code>sqlite3</code> CLI 并全量重建搜索索引，再把包含 base64 附件的完整项目快照通过 IPC 广播给渲染进程。渲染进程这边同一事件又会把整个工作区 <code>JSON.stringify</code> 两次并同步写入 localStorage。这条链路是 CPU、磁盘和 IPC 的共同瓶颈，也是所有窗口在 Agent 运行期间“发黏”的根因。</p>
+  </div>
+
+  <div class="tiles">
+    <div class="tile bad"><div class="label">工作区 JSON</div><div class="value">5.0<small>MB</small></div><div class="note">6 个项目 · 32 个线程 · 977 条记录。每个 delta 全量读写。</div></div>
+    <div class="tile bad"><div class="label">单线程最大体积</div><div class="value">2.27<small>MB</small></div><div class="note">其中 2.25MB 是两张 base64 内联图片附件，只有 38 条记录。</div></div>
+    <div class="tile bad"><div class="label">localStorage 落盘</div><div class="value">37<small>MB</small></div><div class="note">整个工作区镜像被反复同步写入 leveldb。</div></div>
+    <div class="tile warn"><div class="label">首屏 JS 主包</div><div class="value">1.37<small>MB</small></div><div class="note">gzip 389KB。a2ui + lit + zod + marked 全部随首屏加载。</div></div>
+    <div class="tile warn"><div class="label">首屏 CSS</div><div class="value">297<small>KB</small></div><div class="note">style.css 10,881 行；15% 的类在代码里找不到引用。</div></div>
+    <div class="tile ok"><div class="label">类型检查</div><div class="value">4.1<small>s</small></div><div class="note">tsc --noEmit 全量通过，构建链路健康。</div></div>
+  </div>
+
+  <section>
+    <h2>一个 delta 的完整成本链<small>主进程 V2 broker 默认开启（AGENTOS_PROJECT_CHAT_BROKER_V2 ≠ '0'）</small></h2>
+    <p class="prose">下面是 Agent 每输出一批 token 时，两个进程各自要做的事。标红的是可测量的重成本；括号内为用真实工作区文件在本机测得的数值。</p>
+
+    <div class="lane">
+      <div class="lane-title">主进程 <span class="freq">每个合并后的 chat 事件 · 最高 ~20 次/秒</span></div>
+      <div class="chain">
+        <div class="step"><div class="n">01</div><div class="t">coalescer 合并</div><div class="d">50ms 窗口内的 assistant_delta / thinking_delta 合并成一个事件。设计正确。</div></div>
+        <div class="step hot"><div class="n">02</div><div class="t">saveThreadChatState → store.read()</div><div class="d">同步 readFileSync 5MB JSON + JSON.parse + normalize，再 spawn sqlite3 读游标。</div><div class="c">parse 6.5ms + 磁盘 + spawn ~3ms</div></div>
+        <div class="step hot"><div class="n">03</div><div class="t">store.save() 全量落盘</div><div class="d">重写<b>全部</b>线程 rollout 文件（63 个，4.4MB）；spawn sqlite3 全量 upsert 所有项目/线程；再 spawn sqlite3 <b>DELETE 并重建</b>整个搜索索引和 FTS；最后写 5MB 缩进 JSON。</div><div class="c">stringify 7.7ms + 3 次同步 spawn + 65 次文件写</div></div>
+        <div class="step hot"><div class="n">04</div><div class="t">broadcast → store.read() 再读一次</div><div class="d">再次同步读 5MB 并 parse，组装该项目所有线程的完整快照，<b>含附件 dataUrl</b>。</div><div class="c">parse 6.5ms + 磁盘</div></div>
+        <div class="step hot"><div class="n">05</div><div class="t">IPC 结构化克隆</div><div class="d">快照按项目发送；含图片附件的项目单次载荷可达 2MB 以上。</div><div class="c">每事件 MB 级 IPC</div></div>
+      </div>
+      <p class="chain-note">关键点：步骤 02 至 04 里的 sqlite3 全部是 <code>execFileSync</code>，会阻塞主进程事件循环。主进程一旦阻塞，所有窗口的 IPC 请求、菜单、托盘、更新检查都会排队等待。</p>
+    </div>
+
+    <div class="lane">
+      <div class="lane-title">渲染进程 <span class="freq">每次 chat state 更新（同样 ~20 次/秒）</span></div>
+      <div class="chain">
+        <div class="step"><div class="n">01</div><div class="t">setChatWorkspace</div><div class="d">状态位于 AppShell（3,314 行、40 个 useState、39 个 useEffect），整棵树重新 render。</div></div>
+        <div class="step hot"><div class="n">02</div><div class="t">workspaceSession.stage()</div><div class="d">prepareDurableSave 先 <code>JSON.stringify</code> 整个工作区做指纹比较。</div><div class="c">stringify 2.6ms（5MB）</div></div>
+        <div class="step hot"><div class="n">03</div><div class="t">saveImmediateState</div><div class="d">再次 <code>JSON.stringify</code> 整个工作区并同步 <code>localStorage.setItem</code>，在 UI 线程上。</div><div class="c">5MB 同步写 · 每个 delta</div></div>
+        <div class="step hot"><div class="n">04</div><div class="t">750ms 后 IPC saveChatWorkspace</div><div class="d">5MB 对象结构化克隆到主进程，再跑一遍上面的 store.save() 全量落盘——与 broker 的逐事件保存并行发生。</div><div class="c">第二条全量落盘链</div></div>
+        <div class="step hot"><div class="n">05</div><div class="t">AssistantMarkdown 重解析</div><div class="d">正在增长的整条消息用 marked + KaTeX + DOMPurify 从头解析；流式中的 mermaid 代码块每个 delta 都触发一次 mermaid.render。</div><div class="c">O(消息长度) / delta</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>问题清单<small>按影响排序，每条附证据与修复方案</small></h2>
+
+    <div class="finding crit"><div class="stripe"></div><div class="body">
+      <div class="head"><span class="id">P0-1</span><h3>主进程对每个流式事件做全量工作区读、写、索引重建</h3><span class="pill crit">Critical</span></div>
+      <p class="impact">这是整体性能的第一瓶颈。成本随工作区总大小线性增长，与当前对话无关：用户历史越多，每个 token 越慢。同步 spawn 会冻结主进程，影响所有窗口。</p>
+      <h4>证据</h4>
+      <ul>
+        <li><code>electron/chat-broker-core.ts:373-394</code>：每个事件依次调用 <code>saveThreadChatState</code> 和 <code>broadcast</code>。</li>
+        <li><code>electron/project-chat-broker.ts:111-117</code>：<code>saveThreadChatState</code> 先 <code>store.read()</code>，再 <code>saveMutation</code> 调 <code>store.save()</code> 保存整个工作区。</li>
+        <li><code>electron/chat-workspace-store.ts:197-222</code>：<code>save()</code> 顺序执行 saveRolloutFiles（重写所有线程）、saveDatabaseIndex（全量 upsert + 搜索索引 DELETE/重建）、saveJsonSnapshot（5MB 缩进 JSON）。</li>
+        <li><code>electron/chat-workspace-store.ts:654-665</code>：<code>runSql</code> / <code>selectJson</code> 都是 <code>execFileSync('sqlite3', …)</code>。</li>
+        <li><code>electron/chat-workspace-store.ts:329-333</code>：<code>read()</code> 每次都从磁盘 readFileSync + JSON.parse，不用内存中的 <code>currentState</code>；全仓 48 处调用。</li>
+        <li>实测：5MB 文件 parse 6.5ms，stringify 2.6-7.7ms，sqlite3 单次 spawn 约 3ms，索引重建约 25ms。加上 65 次文件写与两次 5MB 读，单事件主线程占用估计 50-100ms，20 次/秒即饱和。</li>
+      </ul>
+      <h4>修复</h4>
+      <div class="fix"><ol>
+        <li><b>流式期间不落盘。</b>delta 只更新内存中的线程状态并广播增量事件；只在 result / error / cancelled 或 5-10 秒节流时持久化。</li>
+        <li><b>按线程增量保存。</b>只重写发生变化的那一个 rollout 文件；sqlite 只 upsert 变化的线程行；搜索索引改为按 thread_id 删除后重插，而不是全表 DELETE。</li>
+        <li><b>用 <code>current()</code> 替换热路径上的 <code>read()</code></b>，read() 只在启动和外部修改时调用。</li>
+        <li><b>把 sqlite3 CLI 换成进程内驱动</b>（node:sqlite、better-sqlite3 或 sql.js），或至少改为异步 execFile 并串行排队，避免阻塞事件循环。</li>
+      </ol></div>
+    </div></div>
+
+    <div class="finding crit"><div class="stripe"></div><div class="body">
+      <div class="head"><span class="id">P0-2</span><h3>渲染进程每次状态更新同步序列化并写入 localStorage 整个工作区</h3><span class="pill crit">Critical</span></div>
+      <p class="impact">UI 线程上每个 delta 做两次 5MB 的 JSON.stringify 和一次 5MB 的 localStorage 同步写，直接吃掉帧预算，流式输出时的卡顿主要来自这里。localStorage 目录已膨胀到 37MB。</p>
+      <h4>证据</h4>
+      <ul>
+        <li><code>src/components/workspace-session.ts:290-305</code>：<code>stage()</code> 对每次更新都调用 <code>prepareDurableSave</code>（指纹）和 <code>saveImmediateState</code>（localStorage）。</li>
+        <li><code>src/workspace-snapshot-resolution.ts:87-90</code>：指纹就是整个工作区的 <code>JSON.stringify</code>。</li>
+        <li><code>src/chat-workspace-persistence.ts:181-191</code>：<code>localStorage.setItem</code> 写整个工作区，异常被 <code>catch {}</code> 吞掉。</li>
+        <li>实测：当前载荷 4,971,857 字符。Chromium 每源 localStorage 配额约 10MB（按 UTF-16 计约 5M 字符），已贴近上限；一旦超限写入会静默失败，回退快照将过期而无人知晓。此条为推断，建议在 DevTools 中验证 setItem 是否已抛 QuotaExceededError。</li>
+      </ul>
+      <h4>修复</h4>
+      <div class="fix"><ol>
+        <li><b>localStorage 只保留轻量元数据</b>（活动线程、侧栏偏好、tab），线程正文由主进程负责持久化。</li>
+        <li><b>指纹换成廉价方案</b>：比较 workspaceRevision 或对象引用，不再序列化整树。</li>
+        <li><b>把 stage() 的即时写改为 idle 回调或 250-500ms 节流</b>，并把流式 delta 排除在“需要落盘”的变更之外。</li>
+      </ol></div>
+    </div></div>
+
+    <div class="finding crit"><div class="stripe"></div><div class="body">
+      <div class="head"><span class="id">P0-3</span><h3>图片附件以 base64 内联在对话记录里，被复制到每一层</h3><span class="pill crit">Critical</span></div>
+      <p class="impact">两张图片（1.59MB + 0.66MB）占整个工作区的 45%，随每次保存、每次 IPC 快照、localStorage 镜像和 React 状态一起被复制。这是 P0-1 和 P0-2 数量级的放大器。</p>
+      <h4>证据</h4>
+      <ul>
+        <li>实测：线程 <code>thread-mpnavr43-85yzpz</code> 38 条记录 2.27MB，其中 <code>message.attachments</code> 字段 2,255,776 字节。</li>
+        <li><code>src/claude-chat-types.ts:59</code>：附件类型带 <code>dataUrl</code>；<code>electron/project-chat-broker.ts:530</code> 的 <code>projectChatTranscriptItem</code> 把 <code>dataUrl</code> 原样放进广播快照。</li>
+        <li><code>electron/main.ts:312</code>：单张图片上限 5MB，8 个文件总量上限 24MB，意味着单个线程理论上可膨胀到 30MB 以上。</li>
+      </ul>
+      <h4>修复</h4>
+      <div class="fix"><ol>
+        <li><b>附件落成文件</b>：保存到 userData/attachments/&lt;hash&gt;，记录里只留 id、mime、size 和一张小缩略图。</li>
+        <li><b>渲染时通过自定义 protocol 或 file URL 引用</b>，不进入 JSON、IPC 与 localStorage。</li>
+        <li><b>做一次迁移</b>把现有内联附件外置，立刻把工作区文件缩小一半。</li>
+      </ol></div>
+    </div></div>
+
+    <div class="finding high"><div class="stripe"></div><div class="body">
+      <div class="head"><span class="id">P1-4</span><h3>对话状态挂在 AppShell，每个 delta 让整个壳层重新 render</h3><span class="pill high">High</span></div>
+      <p class="impact">AppShell 是 3,314 行的单体组件。<code>setChatWorkspace</code> 在它内部，因此每个 delta 都触发 AppShell、ChatPage、AppShellSidebar、AppShellWorkspace、Composer 的完整 render。Transcript 做了 memo，但正在增长的那条消息每次都从头做 Markdown 解析。</p>
+      <h4>证据</h4>
+      <ul>
+        <li><code>src/components/AppShell.tsx:1365-1370</code>：<code>updateThreadChatState → updateChatWorkspace → setChatWorkspace</code>。</li>
+        <li><code>src/components/chat/ChatPage.tsx:343</code> 是 <code>forwardRef</code> 而非 <code>memo</code>；AppShellSidebar / AppShellWorkspace / Composer / ProjectHomeSurface 均未 memo。</li>
+        <li><code>src/components/chat/Transcript.tsx:571</code>：<code>useMemo(() => renderMarkdownSegments(content), [content])</code>，流式中 content 每次都变，marked + KaTeX + DOMPurify 全量重跑。</li>
+        <li><code>src/components/chat/RichCodeBlock.tsx:120-160</code>：MermaidDiagram 的 effect 依赖 <code>code</code>，流式中未闭合的 mermaid 块每个 delta 都触发 render 与修复候选重试。</li>
+        <li><code>src/components/chat/Transcript.tsx:152-162</code>：运行期间 1 秒定时器在 Transcript 根节点 setState。</li>
+        <li>没有列表虚拟化；最长线程 147 条记录全部挂在 DOM 上。</li>
+      </ul>
+      <h4>修复</h4>
+      <div class="fix"><ol>
+        <li><b>把线程 chatState 从 AppShell 拆出</b>，放到独立 store（useSyncExternalStore / zustand 风格）并按 threadId 订阅，壳层只订阅元数据。</li>
+        <li><b>流式消息用增量渲染</b>：只解析最后一个未完成 block，之前已完成的段落缓存 HTML；mermaid 只在代码块闭合或流式结束后渲染。</li>
+        <li><b>给 ChatPage、Sidebar、Workspace、Composer 加 memo</b>，并把 useLiveNow 下沉到只显示时长的那个小组件。</li>
+        <li><b>超过约 100 条记录时启用虚拟列表</b>。</li>
+      </ol></div>
+    </div></div>
+
+    <div class="finding high"><div class="stripe"></div><div class="body">
+      <div class="head"><span class="id">P1-5</span><h3>首屏加载把设置页、A2UI、KaTeX 样式和 59 个字体文件一起带上</h3><span class="pill high">High</span></div>
+      <p class="impact">冷启动要解析 1.37MB JS 与 297KB CSS，没有任何路由级代码分割。主进程 main.js 也有 1.4MB，zod 被完整打进去。窗口未使用 ready-to-show，首帧可能白屏。</p>
+      <h4>证据</h4>
+      <ul>
+        <li><code>dist/assets/index-JZi1oWqr.js</code> 1,369,951 字节（gzip 388,646），其中 a2ui 标识 200 处、lit 135 处、mermaid 胶水 40 处。</li>
+        <li>全仓没有 <code>React.lazy</code> / <code>Suspense</code>；ClaudeAgentSettingsPage（2,286 行）和 ProjectHomeSurface（3,845 行，A2UI）随首屏加载。</li>
+        <li><code>src/main.tsx:6</code> 静态引入 <code>katex/dist/katex.min.css</code>，把 59 个字体文件（1.1MB）带进产物。</li>
+        <li><code>dist-electron/main.js</code> 1,398,457 字节，zod 引用 269 处。</li>
+        <li><code>electron/main.ts:376-398</code>：主窗口未设 <code>show: false</code> + <code>ready-to-show</code>。</li>
+        <li>做得对的地方：mermaid 已按需加载（cytoscape、wardley 等 600KB 级块不影响首屏）。</li>
+      </ul>
+      <h4>修复</h4>
+      <div class="fix"><ol>
+        <li><b>路由级 lazy</b>：设置页、ProjectHomeSurface、RuntimeDevelopmentWindowPage、AppSearchModal 用 <code>React.lazy</code>。</li>
+        <li><b>KaTeX CSS 改为在首次遇到公式时动态注入</b>，并只保留 woff2 字体。</li>
+        <li><b>vite 配置 manualChunks</b> 把 react、a2ui、marked 分开，便于缓存与分析；加 <code>rollup-plugin-visualizer</code> 做一次可视化。</li>
+        <li><b>主窗口 show:false + ready-to-show</b>，避免白屏。</li>
+      </ol></div>
+    </div></div>
+
+    <div class="finding med"><div class="stripe"></div><div class="body">
+      <div class="head"><span class="id">P2-6</span><h3>CSS 是一个 10,881 行的单文件，且透明窗口叠加大量模糊滤镜</h3><span class="pill med">Medium</span></div>
+      <p class="impact">首屏 CSS 297KB；858 个类里有 126 个在源码中找不到引用。macOS 下窗口是 transparent + vibrancy，再叠 28 处 backdrop-filter 与 26 处 blur，滚动和流式重绘时 GPU 合成成本明显。</p>
+      <h4>证据</h4>
+      <ul>
+        <li><code>src/style.css</code> 281,392 字节、1,569 条规则、19 处通配选择器、76 处 box-shadow。</li>
+        <li><code>electron/main.ts:389-396</code>：<code>transparent: true, vibrancy: 'under-window'</code>。</li>
+      </ul>
+      <h4>修复</h4>
+      <div class="fix"><ol>
+        <li><b>按组件拆分 CSS</b> 并用 vite 的 CSS code-splitting 随 lazy 路由加载。</li>
+        <li><b>清理未引用的 126 个类</b>（先用 PurgeCSS 报告确认再删）。</li>
+        <li><b>把 backdrop-filter 限制在侧栏和弹层</b>，滚动区域内的元素不使用模糊。</li>
+      </ol></div>
+    </div></div>
+
+    <div class="finding low"><div class="stripe"></div><div class="body">
+      <div class="head"><span class="id">P3-7</span><h3>开发环境与仓库卫生</h3><span class="pill low">Low</span></div>
+      <ul>
+        <li><code>release/</code> 目录本地积累 14 个版本共 12GB；单个 DMG 200MB。建议清理旧版本。</li>
+        <li><code>package-lock.json</code> 被 gitignore，安装不可复现且解析更慢。</li>
+        <li><code>images/</code> 里 11 张 PNG 共约 12MB 进入 git 历史；.git 已 35MB。</li>
+      </ul>
+    </div></div>
+  </section>
+
+  <section>
+    <h2>渲染进程产物体积<small>dist/assets · 未压缩 · KB</small></h2>
+    <div class="chart">
+      <div class="title">前十大块：深色为首屏同步加载，浅色为按需加载</div>
+      <div class="sub">mermaid 家族已正确拆成懒加载；真正拖慢冷启动的是首屏主包与 CSS。</div>
+      <div class="bars">
+        <div class="name">index (主包)</div><div class="track"><div class="fill" style="width:100%"></div></div><div class="val">1,370</div>
+        <div class="name">wardley (mermaid)</div><div class="track"><div class="fill lazy" style="width:45%"></div></div><div class="val">615</div>
+        <div class="name">mermaid.core</div><div class="track"><div class="fill lazy" style="width:43%"></div></div><div class="val">592</div>
+        <div class="name">cytoscape (mermaid)</div><div class="track"><div class="fill lazy" style="width:32%"></div></div><div class="val">443</div>
+        <div class="name">index.css</div><div class="track"><div class="fill" style="width:22%"></div></div><div class="val">297</div>
+        <div class="name">katex</div><div class="track"><div class="fill lazy" style="width:19%"></div></div><div class="val">261</div>
+        <div class="name">architectureDiagram</div><div class="track"><div class="fill lazy" style="width:11%"></div></div><div class="val">150</div>
+        <div class="name">sequenceDiagram</div><div class="track"><div class="fill lazy" style="width:9%"></div></div><div class="val">117</div>
+        <div class="name">KaTeX 字体 ×59</div><div class="track"><div class="fill" style="width:80%"></div></div><div class="val">1,100</div>
+      </div>
+      <div class="legend"><span><i></i>首屏加载</span><span><i class="lazy"></i>按需加载</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>关键实测数据</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>指标</th><th class="num">数值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>chat-workspace.json</td><td class="num">4,971,857 B</td><td>6 项目 / 32 线程 / 977 条记录</td></tr>
+        <tr><td>JSON.parse 一次</td><td class="num">6.5 ms</td><td>Node 本机，热缓存</td></tr>
+        <tr><td>JSON.stringify 一次</td><td class="num">2.6 ms</td><td>缩进版 7.7 ms（store.save 用缩进版）</td></tr>
+        <tr><td>sqlite3 CLI 单次 spawn</td><td class="num">~3 ms</td><td>每次 save 至少 3 次，均为同步</td></tr>
+        <tr><td>搜索索引全量重建</td><td class="num">~25 ms</td><td>861 条文档 DELETE + 重插 + FTS</td></tr>
+        <tr><td>chat-sessions rollout 文件</td><td class="num">63 个 / 4.4 MB</td><td>每次 save 全部重写</td></tr>
+        <tr><td>Local Storage leveldb</td><td class="num">37 MB</td><td>工作区镜像反复写入的结果</td></tr>
+        <tr><td>delta 合并窗口</td><td class="num">50 ms</td><td>主进程事件上限约 20 次/秒</td></tr>
+        <tr><td>渲染进程保存防抖</td><td class="num">750 ms</td><td>但即时 localStorage 写没有防抖</td></tr>
+        <tr><td>tsc --noEmit</td><td class="num">4.1 s</td><td>约 71k 行 TS，健康</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>建议的动手顺序</h2>
+    <div class="tablewrap"><table class="plan">
+      <thead><tr><th>阶段</th><th>动作</th><th>涉及</th><th>工作量</th><th>预期收益</th></tr></thead>
+      <tbody>
+        <tr><td>第一周</td><td>流式期间不落盘、不写 localStorage；broker 热路径改用 current()</td><td>P0-1, P0-2</td><td>小</td><td>流式卡顿基本消失，主进程不再冻结</td></tr>
+        <tr><td>第一周</td><td>附件外置为文件并迁移历史数据</td><td>P0-3</td><td>中</td><td>工作区体积减半，所有复制成本同比下降</td></tr>
+        <tr><td>第二周</td><td>按线程增量保存 + 搜索索引增量更新 + 进程内 sqlite</td><td>P0-1</td><td>中</td><td>保存成本从 O(工作区) 降到 O(单线程)</td></tr>
+        <tr><td>第二周</td><td>线程状态拆出 AppShell、流式增量 Markdown、mermaid 闭合后渲染</td><td>P1-4</td><td>中</td><td>长对话下渲染开销稳定</td></tr>
+        <tr><td>第三周</td><td>路由级 lazy、KaTeX 按需、manualChunks、ready-to-show</td><td>P1-5</td><td>小</td><td>冷启动首屏 JS 减少约 40-50%</td></tr>
+        <tr><td>随手</td><td>CSS 拆分与清理、限制 backdrop-filter、清理 release/</td><td>P2-6, P3-7</td><td>小</td><td>滚动更顺，磁盘释放 12GB</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>已经做对的地方<small>修改时不要顺手退化</small></h2>
+    <div class="good">
+      <div><b>主进程 delta 合并器</b>50ms 窗口把 token 级事件压到最多 20 次/秒，是正确的第一道闸。</div>
+      <div><b>mermaid 按需加载</b>1.6MB 的图表家族完全不进首屏。</div>
+      <div><b>Transcript 行级 memo</b>ChatMessage、ToolRow、ThinkingRow 等都用了 memo，只是上游状态设计让它们收益有限。</div>
+      <div><b>侧栏与文件搜索有上限</b>SIDEBAR_SECTION_PREVIEW_LIMIT、5,000 条目 / 深度 10 的文件遍历上限、500ms 的文件监听防抖。</div>
+      <div><b>更新检查克制</b>启动后 8 秒首检，之后每 6 小时一次。</div>
+      <div><b>构建链路快</b>全量类型检查 4 秒，不需要在构建性能上花时间。</div>
+    </div>
+  </section>
+
+  <footer>本报告基于静态代码追踪与本机测量，未做运行时 profiler 采样。P0-2 中关于 localStorage 配额的判断为推断，其余结论均有对应代码行或实测数据支撑。数值来自 2026-09-02 的本地工作区，不同用户数据规模下绝对值会变，但成本随工作区总大小线性放大的结构不变。</footer>
+</div>

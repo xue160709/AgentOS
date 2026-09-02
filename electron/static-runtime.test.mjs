@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { createRequire } from 'node:module'
-import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -561,6 +561,68 @@ test('atomic last-good pointer is unchanged when the development transaction fen
   const lastGood = await store.loadLastGood('runtime', project)
   assert.equal(lastGood.artifactId, first.artifactId)
   assert.equal(lastGood.sourceFingerprint, 'first')
+  rmSync(project, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
+})
+
+test('commit keeps only the pointed artifact on disk and loadLastGood reclaims orphans', async () => {
+  const project = mkdtempSync(resolve(tmpdir(), 'agentos-static-prune-'))
+  const userData = mkdtempSync(resolve(tmpdir(), 'agentos-static-prune-data-'))
+  const output = resolve(project, 'out')
+  mkdirSync(output, { recursive: true })
+  writeFileSync(resolve(output, 'index.html'), '<h1>first</h1>')
+  const store = new staticRuntime.StaticArtifactStore(userData, (() => { let now = 10; return () => ++now })())
+  const declaration = staticDeclaration()
+  const first = await store.commit('runtime', project, declaration, output, 'first')
+  const artifactsDir = dirname(first.rootPath)
+  const listArtifacts = () => readdirSync(artifactsDir).sort()
+
+  // A second successful commit removes the first copy; only the new pointer target survives.
+  writeFileSync(resolve(output, 'index.html'), '<h1>second</h1>')
+  const second = await store.commit('runtime', project, declaration, output, 'second')
+  assert.notEqual(second.artifactId, first.artifactId)
+  assert.deepEqual(listArtifacts(), [second.artifactId])
+  assert.equal(readFileSync(resolve(second.rootPath, 'index.html'), 'utf8'), '<h1>second</h1>')
+
+  // A rejected commit must not prune: the fence fires before the pointer rename.
+  writeFileSync(resolve(output, 'index.html'), '<h1>rejected</h1>')
+  await assert.rejects(() => store.commit('runtime', project, declaration, output, 'third', undefined, () => false), /runtime-build-commit-fence-rejected/)
+  assert.deepEqual(listArtifacts(), [second.artifactId])
+
+  // Orphans left by earlier versions, plus a foreign staging directory, are handled on load:
+  // well-formed artifact ids go, `.staging-*` and the pointed artifact stay.
+  mkdirSync(resolve(artifactsDir, 'old1-1-aaaaaaaaaaaa', 'books'), { recursive: true })
+  writeFileSync(resolve(artifactsDir, 'old1-1-aaaaaaaaaaaa', 'books', 'big.pdf'), 'x')
+  mkdirSync(resolve(artifactsDir, 'old2-1-bbbbbbbbbbbb'), { recursive: true })
+  mkdirSync(resolve(artifactsDir, '.staging-other'), { recursive: true })
+  const loaded = await store.loadLastGood('runtime', project)
+  assert.equal(loaded.artifactId, second.artifactId)
+  assert.deepEqual(listArtifacts(), ['.staging-other', second.artifactId])
+
+  rmSync(project, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
+})
+
+test('pruning re-reads the pointer so a stale caller cannot delete the live artifact', async () => {
+  const project = mkdtempSync(resolve(tmpdir(), 'agentos-static-prune-race-'))
+  const userData = mkdtempSync(resolve(tmpdir(), 'agentos-static-prune-race-data-'))
+  const output = resolve(project, 'out')
+  mkdirSync(output, { recursive: true })
+  writeFileSync(resolve(output, 'index.html'), '<h1>live</h1>')
+  const store = new staticRuntime.StaticArtifactStore(userData, (() => { let now = 10; return () => ++now })())
+  const live = await store.commit('runtime', project, staticDeclaration(), output, 'live')
+  const artifactsDir = dirname(live.rootPath)
+  const runtimePath = dirname(artifactsDir)
+
+  // Two leftovers, and a caller that still believes `stale` is the pointer target.
+  mkdirSync(resolve(artifactsDir, 'stale-1-aaaaaaaaaaaa'), { recursive: true })
+  mkdirSync(resolve(artifactsDir, 'other-1-bbbbbbbbbbbb'), { recursive: true })
+  await store.pruneArtifacts(runtimePath, 'stale-1-aaaaaaaaaaaa')
+
+  // The live pointer target survives even though the caller never named it.
+  assert.deepEqual(readdirSync(artifactsDir).sort(), ['stale-1-aaaaaaaaaaaa', live.artifactId].sort())
+  assert.equal((await store.loadLastGood('runtime', project)).artifactId, live.artifactId)
+
   rmSync(project, { recursive: true, force: true })
   rmSync(userData, { recursive: true, force: true })
 })
