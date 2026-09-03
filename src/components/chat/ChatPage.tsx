@@ -429,14 +429,13 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const brokerScopeIdRef = useRef(activeProject.id)
   brokerScopeIdRef.current = activeProject.id
   const readBrokerSnapshot = useCallback(() => brokerSourceRef.current?.get(brokerScopeIdRef.current), [])
+  const brokerScope = useCallback(
+    () => ({ projectId: brokerScopeIdRef.current, routeGeneration: readBrokerSnapshot()?.routeGeneration ?? 0 }),
+    [readBrokerSnapshot],
+  )
   const chatBridge = useMemo(
-    () => injectedChatBridge ?? (projectChatEnabled
-      ? createProjectChatBridge(() => ({
-          projectId: brokerScopeIdRef.current,
-          routeGeneration: readBrokerSnapshot()?.routeGeneration ?? 0,
-        }))
-      : undefined),
-    [injectedChatBridge, projectChatEnabled, readBrokerSnapshot],
+    () => injectedChatBridge ?? (projectChatEnabled ? createProjectChatBridge(brokerScope) : undefined),
+    [brokerScope, injectedChatBridge, projectChatEnabled],
   )
   const activeRunState = activeThread ? threadRunStates[activeThread.id] : undefined
   const isRunning = Boolean(activeRunState)

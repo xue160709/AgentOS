@@ -1366,14 +1366,13 @@ export function AppShell() {
     // Probing is not legacy: staging here would let a renderer mirror overwrite
     // Main before the seam has answered.
     if (projectChatReadiness !== 'legacy') return
-    // 磁盘格式不变：落盘前把 store 里的对话内容装回线程。
-    const stage = () => {
+    workspaceSession.stage(hydrateWorkspaceChatStates(chatWorkspace))
+    // Revision 1 由渲染进程持有耐久副本，对话内容不再经过壳层 state，
+    // 因此改由 store 变化驱动同一次 staging；磁盘格式不变，落盘前装回线程。
+    return threadChatStore.subscribe(() => {
       const current = chatWorkspaceRef.current
       if (current) workspaceSession.stage(hydrateWorkspaceChatStates(current))
-    }
-    stage()
-    // Revision 1 由渲染进程持有耐久副本，因此对话内容变化也必须驱动一次 staging。
-    return threadChatStore.subscribe(stage)
+    })
   }, [chatWorkspace, projectChatReadiness, workspaceSession])
 
   useEffect(() => {

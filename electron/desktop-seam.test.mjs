@@ -226,8 +226,8 @@ test('Local App Tab close is Main-authoritative and releases side effects only a
   const closeFlow = appShell.slice(closeStart, closeEnd)
   assert.ok(closeFlow.indexOf('await workspaceSession.flush()') < closeFlow.indexOf('await window.desktop.getChatWorkspace()'))
   assert.ok(closeFlow.indexOf('await window.desktop.getChatWorkspace()') < closeFlow.indexOf('window.desktop.closeWorkspaceTab('))
-  assert.ok(closeFlow.indexOf('window.desktop.closeWorkspaceTab(') < closeFlow.indexOf('flushSync(() => setChatWorkspace(result.workspace))'))
-  assert.ok(closeFlow.indexOf('flushSync(() => setChatWorkspace(result.workspace))') < closeFlow.indexOf('persistChatWorkspaceStateToLocalStorage(result.workspace)'))
+  assert.ok(closeFlow.indexOf('window.desktop.closeWorkspaceTab(') < closeFlow.indexOf('flushSync(() => adoptAuthoritativeSnapshot(result.workspace))'))
+  assert.ok(closeFlow.indexOf('flushSync(() => adoptAuthoritativeSnapshot(result.workspace))') < closeFlow.indexOf('persistChatWorkspaceStateToLocalStorage(result.workspace)'))
   assert.doesNotMatch(closeFlow, /releaseLocalAppRuntime/)
   const cleanupStart = appShell.indexOf('// --- Autosave through Workspace Session')
   const cleanupEnd = appShell.indexOf('// --- Routing helper', cleanupStart)
@@ -242,7 +242,7 @@ test('Local App chooser opens existing tabs through the authoritative Main commi
   const openFlow = appShell.slice(openFlowStart, openFlowEnd)
   assert.ok(openFlow.indexOf('await workspaceSession.flush()') < openFlow.indexOf('await window.desktop.getChatWorkspace()'))
   assert.ok(openFlow.indexOf('await window.desktop.getChatWorkspace()') < openFlow.indexOf('window.desktop.openWorkspaceTab('))
-  assert.ok(openFlow.indexOf('setChatWorkspace(result.workspace)') < openFlow.indexOf('startLocalApp(result.definition.id'))
+  assert.ok(openFlow.indexOf('adoptAuthoritativeSnapshot(result.workspace)') < openFlow.indexOf('startLocalApp(result.definition.id'))
   assert.match(appShell, /await setActiveLocalAppPreviewVisible\(false\)[\s\S]{0,120}setLocalAppChooserOpen\(true\)/)
   assert.doesNotMatch(appShell, /onChooseNew=\{\(\) => \{ setLocalAppChooserOpen\(false\); void inspectLocalApp\(\) \}\}/)
   const preview = readFileSync(resolve(root, 'src/components/RuntimePreview.tsx'), 'utf8')
@@ -287,7 +287,7 @@ test('Local App creation keeps durable commit before runtime start in Main', () 
   assert.ok(createFlow.indexOf('await window.desktop.getChatWorkspace()') < createFlow.indexOf('window.desktop.createWorkspaceTab('))
   assert.match(createFlow, /catch \(error\)[\s\S]{0,260}setLocalAppDialogError\(message\)[\s\S]{0,80}return/)
   const successBranch = appShell.slice(appShell.indexOf('if (!result.ok)'), appShell.indexOf('} finally {', appShell.indexOf('if (!result.ok)')))
-  assert.ok(successBranch.indexOf('setChatWorkspace(result.workspace)') < successBranch.indexOf('startRuntime(result.definition.id'))
+  assert.ok(successBranch.indexOf('adoptAuthoritativeSnapshot(result.workspace)') < successBranch.indexOf('startRuntime(result.definition.id'))
 })
 
 test('Local App relocation gates the Main revision after renderer flush and returns authoritative workspace', () => {
@@ -312,7 +312,7 @@ test('Local App relocation gates the Main revision after renderer flush and retu
   const flow = appShell.slice(start, end)
   assert.ok(flow.indexOf('await workspaceSession.flush()') < flow.indexOf('await window.desktop.getChatWorkspace()'))
   assert.ok(flow.indexOf('await window.desktop.getChatWorkspace()') < flow.indexOf('window.desktop.relocateRuntime('))
-  assert.match(flow, /setChatWorkspace\(result\.workspace\)/)
+  assert.match(flow, /adoptAuthoritativeSnapshot\(result\.workspace\)/)
 })
 
 test('Main Preview creation returns before native loading and revalidates from the in-memory authority', () => {
