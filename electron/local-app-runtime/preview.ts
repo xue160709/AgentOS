@@ -4,7 +4,7 @@
  */
 
 import type { BrowserWindow, Session, WebContents, WebContentsView } from 'electron'
-import { normalizeLoopbackUrl } from './index'
+import { normalizeLoopbackUrl } from './loopback'
 import { STATIC_PREVIEW_SCHEME } from './static'
 import type { LocalAppPreviewStatus } from '../../src/components/types'
 

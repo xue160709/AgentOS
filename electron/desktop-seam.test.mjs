@@ -176,7 +176,7 @@ test('Static build keeps last-good Preview alive and cancellation uses the build
   assert.doesNotMatch(main, /protocol\.handle\(STATIC_PREVIEW_SCHEME, \(request\) => staticPreviewResponse\(request, staticRegistry\)\)/)
   assert.match(buildHandler, /runtime\.buildStatus === 'build_failed'/)
 
-  const runtime = readFileSync(resolve(root, 'electron/local-app-runtime/index.ts'), 'utf8')
+  const runtime = readFileSync(resolve(root, 'electron/local-app-runtime/child-process.ts'), 'utf8')
   assert.match(runtime, /detached: process\.platform !== 'win32'/)
   const workspace = readFileSync(resolve(root, 'src/components/RuntimeWorkspace.tsx'), 'utf8')
   assert.match(workspace, /runtime-cancel-build/)
