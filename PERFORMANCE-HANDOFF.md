@@ -4,7 +4,7 @@
 
 - 基线审查报告（含全部实测图表）：https://claude.ai/code/artifact/f55781c6-b89c-4d13-a982-aef20070dde8
 - 测量日期：2026-09-02，分支 `homepage-test`
-- 全部改动尚未提交
+- 本轮 1.1–1.5 与 1.6 的一部分已在 `a12252a` 落进 `homepage-test`；其余仍在工作区
 
 ---
 
@@ -73,6 +73,114 @@
 
 `electron/local-app-runtime.test.mjs` 的 `waitForPath` / `waitForPidGone` / `waitForChildExit` 原本用 5 秒上限等待真实子进程退出。这些是「进程最终退出」的正确性断言而非性能断言，在并行负载下会误报。已统一为 `PROCESS_WAIT_TIMEOUT_MS = 20_000`。
 
+### 1.6 线程对话状态移出 AppShell（原 TODO-1）
+
+**问题。** `chatWorkspace` 整个对象放在 `AppShell` 的 `useState` 里，broker 每条 delta 都会经
+`acceptProjectChatSnapshot` 触发三次壳层 `setState`（`projectChatSnapshots`、`chatWorkspace`、
+`threadRunStates`），于是 AppShell、AppShellSidebar、AppShellWorkspace、ChatPage、Composer
+按 delta 频率整棵树重算。只加 `memo` 无效：`chatWorkspace` 每条 delta 都换新引用。
+
+**做法。** 把「每条线程的对话内容」和「broker 快照」都移到渲染进程的外部 store，
+AppShell 的 React state 只保留工作区元数据。
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/components/chat/thread-chat-state-store.ts` | 新增。`ThreadChatStateStore`（按 threadId 分桶订阅）+ `useThreadChatState` / `useThreadChatSelector` + `adoptWorkspaceChatStates()` / `hydrateWorkspaceChatStates()` |
+| `src/components/chat/broker-snapshot-source.ts` | 新增。`BrokerSnapshotStore` 与 `useBrokerSnapshotSelector`，让 ChatPage 只订阅它真正渲染的快照片段 |
+| `src/components/types.ts` | 新增 `ThreadMetadata = Omit<WorkspaceThread, 'chatState'>` 与 `WorkspaceMetadataState`。`WorkspaceThread` 可赋给前者、反之不行，所以每个仍需要对话内容的读取点都在编译期暴露 |
+| `src/components/workspace-session.ts` | 元数据类方法泛型化为 `<S extends WorkspaceMetadataState>`；`applyProjectChatSnapshot` 接受 `{ store, deferTimestampOnlyUpdates }` |
+| `src/workspace-commands.ts` / `workspace-command-client.ts` | 同样泛型化（不读 `chatState`，主进程调用方零变化） |
+| `src/components/AppShell.tsx` | state 改为 `WorkspaceMetadataState`；新增 `adoptAuthoritativeSnapshot()` 作为权威快照的唯一入口；`updateThreadChatState` 只写 store |
+| `src/components/chat/ChatThreadView.tsx` | 新增 `ThreadTranscript`：唯一订阅 transcript 的组件，位置在 `ChatPage` 之下 |
+| `ChatPage` / `AppShellWorkspace` / `AppSearchModal` / `ProjectHomeSurface` / 两个聊天子窗口 | 改为从 store 读取；子窗口用 `usePublishedThreadChatStates` 把本地快照投影进同一个 store |
+
+**磁盘格式不变。** `ChatWorkspaceState` 与所有主进程契约原样保留；壳层与耐久形态之间由
+`adoptWorkspaceChatStates()` / `hydrateWorkspaceChatStates()` 显式转换，Revision 1 落盘前装配回去。
+
+**实测（`perf-harness/`，真实组件树 + 40 条合成 delta）。**
+
+| 组件 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `AppShellSidebar` | 61 | **0** |
+| `Composer` | 60 | **0** |
+| `AppShellWorkspace` | 61 | 0 |
+| `ChatThreadView` | 60 | 0 |
+| `SettingsPage` | 40 | 0 |
+| `IconInline` | 1482 | 280 |
+| `ProcessTraceBlock`（transcript 内，应当渲染） | 40 | 40 |
+
+对比基线是 `5a254a2`（本轮改动之前）的 git worktree，两侧跑同一份探针，各连跑两次、数字完全一致。
+计数窗口只覆盖 40 条 delta：run 开始与终止各自应该重渲染一次壳层，被刻意排除在窗口外。
+终止快照仍然提交一次元数据 + 一次 run 状态，于是 `AppShellSidebar` 在整次回答里共 2 次、
+`Composer` 1 次——都发生在回答结束时，不再随 delta 增长。
+
+`memo()` / `forwardRef()` 包装的组件（`Transcript`、`ChatPage`）在探针里不可见，因为它们不是函数；
+判断 `ChatPage` 有没有重渲染，看它渲染体里创建的 `Composer`。
+
+### 1.7 拆分 `src/style.css`（原 TODO-2）
+
+**问题。** 单文件 10881 行 / 281 KB，构建后首屏 CSS 265.4 KB，且没有任何区域边界。
+
+**做法分两步，两步都可验证。**
+
+1. **纯搬运。** 按区域切成 `src/styles/` 下 15 个文件，`style.css` 只剩 `@import` 顺序。
+   切点全部落在顶层块之间（脚本会校验），顺序与原单文件完全一致，因此构建产物
+   **逐字节相同**（内容哈希文件名都没变：`index-C2WDNjzu.css`，265,358 B）。
+2. **跟着路由懒加载。** 只有能证明级联结果不变的区域才允许搬进懒加载块：
+   - `styles/app-search.css` → `AppSearchModal`（本来就是 `lazy()`）。
+   - `styles/settings.css` 按消费方拆成 `settings-controls.css`（首次启动向导与项目首页也在用，留首屏）
+     与 `settings-page.css`（只有 `src/components/setting/` 用，随 `SettingsPage` 懒加载）。
+
+**为什么 `agent-settings.css`（33.6 KB）没有搬。** 它 126 个类里只有 19 个是设置页专有，
+其余由项目首页的 Agent 设置抽屉（eager）消费，搬走就会散架。
+
+**判定「可以搬」的三个条件**（脚本逐条检查，全部为 0 才动手）：
+
+- 该区域每条规则被赋样式的元素都带着「只有那个路由才有的类」；
+- 拆分后会跨到前面去的同区域规则里，没有「同特异性 + 同属性 + 可能命中同一元素」的；
+- 后加载的 eager 区域文件里同样没有这种规则。
+
+**结果。**
+
+| 产物 | 拆分前 | 拆分后 |
+| --- | --- | --- |
+| `index.css`（首屏） | 265.36 kB / gzip 34.70 | **243.20 kB / gzip 32.02** |
+| `SettingsPage.css`（随路由） | — | 14.45 kB |
+| `AppSearchModal.css`（随路由） | — | 7.71 kB |
+
+**语义等价核对。** 构建产物拍平成「@上下文 ‖ 选择器 ‖ 声明」再做多重集比对：
+前后都是 **1831 条规则，0 缺失、0 新增**——只是落在了不同文件里。
+（handoff 原来建议的 `shasum` 只在第 1 步适用；第 2 步规则跨文件重新分配，哈希必然变，
+所以改用规则集比对，这是更强的核对。）
+
+**防回归。** `electron/style-layering.test.mjs` 守住四条：`style.css` 只有 `@import`；
+每个区域文件要么被入口引入、要么恰好被一个组件引入；懒加载样式表不与首屏样式表争抢同一个类；
+`src/components/setting/` 只能经由那一处 `lazy()` 进入。
+
+---
+
+### 1.8 清理 `release/`（原 TODO-3，已获用户确认）
+
+本地 `release/` 原有 14 个版本共 12 GB（目录在 `.gitignore` 中，与仓库无关）。
+按用户确认删除到只留最近两个版本：**0.1.17**（当前 `package.json` 版本）与 **0.1.15**。
+**12 GB → 1.9 GB。**
+
+原来记在这里的一行命令是错的，不要再用：
+
+```bash
+ls -d release/*/ | head -n -2 | xargs rm -rf   # ✗ 会删掉最新的两个
+```
+
+`ls -d release/*/` 按字典序排，`0.1.9` 排在 `0.1.15` / `0.1.17` 之后，
+`head -n -2` 保留的恰恰是最旧的两个。要按修改时间取：
+
+```bash
+cd release && KEEP=$(ls -dt */ | head -2 | tr -d '/' | tr '\n' ' ')
+for d in */; do name="${d%/}"; case " $KEEP " in *" $name "*) ;; *) rm -rf "$name";; esac; done
+```
+
+---
+
 ---
 
 ## 2. 必须守住的不变量
@@ -89,64 +197,30 @@
 
 5. **附件的 `dataUrl` 只放缩略图。** 新增任何附件录入路径都要经过缩略图化，否则 1.2 的收益会被重新吃掉。`base64` / `text` 仍然只用于送 Agent，不进持久化。
 
+6. **壳层 React state 不得持有 `chatState`。** AppShell 的工作区类型是 `WorkspaceMetadataState`；
+   主进程权威快照一律经 `adoptAuthoritativeSnapshot()` 进入，落盘一律经 `hydrateWorkspaceChatStates()`
+   出去。绕开任一侧就等于把整份 transcript 重新塞回按 delta 变化的 React state，1.6 的收益立刻消失。
+   回归测试见 `thread-chat-state-store.test.mjs` 的「workspace adoption strips chat content…」。
+
+7. **run 活跃期间，只有时间戳变化的 broker 快照不得提交到壳层 state。**
+   `acceptProjectChatSnapshot` 按 `snapshot.runs` 是否还有活跃 run 决定 `deferTimestampOnlyUpdates`。
+   终止快照里 run 已是 `succeeded/failed/cancelled`，精确时间戳照常落地，因此排序语义不变。
+   `setThreadRunStates` 的 `sameThreadRunStates` 相等判断是同一件事的另一半——它原本每条 delta
+   都返回新对象。回归测试见「running deltas that only move timestamps…」。
+
+8. **懒加载样式表不得与首屏样式表给同一个类上样式。** 懒加载块在 `index.css` 之后到达，
+   谁赢取决于用户什么时候打开那个路由——这类回归在开发机上几乎看不见。
+   新增区域文件或调整 `style.css` 的 `@import` 顺序后跑一次 `style-layering.test.mjs`。
+
 ---
 
 ## 3. 待办
 
-### TODO-1：把线程对话状态移出 AppShell（高价值 / 高风险）
+无。1.1–1.8 之后 handoff 上原有的三项待办都已完成。
 
-**问题。** `src/components/AppShell.tsx` 是 3314 行的单体组件，`chatWorkspace` 整个对象放在它的 `useState` 里（`AppShell.tsx:333`）。每个 delta 经 `updateThreadChatState`（`:1365`）→ `updateChatWorkspace`（`:422`）→ `setChatWorkspace` 触发整棵树重渲染：AppShell 自身、ChatPage、AppShellSidebar、AppShellWorkspace、Composer 全部重算。
-
-**为什么不能只加 `memo`。** 试过评估：`chatWorkspace` 每个 delta 都换新引用，任何从它派生的 prop 也随之变化，`memo` 在这些组件上不会命中。必须先把「每条线程的对话内容」从「工作区元数据」里分出来。
-
-**建议做法。**
-
-1. 新增 `src/components/chat/thread-chat-state-store.ts`：一个外部 store，`getSnapshot(threadId)` / `subscribe(threadId, cb)` / `setThreadChatState(threadId, update)`，内部按 threadId 分桶，只通知订阅了该 threadId 的组件。
-2. `AppShell` 的 `chatWorkspace` 只保留元数据：`projects`、`threads`（不含 `chatState`）、`activeProjectId`、`activeThreadId`、`sidebarPrefs`、`workspaceTabs` 等。
-3. `ChatPage` / `Transcript` 用 `useSyncExternalStore` 订阅当前活动线程的 `chatState`。
-4. `applyProjectChatSnapshot`（`src/components/workspace-session.ts`）在应用 broker 快照时同时写元数据与 store。
-5. legacy 回退路径（`projectChatReadiness === 'legacy'`）仍需要完整 `thread.chatState` 才能持久化，落盘前从 store 组装回去。
-
-**注意点。**
-
-- `src/chat-workspace-persistence.ts` 与 `electron/chat-workspace-store.ts` 的磁盘结构假定 `thread.chatState` 存在。**不要改磁盘格式**，只改渲染进程内的内存组织方式。
-- `workspace-session.test.mjs`（596 行）覆盖了 `WorkspaceSession` 的行为，改动后必须全绿。
-- 完成后应能观察到：流式期间侧栏与输入框不再重渲染。建议用 React DevTools Profiler 录一次流式回答作为前后对比证据。
-
-**完成定义。** 一次流式回答期间，`AppShellSidebar` 与 `Composer` 的 render 次数从「每 delta 一次」降到 0；`tsc` 与全部测试通过。
-
-### TODO-2：拆分 `src/style.css`（中价值 / 低风险但机械量大）
-
-**现状。** 单文件 10881 行 / 281 KB，构建后首屏 CSS 259.1 KB。7815 条规则起始选择器。
-
-**按类名前缀的规模分布（规则数）。**
-
-| 前缀 | 规则数 | 前缀 | 规则数 |
-| --- | --- | --- | --- |
-| `project-home` | 177 | `app-thread` | 51 |
-| `agent-status` | 99 | `app-search` | 51 |
-| `agent-mcp` | 91 | `app-sidebar` | 50 |
-| `app-shell` | 78 | `settings-provider` | 38 |
-| `local-app` | 66 | `file-diff` | 38 |
-| `chat-message` | 64 | `settings-update` | 35 |
-
-**建议做法。** 按上表把规则搬进 `src/styles/<area>.css`，`style.css` 只保留基础层与 `@import`。真正的收益来自让这些文件跟着已经懒加载的路由走：`settings-*` 前缀的规则应随 `SettingsPage` 懒加载块加载，`app-search` 随 `AppSearchModal`，`project-home` 中 A2UI 相关部分随 `A2uiCardSurface`。做法是把对应 CSS `import` 移进那些组件模块，Vite 会自动把它们挂到对应的按需块上。
-
-**验证方式（重要，这是纯重构）。** 拆分前后构建产物的 CSS 应当**语义等价**。用以下方式核对，避免因顺序变化改变级联结果：
-
-```bash
-npx vite build && cat dist/assets/index-*.css dist/assets/*.css | tr -d ' \n' | shasum
-```
-
-拆分前后分别记录，并逐条解释任何差异。**不要**顺手删除「源码里搜不到引用」的 126 个类：类名可能由字符串拼接或注入的 HTML/Markdown 使用，该信号不足以支撑删除。
-
-### TODO-3：清理 `release/`（需用户确认后再做）
-
-本地 `release/` 有 14 个版本共 12 GB，单个 DMG 约 200 MB。目录已在 `.gitignore` 中，不影响仓库。**删除不可逆，必须先得到用户明确同意**，并保留最近两个版本：
-
-```bash
-ls -d release/*/ | head -n -2 | xargs rm -rf
-```
+再往下要继续压首屏，剩下的量在 `index.js`（1122.9 KB）而不是 CSS：
+`agent-settings.css`（33.6 KB）与它对应的 Agent 设置抽屉现在是 eager 的，
+如果把抽屉本身改成 `lazy()`，样式可以跟着一起走——但那要先把项目首页对这批类的复用理清楚。
 
 ---
 
@@ -157,13 +231,15 @@ npx tsc --noEmit -p tsconfig.json
 node --test electron/*.test.mjs
 npx vite build
 node scripts/perf-bench-workspace-store.mjs
+npx vite --config perf-harness/vite.config.ts   # render 计数探针，见 perf-harness/README.md
 ```
 
-当前基线：`tsc` 通过；449 项测试全部通过；构建 3.3 秒。
+当前基线：`tsc` 通过；458 项测试全部通过（原 449 + `thread-chat-state-store.test.mjs` 5 项
++ `style-layering.test.mjs` 4 项）；构建 3.3 秒；`index.js` 1122.9 KB / `index.css` 243.2 KB。
 
 **两个坑。**
 
-1. `node --test` 并行执行测试文件。如果新增了做真实磁盘或 `sqlite3` I/O 的测试，可能把 `local-app-runtime.test.mjs` 里等待真实子进程的用例挤到超时。判定方法：`node --test --test-concurrency=1 electron/*.test.mjs` 若全绿，则是负载干扰而非逻辑错误。
+1. `node --test` 并行执行测试文件。如果新增了做真实磁盘或 `sqlite3` I/O 的测试，可能把 `local-app-runtime.test.mjs` 里等待真实子进程的用例挤到超时。判定方法：`node --test --test-concurrency=1 electron/*.test.mjs` 若全绿，则是负载干扰而非逻辑错误。（本轮新增的 `thread-chat-state-store.test.mjs` 是纯内存用例，默认并行下 454 项直接全绿，没有触发这条。）
 2. `scripts/perf-bench-workspace-store.mjs` 默认读当前用户真实工作区，只读不写，所有写入都在临时目录。也可传入任意 `chat-workspace.json` 路径。
 
 ---
@@ -177,7 +253,28 @@ node scripts/perf-bench-workspace-store.mjs
 新增  src/components/chat/A2uiCardSurface.tsx
 新增  scripts/perf-bench-workspace-store.mjs
 新增  PERFORMANCE-HANDOFF.md
+新增  src/components/chat/thread-chat-state-store.ts
+新增  src/components/chat/broker-snapshot-source.ts
+新增  electron/thread-chat-state-store.test.mjs
+新增  perf-harness/（render 计数探针，不进产品构建）
+新增  src/styles/（15 个区域样式文件，其中 app-search / settings-page 随路由懒加载）
+新增  electron/style-layering.test.mjs
+改动  src/style.css（只剩 @import 顺序）
+改动  src/components/AppSearchModal.tsx / setting/SettingsPage.tsx（各自 import 自己的样式）
+改动  electron/window-chrome.test.mjs（断言改为跟随 style.css 的 @import 链）
 改动  electron/chat-workspace-store.ts / .test.mjs
+改动  electron/desktop-seam.test.mjs
+改动  src/components/types.ts
+改动  src/components/workspace-session.ts
+改动  src/components/workspace-command-client.ts
+改动  src/workspace-commands.ts
+改动  src/components/AppShell.tsx
+改动  src/components/AppShellSidebar.tsx
+改动  src/components/AppSearchModal.tsx
+改动  src/components/chat/ChatThreadView.tsx
+改动  src/components/chat/ChatStartView.tsx
+改动  src/components/chat/ProjectChatWindowPage.tsx
+改动  src/components/chat/RuntimeDevelopmentWindowPage.tsx
 改动  electron/project-chat-broker.ts / .test.mjs
 改动  electron/chat-broker-core.ts
 改动  electron/main.ts

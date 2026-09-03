@@ -3,6 +3,7 @@
  * Router component switching settings categories (models, skills, agent mode).
  */
 
+import '../../styles/settings-page.css'
 import { AgentModeSettingsPage } from './AgentModeSettingsPage'
 import { AppUpdateSettingsPage } from './AppUpdateSettingsPage'
 import { DeveloperSettingsPage } from './DeveloperSettingsPage'

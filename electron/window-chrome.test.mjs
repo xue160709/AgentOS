@@ -23,6 +23,18 @@ function loadWindowChromeModule() {
   return module.exports
 }
 
+
+/**
+ * `src/style.css` 现在只有 @import；断言样式规则时要看它实际拉进来的那些文件。
+ * 随组件懒加载的区域文件（app-search / settings-page）不在这条链上，也不该在这里断言。
+ */
+function readStylesheet() {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../src')
+  const entry = readFileSync(resolve(root, 'style.css'), 'utf8')
+  const imports = [...entry.matchAll(/@import\s+'([^']+)'/g)].map((match) => match[1])
+  return imports.map((specifier) => readFileSync(resolve(root, specifier), 'utf8')).join('\n')
+}
+
 test('Windows main window uses hidden titlebar overlay chrome', () => {
   const { getMainWindowChromeOptions } = loadWindowChromeModule()
 
@@ -54,7 +66,7 @@ test('workspace header is not a global drag region', () => {
 test('sidebar chrome keeps stable drag regions without swallowing interactive controls', () => {
   const appShellSource = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../src/components/AppShell.tsx'), 'utf8')
   const sidebarSource = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../src/components/AppShellSidebar.tsx'), 'utf8')
-  const styleSource = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../src/style.css'), 'utf8')
+  const styleSource = readStylesheet()
 
   assert.match(appShellSource, /isWindows\s*\?\s*' is-platform-win32'/)
   assert.match(styleSource, /\.app-shell\.is-platform-win32\.is-shell-settings\s+\.app-sidebar-scroll\s*\{[^}]*padding-top:\s*calc\(var\(--spacing\) \* 3\)/s)

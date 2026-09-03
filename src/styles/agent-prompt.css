@@ -1,0 +1,240 @@
+/* Agent 追问与权限弹窗 */
+.agent-input-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-layer-modal-top);
+  display: grid;
+  place-items: end center;
+  padding: calc(var(--spacing) * 8);
+  background: color-mix(in oklab, var(--color-token-foreground) 18%, transparent);
+}
+
+.agent-input-dialog {
+  width: min(620px, 100%);
+  max-height: min(76vh, 680px);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 4);
+  padding: calc(var(--spacing) * 5);
+  border: 1px solid var(--color-token-border);
+  border-radius: var(--radius-xl);
+  color: var(--color-token-text-primary);
+  background: var(--color-token-main-surface-primary);
+  box-shadow:
+    0 18px 56px color-mix(in oklab, var(--color-token-foreground) 24%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-token-border) 52%, transparent);
+}
+
+.agent-input-dialog--question {
+  width: min(720px, 100%);
+}
+
+.agent-input-dialog__header {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+}
+
+.agent-input-dialog__header > span {
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-token-text-tertiary);
+}
+
+.agent-input-dialog__header h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: 1.25;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0;
+}
+
+.agent-input-dialog__header p {
+  margin: 0;
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.agent-input-preview {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: calc(var(--spacing) * 3);
+  border: 1px solid var(--color-token-border-light);
+  border-radius: var(--radius-md);
+  color: var(--color-token-text-secondary);
+  background: color-mix(in oklab, var(--color-token-foreground) 4%, transparent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.agent-question-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 4);
+  padding-right: calc(var(--spacing) * 1);
+}
+
+.agent-question-block {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agent-question-block legend {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+  margin: 0 0 calc(var(--spacing) * 2);
+  padding: 0;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-base);
+  line-height: 1.35;
+  font-weight: var(--font-weight-medium);
+}
+
+.agent-question-block legend span {
+  width: fit-content;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.agent-question-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: calc(var(--spacing) * 2);
+}
+
+.agent-question-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: calc(var(--spacing) * 2);
+  align-items: start;
+  min-width: 0;
+  padding: calc(var(--spacing) * 2.5);
+  border: 1px solid var(--color-token-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-token-main-surface-primary);
+  cursor: pointer;
+}
+
+.agent-question-option:hover,
+.agent-question-option.is-selected {
+  border-color: color-mix(in oklab, var(--color-token-link) 48%, var(--color-token-border));
+  background: var(--color-token-list-hover-background);
+}
+
+.agent-question-option input {
+  margin: 3px 0 0;
+}
+
+.agent-question-option__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.75);
+}
+
+.agent-question-option__copy > span:first-child {
+  color: var(--color-token-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.agent-question-option__copy > span:last-child {
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.agent-question-option__preview {
+  grid-column: 1 / -1;
+  min-width: 0;
+  max-height: 140px;
+  overflow: auto;
+  padding: calc(var(--spacing) * 2);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-token-foreground) 4%, transparent);
+}
+
+.agent-question-custom {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+  margin-top: calc(var(--spacing) * 2.5);
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.agent-question-custom input {
+  min-height: 34px;
+  padding: 0 calc(var(--spacing) * 2.5);
+  border: 1px solid var(--color-token-input-border);
+  border-radius: var(--radius-md);
+  color: var(--color-token-input-foreground);
+  background: var(--color-token-input-background);
+  font: inherit;
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.agent-question-custom input:focus {
+  border-color: var(--settings-focus-border);
+  box-shadow: 0 0 0 2px var(--settings-focus-ring);
+}
+
+.agent-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(var(--spacing) * 2);
+}
+
+.btn-scroll-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 180px;
+  z-index: 3;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: var(--radius-full);
+  color: var(--color-token-text-primary);
+  background: color-mix(in oklab, var(--color-token-input-background) 96%, transparent);
+  border-color: var(--color-token-border);
+  box-shadow: var(--shadow-xl);
+  transform: translateX(-50%) translateY(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.btn-scroll-bottom[data-visible] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+@container composer-footer (width <= 520px) {
+  .composer-model-button > span:first-child,
+  .composer-mode-button span {
+    max-width: 72px;
+  }
+}
+

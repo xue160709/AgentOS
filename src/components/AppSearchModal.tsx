@@ -15,6 +15,7 @@ import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
 import { projectContent } from '../project-content'
 import { threadChatStore } from './chat/thread-chat-state-store'
+import '../styles/app-search.css'
 import type {
   AppSearchHighlightRange,
   AppSearchResult,
