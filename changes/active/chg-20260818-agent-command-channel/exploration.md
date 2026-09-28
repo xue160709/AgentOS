@@ -1,7 +1,61 @@
 # Exploration — chg-20260818-agent-command-channel
 
 > 本文件由 `user-perspective-review`（§5）与 `product-design`（§6）按 skill 落盘契约创建于 2026-08-31。
-> §1–§4 本轮未使用。证据等级与验证状态遵循 [.claude/docs/evidence-levels.md](../../../.claude/docs/evidence-levels.md)。
+> §1–§3 本轮未使用；§4 由 `product-problem-investigation` 于 2026-09-28 补入。证据等级与验证状态遵循 [.claude/docs/evidence-levels.md](../../../.claude/docs/evidence-levels.md)。
+
+## §4 问题与根因：工作台 Runtime「构建 / 重启运行时」双入口（2026-09-28）
+
+模式 `ISSUE_TRACE`。情境：用户新建工作台，选择 `/Volumes/macOS/Github/MD-Reader`（Next.js SSR，有 `build`/`start`/`dev`，无 `output: 'export'`），想直接看到页面。
+
+### 4.1 问题信号账本
+
+| 用户信号（E1，原话） | 当前事实（E2） | 推断（E3） | 尚未知 |
+| --- | --- | --- | --- |
+| 「为什么存在『构建』和『重启运行时』，小白完全不懂」 | 工作台 Tab 的 recovery 条同时给出「构建」（主）与「重启运行时」（次），`RuntimeWorkspace.tsx` recovery 区；STATIC | 两个按钮是实现机制名，用户必须先知道项目属于哪一档才能选对 | — |
+| 「点击『重启运行时』就搞定了」 | 重启走 `manager.restart → start`，经 `servedRuntimeDefinition` 按 `C-RSM-402` 阶梯选到 `next start`；REPRODUCED（node 直驱真实 manager，`status=running`，Ready 1.2s） | 正确路径是次按钮，主按钮反而必败 | — |
+| 首次看到「构建失败，仍保留上次产物 / 构建没有产出可直接打开的静态页面」 | `buildRuntime` IPC（`electron/main.ts` buildRuntime handler）强制 `mode:'static'` 调 `manager.build`，没有 ③→② 兜底；OBSERVED（用户截图） | 首败文案谎称有上次产物（= §5 F2） | 截图状态由点「构建」还是新建流程 `AppShell.tsx` 在 `build_required` 时自动调 `buildRuntime` 产生，未区分 |
+| 「页面一直卡在预览，只有切换页面才能看到」 | `RuntimePreview` 仅在 `generation/readyUrl/previewUrl/mode` 变化或 `active` 切换时重建 Preview；UNTESTED | 候选 H1：重启期间 static→development 切换，Preview 创建落在 close/新 generation 之间被丢弃，切页触发 `active` 重跑才恢复；H2：`createRuntimePreview` 返回 `loading` 后没有后续 ready 推进 | 需真实 GUI 复现 |
+
+### 4.2 根因与因果链
+
+```text
+「两个按钮不懂、点主按钮失败」
+  → 直接摩擦：主操作「构建」对 SSR 项目必失败，正确操作藏在次按钮「重启运行时」
+  → 契约错位：C-RSM-402 承诺「如何查看由系统探测决定」，但只有 start/restart 入口走探测阶梯；
+    「构建」入口（buildRuntime IPC）绕过阶梯、硬编码静态档
+  → 根因：工作台表面把实现机制（静态构建 / 进程重启）直接当成用户动作暴露，
+    且同一意图（让页面显示出来/变成最新）分叉成两条决策路径；
+    新词表 runtimeServeStatus（「更新预览」「需要保持运行才能查看」「启动」）已存在，
+    但工作台 Tab 用 showToolbar={false} 关掉了它，只剩 Revision 4 旧 recovery 条
+  → 波及：所有 SSR/服务端项目的首次导入与更新；新建工作台自动构建（AppShell）；
+    侧栏右键「重新构建」；首败文案 F2。不波及：真正可静态导出的项目、项目首页 Runtime 卡片（已用新词表）
+```
+
+反例/验证：可静态导出的项目点「构建」能成功——说明缺陷不在构建本身，而在入口未经阶梯；把 buildRuntime 接入阶梯后 SSR 项目点主按钮应直接落到 `next start`。
+
+### 4.3 解决方向（R，E5，待确认）
+
+1. **一个用户意图，一条决策路径**：工作台只保留一个主动作，语义是「显示最新页面」（沿用已有「更新预览」/「启动」词表），内部一律走 `C-RSM-402` 阶梯：① 有静态产物→直开；② 有服务端产物→`start`；③ 可构建→构建后回 ① 或落 ②；④ 仅 dev→`dev`。`buildRuntime` IPC 与新建流程都改为经阶梯，③ 无产物不再记为 `build_failed`。
+2. **机制动作降级**：「重启运行时」只在进程型档位的故障恢复中出现，或收进「⋯」菜单；「构建」不再作为独立按钮出现在服务端项目上。
+3. **统一表面**：工作台 Tab 复用 `runtimeServeStatus` 的状态与动作，不再维护第二套 recovery 文案；同时修 F2（无 `artifactId` 时不说「仍保留上次产物」）。
+4. **切换后自动呈现**：Runtime 进入可预览状态后当前 Tab 必须自动出现页面，不依赖切页；先按 4.1 H1/H2 复现定位。
+
+明确不做：不新增「模式选择」让用户判断静态/服务端；不改 `C-RSM-402` 阶梯本身；不动项目首页 Runtime 卡片的已确认交互。
+
+### 4.4 待确认与交接
+
+- 需用户决定：工作台主动作名称沿用「更新预览 / 启动」，还是合并为单一「打开 / 更新」。
+- 「卡在预览」→ `interaction-flow-review`（带真实 GUI 复现）；方案收敛后 → `product-spec` 记入本 change，实施 → `project-work`。
+
+### 4.5 用户补充（2026-09-28）与新发现
+
+- 用户原话（E1）：「站在小白的角度，应该减少他们对这里的认知，这里我们做好兜底。减少按钮。出问题才在这个页面出现这些按钮。」→ 方向由用户明确：正常态零按钮，异常态才出现恢复动作。
+- 用户追问：「如果都是 next start，是不是可以理解用户修改了代码，我们 next start 也会重新构建？」
+- 事实（E2，STATIC）：**不会**。第 ② 档「已有服务端产物 → 直接 `npm run start`，不重新构建」；`next start` 只伺服既有 `.next`。源码新鲜度检测 `checkStaticStale` 只覆盖静态产物（`supervisor.ts` checkStaticStale，`mode !== 'static'` 直接返回），服务端档没有任何过期判断。
+- 推论（E3）：服务端项目一旦有过 `.next/BUILD_ID`，打开和「重启运行时」都会永远伺服旧构建；界面内没有能让它变新的正常入口（「构建」只在走静态路径时顺带重建了 `.next`，属于偶然）。这与用户「做好兜底」的预期相反，是比双按钮更深的缺口。
+- 与已确认合同的冲突（须用户裁决）：design.md Revision 5「源码更新 → 旧页面继续可用 + 提示重新构建（用户决定）」要求用户手动触发更新；用户本轮方向是系统兜底、减少按钮，倾向自动更新。
+- 候选方向（R，E5）：打开/切回时判断源码是否比产物新（静态档复用 `fingerprintStaticSource`，服务端档在构建时记录源码指纹）；过期则**先显示旧页面，后台重建，成功后无感切换**，失败保留旧页面并才出现恢复条。不引入文件监听。
+- 「打开」的定义（R，回应用户 2026-09-28 追问「不可能每次切换 tab 都算一次打开」）：检查挂在 **Runtime 冷启动**上，而非 Tab 激活——同一 generation 只检查一次。触发：应用重启后该 Tab 首次被看到、关闭工作台后从「新建工作台」列表重开（9-28 REAL 更正：此手势存在）、重启运行时、「用 AI 修改」会话结束（已知改过代码，直接重建）、用户点顶栏 ↻ 刷新（把已有按钮的语义扩为「看最新」）。不触发：切换 Tab、窗口聚焦、侧栏展开收起。外部编辑器改代码后不切 Tab 不会自动发现，需点 ↻。
 
 ## §5 用户证据：工作台/项目首页 Runtime 导入·开发流程评审（2026-08-31）
 
@@ -99,6 +153,24 @@
 - 需 REAL Explorer（真实 GUI）升级证据：opening→live 真实耗时、创建失败真实呈现、F11 双状态链时序、重启恢复观感。
 - F11 类竞态/late event 按分工交 `interaction-flow-review`。
 - F1/F2/F4/F5 均有精确文件行号，适合直接开 work order；是否进入正式文档与修复优先级待用户决策（本节全部内容按 `confirmation_source` 映射为 `agent_proposal`，不构成产品事实）。
+
+### 5.7 第二轮：真实使用反馈（2026-09-28）
+
+- 模式：FEEDBACK_SYNTHESIS + SIMULATED；lens：首次使用、失败恢复。无 Explorer Thread 真实 GUI 走查（UNTESTED，待授权）。
+- E1（用户本人实操，打包版 AgentOS，Dock 启动）：新建工作台选 MD-Reader → 「静态构建失败 (unknown)」；PATH 修复后 → 「构建没有产出可直接打开的静态页面」+「构建失败，仍保留上次产物」；点「重启运行时」→ 页面可用；成功后页面停在占位，切页才出现；原话「为什么存在『构建』和『重启运行时』，小白完全不懂」「减少按钮，出问题才在这个页面出现这些按钮」。
+- E2/REPRODUCED：node 中以 Finder PATH 调 `spawn npm` → ENOENT；补 PATH 后 npm 11.19.0；真实 `LocalAppRuntimeManager.start` 对 MD-Reader → `servePlan=production`、`next start` Ready 1.2s、`status=running`。
+- E2/STATIC：`buildRuntime` IPC 强制静态档；`checkStaticStale` 仅静态档；工作台 `showToolbar={false}`。
+- E3：F13（服务端项目永远旧版）比双按钮更伤信任，因为错误结果不可见。
+- E4：M11–M16 心声见 Paintpoints.md §3，不构成证据。
+- 映射：E1 观察与 E2/REPRODUCED 可作 `verified_as_built`（限现状）；F13 推论、全部方案方向为 `agent_proposal`。
+
+### 5.8 第三轮：REAL GUI 走查（2026-09-28）
+
+- 执行：Explorer Thread，独立 userData + Dock 同款 PATH，开发版（65a02c4 + 未提交修复），CDP 驱动；偏离：文件夹选择器桩、J2 起副本端口改 3031。
+- E2/REPRODUCED：F17 引导修复生效；F14 预览占位 ×4（根因 effect 缺 status 依赖，主会话静态复核成立）；F13 改源码 5 条路径均不生效；F18 端口冲突「[stderr] }」×3。
+- E2/OBSERVED：F19 局域网暴露；F20 模式标签错位；F21 新建弹窗首次为空；F22 关闭无确认且可一键重开；F23 引导细节；F4 获 REAL 佐证。
+- 推翻：settings 日志泄露密钥（已打码）；「无关闭重开手势」（§4.5 表需恢复该行）。
+- 映射：以上 E2 观察可作 `verified_as_built`（限现状）；修复方向仍为 `agent_proposal`。
 
 ## §6 方案候选与图
 

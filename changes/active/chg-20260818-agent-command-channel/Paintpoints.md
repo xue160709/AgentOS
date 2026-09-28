@@ -1,6 +1,8 @@
 # Painpoints — 工作台/项目首页 Runtime 导入·开发流程
 
 > 来源：2026-08-31 用户视角评审（`user-perspective-review`，SIMULATED 静态走查 + 三个正交 lens：首次导入 / AI 开发迭代 / 失败与中断恢复）。
+> 来源：2026-09-28 第二轮（`user-perspective-review`，FEEDBACK_SYNTHESIS + SIMULATED，lens：首次使用 / 失败恢复）：用户本人用打包版 AgentOS 新建工作台打开 `/Volumes/macOS/Github/MD-Reader`（Next.js SSR）的截图与原话（E1）＋主会话用真实 `LocalAppRuntimeManager` 在 node 中复现（E2/REPRODUCED）＋「小白」情境模拟（E4，仓库无 `USER_PROFILE.md`，情境仅取自用户原话）。**本轮仍无 Explorer Thread 真实 GUI 走查**。
+> 来源：2026-09-28 第三轮 REAL：Explorer Thread 以独立 userData、Dock 同款 PATH 启动开发版（基线 65a02c4 + 未提交修复，dist 13:50），经 CDP 驱动真实界面走 J0–J5（全新引导 → 新建工作台 → 失败恢复 → 改源码 → 重启应用 → 侧栏菜单）；证据目录 `scratchpad/walkthrough2/`（会话临时目录）。系统文件夹选择器以桩代替；因用户已安装的 AgentOS 占用 3030，J2 起对副本改用 `-p 3031`（已记录的偏离）。
 > 证据等级遵循 [.claude/docs/evidence-levels.md](../../../.claude/docs/evidence-levels.md)：本文全部为 `STATIC`（代码行号可定位）/ `INFERRED`（推断）/ `E4`（模拟心声）/ `UNTESTED`，**无 REAL 证据**，均属 `agent_proposal` 候选，不构成产品事实。
 > 完整分级证据与裁决记录见 [`exploration.md`](exploration.md) §5；汇报页见 [`view.html`](view.html)。
 
@@ -9,6 +11,8 @@
 ## 1. 一句话结论
 
 流程骨架（对象隔离、last-good 兜底、同路径冲突处理、术语纪律）是扎实的；系统性缺口集中在两处——**失败时刻的解释力**（Main 算出的诊断信息送不到用户眼前）和**承诺与实现的一致性**（多条已确认合同只兑现了一半）。最重的问题都落在新手最容易踩的路径上：首次导入、首次创建、首次失败。
+
+**9-28 第二轮**：真实使用把缺口推到了更前面——工作台 Tab 把实现机制（「构建」「重启运行时」「静态产物」）直接交给用户选择，而主按钮对服务端项目必然失败、正确路径藏在次按钮（F12）；更深一层，服务端项目改了代码后打开和重启都永远伺服旧构建，界面没有正常入口让它变新（F13）。用户已给出方向：「减少按钮，出问题才出现」。
 
 ## 2. 痛点总表（按用户影响排序）
 
@@ -24,6 +28,18 @@
 | F8 | **覆盖无反馈 + 死文案**：对 `unsupported` 目录点「已保存预览」被 `applyServeOverride` 直接短路，界面无任何变化；为该场景写好的 `viewModeArtifactUnavailable` 从未被任何组件引用 | P2 | 查看方式覆盖 | STATIC · 主会话复核 | `electron/local-app-runtime/static.ts:251-263`；`src/locales/zh.json:194` |
 | F9 | **工具栏过载**：非初始化态同屏 8–9 个控件（两段状态、用 AI 修改、查看方式三态、构建、刷新、日志、重启、停止）；「保持运行」作为常驻选项与"不暴露 dev 心智"原则有张力 | P2 | 日常查看 | STATIC | `ProjectHomeRuntimeView.tsx:57-65` |
 | F10 | **文档/代码卫生**：PRD 标 Revision 6 Planned 但 R3/R4 已落码；`startProjectRuntimeChat` 为被测试断言不接线的历史路径；`LocalAppOnboardingDialog.tsx` 疑似死组件；`enterDevelopmentMode` 词条疑似死文案 | P3 | — | STATIC | `prd/local-app-runtime/README.md`；`electron/project-chat-renderer.test.mjs:137` |
+| F15 | **从 Dock 打开的打包版找不到 npm**：GUI 进程 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，`spawn npm` 报 ENOENT，界面只显示「静态构建失败 (unknown)」——任何项目都打不开且原因不可见。**已修复，未提交** | P0（已修） | 首次导入 | E1 截图 + E2 REPRODUCED | `electron/main.ts`（补 PATH）；`electron/local-app-runtime/supervisor.ts:516`（带出真实错误） |
+| F12 | **主按钮必败、正确路径藏在次按钮**：工作台 recovery 条主按钮「构建」走 `buildRuntime` IPC，强制静态档、绕过 `C-RSM-402` 阶梯，对 SSR 项目必报「构建没有产出可直接打开的静态页面」；次按钮「重启运行时」走阶梯落到 `next start` 才成功 | P1 | 首次导入 | E1（用户实操：点重启才成功）+ E2 REPRODUCED（重启路径 `status=running`） | `RuntimeWorkspace.tsx` recovery 区；`electron/main.ts` buildRuntime handler；`AppShell.tsx:1843` |
+| F13 | **服务端项目改代码后永远显示旧版**（9-28 REAL：切页、↻、重启运行时、重启应用、关闭重开全部无效；运行中「重新构建」禁用；无任何「有改动未生效」提示）：第 ② 档有 `.next/BUILD_ID` 就直接 `npm run start` 不重建；`checkStaticStale` 只覆盖静态档；打开、重启都不会变新，界面无正常更新入口 | P1 | 回访/迭代 | E2 REPRODUCED（5 条路径） | `supervisor.ts` detectModeAndStart / checkStaticStale；`static.ts` detectRuntimeServePlan |
+| F14 | **运行成功后画面停在「运行中 / 预览」占位，切页才出现页面**：`RuntimePreview` 创建预览的 effect 依赖不含 `runtime.status`；Main 在 starting 阶段就从 stdout 写入 readyUrl（`readyUrlObserved`），转 running 时依赖无变化，effect 不重跑；重启应用后另见 renderer 漏收 running 事件停在 starting | P1（升级：每次成功都命中） | 首次成功/重启/恢复 | E1 + E2 REPRODUCED ×4（首次成功、菜单重启、应用重启恢复、关闭后重开） | `src/components/RuntimePreview.tsx` effect 依赖；`electron/local-app-runtime/snapshot-state.ts:189` |
+| F16 | **机制词汇与按钮过量**：工作台 Tab 用 `showToolbar={false}` 关掉了新词表工具栏，只剩 Revision 4 旧 recovery 条（「需要首次构建」「正在构建静态产物」「构建失败，仍保留上次产物」＋构建/重启运行时/更换目录）；侧栏「⋯」菜单 9 项，含重新构建/刷新/重启/停止 | P2 | 全程 | E1（「小白完全不懂」）+ STATIC | `AppShellWorkspace.tsx:618`；`RuntimeWorkspace.tsx`；`AppShellSidebar.tsx:255-265` |
+| F17 | **全新安装引导「完成」静默失败**：Main 无工作区时 renderer 只在内存建默认态不回写，`project.create` 恒返回 `workspace-unavailable`，引导页不渲染错误。**已修复未提交**，REAL 复走：点完成 1s 进入主界面 | P0（已修） | 首次引导 | E2 REPRODUCED（修复前 7 次失败、修复后通过） | `src/chat-workspace-persistence.ts`；`AppShell.tsx` startInitialSetup |
+| F18 | **端口冲突时错误文案无信息量且只能原样重试**：显示「开发服务退出 (1)：[stderr] }」（只取日志最后一行）；「启动运行时」「重启运行时」每次约 27s 后同样失败；项目脚本写死 `-p` 时覆盖注入的 PORT | P1 | 首次启动失败 | E2 REPRODUCED（3 次） | `supervisor.ts:876` latestReadableReason |
+| F19 | **服务端伺服暴露到局域网**：`next start -p` 监听 `*:端口`，日志显示 Network 地址；注入的 `HOST=127.0.0.1` 对该脚本无效，界面无提示 | P1（安全） | 运行中 | E2 OBSERVED | 项目脚本 + supervisor 注入 env |
+| F20 | **模式标签错位**：实际跑 `next start`（生产），「查看 Runtime」显示「开发模式」，失败文案写「开发服务退出」 | P2 | 排障 | E2 OBSERVED | `runtime-event-state.ts`；`supervisor.ts:780` |
+| F21 | **「新建工作台」弹窗首次为空**：已加入的项目不列出，唯一入口叫「选择其他项目文件夹…」 | P2 | 新建工作台 | E2 OBSERVED | 新建工作台 chooser |
+| F22 | **「关闭工作台」无确认、直接停服务**；关闭后可从「新建工作台」列表一键重开且不再要求信任 | P3 | 关闭/重开 | E2 OBSERVED | `AppShellSidebar.tsx` close 项 |
+| F23 | **首次引导细节**：全新 userData 显示「已读取已有模型配置。」；首次 `project.create` 带过期 revision，先 `workspace-conflict` 再自动重试（用户不可见） | P3 | 首次引导 | E2 OBSERVED | 引导状态文案；workspace-command-client |
 | F11 | **双状态链瞬时矛盾风险**：「结束修改」成功瞬间，开发会话链与 Runtime 产物链各自独立发布，可能短暂出现「修改已结束」+「预览可更新」并存 | 待验证 | 收口瞬间 | **INFERRED** | `runtimeDevelopmentStatus` vs `runtimeServeStatus` 两条独立 generation fence |
 
 严重度描述用户影响与恢复成本，不代表发生频率（无 E1 频率数据）。
@@ -44,6 +60,14 @@
 | M8 · 同路径冲突（正向锚点） | 检测→阻止→点名占用者→一键「切换到正在修改的 Runtime」 | 「哦，原来是我在另一个地方已经开着改了，点一下就跳过去了。」 | 安心｜中 | 正向 |
 | M9 · 两个窗口各管一半 | 开发窗口无 Preview，效果只在主窗口；无「查看效果」跳转 | 「效果在哪看？开发窗口里没有预览，我是不是要切回主窗口那个 tab。」 | 分心｜中 | F9 相邻 |
 | M10 · 覆盖没反应 | 对 unsupported 目录点「已保存预览」界面无任何变化 | 「我点了『已保存预览』，界面看着好像什么都没变——是没点中，还是它就是做不到又不告诉我？」 | 困惑｜中 | F8 |
+| M11 · 从 Dock 打开，选好目录（9-28） | E1：「静态构建失败 (unknown)」+「构建失败，仍保留上次产物」 | 「我就选了个文件夹，它说构建失败，还说保留了上次的东西——我第一次用哪来的上次？unknown 是什么？」 | 困惑→无助｜高 | F15、F2 |
+| M12 · 面对两个按钮（9-28） | E1：recovery 条并列「构建」「重启运行时」「更换目录」 | 「构建和重启有什么区别？我不知道该点哪个，点错会不会把东西弄坏？」 | 犹豫｜高 | F12、F16 |
+| M13 · 点了主按钮（9-28） | E1：「构建没有产出可直接打开的静态页面」 | 「什么叫静态页面？我的项目在终端里 npm run dev 明明能跑。」 | 挫败｜高 | F12 |
+| M14 · 试次按钮成功（9-28，正向转折） | E1 + E2：点「重启运行时」后 MD-Reader 完整可用 | 「原来点这个就好了……但我是蒙对的。」 | 松一口气但不踏实｜中 | F12 |
+| M15 · 成功却看不到（9-28） | E1：页面停在预览占位，切到别的页面再切回来才出现 | 「它说好了但一片空白，我还以为又坏了，碰巧切了一下才出来。」 | 疑惑｜中 | F14 |
+| M16 · 改完代码回来看（推演） | STATIC：已有 `.next` 时打开/重启都直接 `next start` | 「我明明改了标题，怎么还是旧的？是没保存还是它缓存了？重启也没用。」 | 怀疑→失去信任｜高 | F13 |
+| M17 · 点了信任，半分钟后（REAL） | E2：「正在首次构建静态产物」→「正在准备依赖 / 构建没有产出可直接打开的静态页面」→「正在启动」→「启动失败：开发服务退出 (1)：[stderr] }」，约 33s | 「我点了信任，它说在构建，又说构建没产出，最后给我一个 `}`——我完全不知道哪里坏了，只能一遍遍点『启动运行时』。」 | 无助｜高 | F18、F4 |
+| M18 · 终于「运行中」却是空白（REAL） | E2：状态「运行中」，预览占位 90s 无变化，切页后出现 | 「终于显示运行中了，页面却是空的，我以为又坏了。」 | 疑惑→不信任｜高 | F14 |
 
 ## 4. 关键问题展开
 
@@ -79,12 +103,29 @@ Main 在失败时精心写入具体原因（如「修改未自动保存，请检
 
 数据层是安全的（源码真实落盘、Thread 持久化、last-good 保留），但"发生过什么"这条叙事线在关窗和重启处断裂：无后台继续提示、无未完成事项续接、`needs_attention` 的入口按钮与初始按钮同名。用户不丢数据，但要花额外力气验证系统的承诺。
 
+### F12 · 主按钮必败（P1，9-28）
+- 影响面：所有「有 build 脚本、构建不出静态页」的服务端项目（Next SSR、含 API 路由的 Next 等）的首次导入与每次点「构建」。
+- 根因线索：同一意图（让页面显示出来）分叉为两条决策路径——start/restart 经 `servedRuntimeDefinition` 走阶梯；`buildRuntime` IPC 硬编码静态档。新建流程 `AppShell.tsx:1843` 在 `build_required` 时也调它。
+- 就近范式：`manager.start` 里的 `serveAsServer()` 已实现 ③→② 兜底，可作为所有入口的唯一路径。
+
+### F13 · 服务端项目永远旧版（P1，9-28）
+- 影响面：任何有过一次 `.next/BUILD_ID` 的服务端项目；用户在外部编辑器或 AI 会话外改代码后，打开/重启都看到旧页面，且界面不提示过期。
+- 根因线索：第 ② 档定义为「已有服务端产物 → 直接 start，不重新构建」，缺少与静态档对称的新鲜度判断。
+- 就近范式：静态档 `checkStaticStale` + `fingerprintStaticSource`；last-good「旧页先显示、成功后切换」的构建栅栏。
+
+### F15 · 找不到 npm（P0，已修复未提交）
+- 影响面：从 Dock/Finder 启动打包版、Node 装在 Homebrew/`~/.local`/nvm 等非系统目录的所有用户——即几乎所有 macOS 用户。
+- 修复：主进程启动时复用 `buildMcpExecutableEnv` 补全 PATH；失败文案带出 `exit.error.message`。已用 Finder PATH 模拟验证，打包安装后用户实测报错已变化（证明生效）。
+
 ## 5. 正向体验（应保留，防止修复时误伤）
 
 - **同路径冲突闭环是全场最完整的恢复路径**：检测→阻止第二实例→点名占用者→一键切换，四环节全部落码；零进程浏览态是 2026-08-30 用户实测「首页卡片无法运行」（E1）的**根因修复**。
 - **术语纪律彻底**：普通路径文案零 npm/端口/产物目录泄漏。
 - **关窗不取消 AI** 的承诺在代码层真实兑现（窗口销毁与 Run 生命周期是两条独立路径）。
 - **last-good 与信任持久化、stale 检测诚实**：重启后不假装预览是最新的。
+- **9-28 真实正向**：一旦走对路径（重启运行时），MD-Reader 这类服务端项目无需任何端口/命令配置即可完整可用，四档阶梯本身判断正确（E1 + E2 REPRODUCED）。
+- **失败后仍给出可行动的出口**：即便文案有误，recovery 条至少让用户有路可试，没有死在空白页（E1）。
+- **9-28 REAL 正向**：修复后首次引导 1s 进入主界面，项目与 Skills 立即出现；信任框简洁；失败横幅始终给出口；「查看 Runtime」有完整日志；退出应用回收子进程；重启后工作台自动恢复。
 - **tier① 零 spawn 直开已有产物**：正中"平时看产物"诉求，甚至超前于 PRD 标注的 Revision 5 Planned。
 
 ## 6. 自发建议（E4）→ 背后需要（E3）→ 体验机会（E5）
@@ -96,6 +137,9 @@ Main 在失败时精心写入具体原因（如「修改未自动保存，请检
 | 创建请求别装成我说的；点击前给预告 | 代理行为的透明与归因 | 创建请求以系统任务说明呈现；按钮旁一行预期说明 |
 | 报权限错就指条路 | 错误 → 动作闭环 | `trust_required` / `misplacedRuntime` alert 附带直达恢复入口 |
 | 窗口没准备好也让我先把话打完 | 等待期不浪费用户意图 | opening 允许输入、排队至 live 提交（兑现 design.md:107） |
+| **用户真实建议（E1，非模拟）**：「减少按钮，出问题才在这个页面出现这些按钮」 | 正常态零认知负担，恢复动作按需出现 | 工作台正常态只显示页面；异常态出现单一主恢复动作 |
+| 「我改了代码，打开就该是新的」 | 结果新鲜度可信 | 冷启动与 ↻ 时判断源码是否比产物新，旧页先显示、后台重建、无感切换 |
+| 「别问我构建还是重启，你替我决定」 | 不承担机制选择 | 所有入口统一走 `C-RSM-402` 阶梯，机制动作退到故障恢复/菜单 |
 | 完成后通知我，别让我盯着 | 收口期的可离开性 | 保存成功/失败的轻量通知；关窗时一句「AI 会在后台完成」 |
 
 ## 7. 覆盖盲区与待验证（UNTESTED）
@@ -106,7 +150,18 @@ Main 在失败时精心写入具体原因（如「修改未自动保存，请检
 - 重启恢复、跨天回访的实际观感；`needs_attention` 重开后能否定位到等待项。
 - 英文文案、Windows 平台、窄窗口/键盘/读屏路径。
 - 竞态/late event/焦点归属类问题按分工交 `interaction-flow-review`。
+- 9-28 第三轮 REAL 仍未覆盖：释放 3030 的真实修复路径（不可动用户已装 App）；「更换目录」「停止→启动」「用 AI 修改」；项目未写死端口时 F14 是否出现（按代码推断仍可能因 readyUrl 早于 running 而出现，未验证）；首次成功那一刻窗口可见性。
+- 9-28 第二轮追加（已被第三轮部分覆盖）：未做 Explorer Thread 真实 GUI 走查（需另起 Electron 实例 + CDP，与用户正在运行的 AgentOS 冲突，待用户授权）；F14 根因；SSR 项目首次 `next build` 真实等待时长与期间文案（「正在首次构建静态产物」对服务端项目也不准确）；缺 `node_modules` 时的依赖准备路径；可静态导出的 Next 项目对照；nvm/fnm 等其它 Node 安装方式下的 PATH 补全。
 
 ## 8. 裁决记录
 
 失败恢复 lens 曾判断 `createPrompt` 为死代码，**不成立**——其仅 grep 了 `src/`，该 prompt 在 Main 侧经 locale 读取并于 `electron/main.ts:1495` 提交（主会话实证）。该 lens 其余结论（F1、misplaced 无动作等）独立成立。
+
+**2026-09-28**：F2 首次失败假备份文案获用户真实截图佐证（工作台 Tab 表面，「构建失败，仍保留上次产物」），证据由 STATIC 升为 E1 观察；原 STATIC 判断不变。F12 的截图状态是用户点了「构建」还是新建流程自动调用 `buildRuntime` 产生，无法区分，结论只依赖「构建入口绕过阶梯」这一 STATIC 事实，不依赖具体触发方式。
+
+**2026-09-28 第三轮裁决**：
+- Explorer 报告「主进程 stdout 打印的 settings 日志含 apiKey/authToken 字段、可能明文」——**不成立**：`summarizeResolvedConfigForLog` 对两者调用 `redactSecret`（`electron/claude-agent-settings.ts:496`），日志只含打码值与 has* 布尔。
+- 主会话此前向用户称「没有关掉再打开的轻量手势」（exploration §4.5）——**被 REAL 推翻**：关闭工作台后，「新建工作台」列表会列出原工作台，点击即重开且不再要求信任。§4.5 触发时机表应恢复「关闭后重开」一行。
+- F4（信任框命令 ≠ 实际执行）获 REAL 佐证：信任框只写 `npm run build`，实际还执行了 `npm ci`（629 包）与 `npm run start`。
+- F12 本轮未复现为「主按钮=构建」：服务端失败后横幅主按钮为「启动运行时」，说明横幅按钮随 mode 变化；F12 结论（`buildRuntime` 入口绕过阶梯）不变，触发面为 static 模式失败态。
+- F19（服务端伺服暴露到局域网）——**用户裁决撤销**（2026-09-28：「局域网都可以访问是对的」），为预期行为，不作为缺陷修复；原观察保留。

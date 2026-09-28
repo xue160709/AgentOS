@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="change-status" content="implementing">
-<meta name="change-revision" content="4">
+<meta name="change-revision" content="5">
 <meta name="change-stage" content="实施中">
 <title>Runtime 开发会话与伺服探测 · 汇报</title>
 <style>
@@ -59,11 +59,13 @@ footer a{color:var(--accent);text-decoration:none}
 <body>
 <main>
 <h1>Runtime 开发会话与伺服探测</h1>
-<p class="sub">chg-20260818-agent-command-channel · Revision 4 · 实施中 · 已确认范围签署于 2026-08-30</p>
+<p class="sub">chg-20260818-agent-command-channel · Revision 5 · 实施中 · 最近确认 2026-09-28</p>
 
 <section class="decide">
 <h2>需要你决定什么</h2>
 <ul>
+<li><strong>已定（9-28）— Revision 5</strong>：你已确认——所有入口统一走四档探测；源码有更新自动重建（应用重启恢复、关闭后重开、重启运行时、↻ 时检查，AI 修改结束直接重建，切页不触发）；工作台正常态零按钮、菜单只留四项；局域网可访问是预期行为。实施顺序：预览自动出现 → 失败说真话 → 自动重建 → 按钮与菜单精简。</li>
+<li><strong>待你定 — 验收方式</strong>：Revision 5 做完后是直接归档、验完再归档，还是先归档以后再验？不回答则按「做完直接归档」处理。<span class="badge">默认假设，可推翻</span> 另：探测结论与手动覆盖入口将从工具栏移入「查看 Runtime」详情。</li>
 <li><strong>决定 1 — 修复范围</strong>：8-31 用户视角评审发现 11 项体验缺口，其中 <b>2 项是已确认合同的实现差距</b>（探测结论在工作台侧不可见不可覆盖；opening 阶段输入框被整体禁用）。建议先修 F1／F2／F4／F5 四项（均有精确行号，可直接开 work order），其余进 backlog——接受这个切法吗？</li>
 <li><strong>决定 2 — 容错修复批次</strong>：8-31 容错状态机审查新发现 21 组问题（R-01〜R-21，见下表），其中 <b>9 项 P1</b>。建议第一批修 R-01（production 失败无路可走）、R-02（构建失败零反馈）、R-04（首屏假状态）、R-07（停止后状态回跳）、R-08（半成品被当成功产物）——接受吗？</li>
 <li><strong>决定 3 — 两个产品裁决</strong>：①构建进行中用户切走页面，构建应该<b>继续</b>还是<b>中止</b>？（现状：静默杀掉，用户以为成功了）②「停止」是否立即作废旧一代事件（结构性修复 R-07）？</li>
@@ -117,6 +119,44 @@ footer a{color:var(--accent);text-decoration:none}
 <section>
 <h2>要动哪些地方（进度 + 评审发现）</h2>
 <p>R3（开发会话）与 R4（四档探测）任务清单全部完成，Development Check 与 GUI smoke 通过<span class="badge ok">已落码</span>；正式 GUI 验收未全量执行<span class="badge warn">待验收</span>。</p>
+<h3>9-28 真实使用：工作台「构建 / 重启运行时」双入口</h3>
+<div class="figs">
+<figure>
+<svg viewBox="0 0 360 200" role="img" aria-label="现状：两个按钮两条路径">
+<defs><marker id="b" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7z" fill="currentColor" opacity=".55"/></marker></defs>
+<text x="10" y="18" class="m">现状</text>
+<rect class="box" x="10" y="30" width="150" height="30" rx="6"/><text x="85" y="50" text-anchor="middle">「构建」（主按钮）</text>
+<rect class="box" x="200" y="30" width="150" height="30" rx="6"/><text x="275" y="50" text-anchor="middle">「重启运行时」（次）</text>
+<path d="M85 60 V92" stroke="currentColor" opacity=".55" fill="none" marker-end="url(#b)"/><path d="M275 60 V92" stroke="currentColor" opacity=".55" fill="none" marker-end="url(#b)"/>
+<rect class="box" x="10" y="94" width="150" height="34" rx="6"/><text x="85" y="108" text-anchor="middle">只走静态构建</text><text x="85" y="122" text-anchor="middle" class="m">跳过四档探测</text>
+<rect class="box hot" x="200" y="94" width="150" height="34" rx="6"/><text x="275" y="108" text-anchor="middle">走四档探测</text><text x="275" y="122" text-anchor="middle" class="m">落到 npm run start</text>
+<path d="M85 128 V152" stroke="currentColor" opacity=".55" fill="none" marker-end="url(#b)"/><path d="M275 128 V152" stroke="currentColor" opacity=".55" fill="none" marker-end="url(#b)"/>
+<text x="85" y="170" text-anchor="middle" style="fill:var(--warn)">必失败·谎称有上一版</text>
+<text x="275" y="170" text-anchor="middle" style="fill:var(--ok)">页面打开</text>
+</svg>
+<figcaption>同一个意图被拆成两条路径，正确的那条是次按钮。</figcaption>
+</figure>
+<figure>
+<svg viewBox="0 0 360 200" role="img" aria-label="建议：一个动作一条路径">
+<text x="10" y="18" class="m">建议<tspan class="m"> · 推断，待你确认</tspan></text>
+<rect class="box hot" x="100" y="30" width="160" height="30" rx="6"/><text x="180" y="50" text-anchor="middle">「更新预览 / 启动」</text>
+<path d="M180 60 V92" stroke="currentColor" opacity=".55" fill="none" marker-end="url(#b)"/>
+<rect class="box" x="70" y="94" width="220" height="34" rx="6"/><text x="180" y="108" text-anchor="middle">四档探测（C-RSM-402，已确认）</text><text x="180" y="122" text-anchor="middle" class="m">静态直开 / start / 构建后再判 / dev</text>
+<path d="M180 128 V152" stroke="currentColor" opacity=".55" fill="none" marker-end="url(#b)"/>
+<text x="180" y="170" text-anchor="middle" style="fill:var(--ok)">页面自动出现，不用切页</text>
+<text x="180" y="190" text-anchor="middle" class="m">「重启运行时」收进故障恢复 / ⋯ 菜单</text>
+</svg>
+<figcaption>用户不需要知道项目属于哪一档。</figcaption>
+</figure>
+</div>
+<ul>
+<li>根因：工作台 Tab 用的是 Revision 4 的旧恢复条；已有的新状态词表（「需要保持运行才能查看」「启动」）只在被关掉的工具栏里；「构建」入口绕过了已确认的四档探测<span class="badge ok">重启路径已复现</span></li>
+<li>首败文案「构建失败，仍保留上次产物」＝ F2 在工作台的又一处<span class="badge ok">真实截图</span></li>
+<li class="inferred">重启成功后页面停在占位画面、切页才出现：原因未定位<span class="badge warn">未验证</span></li>
+<li><b>9-28 真实界面走查</b>：修复后新用户引导 1 秒进入<span class="badge ok">已验证</span>；<b>运行成功后页面停在空白占位</b>复现 4 次，根因已定位<span class="badge ok">已复现</span>；<b>改源码后五种方式都看不到变化</b><span class="badge ok">已复现</span>；端口被占时只显示「[stderr] }」；服务暴露到局域网<span class="badge warn">安全</span>。</li>
+<li>用户视角评审（9-28 第二轮）：新增 5 项，最重的是 <b>F15 找不到 npm（P0，已修）</b>、<b>F12 主按钮必败</b>、<b>F13 服务端项目改代码后永远旧版</b>（均 P1）。你的原话「减少按钮，出问题才出现」已作为真实用户建议记录<span class="badge ok">真实使用</span></li>
+<li>已顺带修复：打包版从 Dock 启动找不到 npm（报「静态构建失败 (unknown)」）<span class="badge ok">已落码·未提交</span></li>
+</ul>
 <h3>8-31 用户视角评审：11 项缺口（SIMULATED 静态走查，无 REAL 证据）</h3>
 <table>
 <tr><th>#</th><th>发现</th><th>严重度</th><th>性质</th></tr>
@@ -173,7 +213,7 @@ footer a{color:var(--accent);text-decoration:none}
 </section>
 
 <footer>
-chg-20260818-agent-command-channel · revision 4 · 实施中 · 范围签署 2026-08-30（对话确认，记录于 proposal.md）<br>
+chg-20260818-agent-command-channel · revision 5 · 实施中 · Revision 5 于 2026-09-28 对话确认（记录于 proposal.md）<br>
 <a href="product.md">product.md</a> · <a href="design.md">design.md</a> · <a href="exploration.md">exploration.md</a> · <a href="Paintpoints.md">Paintpoints.md</a> · <a href="mockup.html">mockup.html</a> · <a href="proposal.md">proposal.md</a> · <a href="tasks.md">tasks.md</a>
 </footer>
 </main>

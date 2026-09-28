@@ -1,6 +1,6 @@
 ---
 change_id: chg-20260818-agent-command-channel
-revision: 4
+revision: 5
 task_level: Heavy
 level_basis: "网站授权与身份边界、跨窗口共享会话、平台 deep link、主进程协调和预览 Runtime 跨模块契约"
 professional_gaps:
@@ -20,6 +20,20 @@ confirmation: user_confirmed
 acceptance_requested: false
 coverage_gate: buildable
 ---
+
+# Revision 5 Tasks
+
+## 工作台零认知查看与自动更新（2026-09-28）
+
+初始项（`product-spec` 写入，按用户确认的顺序）：
+
+- [x] `R5-01` 预览自动呈现：Runtime 进入 running 且有 readyUrl（或静态 previewUrl）时当前工作台立即创建预览，不依赖切页；覆盖首次成功、重启运行时、应用重启恢复、关闭后重开四条路径（`C-RSM-506`；证据 Paintpoints F14）。判据：四条路径各自无需切页即出现页面。
+  - 进度（2026-09-28，project-work）：`runtimePreviewReady` 抽为纯函数并作为 `RuntimePreview` 创建 effect 依赖（根因：readyUrl 在 starting 阶段写入、转 running 时依赖无变化）；`isStaleRuntimeSnapshot` 统一 IPC 回包与事件的新旧判定，拒绝同实例更早 `updatedAt` 的快照（应用重启后 renderer 卡 starting）。证据：`node --test electron/runtime-event-state.test.mjs` 新增 3 项先红后绿；`npx tsc` exit 0。版本：base 65a02c4 + 未提交 diff。未验证：真实 GUI 四条路径复走（待 R5-03 后一并走查）。
+- [x] `R5-02` 失败说真话：失败文案给出可读根因（端口被占用等），不再只取日志最后一行；无 last-good 时不显示「仍保留上次产物/继续显示上一版」（`C-RSM-506`；F18、F2）。判据：端口冲突场景文案含端口占用原因；首败文案不含上次产物。
+  - 进度（2026-09-28，project-work）：`readableFailureReason` 取代「只取最后一行」——识别 `EADDRINUSE` 输出「端口 N 已被其他程序占用」，其次取含 error 的行，跳过 `}`/堆栈帧；生产服务退出文案改「页面服务退出」（F20 部分）；`runtimeBuildFailed` 改为中性「构建失败」，有 last-good 时才用 `runtimeBuildFailedKeptLast`/`serveBuildFailed`。证据：`node --test electron/local-app-runtime.test.mjs electron/runtime-event-state.test.mjs` 39/39；`npx tsc` exit 0。未做：端口冲突时自动换端口（不在确认范围）。
+- [ ] `R5-03` 源码新鲜度与自动重建：构建成功后记录源码指纹（静态、服务端对称）；按 `C-RSM-503` 时机比对，过期即重建；服务端档构建前备份 `.next`，失败回滚并以旧版重启（`C-RSM-502/503`；F13）。判据：改源码后五个触发点中四个检查点可看到新版，切页不触发；构建失败后旧版仍可用。
+- [ ] `R5-04` 入口统一：`buildRuntime` 与新建流程经四档阶梯，③ 无产物落 ②（`C-RSM-501`；F12）。判据：SSR 项目任何入口都不出现「构建没有产出可直接打开的静态页面」失败态。
+- [ ] `R5-05` 工作台零按钮与侧栏菜单精简；探测结论与覆盖入口移入「查看 Runtime」（`C-RSM-504/505`、`Q-R5-01`；F16）。判据：正常态工作台无运行类按钮、菜单四项；异常态出现恢复条与排障项。
 
 # Revision 4 Tasks
 
