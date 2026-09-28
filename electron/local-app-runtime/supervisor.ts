@@ -16,6 +16,7 @@ import type {
 } from '../../src/components/types'
 import {
   findDetectedStaticArtifact,
+  fingerprintRuntimeSource,
   fingerprintStaticSource,
   StaticArtifactStore,
   StaticPreviewRegistry,
@@ -39,6 +40,15 @@ import { createRuntimeLivenessBridgeSource, runtimeDevCommandArgs } from './live
 import { RuntimeInspectionPass, type RuntimeDirectoryFacts } from './inspect'
 import { RuntimeSnapshotTransitions } from './snapshot-state'
 import { StaticBuildFence } from './static-build'
+import {
+  backupServerBundle,
+  currentServerBuildRecord,
+  discardServerBundleBackup,
+  readServerBundleId,
+  restoreServerBundle,
+  serverBundleStale,
+  ServerBuildRecordStore,
+} from './server-bundle'
 
 /** Narrow seams used by focused tests to pause the build validation phases. */
 export type RuntimeStaticOutputValidator = (
@@ -100,6 +110,8 @@ type ActiveRuntime = {
   buildOperation?: Promise<LocalAppRuntimeSnapshot>
   buildPreSnapshot?: LocalAppRuntimeSnapshot
   operation?: Promise<LocalAppRuntimeSnapshot>
+  /** In-flight rebuild of a served bundle (`C-RSM-502`); at most one. */
+  serverUpdate?: Promise<LocalAppRuntimeSnapshot>
   controller: AbortController
   logs: RuntimeLogEntry[]
   consumerIds: Set<string>
@@ -117,6 +129,9 @@ export class LocalAppRuntimeSupervisor {
   private readonly preparationDigests: Map<string, string>
   private readonly preparationRecordPath?: string
   private readonly staticArtifactStore: StaticArtifactStore
+  private readonly serverBuildRecords: ServerBuildRecordStore
+  /** Source fingerprint an update last failed on; the same source is not retried automatically. */
+  private readonly updateFailedFingerprints = new Map<string, string>()
   private readonly staticPreviewRegistry: StaticPreviewRegistry
   private readonly validateStaticOutputImpl: RuntimeStaticOutputValidator
   private readonly fingerprintStaticSourceImpl: RuntimeStaticSourceFingerprinter
@@ -141,6 +156,7 @@ export class LocalAppRuntimeSupervisor {
     this.preparationDigests = options.preparationDigests ?? new Map()
     this.preparationRecordPath = options.preparationRecordPath
     this.staticArtifactStore = options.staticArtifactStore ?? new StaticArtifactStore(options.userDataPath ?? path.join(process.cwd(), '.agentos-runtime-data'), this.now)
+    this.serverBuildRecords = new ServerBuildRecordStore(options.userDataPath ? path.join(options.userDataPath, 'local-app-server-builds.json') : undefined)
     this.staticPreviewRegistry = options.staticPreviewRegistry ?? new StaticPreviewRegistry()
     this.validateStaticOutputImpl = options.validateStaticOutput ?? ((projectRoot, declaration) => validateStaticOutput(projectRoot, declaration))
     this.fingerprintStaticSourceImpl = options.fingerprintStaticSource ?? ((projectRoot, declaration) => fingerprintStaticSource(projectRoot, declaration))
@@ -380,6 +396,9 @@ export class LocalAppRuntimeSupervisor {
     runtime.buildOperationId = undefined
     runtime.buildController = undefined
     runtime.buildPreSnapshot = undefined
+    // An interrupted server update restores its `.next` backup before the
+    // stop is complete, so quitting never leaves a half-built bundle behind.
+    await runtime.serverUpdate?.catch(() => undefined)
     return runtime.snapshot
   }
 
@@ -528,6 +547,9 @@ export class LocalAppRuntimeSupervisor {
       if (!detected.ok) return runtime.snapshot
       declaration = detected.value
       if (!declaration) {
+        // Tier ③ → ②: the build produced a server bundle instead. Record the
+        // source it was built from so later checks can tell it is current.
+        await this.recordServerBuild(runtime.definition.id, canonicalRoot)
         runtime.snapshot = this.state.buildFailed(runtime.snapshot, {
           errorCode: 'build-produces-no-artifact',
           detail: '构建没有产出可直接打开的静态页面',
@@ -593,6 +615,117 @@ export class LocalAppRuntimeSupervisor {
     } catch {
       // Stale checking is advisory and must never make an otherwise usable
       // last-good artifact unavailable.
+    }
+  }
+
+  /**
+   * Whether the source changed since the artifact or bundle being shown was
+   * built (`C-RSM-502`). Development runtimes never report stale: dev reloads
+   * itself. A source that an update already failed on is not reported again
+   * until it changes.
+   */
+  async sourceFreshness(localAppId: string): Promise<{ stale: boolean; fingerprint?: string }> {
+    const runtime = this.runtimes.get(localAppId)
+    if (!runtime) return { stale: false }
+    try {
+      const inspected = await new RuntimeInspectionPass().inspectDefinition(runtime.definition)
+      if (!inspected.ok) return { stale: false }
+      const root = inspected.canonicalRoot
+      const failed = this.updateFailedFingerprints.get(localAppId)
+      if (runtime.snapshot.mode === 'static') {
+        if (!inspected.agentos || !runtime.snapshot.artifactId) return { stale: false }
+        const artifact = await this.staticArtifactStore.loadLastGood(localAppId, root)
+        if (!artifact?.sourceFingerprint) return { stale: false }
+        const fingerprint = await fingerprintStaticSource(root, inspected.agentos)
+        return { stale: fingerprint !== artifact.sourceFingerprint && fingerprint !== failed, fingerprint }
+      }
+      if (runtime.definition.serveScript !== 'start') return { stale: false }
+      if (!await serverBundleStale(root, await this.serverBuildRecords.get(localAppId))) return { stale: false }
+      const fingerprint = await fingerprintRuntimeSource(root)
+      return { stale: fingerprint !== failed, fingerprint }
+    } catch {
+      // Freshness is advisory; an unreadable tree must not break viewing.
+      return { stale: false }
+    }
+  }
+
+  /** Remember (or clear) the source an automatic update failed on. */
+  noteUpdateOutcome(localAppId: string, succeeded: boolean, fingerprint?: string): void {
+    if (succeeded || !fingerprint) this.updateFailedFingerprints.delete(localAppId)
+    else this.updateFailedFingerprints.set(localAppId, fingerprint)
+  }
+
+  /**
+   * Rebuild a served bundle in place (`C-RSM-502`, design.md Revision 5 §4):
+   * stop the server quietly, back up `.next`, build, then serve the new
+   * bundle — or restore the backup and serve the previous one. The rendered
+   * page stays up while building because the status remains `running`.
+   */
+  updateServer(localAppId: string): Promise<LocalAppRuntimeSnapshot | null> {
+    const runtime = this.runtimes.get(localAppId)
+    if (!runtime) return Promise.resolve(null)
+    if (runtime.serverUpdate) return runtime.serverUpdate
+    if (runtime.definition.serveScript !== 'start' || runtime.snapshot.status !== 'running') return Promise.resolve(runtime.snapshot)
+    const operation = this.runServerUpdate(runtime).finally(() => {
+      if (runtime.serverUpdate === operation) runtime.serverUpdate = undefined
+    })
+    runtime.serverUpdate = operation
+    return operation
+  }
+
+  private async runServerUpdate(runtime: ActiveRuntime): Promise<LocalAppRuntimeSnapshot> {
+    const inspected = await new RuntimeInspectionPass().inspectDefinition(runtime.definition)
+    if (!inspected.ok) return runtime.snapshot
+    const root = inspected.canonicalRoot
+    const isActive = () => this.runtimes.get(runtime.definition.id) === runtime && !runtime.controller.signal.aborted
+    runtime.snapshot = this.state.serverUpdating(runtime.snapshot)
+    this.emit(runtime, 'status')
+    // Detach before terminating so the exit is not treated as a crash.
+    const server = runtime.child
+    runtime.child = undefined
+    if (server) await server.terminate()
+    const backup = await backupServerBundle(root)
+    let succeeded = false
+    let failure = '构建失败'
+    try {
+      const build = this.spawnChild(runtime, { executable: npmExecutable(), args: ['run', 'build'], cwd: root, env: { NODE_ENV: 'production' } })
+      runtime.buildChild = build
+      const exit = await build.awaitExit({ signal: runtime.controller.signal })
+      if (runtime.buildChild === build) runtime.buildChild = undefined
+      succeeded = !exit.error && exit.code === 0 && Boolean(await readServerBundleId(root))
+      if (!succeeded) failure = exit.error?.message ?? this.latestReadableReason(runtime) ?? `构建失败 (${exit.code ?? exit.signal ?? 'unknown'})`
+    } catch (error) {
+      failure = error instanceof Error ? error.message : failure
+    }
+    if (!isActive()) {
+      await restoreServerBundle(root, backup).catch(() => undefined)
+      return runtime.snapshot
+    }
+    if (succeeded) {
+      await discardServerBundleBackup(backup).catch(() => undefined)
+      await this.recordServerBuild(runtime.definition.id, root)
+    } else {
+      await restoreServerBundle(root, backup).catch(() => undefined)
+    }
+    const served = await this.startRuntime(runtime, new RuntimeInspectionPass())
+    if (!isActive()) return runtime.snapshot
+    if (served.status !== 'running') {
+      // Neither bundle would serve: this is now a start failure, not an update.
+      runtime.snapshot = { ...runtime.snapshot, buildStatus: 'ready' }
+      this.emit(runtime, 'status')
+      return runtime.snapshot
+    }
+    runtime.snapshot = succeeded ? this.state.serverUpdated(runtime.snapshot) : this.state.serverUpdateFailed(runtime.snapshot, failure)
+    this.emit(runtime, 'status')
+    return runtime.snapshot
+  }
+
+  private async recordServerBuild(definitionId: string, canonicalRoot: string): Promise<void> {
+    try {
+      const record = await currentServerBuildRecord(canonicalRoot, this.now())
+      if (record) await this.serverBuildRecords.set(definitionId, record)
+    } catch {
+      // Without a record the mtime rule still applies; never fail the build over it.
     }
   }
 

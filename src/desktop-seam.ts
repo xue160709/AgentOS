@@ -89,6 +89,7 @@ export const DESKTOP_INVOKE_CHANNELS = {
   stopRuntime: 'desktop:runtime:stop',
   releaseRuntime: 'desktop:runtime:release',
   restartRuntime: 'desktop:runtime:restart',
+  updateRuntime: 'desktop:runtime:update',
   buildRuntime: 'desktop:runtime:build',
   cancelRuntimeBuild: 'desktop:runtime:build-cancel',
   setRuntimeServeOverride: 'desktop:runtime:set-serve-override',

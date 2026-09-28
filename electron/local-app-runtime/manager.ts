@@ -18,6 +18,12 @@ import {
 
 export type RuntimeManagerOptions = RuntimeSupervisorOptions & {
   rootExecutionRegistry?: RuntimeRootExecutionRegistry
+  /**
+   * Check source freshness after every start and update automatically
+   * (`C-RSM-502/503`). Main enables it; tests opt in explicitly so a
+   * background check never races their spawn assertions.
+   */
+  autoUpdate?: boolean
 }
 
 /**
@@ -72,6 +78,8 @@ export class LocalAppRuntimeManager {
   private readonly consumers = new Map<string, Set<string>>()
   private readonly pendingDefinitionStops = new Map<string, Promise<void>>()
   private readonly buildOperations = new Map<string, Promise<LocalAppRuntimeSnapshot>>()
+  private readonly updateOperations = new Map<string, Promise<LocalAppRuntimeSnapshot | null>>()
+  private readonly autoUpdate: boolean
   private readonly listeners = new Set<(event: LocalAppRuntimeEvent) => void>()
   private readonly sharedRootJoins = new Map<string, SharedRootJoin>()
   private readonly lastProjectedGeneration = new Map<string, number>()
@@ -83,6 +91,7 @@ export class LocalAppRuntimeManager {
     this.leases = new RuntimeLeaseBook(this.rootExecutionRegistry)
     this.now = options.now ?? Date.now
     this.externalOnEvent = options.onEvent
+    this.autoUpdate = options.autoUpdate === true
     this.supervisor = new LocalAppRuntimeSupervisor({
       ...options,
       onEvent: (event) => {
@@ -122,6 +131,54 @@ export class LocalAppRuntimeManager {
   }
 
   async start(
+    localAppId: string,
+    consumerId?: string,
+    options: RuntimeStartOptions = {},
+  ): Promise<LocalAppRuntimeSnapshot> {
+    const snapshot = await this.startServed(localAppId, consumerId, options)
+    // `C-RSM-503`: every start (restore, reopen, restart, new) is a freshness
+    // checkpoint. It runs after the page is already viewable, never before.
+    if (this.autoUpdate && !this.sharedRootJoins.has(localAppId)) void this.updateToLatest(localAppId).catch(() => undefined)
+    return snapshot
+  }
+
+  /**
+   * Bring what the user is viewing up to date with its source
+   * (`C-RSM-502`). Without `force` it only acts when the source changed and
+   * an update has not already failed on that source; `force` is the explicit
+   * retry. Static runtimes rebuild through the regular build; served bundles
+   * are rebuilt in place. Development runtimes need nothing.
+   */
+  updateToLatest(localAppId: string, options: { force?: boolean } = {}): Promise<LocalAppRuntimeSnapshot | null> {
+    const existing = this.updateOperations.get(localAppId)
+    if (existing) return existing
+    const operation = this.runUpdate(localAppId, options.force === true).finally(() => {
+      if (this.updateOperations.get(localAppId) === operation) this.updateOperations.delete(localAppId)
+    })
+    this.updateOperations.set(localAppId, operation)
+    return operation
+  }
+
+  private async runUpdate(localAppId: string, force: boolean): Promise<LocalAppRuntimeSnapshot | null> {
+    if (this.sharedRootJoins.has(localAppId)) return this.get(localAppId)
+    const snapshot = this.supervisor.snapshot(localAppId)
+    if (!snapshot) return null
+    const isStatic = snapshot.mode === 'static'
+    const viewable = isStatic ? Boolean(snapshot.artifactId) && snapshot.status !== 'stopped' : snapshot.status === 'running'
+    if (!viewable || this.buildOperations.has(localAppId)) return snapshot
+    const freshness = await this.supervisor.sourceFreshness(localAppId)
+    if (!force && !freshness.stale) return snapshot
+    if (isStatic) {
+      const built = await this.build(localAppId)
+      this.supervisor.noteUpdateOutcome(localAppId, built.buildStatus !== 'build_failed' && built.status !== 'failed', freshness.fingerprint)
+      return built
+    }
+    const updated = await this.supervisor.updateServer(localAppId)
+    if (updated) this.supervisor.noteUpdateOutcome(localAppId, updated.status === 'running' && updated.errorCode !== 'update-failed', freshness.fingerprint)
+    return updated
+  }
+
+  private async startServed(
     localAppId: string,
     consumerId?: string,
     options: RuntimeStartOptions = {},

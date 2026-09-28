@@ -185,6 +185,28 @@ export class RuntimeSnapshotTransitions {
     }
   }
 
+  /**
+   * A served bundle is being rebuilt from newer source (`C-RSM-502`). The
+   * status stays `running` so the already rendered page keeps showing; the
+   * update is carried by `buildStatus` until the new server is ready.
+   */
+  serverUpdating(snapshot: LocalAppRuntimeSnapshot): LocalAppRuntimeSnapshot {
+    return { ...snapshot, buildStatus: 'building', phase: 'build', errorCode: undefined, detail: undefined, updatedAt: this.now() }
+  }
+
+  /**
+   * `ready` rather than `undefined`: runtime events merge `buildStatus` with
+   * `??`, so clearing it would leave the renderer showing the update forever.
+   */
+  serverUpdated(snapshot: LocalAppRuntimeSnapshot): LocalAppRuntimeSnapshot {
+    return { ...snapshot, buildStatus: 'ready', errorCode: undefined, detail: undefined, updatedAt: this.now() }
+  }
+
+  /** The previous bundle is serving again; the failed update is reported, not the runtime. */
+  serverUpdateFailed(snapshot: LocalAppRuntimeSnapshot, detail: string): LocalAppRuntimeSnapshot {
+    return { ...snapshot, buildStatus: 'build_failed', errorCode: 'update-failed', detail, updatedAt: this.now() }
+  }
+
   /** The dev server printed its own loopback URL; prefer it over the guess. */
   readyUrlObserved(snapshot: LocalAppRuntimeSnapshot, readyUrl: string): LocalAppRuntimeSnapshot {
     return { ...snapshot, readyUrl, updatedAt: this.now() }

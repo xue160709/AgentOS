@@ -1419,6 +1419,7 @@ if (gotSingleInstanceLock) {
     localAppRuntimeManager = new LocalAppRuntimeManager({
       preparationRecordPath: path.join(userDataPath, 'local-app-preparation.json'),
       userDataPath,
+      autoUpdate: true,
       onEvent: (event) => {
         const runtimeDefinitionId = event.runtimeDefinitionId
         if (!runtimeDefinitionId) return
@@ -2315,6 +2316,17 @@ if (gotSingleInstanceLock) {
       localAppRuntimeManager.register(definition)
       await localAppPreviewManager?.closeForLocalApp(rawId.trim())
       return localAppRuntimeManager.restart(rawId.trim())
+    })
+    // `C-RSM-503`: ↻ and the failed-update retry. Never builds a runtime that
+    // is not already viewable; the start path owns first builds.
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.updateRuntime, async (_event, rawId: unknown, rawOptions: unknown) => {
+      if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) return null
+      const id = rawId.trim()
+      const definition = readRuntimeDefinition(id)
+      if (!definition || !localAppRuntimeManager) return null
+      await assertRuntimeTrust(definition)
+      const force = typeof rawOptions === 'object' && rawOptions !== null && (rawOptions as { force?: unknown }).force === true
+      return localAppRuntimeManager.updateToLatest(id, { force })
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.buildRuntime, async (event, rawId: unknown) => {
       if (typeof rawId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawId.trim())) return { ok: false, code: 'invalid-id', message: 'Runtime 标识无效' }

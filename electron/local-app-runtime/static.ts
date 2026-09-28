@@ -600,10 +600,16 @@ export async function fingerprintStaticSource(
   return fingerprintRuntimeSource(projectRoot, declaration.outputRoot)
 }
 
-/** Source-only fingerprint shared by static-capable and development-only sessions. */
-export async function fingerprintRuntimeSource(projectRoot: string, outputRoot?: string): Promise<string> {
-  const hash = createHash('sha256')
-  const ignored = new Set(['.git', 'node_modules', '.next', ...(outputRoot ? [outputRoot] : [])])
+/** Build output AgentOS itself writes next to a server bundle while updating it. */
+export const SERVER_BUNDLE_BACKUP_DIRECTORY = '.next.agentos-backup'
+
+/** Visit every source file in stable order, skipping VCS, dependencies and build output. */
+async function walkRuntimeSource(
+  projectRoot: string,
+  outputRoot: string | undefined,
+  onFile: (relative: string, fileStat: Awaited<ReturnType<typeof stat>>) => void,
+): Promise<void> {
+  const ignored = new Set(['.git', 'node_modules', '.next', SERVER_BUNDLE_BACKUP_DIRECTORY, ...(outputRoot ? [outputRoot] : [])])
   const visit = async (directory: string, relative = ''): Promise<void> => {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
@@ -613,11 +619,27 @@ export async function fingerprintRuntimeSource(projectRoot: string, outputRoot?:
       if (entry.isDirectory()) {
         await visit(filePath, nextRelative)
       } else if (entry.isFile()) {
-        const fileStat = await stat(filePath)
-        hash.update(`${nextRelative}:${fileStat.size}:${fileStat.mtimeMs}\n`)
+        onFile(nextRelative, await stat(filePath))
       }
     }
   }
   await visit(projectRoot)
+}
+
+/** Source-only fingerprint shared by static-capable and development-only sessions. */
+export async function fingerprintRuntimeSource(projectRoot: string, outputRoot?: string): Promise<string> {
+  const hash = createHash('sha256')
+  await walkRuntimeSource(projectRoot, outputRoot, (relative, fileStat) => {
+    hash.update(`${relative}:${fileStat.size}:${fileStat.mtimeMs}\n`)
+  })
   return hash.digest('hex')
+}
+
+/** Latest modification time of any source file; 0 for an empty tree. */
+export async function newestRuntimeSourceMtime(projectRoot: string, outputRoot?: string): Promise<number> {
+  let newest = 0
+  await walkRuntimeSource(projectRoot, outputRoot, (_relative, fileStat) => {
+    newest = Math.max(newest, Number(fileStat.mtimeMs))
+  })
+  return newest
 }

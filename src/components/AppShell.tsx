@@ -902,7 +902,10 @@ export function AppShell() {
       onViewModeChange: setProjectHomeViewMode,
       onStart: () => { void startProjectRuntime() },
       onCreate: runtimeDevelopmentEnabled ? () => { void runRuntimeDevelopmentAction({ kind: 'project-runtime', projectId: activeProject.id, mountId: projectRuntimeState.mountId }) } : undefined,
-      onRefresh: () => { if (projectRuntimePreviewId) void window.desktop?.reloadRuntimePreview?.(projectRuntimePreviewId) },
+      onRefresh: () => {
+        if (projectRuntimePreviewId) void window.desktop?.reloadRuntimePreview?.(projectRuntimePreviewId)
+        if (projectRuntimeState.definition) void window.desktop?.updateRuntime?.(projectRuntimeState.definition.id).catch(() => undefined)
+      },
       onToggleLogs: () => setProjectRuntimeState((current) => ({ ...current, logsOpen: !current.logsOpen })),
       onRestart: () => { if (projectRuntimeState.definition) void window.desktop?.restartRuntime?.(projectRuntimeState.definition.id).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
       onStop: () => { if (projectRuntimeState.definition) void window.desktop?.stopRuntime?.(projectRuntimeState.definition.id, 'user').then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
@@ -2043,6 +2046,8 @@ export function AppShell() {
   const reloadLocalAppPreview = useCallback((tabId: string, localAppId: string) => {
     const runtime = runtimeStates[localAppId]
     if (runtime) void window.desktop?.reloadRuntimePreview?.(`preview-${tabId}-${runtime.generation}`)
+    // `C-RSM-503`: ↻ also means "show me the latest"; Main rebuilds only if the source changed.
+    void window.desktop?.updateRuntime?.(localAppId).catch(() => undefined)
   }, [runtimeStates])
 
   const navigateLocalAppPreview = useCallback((tabId: string, localAppId: string, direction: 'back' | 'forward') => {

@@ -313,6 +313,9 @@ const desktopAdapter = {
   restartRuntime(runtimeDefinitionId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.restartRuntime, runtimeDefinitionId) as Promise<RuntimeSnapshot>
   },
+  updateRuntime(runtimeDefinitionId: string, options?: { force?: boolean }) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.updateRuntime, runtimeDefinitionId, options) as Promise<RuntimeSnapshot | null>
+  },
   buildRuntime(runtimeDefinitionId: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.buildRuntime, runtimeDefinitionId)
   },

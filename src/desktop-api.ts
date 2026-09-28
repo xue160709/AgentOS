@@ -289,6 +289,8 @@ export type DesktopAPI = {
   stopRuntime?: (runtimeDefinitionId: string, reason?: 'user' | 'last-consumer' | 'app-quit') => Promise<RuntimeSnapshot | null>
   releaseRuntime?: (runtimeDefinitionId: string, consumerId: string) => Promise<RuntimeSnapshot | null>
   restartRuntime?: (runtimeDefinitionId: string) => Promise<RuntimeSnapshot>
+  /** Bring the viewed page up to date with its source; `force` retries even when unchanged. */
+  updateRuntime?: (runtimeDefinitionId: string, options?: { force?: boolean }) => Promise<RuntimeSnapshot | null>
   /** Explicit user action; Main derives the fixed npm run build command. */
   buildRuntime?: (runtimeDefinitionId: string) => Promise<RuntimeBuildResult>
   cancelRuntimeBuild?: (runtimeDefinitionId: string, buildId?: string) => Promise<RuntimeSnapshot | null>
