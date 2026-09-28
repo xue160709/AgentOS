@@ -14,7 +14,7 @@ export class RuntimeEditRuntimeBridge {
 
   constructor(private readonly options: {
     coordinator: Pick<RuntimeEditCoordinator, 'beginBuild' | 'completeBuild'>
-    manager: Pick<LocalAppRuntimeManager, 'register' | 'start' | 'release' | 'build' | 'cancelBuild'>
+    manager: Pick<LocalAppRuntimeManager, 'register' | 'start' | 'release' | 'build' | 'cancelBuild' | 'updateToLatest'>
     resolveDefinition: (projectId: string) => LocalAppDefinition | null
     inspect?: (rootPath: string) => Promise<LocalAppInspectResult>
   }) {}
@@ -41,6 +41,12 @@ export class RuntimeEditRuntimeBridge {
     const definition = this.options.resolveDefinition(intent.projectId)
     if (!definition) return
     const inspected = await (this.options.inspect ?? inspectLocalAppDirectory)(definition.rootPath)
+    // A served bundle catches up with the edit through the same freshness
+    // path as every other checkpoint (`C-RSM-501/503`).
+    if (inspected.ok && inspected.servePlan?.kind === 'production') {
+      await this.options.manager.updateToLatest(definition.id)
+      return
+    }
     // Development-only, static-less and invalid declarations are deliberately
     // no-ops. There is no command inference path here.
     if (!inspected.ok || inspected.mode !== 'static' || !inspected.agentos) return

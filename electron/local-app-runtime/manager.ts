@@ -170,12 +170,36 @@ export class LocalAppRuntimeManager {
     if (!force && !freshness.stale) return snapshot
     if (isStatic) {
       const built = await this.build(localAppId)
+      // Tier ③ → ②: the source no longer exports a static page (either no
+      // page was found, or the declared output vanished). When the directory
+      // now serves as a server, do that instead of reporting a failure
+      // (`C-RSM-501`).
+      if (built.errorCode === 'build-produces-no-artifact' || built.buildStatus === 'build_failed') {
+        const definition = this.definitions.get(localAppId)
+        const facts = definition ? await new RuntimeInspectionPass().inspectDefinition(definition) : null
+        if (facts?.ok && facts.servePlan.kind === 'production') return this.start(localAppId, undefined, { autoBuild: true })
+      }
       this.supervisor.noteUpdateOutcome(localAppId, built.buildStatus !== 'build_failed' && built.status !== 'failed', freshness.fingerprint)
       return built
     }
     const updated = await this.supervisor.updateServer(localAppId)
     if (updated) this.supervisor.noteUpdateOutcome(localAppId, updated.status === 'running' && updated.errorCode !== 'update-failed', freshness.fingerprint)
     return updated
+  }
+
+  /**
+   * The one user intent behind every build, update and retry entry
+   * (`C-RSM-501`, `DI-RSM-501`): nothing viewable yet → start through the
+   * serve ladder (which builds when it must); already viewable → rebuild from
+   * the current source. No entry decides static-versus-server itself.
+   */
+  async refresh(localAppId: string): Promise<LocalAppRuntimeSnapshot> {
+    const snapshot = this.get(localAppId)
+    const viewable = snapshot
+      ? snapshot.mode === 'static' ? Boolean(snapshot.artifactId) && snapshot.status !== 'stopped' : snapshot.status === 'running'
+      : false
+    if (!viewable) return this.start(localAppId, undefined, { autoBuild: true })
+    return (await this.updateToLatest(localAppId, { force: true })) ?? this.start(localAppId, undefined, { autoBuild: true })
   }
 
   private async startServed(

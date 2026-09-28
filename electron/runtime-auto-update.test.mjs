@@ -238,3 +238,63 @@ test('a stale static artifact is rebuilt automatically instead of only flagged (
     rmSync(userData, { recursive: true, force: true })
   }
 })
+
+test('refresh starts through the serve ladder when nothing is viewable, and force-rebuilds when it is (C-RSM-501)', async () => {
+  const root = serverProject()
+  const { manager, spawns, userData, id } = createManager(root, () => {
+    writeFileSync(resolve(root, '.next/BUILD_ID'), 'build-2')
+    return 0
+  })
+  try {
+    const started = await manager.refresh(id)
+    assert.equal(started.status, 'running')
+    assert.deepEqual(spawns, ['start'], 'not viewable yet: the ladder serves the existing bundle')
+    const rebuilt = await manager.refresh(id)
+    assert.equal(rebuilt.status, 'running')
+    assert.deepEqual(spawns, ['start', 'build', 'start'], 'viewable: an explicit refresh rebuilds even without source changes')
+  } finally {
+    await manager.stopAll('app-quit')
+    rmSync(root, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true })
+  }
+})
+
+// `DI-RSM-501`: no entry decides static versus server on its own.
+test('build, update and new-workbench entries never hardcode static mode', () => {
+  const main = readFileSync(resolve(testDir, 'main.ts'), 'utf8')
+  const buildHandler = main.slice(main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.buildRuntime'), main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild'))
+  assert.match(buildHandler, /localAppRuntimeManager\.refresh\(id\)/)
+  assert.doesNotMatch(buildHandler, /mode: 'static'/)
+  assert.doesNotMatch(buildHandler, /static-runtime-required/)
+  const appShell = readFileSync(resolve(testDir, '../src/components/AppShell.tsx'), 'utf8')
+  const createFlow = appShell.slice(appShell.indexOf("window.desktop.startRuntime(result.definition.id, 'user'"), appShell.indexOf("window.desktop.startRuntime(result.definition.id, 'user'") + 600)
+  assert.doesNotMatch(createFlow, /buildRuntime/, 'a user start already builds when it must')
+})
+
+test('a static project that stops exporting pages is served as a server after its rebuild (③→②)', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'agentos-auto-update-to-server-'))
+  mkdirSync(resolve(root, 'node_modules'))
+  mkdirSync(resolve(root, 'src'))
+  mkdirSync(resolve(root, 'out'))
+  writeFileSync(resolve(root, 'package.json'), JSON.stringify({ scripts: { dev: 'd', build: 'b', start: 's' } }))
+  writeFileSync(resolve(root, 'src/page.tsx'), 'v1')
+  writeFileSync(resolve(root, 'out/index.html'), '<h1>v1</h1>')
+  const { manager, spawns, userData, id } = createManager(root, () => {
+    rmSync(resolve(root, 'out'), { recursive: true, force: true })
+    mkdirSync(resolve(root, '.next'), { recursive: true })
+    writeFileSync(resolve(root, '.next/BUILD_ID'), 'ssr-1')
+    return 0
+  })
+  try {
+    assert.equal((await manager.start(id, 'tab:view')).mode, 'static')
+    editSource(root, 'v2', new Date(Date.now() + 60_000))
+    const served = await manager.updateToLatest(id)
+    assert.deepEqual(spawns, ['build', 'start'])
+    assert.equal(served.status, 'running')
+    assert.equal(served.mode, 'development')
+  } finally {
+    await manager.stopAll('app-quit')
+    rmSync(root, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true })
+  }
+})

@@ -2335,31 +2335,19 @@ if (gotSingleInstanceLock) {
       if (!definition) return { ok: false, code: 'runtime-definition-missing', message: 'Runtime 不存在' }
       const inspected = await inspectLocalAppDirectory(definition.rootPath, definition.serveOverride)
       if (!inspected.ok) return { ok: false, code: inspected.code, message: inspected.message }
-      // `C-RSM-402` tier ②: a directory that can build an openable page is
-      // buildable even before any declaration exists.
-      if (inspected.servePlan.kind !== 'artifact' && inspected.servePlan.kind !== 'buildable') {
-        return { ok: false, code: 'static-runtime-required', message: '这个页面需要保持运行才能查看，无法生成已保存预览' }
-      }
       await assertRuntimeTrust(definition)
       if (!localAppRuntimeManager) return { ok: false, code: 'runtime-unavailable', message: 'Runtime 服务暂不可用，请重试' }
-      const staticDefinition: RuntimeDefinition = { ...definition, mode: 'static', agentos: inspected.agentos }
-      const currentRuntime = localAppRuntimeManager.get(id)
-      const isStaticRuntime = currentRuntime?.mode === 'static' || currentRuntime?.buildStatus !== undefined
-      // A static build keeps the existing last-good artifact and Preview alive
-      // while npm runs. Only an explicit development runtime needs stopping
-      // before the static build can claim the same definition id.
-      if (currentRuntime && !isStaticRuntime) {
-        await localAppPreviewManager?.closeForLocalApp(id)
-        await localAppRuntimeManager.stop(id, 'user')
-      }
-      localAppRuntimeManager.register(staticDefinition)
+      // `C-RSM-501` / `DI-RSM-501`: this entry no longer decides static versus
+      // server. The Manager runs the serve ladder: first build, ③→② fallback,
+      // or a rebuild of whatever is being viewed.
+      localAppRuntimeManager.register(definition)
       try {
-        const runtime = await localAppRuntimeManager.build(id)
-        if (runtime.buildStatus === 'build_failed') {
+        const runtime = await localAppRuntimeManager.refresh(id)
+        if (runtime.status === 'failed' || runtime.status === 'path_missing' || runtime.buildStatus === 'build_failed') {
           return {
             ok: false,
             code: runtime.errorCode ?? 'build-failed',
-            message: runtime.detail ?? '静态构建失败',
+            message: runtime.detail ?? '页面更新失败',
             runtime,
           }
         }
@@ -2377,7 +2365,7 @@ if (gotSingleInstanceLock) {
             conflict: mintRuntimeRootConflict(event.sender.id, conflictingLease),
           }
         }
-        return { ok: false, code: 'build-failed', message: error instanceof Error ? error.message : '静态构建失败', runtime: localAppRuntimeManager.get(id) ?? undefined }
+        return { ok: false, code: 'build-failed', message: error instanceof Error ? error.message : '页面更新失败', runtime: localAppRuntimeManager.get(id) ?? undefined }
       }
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild, async (_event, rawId: unknown, rawBuildId: unknown) => {

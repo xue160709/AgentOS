@@ -24,6 +24,8 @@ import type { RuntimeRootExecutionRegistry } from './runtime-root-execution-regi
 type RuntimeDevelopmentManager = {
   register(definition: LocalAppDefinition): void
   start(localAppId: string, consumerId?: string, options?: { autoBuild?: boolean }): Promise<LocalAppRuntimeSnapshot>
+  restart(localAppId: string): Promise<LocalAppRuntimeSnapshot>
+  get(localAppId: string): LocalAppRuntimeSnapshot | null
   release(localAppId: string, consumerId: string): Promise<LocalAppRuntimeSnapshot | null>
   build(localAppId: string, consumerId?: string, options?: RuntimeBuildOptions): Promise<LocalAppRuntimeSnapshot>
   cancelBuild(localAppId: string, buildId?: string): Promise<LocalAppRuntimeSnapshot | null>
@@ -55,6 +57,8 @@ type RuntimeDevelopmentBridgeLogCode =
   | 'runtime-save-succeeded'
   | 'runtime-build-failed'
   | 'runtime-save-aborted'
+  | 'runtime-save-served'
+  | 'runtime-restore-viewing-failed'
 
 /**
  * Adapts coordinator intents to the existing Runtime state machine. It never
@@ -115,7 +119,9 @@ export class RuntimeDevelopmentRuntimeBridge {
     // saving a preview, not the presence of a declaration block.
     const saveCapability = inspected.servePlan.kind === 'artifact' || inspected.servePlan.kind === 'buildable'
       ? 'static'
-      : inspected.hasDevScript ? 'development-only' : 'unavailable'
+      : inspected.servePlan.kind === 'production' && inspected.hasBuildScript
+        ? 'server'
+        : inspected.hasDevScript ? 'development-only' : 'unavailable'
     const entryFingerprint = await this.fingerprintSource(inspected.canonicalRoot, inspected.agentos?.outputRoot)
     if (!this.isOpenCurrent(authority, openOperation)) return null
     this.options.coordinator.open({ ...authority, runtimeDefinitionId: definition.id, entryFingerprint, saveCapability })
@@ -164,7 +170,9 @@ export class RuntimeDevelopmentRuntimeBridge {
       return
     }
     if (intent.type === 'closed') {
-      await this.releaseDevelopment(intent.runtimeScopeId, intent)
+      // Only the close that actually ended this session may restore viewing;
+      // a late or duplicate close must not restart a newer session's server.
+      if (await this.releaseDevelopment(intent.runtimeScopeId, intent)) await this.restoreViewing(intent.runtimeScopeId)
       return
     }
     await this.save(intent)
@@ -339,20 +347,54 @@ export class RuntimeDevelopmentRuntimeBridge {
       this.options.coordinator.completeSave(fence, 'aborted')
       return
     }
+    // Tier ③ → ②: the edited source builds a server bundle, not a page.
+    // Serve it instead of reporting a failed save (`C-RSM-501`).
+    if (snapshot.errorCode === 'build-produces-no-artifact') {
+      this.options.manager.register({ ...definition, canonicalRoot: inspected.canonicalRoot })
+      snapshot = await this.options.manager.start(definition.id, undefined, { autoBuild: true })
+      const served = snapshot.status === 'running'
+      this.options.coordinator.completeSave(fence, served ? 'saved' : 'build-failed')
+      logBridge(served ? 'info' : 'error', 'save', fence.runtimeScopeId, served ? 'runtime-save-served' : 'runtime-build-failed')
+      return
+    }
     const succeeded = snapshot.mode === 'static' && snapshot.buildStatus === 'ready' && snapshot.status === 'ready'
     this.options.coordinator.completeSave(fence, succeeded ? 'saved' : 'build-failed')
     logBridge(succeeded ? 'info' : 'error', 'save', fence.runtimeScopeId, succeeded ? 'runtime-save-succeeded' : 'runtime-build-failed')
   }
 
-  private async releaseDevelopment(runtimeScopeId: RuntimeScopeId, authority?: Pick<RuntimeDevelopmentAuthority, 'routeGeneration' | 'developmentGeneration'>): Promise<void> {
+  /**
+   * A session runs the Runtime's own definition as `npm run dev`. Once it
+   * closes, whoever is still viewing must get the serve ladder's choice back
+   * (`C-RSM-501`) — for a served bundle that restart is also the freshness
+   * checkpoint that rebuilds the AI's edits (`C-RSM-503`).
+   */
+  private async restoreViewing(runtimeScopeId: RuntimeScopeId): Promise<void> {
+    const definition = this.options.resolveDefinition(runtimeScopeId)
+    if (!definition) return
+    const inspected = await this.inspect(definition.rootPath)
+    if (!inspected.ok) return
+    this.options.manager.register({ ...definition, canonicalRoot: inspected.canonicalRoot })
+    const current = this.options.manager.get(definition.id)
+    if (!current || current.mode !== 'development' || !['running', 'starting', 'degraded'].includes(current.status)) return
+    if (inspected.servePlan.kind === 'development') return
+    try {
+      await this.options.manager.restart(definition.id)
+    } catch {
+      logBridge('error', 'close', runtimeScopeId, 'runtime-restore-viewing-failed')
+    }
+  }
+
+  /** True only when this call ended the session it names. */
+  private async releaseDevelopment(runtimeScopeId: RuntimeScopeId, authority?: Pick<RuntimeDevelopmentAuthority, 'routeGeneration' | 'developmentGeneration'>): Promise<boolean> {
     const consumer = this.developmentConsumers.get(runtimeScopeId)
-    if (!consumer) return
-    if (authority && (consumer.routeGeneration !== authority.routeGeneration || consumer.developmentGeneration !== authority.developmentGeneration)) return
+    if (!consumer) return false
+    if (authority && (consumer.routeGeneration !== authority.routeGeneration || consumer.developmentGeneration !== authority.developmentGeneration)) return false
     this.developmentConsumers.delete(runtimeScopeId)
     if (consumer.prospective) {
       if (consumer.rootLease) await this.rootExecutionRegistry.release(consumer.rootLease)
     } else if (consumer.leaseOnly) await this.options.manager.releaseDevelopmentLease(consumer.definitionId, consumer.rootLease)
     else await this.options.manager.release(consumer.definitionId, consumer.consumerId)
+    return true
   }
 
   private isOpenCurrent(authority: RuntimeDevelopmentAuthority, operation: symbol): boolean {
@@ -397,7 +439,7 @@ function scopeKind(runtimeScopeId: RuntimeScopeId): 'project' | 'workspace' {
   return runtimeScopeId.startsWith('project:') ? 'project' : 'workspace'
 }
 
-function logBridge(level: 'info' | 'error', operation: 'open' | 'save', runtimeScopeId: RuntimeScopeId, code: RuntimeDevelopmentBridgeLogCode): void {
+function logBridge(level: 'info' | 'error', operation: 'open' | 'save' | 'close', runtimeScopeId: RuntimeScopeId, code: RuntimeDevelopmentBridgeLogCode): void {
   // 异常对象可能含 root、命令、用户内容或 credential；运行日志只写固定枚举字段。
   const payload = { operation, scopeKind: scopeKind(runtimeScopeId), code }
   if (level === 'error') console.error('[runtime-development/bridge]', payload)

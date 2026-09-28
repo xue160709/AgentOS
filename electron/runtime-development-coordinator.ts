@@ -446,6 +446,8 @@ export class RuntimeDevelopmentCoordinator implements RuntimeEditRunnerHook {
     if (!this.canProbe(session)) return
     if (fingerprint === session.entryFingerprint) return this.close(session, false)
     if (session.saveCapability === 'development-only') return this.close(session, true, '修改仅在运行中的页面可见。')
+    // The bridge rebuilds and restarts the served bundle once the session closes.
+    if (session.saveCapability === 'server') return this.close(session, true, '页面会更新到修改后的版本。')
     if (session.saveCapability !== 'static') return this.failNeedsAttention(session, 'runtime-save-unavailable', '此 Runtime 没有可靠的保存声明。')
     if (session.autoSaveAttemptedGeneration === session.developmentGeneration) return
     const operationId = session.settleOperationId

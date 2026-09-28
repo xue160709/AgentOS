@@ -22,7 +22,7 @@ const staticDeclaration = { mode: 'static', buildCommand: 'npm run build', outpu
 const definition = { id: 'runtime', rootPath: '/runtime', canonicalRoot: '/runtime', trustStatus: 'trusted', owner: { kind: 'workspace' }, mode: 'static', agentos: staticDeclaration, servePlan: { kind: 'artifact', declaration: staticDeclaration, source: 'declaration' } }
 const authority = { runtimeScopeId: 'workspace:runtime', routeGeneration: 2, developmentGeneration: 3 }
 
-function harness({ inspected, buildSnapshot, canCommit = true, startError, buildError, definitionValue = definition, resolveProspectiveRoot } = {}) {
+function harness({ inspected, buildSnapshot, canCommit = true, startError, buildError, definitionValue = definition, resolveProspectiveRoot, currentSnapshot } = {}) {
   const { RuntimeDevelopmentRuntimeBridge } = load(resolve(testDir, './runtime-development-runtime-bridge.ts'))
   const { RuntimeRootExecutionRegistry } = load(resolve(testDir, './runtime-root-execution-registry.ts'))
   const rootExecutionRegistry = new RuntimeRootExecutionRegistry()
@@ -43,6 +43,8 @@ function harness({ inspected, buildSnapshot, canCommit = true, startError, build
     release: async (id, consumer) => { calls.push(['release', id, consumer]); return null },
     build: async (id, consumer, options) => { calls.push(['build', id, consumer]); if (buildError) throw buildError; calls.push(['guard-result', await options.beforeCommit()]); return buildSnapshot ?? { status: 'ready', mode: 'static', buildStatus: 'ready' } },
     cancelBuild: async (id) => { calls.push(['cancel', id]); return null },
+    get: (id) => { calls.push(['get', id]); return currentSnapshot ?? null },
+    restart: async (id) => { calls.push(['restart', id]); return { status: 'running', mode: 'development' } },
     acquireDevelopmentLease: async (id) => {
       calls.push(['acquire-lease', id]); const value = registeredDefinitions.get(id)
       if (!value) throw new Error('missing-definition')
@@ -231,4 +233,41 @@ test('thrown errors are reduced to fixed redacted log codes without path, comman
   }
   assert.deepEqual(openLogs.at(-1)[1], { operation: 'open', scopeKind: 'workspace', code: 'runtime-live-preview-unavailable' })
   assert.deepEqual(saveLogs.at(-1)[1], { operation: 'save', scopeKind: 'workspace', code: 'runtime-build-failed' })
+})
+
+// `C-RSM-501/503`: a served bundle is rebuilt by returning to the serve ladder
+// once the AI session that ran it as `npm run dev` closes.
+const productionInspected = { ok: true, rootPath: '/runtime', canonicalRoot: '/runtime', name: 'runtime', hasLockfile: false, nodeModulesPresent: true, hasDevScript: true, hasBuildScript: true, hasStartScript: true, mode: 'development', servePlan: { kind: 'production', reason: 'server-bundle-present' } }
+
+test('a server-bundle session closes by restarting the viewer through the serve ladder', async () => {
+  const h = harness({ inspected: productionInspected, currentSnapshot: { status: 'running', mode: 'development' } })
+  const opened = await h.bridge.open(authority)
+  assert.equal(h.calls.find((call) => call[0] === 'register' && call[1].serveScript === 'dev') !== undefined, true, 'the session runs dev')
+  assert.ok(opened)
+  await h.bridge.handle({ ...authority, operationId: 'close-server', type: 'closed', retainRuntimeService: true })
+  assert.deepEqual(h.calls.filter((call) => call[0] === 'restart'), [['restart', 'runtime']])
+  const restored = h.calls.filter((call) => call[0] === 'register').at(-1)[1]
+  assert.equal(restored.serveScript, undefined, 'the dev override does not survive the session')
+})
+
+test('a dev-only session close and a late close never restart the viewer', async () => {
+  const devOnly = harness({ inspected: { ...productionInspected, hasBuildScript: false, hasStartScript: false, servePlan: { kind: 'development', reason: 'no-build-script' } }, currentSnapshot: { status: 'running', mode: 'development' } })
+  await devOnly.bridge.open(authority)
+  await devOnly.bridge.handle({ ...authority, operationId: 'close-dev', type: 'closed', retainRuntimeService: true })
+  assert.equal(devOnly.calls.some((call) => call[0] === 'restart'), false)
+
+  const late = harness({ inspected: productionInspected, currentSnapshot: { status: 'running', mode: 'development' } })
+  await late.bridge.open(authority)
+  await late.bridge.open({ ...authority, developmentGeneration: 4 })
+  await late.bridge.handle({ ...authority, operationId: 'old-close', type: 'closed', retainRuntimeService: true })
+  assert.equal(late.calls.some((call) => call[0] === 'restart'), false, 'an old generation close is fenced')
+})
+
+test('a save whose build produces no page serves the bundle instead of failing', async () => {
+  const buildable = { ...productionInspected, mode: 'static', agentos: undefined, servePlan: { kind: 'buildable', source: 'detected' } }
+  const h = harness({ inspected: buildable, buildSnapshot: { status: 'build_failed', mode: 'static', buildStatus: 'build_failed', errorCode: 'build-produces-no-artifact' } })
+  await h.bridge.open(authority)
+  await h.bridge.handle({ ...authority, operationId: 'save-1', type: 'save' })
+  assert.ok(h.calls.some((call) => call[0] === 'start' && call[3]?.autoBuild === true), 'falls back to the serve ladder')
+  assert.equal(h.completions.at(-1)[1], 'saved')
 })

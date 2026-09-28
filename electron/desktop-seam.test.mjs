@@ -169,10 +169,12 @@ test('Static build keeps last-good Preview alive and cancellation uses the build
   const buildEnd = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild', buildStart)
   assert.ok(buildStart >= 0 && buildEnd > buildStart)
   const buildHandler = main.slice(buildStart, buildEnd)
-  const stopGuard = buildHandler.indexOf('if (currentRuntime && !isStaticRuntime)')
-  assert.ok(stopGuard >= 0)
-  assert.ok(stopGuard < buildHandler.indexOf('closeForLocalApp(id)'))
-  assert.ok(stopGuard < buildHandler.indexOf("localAppRuntimeManager.stop(id, 'user')"))
+  // `C-RSM-501`: the entry hands the intent to the Manager's serve ladder and
+  // never stops the runtime or closes its Preview first, so whatever is being
+  // viewed stays up while it is rebuilt.
+  assert.match(buildHandler, /localAppRuntimeManager\.refresh\(id\)/)
+  assert.doesNotMatch(buildHandler, /closeForLocalApp\(id\)/)
+  assert.doesNotMatch(buildHandler, /localAppRuntimeManager\.stop\(id/)
   assert.doesNotMatch(main, /protocol\.handle\(STATIC_PREVIEW_SCHEME, \(request\) => staticPreviewResponse\(request, staticRegistry\)\)/)
   assert.match(buildHandler, /runtime\.buildStatus === 'build_failed'/)
 

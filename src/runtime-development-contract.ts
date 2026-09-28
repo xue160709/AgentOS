@@ -42,7 +42,8 @@ export type RuntimeDevelopmentErrorCode =
   | 'runtime-save-timeout'
   | 'runtime-build-failed'
 
-export type RuntimeDevelopmentSaveCapability = 'static' | 'development-only' | 'unavailable'
+/** `server`: the session ends by rebuilding and serving the bundle again (`C-RSM-501/502`). */
+export type RuntimeDevelopmentSaveCapability = 'static' | 'server' | 'development-only' | 'unavailable'
 
 export type RuntimeDevelopmentSnapshot = {
   runtimeScopeId: RuntimeScopeId

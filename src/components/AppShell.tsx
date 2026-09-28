@@ -1840,15 +1840,10 @@ export function AppShell() {
       persistChatWorkspaceStateToLocalStorage(result.workspace)
       if (window.desktop.startRuntime) {
         try {
-          let runtime = await window.desktop.startRuntime(result.definition.id, 'user', `tab:${result.tab.id}`)
+          // A user start already runs the serve ladder, including the first
+          // build and the ③→② fallback (`C-RSM-501`); no second build call.
+          const runtime = await window.desktop.startRuntime(result.definition.id, 'user', `tab:${result.tab.id}`)
           setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
-          if (result.definition.mode === 'static' && (runtime.status === 'build_required' || runtime.buildStatus === 'build_required') && window.desktop.buildRuntime) {
-            const buildResult = await window.desktop.buildRuntime(result.definition.id)
-            if (buildResult.runtime) {
-              runtime = buildResult.runtime
-              setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
-            }
-          }
         } catch (error) {
           setRuntimeStates((current) => mergeAcceptedRuntime(current, {
             runtimeDefinitionId: result.definition.id,
