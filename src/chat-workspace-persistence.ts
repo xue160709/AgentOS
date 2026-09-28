@@ -103,13 +103,14 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
         }
         return finalized
       }
-      if (fromLocal) {
-        const finalized = await finalizeChatWorkspaceState(fromLocal.state)
-        if (window.desktop.saveChatWorkspace) {
-          await withDeadline(window.desktop.saveChatWorkspace(finalized), WORKSPACE_LOAD_DEADLINE_MS)
-        }
-        return finalized
+      // Main has no durable workspace yet (first launch). It is the only writer
+      // for project commands, so seed it now or every `project.create` is
+      // refused with `workspace-unavailable`.
+      const finalized = await finalizeChatWorkspaceState(fromLocal?.state ?? createDefaultChatWorkspaceState())
+      if (window.desktop.saveChatWorkspace) {
+        await withDeadline(window.desktop.saveChatWorkspace(finalized), WORKSPACE_LOAD_DEADLINE_MS)
       }
+      return finalized
     } catch {
       /* ignore */
     }

@@ -388,6 +388,27 @@ test('Renderer persistence propagates Main save rejection instead of treating lo
   }
 })
 
+test('First launch seeds Main with a default workspace so project.create is not refused', async () => {
+  const { loadChatWorkspaceState } = loadTsModule(resolve(testDir, '../src/chat-workspace-persistence.ts'))
+  const previousWindow = globalThis.window
+  const saved = []
+  globalThis.window = {
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    desktop: {
+      getChatWorkspace: async () => null,
+      saveChatWorkspace: async (state) => { saved.push(state); return state },
+    },
+  }
+  try {
+    const state = await loadChatWorkspaceState()
+    assert.equal(saved.length, 1, 'a fresh install must write the default workspace to Main')
+    assert.deepEqual(saved[0].projects, [])
+    assert.deepEqual(state.projects, [])
+  } finally {
+    globalThis.window = previousWindow
+  }
+})
+
 test('Workspace Session immediate durable save ignores runtime-only pathMissing changes', async () => {
   const harness = createHarness()
   const first = createState()

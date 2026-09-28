@@ -1717,9 +1717,10 @@ export function AppShell() {
         { type: 'project.create', name: pathBasename(value, scratchDefault), path: value },
         { preserveSelection: false },
       )
-      if (!result.ok) return
+      if (!result.ok) return result
       goHome()
       requestAnimationFrame(() => void chatRef.current?.focusComposer())
+      return result
     },
     [goHome, t, workspaceCommandClient],
   )
@@ -2292,7 +2293,10 @@ export function AppShell() {
       }
       const saved = await saveInitialModelSettings()
       if (!saved) return
-      await createProjectFromExistingPath(initialProjectPath)
+      // The shared workspace error notice is not rendered on this screen, so
+      // a refused create must be surfaced in the setup status line itself.
+      const result = await createProjectFromExistingPath(initialProjectPath)
+      if (result && !result.ok) setInitialModelStatus(result.message)
     },
     [createProjectFromExistingPath, initialProjectPath, saveInitialModelSettings, t],
   )
