@@ -33,12 +33,13 @@ coverage_gate: buildable
   - 进度（2026-09-28，project-work）：`readableFailureReason` 取代「只取最后一行」——识别 `EADDRINUSE` 输出「端口 N 已被其他程序占用」，其次取含 error 的行，跳过 `}`/堆栈帧；生产服务退出文案改「页面服务退出」（F20 部分）；`runtimeBuildFailed` 改为中性「构建失败」，有 last-good 时才用 `runtimeBuildFailedKeptLast`/`serveBuildFailed`。证据：`node --test electron/local-app-runtime.test.mjs electron/runtime-event-state.test.mjs` 39/39；`npx tsc` exit 0。未做：端口冲突时自动换端口（不在确认范围）。
 - [x] `R5-03` 源码新鲜度与自动重建：构建成功后记录源码指纹（静态、服务端对称）；按 `C-RSM-503` 时机比对，过期即重建；服务端档构建前备份 `.next`，失败回滚并以旧版重启（`C-RSM-502/503`；F13）。判据：改源码后五个触发点中四个检查点可看到新版，切页不触发；构建失败后旧版仍可用。
   - 进度（2026-09-28，project-work；covers `C-RSM-502/503`，preserves `DI-RSM-502/503/504`）：新增 `electron/local-app-runtime/server-bundle.ts`（服务端构建记录、过期判定：记录匹配比指纹/否则比 mtime、`.next` 克隆备份/还原）；`static.ts` 抽出源码遍历并新增 `newestRuntimeSourceMtime`；Supervisor 新增 `sourceFreshness` / `updateServer`（停服不触发崩溃重试 → 备份 → 构建 → 成功记账并重启 / 失败还原并以旧版重启，`update-failed`）、③→② 首次构建时写记录、`stop()` 等待更新还原备份；Manager 新增 `updateToLatest({force})` 与 `autoUpdate` 选项（Main 开启），每次 start 后后台检查；新 IPC `desktop:runtime:update`，↻（工作台与项目首页）调用之。证据：`node --test electron/runtime-auto-update.test.mjs` 5/5（过期判定、服务端成功、失败回滚且同源不重试、取消还原、静态自动重建）；全量 469 项中 468 通过，唯一失败为 `local-app-runtime.test.mjs` 真实 lsof 用例在并发负载下的既有抖动，单跑 28/28；`npx tsc` exit 0；`npx vite build` PASS。未覆盖：AI 修改结束对服务端档的重建（归 R5-04 统一入口）；真实 GUI 走查（R5-05 后一并）。
-- [ ] `R5-04` 入口统一：`buildRuntime` 与新建流程经四档阶梯，③ 无产物落 ②（`C-RSM-501`；F12）。判据：SSR 项目任何入口都不出现「构建没有产出可直接打开的静态页面」失败态。
+- [x] `R5-04` 入口统一：`buildRuntime` 与新建流程经四档阶梯，③ 无产物落 ②（`C-RSM-501`；F12）。判据：SSR 项目任何入口都不出现「构建没有产出可直接打开的静态页面」失败态。
+  - 进度（2026-09-28，project-work；covers `C-RSM-501`，preserves `DI-RSM-501`）：Manager 新增 `refresh`（统一的构建/更新/重试意图）；`buildRuntime` IPC 改调 `refresh`，不再写死 static、不再先停服关预览；新建工作台流程删除多余的 `buildRuntime` 调用；`updateToLatest` 静态重建失败后重新判档，已成服务端档则经阶梯伺服；开发会话新增 `server` 保存能力，会话关闭（仅本代真正释放时）重新注册持久 Definition 并 `restart` 回到阶梯，静态保存构建不出页面时改为伺服；edit-bridge 服务端档走 `updateToLatest`。证据：`runtime-auto-update.test.mjs` 8/8（含 refresh、③→② 回退、DI-RSM-501 源码审计）；`runtime-development-runtime-bridge.test.mjs` 新增 3 项（服务端会话关闭重启、dev-only 与迟到关闭不重启、保存无页面改伺服）；`desktop-seam` 审计按新合同更新；全量 475/475（另一次 474/475，失败为 NF-R5-01 lsof 抖动）；`npx tsc` exit 0；`npx vite build` PASS。
 - [ ] `R5-05` 工作台零按钮与侧栏菜单精简；探测结论与覆盖入口移入「查看 Runtime」（`C-RSM-504/505`、`Q-R5-01`；F16）。判据：正常态工作台无运行类按钮、菜单四项；异常态出现恢复条与排障项。
 
 ### 新发现（project-work）
 
-- `NF-R5-01` 全量 `node --test electron/*.test.mjs` 并发运行时偶发卡死或 `development takeover terminates only the process holding this project Next lock` 失败（真实 `lsof` 1s 超时）；逐文件运行全部通过。与 R5 改动无关，建议单独给该用例放宽超时或串行化。
+- `NF-R5-01` 全量 `node --test electron/*.test.mjs` 并发运行时偶发卡死或 `development takeover terminates only the process holding this project Next lock` 失败（真实 `lsof` 1s 超时）；逐文件运行全部通过。与 R5 改动无关，建议单独给该用例放宽超时或串行化。同类负载抖动还见于 `static-runtime.test.mjs`「failed or cancelled builds retain the last-good artifact」（等待 20 次 setImmediate），基线代码全量运行也出现过卡住。
 
 # Revision 4 Tasks
 
