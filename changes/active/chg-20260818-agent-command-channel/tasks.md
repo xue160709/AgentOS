@@ -35,11 +35,19 @@ coverage_gate: buildable
   - 进度（2026-09-28，project-work；covers `C-RSM-502/503`，preserves `DI-RSM-502/503/504`）：新增 `electron/local-app-runtime/server-bundle.ts`（服务端构建记录、过期判定：记录匹配比指纹/否则比 mtime、`.next` 克隆备份/还原）；`static.ts` 抽出源码遍历并新增 `newestRuntimeSourceMtime`；Supervisor 新增 `sourceFreshness` / `updateServer`（停服不触发崩溃重试 → 备份 → 构建 → 成功记账并重启 / 失败还原并以旧版重启，`update-failed`）、③→② 首次构建时写记录、`stop()` 等待更新还原备份；Manager 新增 `updateToLatest({force})` 与 `autoUpdate` 选项（Main 开启），每次 start 后后台检查；新 IPC `desktop:runtime:update`，↻（工作台与项目首页）调用之。证据：`node --test electron/runtime-auto-update.test.mjs` 5/5（过期判定、服务端成功、失败回滚且同源不重试、取消还原、静态自动重建）；全量 469 项中 468 通过，唯一失败为 `local-app-runtime.test.mjs` 真实 lsof 用例在并发负载下的既有抖动，单跑 28/28；`npx tsc` exit 0；`npx vite build` PASS。未覆盖：AI 修改结束对服务端档的重建（归 R5-04 统一入口）；真实 GUI 走查（R5-05 后一并）。
 - [x] `R5-04` 入口统一：`buildRuntime` 与新建流程经四档阶梯，③ 无产物落 ②（`C-RSM-501`；F12）。判据：SSR 项目任何入口都不出现「构建没有产出可直接打开的静态页面」失败态。
   - 进度（2026-09-28，project-work；covers `C-RSM-501`，preserves `DI-RSM-501`）：Manager 新增 `refresh`（统一的构建/更新/重试意图）；`buildRuntime` IPC 改调 `refresh`，不再写死 static、不再先停服关预览；新建工作台流程删除多余的 `buildRuntime` 调用；`updateToLatest` 静态重建失败后重新判档，已成服务端档则经阶梯伺服；开发会话新增 `server` 保存能力，会话关闭（仅本代真正释放时）重新注册持久 Definition 并 `restart` 回到阶梯，静态保存构建不出页面时改为伺服；edit-bridge 服务端档走 `updateToLatest`。证据：`runtime-auto-update.test.mjs` 8/8（含 refresh、③→② 回退、DI-RSM-501 源码审计）；`runtime-development-runtime-bridge.test.mjs` 新增 3 项（服务端会话关闭重启、dev-only 与迟到关闭不重启、保存无页面改伺服）；`desktop-seam` 审计按新合同更新；全量 475/475（另一次 474/475，失败为 NF-R5-01 lsof 抖动）；`npx tsc` exit 0；`npx vite build` PASS。
-- [ ] `R5-05` 工作台零按钮与侧栏菜单精简；探测结论与覆盖入口移入「查看 Runtime」（`C-RSM-504/505`、`Q-R5-01`；F16）。判据：正常态工作台无运行类按钮、菜单四项；异常态出现恢复条与排障项。
+- [x] `R5-05` 工作台零按钮与侧栏菜单精简；探测结论与覆盖入口移入「查看 Runtime」（`C-RSM-504/505`、`Q-R5-01`；F16）。判据：正常态工作台无运行类按钮、菜单四项；异常态出现恢复条与排障项。
+  - 进度（2026-09-28，project-work；covers `C-RSM-504/505/506`、`Q-R5-01`，preserves `DI-RSM-505`）：`runtime-event-state.ts` 新增 `runtimeWorkbenchState` / `runtimeNeedsTroubleshooting`；`RuntimeWorkspace` 改为投影驱动——准备/更新占位无按钮，更新失败顶部警示条（重试=refresh、查看日志），打不开/未就绪/目录丢失/已停止各一个恢复动作；工具栏只留标题、用 AI 修改、刷新；`RuntimePreview` 新增 `placeholder`；侧栏菜单正常四项、异常追加「排查问题」三项，删除 `runtimeDefinitions`/`onBuildWorkspaceRuntime`/`onRefreshWorkspaceRuntime` 死属性；「查看 Runtime」加查看方式组、模式标签改「保持运行/已保存预览」；新增中英文案 12 条。证据：`runtime-event-state.test.mjs` 新增投影测试；`desktop-seam` 审计按零按钮合同改写；全量 476 中 475 通过（唯一失败为 NF-R5-01）；`npx tsc` 无输出；`npx vite build` PASS。真实 GUI 走查：复走 4/5 通过，见 NF-R5-04。
 
 ### 新发现（project-work）
 
 - `NF-R5-01` 全量 `node --test electron/*.test.mjs` 并发运行时偶发卡死或 `development takeover terminates only the process holding this project Next lock` 失败（真实 `lsof` 1s 超时）；逐文件运行全部通过。与 R5 改动无关，建议单独给该用例放宽超时或串行化。同类负载抖动还见于 `static-runtime.test.mjs`「failed or cancelled builds retain the last-good artifact」（等待 20 次 setImmediate），基线代码全量运行也出现过卡住。
+- `NF-R5-02` 首次打开的 ③→② 回退会因新 userData 没有依赖准备记录而执行 `npm install`（走查 3：约 17s，629 包），即使 `node_modules` 已存在。属既有保守策略，影响首开耗时，待决定是否对已存在 `node_modules` 放宽。
+- `NF-R5-03` 走查 3 期间用户已安装的 AgentOS（PID 15075）及其 3030 上的 next-server 退出，无崩溃报告；测试实例的进程接管只针对副本目录的 Next 锁。原因未查明，已告知用户。
+- `NF-R5-04`（已修，走查 3 → 修复）：①同代重启后预览复用失败会话 → 服务端更新后换新一代、失败会话不复用；②启动检查点先起旧版再杀 → 过期服务端包先构建再伺服；③↻ 先 reload 后 update → 先 update、未重建才 reload；④渲染层跨代继承 buildStatus/detail/errorCode → 仅同实例继承；⑤失败后 stopped 丢原因 → `stopReason: error` 仍显示「页面打不开」；⑥原因带 `[stderr]`、端口号缺失 → 去前缀并跨行取端口。证据：`runtime-auto-update.test.mjs` 10/10、`runtime-event-state.test.mjs`、`local-app-runtime.test.mjs` 新增用例；全量 479/479。
+  - 复走 4（REAL，2026-09-28 16:33–16:47）：E1/E8、E2、E5、E6、E7 PASS；E3 FAIL（渲染层收不到 `stopReason`，「页面打不开」仅停留 4ms）→ 修复：supervisor/main 事件下发 `stopReason`、`applyRuntimeEvent` 保留，③→② 判定先于 stopped。
+  - 复走 5（REAL，16:50–16:58）：E3 PASS（原因常驻 84s 且切页后仍在，0 次「已停止」闪现）；E4 PASS（重试 1s 后页面出现、无需切页、30s 内无重建）。
+  - 两处小瑕疵（首开提示在 ③→② 时丢失、页内导航后预览停在 loading）于 `2003fc6` 修复；该修复晚于复走 5 的构建，未经 GUI 复走，由 `local-app-preview.test.mjs` 新用例覆盖。
+  - 旁证：信任对话框仍显示 `npm run dev` 而实际执行 `npm run start`（= Paintpoints F4，不在 R5 范围）。
 
 # Revision 4 Tasks
 
