@@ -47,6 +47,7 @@ import { WebsiteBindingStore } from './website-binding-store'
 import { ExternalTaskReceiptStore } from './external-task-receipt-store'
 import { AgentOSPairingService } from './agentos-pairing'
 import { probeMcpServer } from './claude-agent-runner/mcp-probe'
+import { buildMcpExecutableEnv } from './claude-agent-runner/mcp'
 import { testWebSearchProviderSettings } from './claude-agent-runner/web-search'
 import { ClaudeAgentSettingsStore } from './claude-agent-settings'
 import { ChatWorkspaceStore } from './chat-workspace-store'
@@ -152,6 +153,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // │
 process.env.APP_ROOT = path.join(__dirname, '..')
 loadMainProcessEnv(process.env.APP_ROOT)
+// Finder/Dock 启动的 release 版只继承 /usr/bin:/bin:/usr/sbin:/sbin；补上 node/npm 常见安装目录，
+// 否则 Runtime 的 npm 子进程会 spawn ENOENT。
+if (process.platform !== 'win32') {
+  const executablePath = buildMcpExecutableEnv(process.env).PATH
+  if (executablePath) process.env.PATH = executablePath
+}
 installSafeStdStreamHandlers()
 
 // 🚧 使用 process.env['KEY'] 避免被 vite:define 内联；见 Vite 2.x 插件行为 /

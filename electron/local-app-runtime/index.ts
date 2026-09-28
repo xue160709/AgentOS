@@ -24,6 +24,7 @@ export { allocateLoopbackPort, normalizeLoopbackUrl, parseLoopbackReadyUrl, prob
 export {
   RuntimeChildProcess,
   buildAllowedRuntimeEnv,
+  readableFailureReason,
   redactRuntimeLine,
   terminateNextDevLockOwners,
   terminateProcessTree,

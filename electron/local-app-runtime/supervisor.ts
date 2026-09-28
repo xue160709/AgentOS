@@ -27,6 +27,7 @@ import {
   RuntimeChildProcess,
   npmExecutable,
   runtimeBridgeExecutable,
+  readableFailureReason,
   redactRuntimeLine,
   terminateNextDevLockOwners,
   type RuntimeChildExit,
@@ -513,7 +514,7 @@ export class LocalAppRuntimeSupervisor {
     if (exit.error || exit.code !== 0) {
       runtime.snapshot = this.state.buildFailed(runtime.snapshot, {
         errorCode: signal.aborted ? 'build-cancelled' : 'build-failed',
-        detail: signal.aborted ? '静态构建已取消' : `静态构建失败 (${exit.code ?? exit.signal ?? 'unknown'})`,
+        detail: signal.aborted ? '静态构建已取消' : `静态构建失败 (${exit.error?.message ?? exit.code ?? exit.signal ?? 'unknown'})`,
         logs: this.recentLogs(runtime),
       })
       this.emit(runtime, 'exit', { detail: runtime.snapshot.detail, code: exit.code, signal: exit.signal ?? undefined })
@@ -777,7 +778,7 @@ export class LocalAppRuntimeSupervisor {
     child.onceExit((code, signal) => {
       if (runtime.child !== child || runtime.controller.signal.aborted) return
       runtime.child = undefined
-      const exitDetail = `开发服务退出 (${code ?? signal ?? 'unknown'})${this.latestReadableReason(runtime) ? `：${this.latestReadableReason(runtime)}` : ''}`
+      const exitDetail = `${runtime.definition.serveScript === 'start' ? '页面服务' : '开发服务'}退出 (${code ?? signal ?? 'unknown'})${this.latestReadableReason(runtime) ? `：${this.latestReadableReason(runtime)}` : ''}`
       runtime.snapshot = this.state.processExited(runtime.snapshot, exitDetail)
       this.emit(runtime, 'exit', { code, signal: signal ?? undefined, detail: exitDetail })
       if (runtime.snapshot.status !== 'running') return
@@ -874,8 +875,7 @@ export class LocalAppRuntimeSupervisor {
   }
 
   private latestReadableReason(runtime: ActiveRuntime): string | undefined {
-    const latest = runtime.logs.at(-1)
-    return latest ? `[${latest.stream}] ${latest.line}` : undefined
+    return readableFailureReason(runtime.logs)
   }
 
   private emit(runtime: ActiveRuntime, type: LocalAppRuntimeEvent['type'], detail: Partial<LocalAppRuntimeEvent> = {}): void {

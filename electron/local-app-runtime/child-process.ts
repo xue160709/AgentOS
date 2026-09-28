@@ -14,6 +14,24 @@ export function redactRuntimeLine(value: string, limit = LOCAL_APP_RUNTIME_DEFAU
   return line
 }
 
+/**
+ * The one line a user should read when a supervised child fails. The last log
+ * line is often a stack-trace fragment such as `}`, so prefer a recognized
+ * cause (a busy port), then the latest line that names an error, then the
+ * latest line with any readable content.
+ */
+export function readableFailureReason(lines: readonly { stream: string; line: string }[]): string | undefined {
+  const recent = lines.slice(-60).reverse()
+  for (const { line } of recent) {
+    if (!line.includes('EADDRINUSE')) continue
+    const port = /:(\d{2,5})\b(?!.*:\d)/.exec(line)?.[1]
+    return port ? `端口 ${port} 已被其他程序占用` : '端口已被其他程序占用'
+  }
+  const readable = recent.filter(({ line }) => /[\p{L}\p{N}]/u.test(line) && !/^\s*at\s/.test(line))
+  const named = readable.find(({ line }) => /\b(error|ERR!|failed|cannot|not found)\b/i.test(line)) ?? readable[0]
+  return named ? `[${named.stream}] ${named.line}` : undefined
+}
+
 /** 只继承产品合同明确允许的宿主变量，拒绝 npm_config_* 与凭据变量。 */
 export function buildAllowedRuntimeEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const allowed = new Set([

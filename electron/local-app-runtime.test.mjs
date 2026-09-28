@@ -1072,3 +1072,20 @@ test('Runtime manager borrows a live same-root Runtime without ever spawning one
   assert.equal(await manager.borrowSharedRoot(borrower.id, 'project-home:project-data:mount-1'), null)
   await manager.stopAll('app-quit')
 })
+
+// `C-RSM-506` / Paintpoints F18: the last log line of a failed `next start` is
+// often a stack fragment like `}`; a busy port must be named instead.
+test('failure reason names a busy port and skips stack fragments', () => {
+  const lines = [
+    { stream: 'stdout', line: '> next start -p 3030' },
+    { stream: 'stderr', line: 'Error: listen EADDRINUSE: address already in use :::3030' },
+    { stream: 'stderr', line: '    at Server.setupListenHandle [as _listen2] (node:net:1908:16)' },
+    { stream: 'stderr', line: '}' },
+  ]
+  assert.equal(runtime.readableFailureReason(lines), '端口 3030 已被其他程序占用')
+  assert.equal(
+    runtime.readableFailureReason([{ stream: 'stderr', line: 'Error: Cannot find module x' }, { stream: 'stderr', line: '    at foo (a.js:1:1)' }, { stream: 'stderr', line: '}' }]),
+    '[stderr] Error: Cannot find module x',
+  )
+  assert.equal(runtime.readableFailureReason([{ stream: 'stderr', line: '}' }]), undefined)
+})
