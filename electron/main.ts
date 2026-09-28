@@ -1446,6 +1446,7 @@ if (gotSingleInstanceLock) {
           detail: event.detail,
           phase: event.phase,
           errorCode: event.errorCode,
+          stopReason: event.stopReason,
           previewStatus: event.previewStatus,
           timestamp: event.timestamp,
         })

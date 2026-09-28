@@ -165,6 +165,8 @@ export type RuntimeEvent = {
   detail?: string
   phase?: RuntimeSnapshot['phase']
   errorCode?: string
+  /** Why a `stopped` Runtime stopped; `error` means a failed start (its reason stays in `detail`). */
+  stopReason?: RuntimeSnapshot['stopReason']
   previewStatus?: PreviewStatus
   /** Mirrors `RuntimeSnapshot.sharedRootRuntime` for a borrowed Runtime. */
   sharedRootRuntime?: SharedRootRuntimeRef

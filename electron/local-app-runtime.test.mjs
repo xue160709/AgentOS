@@ -1085,7 +1085,14 @@ test('failure reason names a busy port and skips stack fragments', () => {
   assert.equal(runtime.readableFailureReason(lines), '端口 3030 已被其他程序占用')
   assert.equal(
     runtime.readableFailureReason([{ stream: 'stderr', line: 'Error: Cannot find module x' }, { stream: 'stderr', line: '    at foo (a.js:1:1)' }, { stream: 'stderr', line: '}' }]),
-    '[stderr] Error: Cannot find module x',
+    'Error: Cannot find module x',
   )
   assert.equal(runtime.readableFailureReason([{ stream: 'stderr', line: '}' }]), undefined)
+  // Walkthrough 3: the newest EADDRINUSE line (`code: 'EADDRINUSE'`) has no port.
+  assert.equal(runtime.readableFailureReason([
+    { stream: 'stderr', line: "Error: listen EADDRINUSE: address already in use :::3030" },
+    { stream: 'stderr', line: "  code: 'EADDRINUSE'," },
+    { stream: 'stderr', line: '  port: 3030' },
+    { stream: 'stderr', line: '}' },
+  ]), '端口 3030 已被其他程序占用')
 })

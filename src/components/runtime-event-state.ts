@@ -25,6 +25,50 @@ export function runtimePreviewReady(runtime?: RuntimeSnapshot | null): boolean {
 }
 
 /**
+ * What the workbench shows (`C-RSM-504/506`, design.md Revision 5 §6). The
+ * normal states carry no actions; only an abnormal state names one recovery.
+ * The project-home card keeps its own projection (`runtimeServeStatus`).
+ */
+export type RuntimeWorkbenchState =
+  | { kind: 'preparing'; firstBuild: boolean }
+  | { kind: 'viewing' }
+  | { kind: 'updating'; pageVisible: boolean }
+  | { kind: 'update-failed'; reason?: string }
+  | { kind: 'open-failed'; reason?: string }
+  | { kind: 'not-ready' }
+  | { kind: 'path-missing' }
+  | { kind: 'stopped' }
+
+export function runtimeWorkbenchState(runtime?: RuntimeSnapshot | null): RuntimeWorkbenchState {
+  if (!runtime) return { kind: 'preparing', firstBuild: false }
+  if (runtime.status === 'path_missing') return { kind: 'path-missing' }
+  // Tier ③ → ②: no page was built, so the server is being started next.
+  // Checked before `stopped`: the static attempt is stopped on the way.
+  if (runtime.errorCode === 'build-produces-no-artifact') return { kind: 'preparing', firstBuild: false }
+  // A start that failed is stopped right after; keep telling why.
+  if (runtime.status === 'stopped' && runtime.stopReason === 'error') return { kind: 'open-failed', reason: runtime.detail }
+  if (runtime.status === 'stopped') return { kind: 'stopped' }
+  if (runtimePreviewReady(runtime)) {
+    if (runtime.buildStatus === 'building') return { kind: 'updating', pageVisible: true }
+    if (runtime.buildStatus === 'build_failed') return { kind: 'update-failed', reason: runtime.detail }
+    return { kind: 'viewing' }
+  }
+  if (runtime.status === 'failed' || runtime.status === 'degraded' || runtime.buildStatus === 'build_failed' || runtime.status === 'build_failed') {
+    return { kind: 'open-failed', reason: runtime.detail }
+  }
+  if (runtime.status === 'build_required' || runtime.buildStatus === 'build_required') return { kind: 'not-ready' }
+  // A served bundle restarting after its rebuild is still the update, not a first open.
+  if (runtime.mode === 'development' && runtime.buildStatus === 'building') return { kind: 'updating', pageVisible: false }
+  return { kind: 'preparing', firstBuild: runtime.buildStatus === 'building' && !runtime.artifactId }
+}
+
+/** Abnormal states are the only ones that expose troubleshooting actions (`C-RSM-505`). */
+export function runtimeNeedsTroubleshooting(runtime?: RuntimeSnapshot | null): boolean {
+  const kind = runtimeWorkbenchState(runtime).kind
+  return kind === 'update-failed' || kind === 'open-failed' || kind === 'not-ready' || kind === 'path-missing' || kind === 'stopped'
+}
+
+/**
  * Snapshots reach the renderer both as events and as IPC replies, so an older
  * snapshot of the same Runtime instance can arrive after a newer one. Reject
  * older generations, a different instance within the same generation, and
@@ -194,9 +238,12 @@ export function applyRuntimeEvent(current: RuntimeStateMap, event: RuntimeEvent)
   const runtimeDefinitionId = event.runtimeDefinitionId
   if (!runtimeDefinitionId) return current
 
-  const previous = current[runtimeDefinitionId]
-  if (previous && event.generation < previous.generation) return current
-  if (previous && event.runtimeId !== previous.runtimeId && event.generation === previous.generation) return current
+  const latest = current[runtimeDefinitionId]
+  if (latest && event.generation < latest.generation) return current
+  if (latest && event.runtimeId !== latest.runtimeId && event.generation === latest.generation) return current
+  // Fields are inherited only within one Runtime instance. A new generation
+  // must not show the previous one's failure or build state while it starts.
+  const previous = latest && latest.runtimeId === event.runtimeId && latest.generation === event.generation ? latest : undefined
 
   const next: RuntimeSnapshot = {
     runtimeDefinitionId,
@@ -220,6 +267,7 @@ export function applyRuntimeEvent(current: RuntimeStateMap, event: RuntimeEvent)
     updatedAt: event.timestamp,
     phase: event.phase ?? previous?.phase,
     errorCode: event.errorCode ?? previous?.errorCode,
+    stopReason: event.status === 'stopped' ? event.stopReason ?? previous?.stopReason : undefined,
     detail: event.detail ?? previous?.detail,
     previewStatus: event.phase === 'preview' ? event.previewStatus : previous?.previewStatus,
     // Sharing is a property of the event's own runtime identity: never

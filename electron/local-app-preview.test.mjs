@@ -204,6 +204,32 @@ test('Preview reload reports loading then ready and clears degraded state', asyn
   assert.equal(manager.get('preview-reload').status, 'ready')
 })
 
+test('Preview returns to ready after an in-page navigation that never finishes a load', async () => {
+  const events = []
+  const contents = new EventEmitter()
+  contents.setWindowOpenHandler = () => undefined
+  contents.loadURL = async () => undefined
+  contents.close = () => undefined
+  contents.session = { setPermissionRequestHandler: () => undefined }
+  const view = { webContents: contents, setBounds: () => undefined, setVisible: () => undefined }
+  const manager = new preview.LocalAppPreviewManager({
+    window: { contentView: { addChildView: () => undefined, removeChildView: () => undefined } },
+    createView: () => view,
+    onEvent: (snapshot) => events.push(snapshot.status),
+  })
+  await manager.create('preview-spa', 'tab-1', 'local-app-1', { runtimeId: 'runtime-1', generation: 1, readyUrl: 'http://127.0.0.1:3001/' })
+  contents.emit('did-finish-load')
+  events.length = 0
+  contents.emit('did-start-loading')
+  contents.emit('did-navigate-in-page')
+  contents.emit('did-stop-loading')
+  assert.deepEqual(events, ['loading', 'ready'])
+  contents.emit('did-start-loading')
+  contents.emit('did-fail-load', {}, -2, 'gone')
+  contents.emit('did-stop-loading')
+  assert.equal(manager.get('preview-spa').status, 'degraded', 'a failed load is not turned back into ready')
+})
+
 test('Preview bounds conversion clamps invalid viewport coordinates', () => {
   assert.deepEqual(preview.previewBoundsFromRect({ left: -10, top: 12, width: 320, height: 180 }), { x: 0, y: 12, width: 320, height: 180 })
   assert.deepEqual(preview.previewBoundsFromRect({ left: Number.NaN, top: Number.POSITIVE_INFINITY, width: -1, height: 0 }), { x: 0, y: 0, width: 0, height: 0 })

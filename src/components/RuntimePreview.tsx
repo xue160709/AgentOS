@@ -1,17 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../i18n/i18n'
 import type { RuntimePreviewHost } from '../desktop-api'
 import { RUNTIME_PREVIEW_RESIZE_EVENT, type RuntimePreviewResizeEvent } from '../runtime-preview-events'
 import type { PreviewStatus, RuntimeSnapshot } from './types'
 import { runtimePreviewReady } from './runtime-event-state'
 
-export type RuntimePreviewProps = { host: RuntimePreviewHost; runtime: RuntimeSnapshot | null; active: boolean; testId?: string }
+/** `placeholder` lets a surface replace the default status text shown while no page is visible. */
+export type RuntimePreviewProps = { host: RuntimePreviewHost; runtime: RuntimeSnapshot | null; active: boolean; testId?: string; placeholder?: ReactNode }
 
 export function runtimePreviewBoundsFromRect(rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>) {
   return { x: Math.max(0, Number.isFinite(rect.left) ? rect.left : 0), y: Math.max(0, Number.isFinite(rect.top) ? rect.top : 0), width: Math.max(0, Number.isFinite(rect.width) ? rect.width : 0), height: Math.max(0, Number.isFinite(rect.height) ? rect.height : 0) }
 }
 
-export function RuntimePreview({ host, runtime, active, testId = 'runtime-preview' }: RuntimePreviewProps) {
+export function RuntimePreview({ host, runtime, active, testId = 'runtime-preview', placeholder }: RuntimePreviewProps) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
   const previewIdRef = useRef<string | null>(null)
@@ -100,5 +101,5 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
                       : staticLifecycleStatus === 'failed' ? t('runtime.runtimeFailed')
                         : staticLifecycleStatus === 'path_missing' ? t('runtime.runtimePathMissing')
                           : t('runtime.runtimeStopped')
-  return <div ref={hostRef} className={`runtime-preview-host is-${effectivePreviewStatus}`} data-testid={testId} role="region" aria-label={status}>{effectivePreviewStatus !== 'ready' ? <div className="local-app-preview-placeholder" role="status"><strong>{status}</strong><span>{runtime?.detail ?? t('runtime.preview')}</span></div> : null}</div>
+  return <div ref={hostRef} className={`runtime-preview-host is-${effectivePreviewStatus}`} data-testid={testId} role="region" aria-label={status}>{effectivePreviewStatus !== 'ready' ? (placeholder ? <div className="local-app-preview-placeholder">{placeholder}</div> : <div className="local-app-preview-placeholder" role="status"><strong>{status}</strong><span>{runtime?.detail ?? t('runtime.preview')}</span></div>) : null}</div>
 }

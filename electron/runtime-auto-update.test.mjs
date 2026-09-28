@@ -79,10 +79,11 @@ test('a server bundle is stale only when source is newer than what built it', as
  * Fake npm: `start` prints a loopback URL; `build` runs `onBuild` (which may
  * rewrite `.next`) and exits with its return code.
  */
-function createManager(root, onBuild) {
+function createManager(root, onBuild, extra = {}) {
   const userData = mkdtempSync(resolve(tmpdir(), 'agentos-auto-update-data-'))
   const spawns = []
   const manager = new runtime.LocalAppRuntimeManager({
+    ...extra,
     userDataPath: userData,
     allocatePort: async () => 45720,
     fetch: async () => ({ status: 200 }),
@@ -137,6 +138,8 @@ test('a stale server bundle is rebuilt in place and served again (C-RSM-502)', a
     const updated = await manager.updateToLatest(id)
     assert.equal(updated.status, 'running')
     assert.equal(updated.buildStatus, 'ready')
+    assert.ok(updated.generation > started.generation, 'a rebuilt bundle is a new instance, so its Preview is recreated')
+    assert.notEqual(updated.runtimeId, started.runtimeId)
     assert.deepEqual(spawns, ['start', 'build', 'start'])
     assert.equal(readFileSync(resolve(root, '.next/BUILD_ID'), 'utf8'), 'build-2')
     assert.equal(existsSync(resolve(root, '.next.agentos-backup')), false, 'backup discarded after success')
@@ -292,6 +295,54 @@ test('a static project that stops exporting pages is served as a server after it
     assert.deepEqual(spawns, ['build', 'start'])
     assert.equal(served.status, 'running')
     assert.equal(served.mode, 'development')
+  } finally {
+    await manager.stopAll('app-quit')
+    rmSync(root, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true })
+  }
+})
+
+test('an outdated server bundle is rebuilt before it is served, not pulled away after (C-RSM-503)', async () => {
+  const root = serverProject()
+  editSource(root, 'export default "v2"')
+  const { manager, spawns, userData, id } = createManager(root, () => {
+    writeFileSync(resolve(root, '.next/BUILD_ID'), 'build-2')
+    return 0
+  }, { autoUpdate: true })
+  try {
+    const started = await manager.start(id, 'tab:view')
+    assert.equal(started.status, 'running')
+    assert.equal(started.buildStatus, 'ready')
+    assert.deepEqual(spawns, ['build', 'start'], 'build first, then serve once')
+    await new Promise((r) => setTimeout(r, 50))
+    assert.deepEqual(spawns, ['build', 'start'], 'the post-start check finds it current')
+  } finally {
+    await manager.stopAll('app-quit')
+    rmSync(root, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true })
+  }
+})
+
+test('a failed rebuild before start serves the previous bundle and is not repeated on the next start', async () => {
+  const root = serverProject()
+  editSource(root, 'export default "broken"')
+  let builds = 0
+  const { manager, spawns, userData, id } = createManager(root, () => {
+    builds += 1
+    rmSync(resolve(root, '.next'), { recursive: true, force: true })
+    mkdirSync(resolve(root, '.next'))
+    return 1
+  }, { autoUpdate: true })
+  try {
+    const started = await manager.start(id, 'tab:view')
+    assert.equal(started.status, 'running')
+    assert.equal(started.buildStatus, 'build_failed')
+    assert.equal(started.errorCode, 'update-failed')
+    assert.equal(readFileSync(resolve(root, '.next/BUILD_ID'), 'utf8'), 'build-1')
+    await manager.restart(id)
+    await new Promise((r) => setTimeout(r, 50))
+    assert.equal(builds, 1, 'the same failing source is not rebuilt on restart')
+    assert.equal(spawns.filter((kind) => kind === 'start').length, 2)
   } finally {
     await manager.stopAll('app-quit')
     rmSync(root, { recursive: true, force: true })

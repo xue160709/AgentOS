@@ -1,19 +1,27 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/i18n'
-import type { RuntimeDefinition, RuntimeSnapshot, WorkspaceTab } from './types'
+import type { RuntimeDefinition, RuntimeServeOverride, RuntimeSnapshot, WorkspaceTab } from './types'
 
 export function RuntimeDetailsDialog({
   tab,
   definition,
   runtime,
   onClose,
+  onServeOverrideChange,
 }: {
   tab: WorkspaceTab
   definition: RuntimeDefinition
   runtime: RuntimeSnapshot | null
   onClose: () => void
+  /** `C-RSM-404` / `Q-R5-01`: the view-mode override lives here, not on the workbench. */
+  onServeOverrideChange?: (next: RuntimeServeOverride | null) => void
 }) {
   const { t } = useI18n()
+  const [serveOverride, setServeOverride] = useState<RuntimeServeOverride | undefined>(definition.serveOverride)
+  const chooseOverride = (next: RuntimeServeOverride | null) => {
+    setServeOverride(next ?? undefined)
+    onServeOverrideChange?.(next)
+  }
   const dialogRef = useRef<HTMLElement>(null)
   const logs = runtime?.logs?.slice(-40) ?? []
 
@@ -39,10 +47,16 @@ export function RuntimeDetailsDialog({
       </header>
       <dl className="runtime-details-dialog__facts">
         <div><dt>{t('runtime.status')}</dt><dd>{runtime ? t(runtimeStatusKey(runtime.status)) : t('runtime.runtimeStopped')}</dd></div>
-        <div><dt>{t('runtime.mode')}</dt><dd>{runtime?.mode === 'development' ? t('runtime.developmentMode') : t('runtime.staticPreview')}</dd></div>
+        <div><dt>{t('runtime.mode')}</dt><dd>{runtime?.mode === 'development' ? t('runtime.viewModeDevelopment') : t('runtime.viewModeArtifact')}</dd></div>
         <div><dt>{t('runtime.directory')}</dt><dd title={definition.rootPath}>{definition.rootPath}</dd></div>
         {runtime?.detail ? <div><dt>{t('runtime.detail')}</dt><dd>{runtime.detail}</dd></div> : null}
       </dl>
+      {onServeOverrideChange ? <div className="runtime-details-dialog__view-mode" role="group" aria-label={t('runtime.viewMode')} data-testid="runtime-details-view-mode">
+        <span>{t('runtime.viewMode')}</span>
+        <button type="button" className="btn btn-toolbar" aria-pressed={serveOverride === 'artifact'} onClick={() => chooseOverride('artifact')}>{t('runtime.viewModeArtifact')}</button>
+        <button type="button" className="btn btn-toolbar" aria-pressed={serveOverride === 'server'} onClick={() => chooseOverride('server')}>{t('runtime.viewModeDevelopment')}</button>
+        {serveOverride ? <button type="button" className="btn btn-ghost" onClick={() => chooseOverride(null)}>{t('runtime.viewModeAuto')}</button> : null}
+      </div> : null}
       <section className="runtime-details-dialog__logs" aria-label={t('runtime.logs')}>
         <h3>{t('runtime.logs')}</h3>
         <pre>{logs.join('\n') || t('runtime.noLogs')}</pre>

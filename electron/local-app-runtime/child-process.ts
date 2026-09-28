@@ -22,14 +22,16 @@ export function redactRuntimeLine(value: string, limit = LOCAL_APP_RUNTIME_DEFAU
  */
 export function readableFailureReason(lines: readonly { stream: string; line: string }[]): string | undefined {
   const recent = lines.slice(-60).reverse()
-  for (const { line } of recent) {
-    if (!line.includes('EADDRINUSE')) continue
-    const port = /:(\d{2,5})\b(?!.*:\d)/.exec(line)?.[1]
+  const portInUse = recent.filter(({ line }) => line.includes('EADDRINUSE') || /\bport:\s*\d/.test(line))
+  if (portInUse.some(({ line }) => line.includes('EADDRINUSE'))) {
+    // Node splits the error over several lines (`address already in use :::3030`, `port: 3030`).
+    const port = portInUse.map(({ line }) => /:(\d{2,5})\b(?!.*:\d)/.exec(line)?.[1] ?? /\bport:\s*(\d{2,5})/.exec(line)?.[1]).find(Boolean)
     return port ? `端口 ${port} 已被其他程序占用` : '端口已被其他程序占用'
   }
   const readable = recent.filter(({ line }) => /[\p{L}\p{N}]/u.test(line) && !/^\s*at\s/.test(line))
   const named = readable.find(({ line }) => /\b(error|ERR!|failed|cannot|not found)\b/i.test(line)) ?? readable[0]
-  return named ? `[${named.stream}] ${named.line}` : undefined
+  // Users read the line itself; the stream name only matters in the log view.
+  return named?.line.trim()
 }
 
 /** 只继承产品合同明确允许的宿主变量，拒绝 npm_config_* 与凭据变量。 */

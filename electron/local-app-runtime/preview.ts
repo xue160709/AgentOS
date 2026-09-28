@@ -125,7 +125,8 @@ export class LocalAppPreviewManager {
       // A tab can unmount while its native view remains hidden. Reuse that
       // session so returning to the tab does not reload the page or spawn a
       // second native view.
-      if (previous.snapshot.status === 'closed') {
+      // A failed load is not worth keeping: returning to the tab must retry it.
+      if (previous.snapshot.status === 'closed' || previous.snapshot.status === 'failed') {
         await this.close(previewId)
       } else {
         return previous.snapshot
@@ -361,6 +362,14 @@ export class LocalAppPreviewManager {
         this.onEvent?.(active.snapshot)
       }
       this.emitNavigationState(active)
+    })
+    // A same-document navigation (history.pushState, `?file=` links) starts
+    // loading but never finishes a load; `did-stop-loading` always closes it.
+    // A failed load has already moved the session off `loading`.
+    contents.on('did-stop-loading', () => {
+      if (this.previews.get(active.snapshot.previewId) !== active || active.snapshot.status !== 'loading') return
+      active.snapshot = { ...active.snapshot, status: 'ready', detail: undefined }
+      this.onEvent?.(active.snapshot)
     })
     contents.on('did-navigate', () => this.emitNavigationState(active))
     contents.on('did-navigate-in-page', () => this.emitNavigationState(active))

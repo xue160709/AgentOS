@@ -207,6 +207,22 @@ export class RuntimeSnapshotTransitions {
     return { ...snapshot, buildStatus: 'build_failed', errorCode: 'update-failed', detail, updatedAt: this.now() }
   }
 
+  /**
+   * A served bundle that was rebuilt is a new instance: a new generation and
+   * runtime id, so every Preview and renderer projection of the previous
+   * bundle is replaced rather than reused (Revision 5 §4 step 5).
+   */
+  renewed(snapshot: LocalAppRuntimeSnapshot, generation: number): LocalAppRuntimeSnapshot {
+    return {
+      ...snapshot,
+      generation,
+      runtimeId: `runtime-${snapshot.runtimeDefinitionId ?? snapshot.localAppId}-${generation}-${this.now().toString(36)}`,
+      restartAttempt: 0,
+      startedAt: undefined,
+      updatedAt: this.now(),
+    }
+  }
+
   /** The dev server printed its own loopback URL; prefer it over the guess. */
   readyUrlObserved(snapshot: LocalAppRuntimeSnapshot, readyUrl: string): LocalAppRuntimeSnapshot {
     return { ...snapshot, readyUrl, updatedAt: this.now() }

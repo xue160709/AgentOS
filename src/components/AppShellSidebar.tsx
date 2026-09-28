@@ -29,14 +29,13 @@ import type {
   ThreadRunState,
   WorkspaceProject,
   ThreadMetadata,
-  RuntimeDefinition,
   RuntimeSnapshot,
   WorkspaceTab,
 } from './types'
 import { getSettingsSidebarNav } from './app-shell-constants.ts'
 import { sortProjectsForSidebar } from './project-order'
 import { workspaceRuntimeScopeId, type RuntimeDevelopmentSnapshot } from '../runtime-development-contract'
-import { runtimeDevelopmentStatus } from './runtime-event-state'
+import { runtimeDevelopmentStatus, runtimeNeedsTroubleshooting } from './runtime-event-state'
 
 /** 侧栏单区块预览条数（超过则显示「展开显示」）/ Max items before "show more" in sidebar sections */
 const SIDEBAR_SECTION_PREVIEW_LIMIT = 5
@@ -76,7 +75,6 @@ type AppShellSidebarProps = {
   canForward: boolean
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   workspaceTabs: WorkspaceTab[]
-  runtimeDefinitions: RuntimeDefinition[]
   activeWorkspaceTabId: string
   runtimeStates: Record<string, RuntimeSnapshot>
   runtimeDevelopmentStates: Record<string, RuntimeDevelopmentSnapshot>
@@ -84,8 +82,6 @@ type AppShellSidebarProps = {
   onSelectWorkspaceTab: (tabId: string) => void
   onCloseWorkspaceTab: (tabId: string) => void
   onRenameWorkspaceTab?: (tabId: string, title: string) => void | Promise<boolean>
-  onBuildWorkspaceRuntime: (tab: WorkspaceTab) => void
-  onRefreshWorkspaceRuntime: (tab: WorkspaceTab) => void
   onRuntimeDevelopmentAction: (tab: WorkspaceTab, snapshot?: RuntimeDevelopmentSnapshot) => void
   onViewWorkspaceRuntime: (tab: WorkspaceTab) => void
   onRestartWorkspaceRuntime: (tab: WorkspaceTab) => void
@@ -133,7 +129,6 @@ export function AppShellSidebar({
   canForward,
   onCreateProject,
   workspaceTabs,
-  runtimeDefinitions,
   activeWorkspaceTabId,
   runtimeStates,
   runtimeDevelopmentStates,
@@ -141,8 +136,6 @@ export function AppShellSidebar({
   onSelectWorkspaceTab,
   onCloseWorkspaceTab,
   onRenameWorkspaceTab,
-  onBuildWorkspaceRuntime,
-  onRefreshWorkspaceRuntime,
   onRuntimeDevelopmentAction,
   onViewWorkspaceRuntime,
   onRestartWorkspaceRuntime,
@@ -248,23 +241,25 @@ export function AppShellSidebar({
     const runtime = runtimeStates[tab.runtimeDefinitionId]
     const development = runtimeDevelopmentStates[workspaceRuntimeScopeId(tab.runtimeDefinitionId)]
     const developmentUi = runtimeDevelopmentStatus(t, development)
-    const definition = runtimeDefinitions.find((item) => item.id === tab.runtimeDefinitionId)
-    const isBuilding = runtime?.status === 'building' || runtime?.buildStatus === 'building'
+    // `C-RSM-505`: the menu names intentions a user has; process controls
+    // appear only while the Runtime needs troubleshooting.
+    const troubleshoot = runtimeNeedsTroubleshooting(runtime)
     const canRestart = Boolean(runtime && ['running', 'development', 'degraded', 'failed', 'stopped'].includes(runtime.status))
     const canStop = Boolean(runtime && ['preparing', 'starting', 'running', 'development', 'degraded'].includes(runtime.status))
+    const troubleshootItems: ContextMenuItem[] = troubleshoot ? [
+      { id: 'runtime-tab-restart', label: `${t('runtime.troubleshoot')} · ${t('runtime.restart')}`, disabled: !canRestart, separatorBefore: true, onSelect: () => { closeContextMenu(); onRestartWorkspaceRuntime(tab) } },
+      { id: 'runtime-tab-stop', label: `${t('runtime.troubleshoot')} · ${t('runtime.stop')}`, disabled: !canStop, onSelect: () => { closeContextMenu(); onStopWorkspaceRuntime(tab) } },
+      { id: 'runtime-tab-view-runtime', label: `${t('runtime.troubleshoot')} · ${t('runtime.viewRuntime')}`, onSelect: () => { closeContextMenu(); onViewWorkspaceRuntime(tab) } },
+    ] : []
     openRuntimeMenu(event.currentTarget as HTMLElement, {
       x: event.clientX || rect.left,
       y: event.clientY || rect.bottom,
       items: [
         { id: 'runtime-tab-open', label: t('runtime.openWorkbench'), onSelect: () => { closeContextMenu(); onSelectWorkspaceTab(tab.id) } },
-        { id: 'runtime-tab-development', label: developmentUi.actionLabel, accent: developmentUi.action === 'open', disabled: developmentUi.actionDisabled, separatorBefore: true, onSelect: () => { closeContextMenu(); onRuntimeDevelopmentAction(tab, development) } },
-        { id: 'runtime-tab-build', label: isBuilding ? t('runtime.cancel') : t('runtime.rebuild'), disabled: definition?.mode !== 'static' && runtime?.mode !== 'static', onSelect: () => { closeContextMenu(); onBuildWorkspaceRuntime(tab) } },
-        { id: 'runtime-tab-refresh', label: t('runtime.refresh'), disabled: !runtime?.readyUrl && !runtime?.previewUrl, onSelect: () => { closeContextMenu(); onRefreshWorkspaceRuntime(tab) } },
-        { id: 'runtime-tab-view-runtime', label: t('runtime.viewRuntime'), separatorBefore: true, onSelect: () => { closeContextMenu(); onViewWorkspaceRuntime(tab) } },
-        { id: 'runtime-tab-restart', label: t('runtime.restart'), disabled: !canRestart, onSelect: () => { closeContextMenu(); onRestartWorkspaceRuntime(tab) } },
-        { id: 'runtime-tab-stop', label: t('runtime.stop'), disabled: !canStop, onSelect: () => { closeContextMenu(); onStopWorkspaceRuntime(tab) } },
+        { id: 'runtime-tab-development', label: developmentUi.actionLabel, accent: developmentUi.action === 'open', disabled: developmentUi.actionDisabled, onSelect: () => { closeContextMenu(); onRuntimeDevelopmentAction(tab, development) } },
         { id: 'runtime-tab-rename', label: t('runtime.rename'), separatorBefore: true, onSelect: () => beginRuntimeTabRename(tab) },
         { id: 'runtime-tab-close', label: t('runtime.close'), danger: true, onSelect: () => { closeContextMenu(); onCloseWorkspaceTab(tab.id) } },
+        ...troubleshootItems,
       ],
     })
   }

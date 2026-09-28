@@ -181,18 +181,21 @@ test('Static build keeps last-good Preview alive and cancellation uses the build
   const runtime = readFileSync(resolve(root, 'electron/local-app-runtime/child-process.ts'), 'utf8')
   assert.match(runtime, /detached: process\.platform !== 'win32'/)
   const workspace = readFileSync(resolve(root, 'src/components/RuntimeWorkspace.tsx'), 'utf8')
-  assert.match(workspace, /runtime-cancel-build/)
-  assert.match(workspace, /onCancelBuild \?\? onStop/)
-  assert.match(workspace, /\['build_required', 'build_failed'\]\.includes\(displayStatus\)/)
-  assert.doesNotMatch(workspace, /\['build_required', 'build_failed', 'stale'\]/)
-  assert.match(workspace, /hasLastGood \? t\('runtime\.rebuild'\) : t\('runtime\.build'\)/)
+  // `C-RSM-504`: the workbench derives everything from one projection and
+  // shows no build, rebuild, restart or stop controls; failures get a single
+  // retry (through the serve ladder) plus logs.
+  assert.match(workspace, /runtimeWorkbenchState\(runtime\)/)
+  assert.match(workspace, /data-testid="runtime-update-failed"/)
+  assert.match(workspace, /testId: 'runtime-retry'/)
+  assert.doesNotMatch(workspace, /runtime\.rebuild|runtime\.build'|runtime\.restart|runtime-cancel-build|runtime-stop/)
   const shellWorkspace = readFileSync(resolve(root, 'src/components/AppShellWorkspace.tsx'), 'utf8')
   assert.match(shellWorkspace, /runtime-open-development/)
   assert.doesNotMatch(shellWorkspace, /data-testid="runtime-build"/)
   const sidebar = readFileSync(resolve(root, 'src/components/AppShellSidebar.tsx'), 'utf8')
   assert.match(sidebar, /id: 'runtime-tab-development'[\s\S]*?onRuntimeDevelopmentAction\(tab, development\)/)
-  assert.match(sidebar, /id: 'runtime-tab-build'[\s\S]*?onBuildWorkspaceRuntime\(tab\)/)
-  assert.match(sidebar, /id: 'runtime-tab-refresh'[\s\S]*?onRefreshWorkspaceRuntime\(tab\)/)
+  // `C-RSM-505`: no build/refresh items; process controls only while troubleshooting.
+  assert.doesNotMatch(sidebar, /id: 'runtime-tab-build'|id: 'runtime-tab-refresh'/)
+  assert.match(sidebar, /const troubleshootItems: ContextMenuItem\[\] = troubleshoot \?/)
   const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
   assert.match(appShell, /onRuntimeDevelopmentAction=\{activeWorkspaceTab \?[\s\S]*?kind: 'workspace-runtime', workspaceTabId: activeWorkspaceTab\.id/)
   assert.doesNotMatch(appShell, /startLocalAppDevelopment|openWorkspaceTabProjectChat/)

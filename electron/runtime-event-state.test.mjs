@@ -41,6 +41,8 @@ const {
   isStaleRuntimeSnapshot,
   runtimeDevelopmentStatus,
   runtimePreviewReady,
+  runtimeWorkbenchState,
+  runtimeNeedsTroubleshooting,
   runtimeServeStatus,
   RuntimeEventBatcher,
 } = loadTsModule(resolve(testDir, '../src/components/runtime-event-state.ts'))
@@ -227,4 +229,55 @@ test('build failure copy only claims a previous version when one exists', () => 
   const failed = { runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 1, restartAttempt: 0, updatedAt: 1, mode: 'static', status: 'build_failed', buildStatus: 'build_failed' }
   assert.equal(runtimeServeStatus(t, failed).message, 'runtime.serveBuildFailedFirst')
   assert.equal(runtimeServeStatus(t, { ...failed, artifactId: 'a1', previewUrl: 'agentos-static://p/' }).message, 'runtime.serveBuildFailed')
+})
+
+// `C-RSM-504/505/506`: normal states carry no actions; abnormal ones do.
+test('workbench state separates viewing, updating and failures without mechanism vocabulary', () => {
+  const base = { runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 1, restartAttempt: 0, updatedAt: 1 }
+  const server = { ...base, mode: 'development', readyUrl: 'http://localhost:3030/' }
+  assert.deepEqual(runtimeWorkbenchState({ ...server, status: 'running' }), { kind: 'viewing' })
+  assert.deepEqual(runtimeWorkbenchState({ ...server, status: 'running', buildStatus: 'building' }), { kind: 'updating', pageVisible: true })
+  assert.deepEqual(runtimeWorkbenchState({ ...server, status: 'starting', buildStatus: 'building' }), { kind: 'updating', pageVisible: false })
+  assert.deepEqual(runtimeWorkbenchState({ ...server, status: 'running', buildStatus: 'build_failed', detail: 'Type error' }), { kind: 'update-failed', reason: 'Type error' })
+  assert.deepEqual(runtimeWorkbenchState({ ...server, status: 'running', buildStatus: 'ready' }), { kind: 'viewing' }, 'a finished update is plain viewing')
+  assert.deepEqual(runtimeWorkbenchState({ ...base, mode: 'development', status: 'failed', detail: '端口 3030 已被其他程序占用' }), { kind: 'open-failed', reason: '端口 3030 已被其他程序占用' })
+  assert.deepEqual(runtimeWorkbenchState({ ...base, mode: 'static', status: 'building', buildStatus: 'building' }), { kind: 'preparing', firstBuild: true })
+  assert.deepEqual(runtimeWorkbenchState({ ...base, mode: 'static', status: 'build_required', buildStatus: 'build_required' }), { kind: 'not-ready' })
+  assert.deepEqual(runtimeWorkbenchState({ ...base, status: 'path_missing' }), { kind: 'path-missing' })
+  assert.equal(runtimeNeedsTroubleshooting({ ...server, status: 'running' }), false)
+  assert.equal(runtimeNeedsTroubleshooting({ ...server, status: 'running', buildStatus: 'building' }), false)
+  assert.equal(runtimeNeedsTroubleshooting({ ...base, status: 'failed' }), true)
+  assert.equal(runtimeNeedsTroubleshooting({ ...server, status: 'running', buildStatus: 'build_failed' }), true)
+})
+
+// Walkthrough 3 findings: a failed start that is then stopped keeps its reason;
+// a static build that falls to a server is still preparing; a new generation
+// does not inherit the previous one's failure.
+test('workbench keeps the failure reason, treats ③→② as preparing, and does not inherit across generations', () => {
+  const base = { runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 1, restartAttempt: 0, updatedAt: 1 }
+  assert.deepEqual(runtimeWorkbenchState({ ...base, status: 'stopped', stopReason: 'error', detail: '端口 3030 已被其他程序占用' }), { kind: 'open-failed', reason: '端口 3030 已被其他程序占用' })
+  assert.deepEqual(runtimeWorkbenchState({ ...base, status: 'stopped', stopReason: 'user' }), { kind: 'stopped' })
+  assert.deepEqual(runtimeWorkbenchState({ ...base, mode: 'static', status: 'build_failed', buildStatus: 'build_failed', errorCode: 'build-produces-no-artifact' }), { kind: 'preparing', firstBuild: false })
+  const failed = applyRuntimeEvents({}, [{ type: 'status', runtimeDefinitionId: 'r', runtimeId: 'rt-1', generation: 1, status: 'failed', errorCode: 'process-exited', detail: 'old reason', buildStatus: 'build_failed', timestamp: 1 }])
+  const next = applyRuntimeEvents(failed, [{ type: 'status', runtimeDefinitionId: 'r', runtimeId: 'rt-2', generation: 2, status: 'preparing', timestamp: 2 }])
+  assert.equal(next.r.detail, undefined)
+  assert.equal(next.r.errorCode, undefined)
+  assert.equal(next.r.buildStatus, undefined)
+})
+
+// Walkthrough 4: the reason must survive through the event path, where a
+// failed start arrives as `failed` and then `stopped` within a millisecond.
+test('a failed start stopped right after still reads as open-failed through events', () => {
+  const events = [
+    { type: 'status', runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 2, status: 'failed', errorCode: 'process-exited', detail: '端口 3030 已被其他程序占用', timestamp: 10 },
+    { type: 'status', runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 2, status: 'stopped', stopReason: 'error', errorCode: 'process-exited', detail: '端口 3030 已被其他程序占用', timestamp: 11 },
+  ]
+  const state = applyRuntimeEvents({}, events)
+  assert.deepEqual(runtimeWorkbenchState(state.r), { kind: 'open-failed', reason: '端口 3030 已被其他程序占用' })
+  const main = readFileSync(resolve(testDir, 'main.ts'), 'utf8')
+  assert.match(main, /stopReason: event\.stopReason,/, 'Main forwards stopReason to the renderer')
+  const supervisor = readFileSync(resolve(testDir, 'local-app-runtime/supervisor.ts'), 'utf8')
+  assert.match(supervisor, /stopReason: runtime\.snapshot\.status === 'stopped'/)
+  const fallback = applyRuntimeEvents({}, [{ type: 'status', runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 1, status: 'stopped', stopReason: 'user', mode: 'static', errorCode: 'build-produces-no-artifact', timestamp: 1 }])
+  assert.equal(runtimeWorkbenchState(fallback.r).kind, 'preparing', 'the ③→② hand-off never flashes 已停止')
 })

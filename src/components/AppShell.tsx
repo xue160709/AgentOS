@@ -903,8 +903,14 @@ export function AppShell() {
       onStart: () => { void startProjectRuntime() },
       onCreate: runtimeDevelopmentEnabled ? () => { void runRuntimeDevelopmentAction({ kind: 'project-runtime', projectId: activeProject.id, mountId: projectRuntimeState.mountId }) } : undefined,
       onRefresh: () => {
-        if (projectRuntimePreviewId) void window.desktop?.reloadRuntimePreview?.(projectRuntimePreviewId)
-        if (projectRuntimeState.definition) void window.desktop?.updateRuntime?.(projectRuntimeState.definition.id).catch(() => undefined)
+        const reload = () => { if (projectRuntimePreviewId) void window.desktop?.reloadRuntimePreview?.(projectRuntimePreviewId) }
+        const update = projectRuntimeState.definition ? window.desktop?.updateRuntime?.(projectRuntimeState.definition.id) : undefined
+        if (!update) { reload(); return }
+        // Same order as the workbench ↻: a rebuild brings its own Preview.
+        void update.then((runtime) => {
+          if (runtime) setProjectRuntimeState((current) => ({ ...current, runtime }))
+          if (!runtime || runtime.generation === projectRuntimeState.runtime?.generation) reload()
+        }).catch(reload)
       },
       onToggleLogs: () => setProjectRuntimeState((current) => ({ ...current, logsOpen: !current.logsOpen })),
       onRestart: () => { if (projectRuntimeState.definition) void window.desktop?.restartRuntime?.(projectRuntimeState.definition.id).then((runtime) => setProjectRuntimeState((current) => ({ ...current, runtime }))) },
@@ -2039,10 +2045,19 @@ export function AppShell() {
   }, [setChatWorkspace, t])
 
   const reloadLocalAppPreview = useCallback((tabId: string, localAppId: string) => {
-    const runtime = runtimeStates[localAppId]
-    if (runtime) void window.desktop?.reloadRuntimePreview?.(`preview-${tabId}-${runtime.generation}`)
-    // `C-RSM-503`: ↻ also means "show me the latest"; Main rebuilds only if the source changed.
-    void window.desktop?.updateRuntime?.(localAppId).catch(() => undefined)
+    // `C-RSM-503`: ↻ means "show me the latest". Ask Main first: a rebuild
+    // replaces the Preview with a new generation, and reloading before it
+    // would only hit the server being rebuilt. When nothing changed, reload.
+    const reload = (runtime?: RuntimeSnapshot | null) => {
+      const current = runtime ?? runtimeStates[localAppId]
+      if (current) void window.desktop?.reloadRuntimePreview?.(`preview-${tabId}-${current.generation}`)
+    }
+    const update = window.desktop?.updateRuntime?.(localAppId)
+    if (!update) { reload(); return }
+    void update.then((runtime) => {
+      if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime))
+      if (!runtime || runtime.generation === runtimeStates[localAppId]?.generation) reload(runtime)
+    }).catch(() => reload())
   }, [runtimeStates])
 
   const navigateLocalAppPreview = useCallback((tabId: string, localAppId: string, direction: 'back' | 'forward') => {
@@ -3078,7 +3093,6 @@ export function AppShell() {
           canForward={canForward}
           onCreateProject={createProject}
           workspaceTabs={chatWorkspace.workspaceTabs}
-          runtimeDefinitions={chatWorkspace.runtimeDefinitions}
           activeWorkspaceTabId={chatWorkspace.activeWorkspaceTabId}
           runtimeStates={runtimeStates}
           runtimeDevelopmentStates={runtimeDevelopmentStates}
@@ -3086,15 +3100,6 @@ export function AppShell() {
           onSelectWorkspaceTab={selectWorkspaceTab}
           onCloseWorkspaceTab={closeLocalAppTab}
           onRenameWorkspaceTab={renameLocalAppTab}
-          onBuildWorkspaceRuntime={(tab) => {
-            const runtime = runtimeStates[tab.runtimeDefinitionId]
-            if (runtime?.status === 'building' || runtime?.buildStatus === 'building') cancelLocalAppBuild(tab.runtimeDefinitionId, runtime.buildId)
-            else buildLocalApp(tab.runtimeDefinitionId)
-          }}
-          onRefreshWorkspaceRuntime={(tab) => {
-            selectWorkspaceTab(tab.id)
-            requestAnimationFrame(() => requestAnimationFrame(() => reloadLocalAppPreview(tab.id, tab.runtimeDefinitionId)))
-          }}
           onRuntimeDevelopmentAction={(tab, snapshot) => {
             if (!runtimeDevelopmentEnabled) {
               setWorkspaceSaveError(t('runtime.developmentLiveUnavailable'))
@@ -3189,7 +3194,21 @@ export function AppShell() {
           onTrust={(definition) => void trustAndCreateLocalApp(definition)}
         />
         <AgentOSPairingDialog pairing={pendingPairing} projects={chatWorkspace.projects} />
-        {runtimeDetailsTab && runtimeDetailsDefinition ? <RuntimeDetailsDialog tab={runtimeDetailsTab} definition={runtimeDetailsDefinition} runtime={runtimeStates[runtimeDetailsDefinition.id] ?? null} onClose={() => setRuntimeDetailsTabId(null)} /> : null}
+        {runtimeDetailsTab && runtimeDetailsDefinition ? <RuntimeDetailsDialog
+          tab={runtimeDetailsTab}
+          definition={runtimeDetailsDefinition}
+          runtime={runtimeStates[runtimeDetailsDefinition.id] ?? null}
+          onClose={() => setRuntimeDetailsTabId(null)}
+          onServeOverrideChange={window.desktop?.setRuntimeServeOverride ? (next) => {
+            const definitionId = runtimeDetailsDefinition.id
+            void window.desktop?.setRuntimeServeOverride?.(definitionId, next)
+              .then((runtime) => { if (runtime) setRuntimeStates((current) => mergeAcceptedRuntime(current, runtime)) })
+              .catch((error: unknown) => {
+                const conflict = parseRuntimeRootConflict(error)
+                if (conflict) setRuntimeDevelopmentConflict(conflict)
+              })
+          } : undefined}
+        /> : null}
       </div>
     </div>
   )

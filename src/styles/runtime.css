@@ -113,6 +113,12 @@
 .local-app-runtime-recovery > div:first-child span { color: var(--color-token-text-secondary); font-size: var(--text-xs); }
 .local-app-runtime-recovery__actions { justify-content: flex-end; }
 .local-app-runtime-log { flex: 0 0 auto; margin: 0 12px 10px; border-radius: var(--radius-sm); }
+.runtime-workbench-progress, .runtime-workbench-recovery { display: grid; justify-items: center; gap: 6px; }
+.runtime-workbench-progress span, .runtime-workbench-recovery span { color: var(--color-token-text-secondary); font-size: var(--text-xs); max-width: 520px; overflow-wrap: anywhere; }
+.runtime-workbench-recovery__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.runtime-workbench-warning { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 12px 0; padding: 8px 12px; border-radius: var(--radius-md); color: var(--color-token-text-primary); background: color-mix(in oklab, var(--red-500, #d33) 10%, transparent); font-size: var(--text-sm); }
+.runtime-workbench-warning > span { min-width: 0; overflow-wrap: anywhere; }
+.runtime-workbench-updating { flex: 0 0 auto; padding: 4px 12px; text-align: center; color: var(--color-token-text-secondary); background: color-mix(in oklab, var(--blue-500, #3b82f6) 8%, transparent); font-size: var(--text-xs); }
 .runtime-workspace {
   display: flex;
   width: 100%;
@@ -451,4 +457,5 @@ html.is-resizing-runtime-preview * { user-select: none !important; }
     border: 0;
   }
 }
-
+.runtime-details-dialog__view-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 12px; }
+.runtime-details-dialog__view-mode > span { color: var(--color-token-text-secondary); font-size: var(--text-xs); margin-right: 4px; }

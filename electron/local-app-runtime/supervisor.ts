@@ -64,6 +64,11 @@ export type RuntimeStaticSourceFingerprinter = (
 ) => Promise<string>
 
 export type RuntimeSupervisorOptions = {
+  /**
+   * Keep served pages current with their source (`C-RSM-502/503`). Main
+   * enables it; tests opt in so background work never races their spawns.
+   */
+  autoUpdate?: boolean
   now?: () => number
   spawn?: typeof spawn
   fetch?: typeof globalThis.fetch
@@ -130,6 +135,7 @@ export class LocalAppRuntimeSupervisor {
   private readonly preparationRecordPath?: string
   private readonly staticArtifactStore: StaticArtifactStore
   private readonly serverBuildRecords: ServerBuildRecordStore
+  private readonly autoUpdate: boolean
   /** Source fingerprint an update last failed on; the same source is not retried automatically. */
   private readonly updateFailedFingerprints = new Map<string, string>()
   private readonly staticPreviewRegistry: StaticPreviewRegistry
@@ -156,6 +162,7 @@ export class LocalAppRuntimeSupervisor {
     this.preparationDigests = options.preparationDigests ?? new Map()
     this.preparationRecordPath = options.preparationRecordPath
     this.staticArtifactStore = options.staticArtifactStore ?? new StaticArtifactStore(options.userDataPath ?? path.join(process.cwd(), '.agentos-runtime-data'), this.now)
+    this.autoUpdate = options.autoUpdate === true
     this.serverBuildRecords = new ServerBuildRecordStore(options.userDataPath ? path.join(options.userDataPath, 'local-app-server-builds.json') : undefined)
     this.staticPreviewRegistry = options.staticPreviewRegistry ?? new StaticPreviewRegistry()
     this.validateStaticOutputImpl = options.validateStaticOutput ?? ((projectRoot, declaration) => validateStaticOutput(projectRoot, declaration))
@@ -676,7 +683,6 @@ export class LocalAppRuntimeSupervisor {
   private async runServerUpdate(runtime: ActiveRuntime): Promise<LocalAppRuntimeSnapshot> {
     const inspected = await new RuntimeInspectionPass().inspectDefinition(runtime.definition)
     if (!inspected.ok) return runtime.snapshot
-    const root = inspected.canonicalRoot
     const isActive = () => this.runtimes.get(runtime.definition.id) === runtime && !runtime.controller.signal.aborted
     runtime.snapshot = this.state.serverUpdating(runtime.snapshot)
     this.emit(runtime, 'status')
@@ -684,6 +690,51 @@ export class LocalAppRuntimeSupervisor {
     const server = runtime.child
     runtime.child = undefined
     if (server) await server.terminate()
+    const result = await this.rebuildServerBundle(runtime, inspected.canonicalRoot)
+    if (!result || !isActive()) return runtime.snapshot
+    // New bundle (or the restored one) → new instance, so the Preview of the
+    // stopped server is replaced instead of reused.
+    const generation = (this.generationByApp.get(runtime.definition.id) ?? runtime.snapshot.generation) + 1
+    this.generationByApp.set(runtime.definition.id, generation)
+    runtime.snapshot = this.state.renewed(runtime.snapshot, generation)
+    const served = await this.startRuntime(runtime, new RuntimeInspectionPass(), { skipFreshness: true })
+    if (!isActive()) return runtime.snapshot
+    if (served.status !== 'running') {
+      // Neither bundle would serve: this is now a start failure, not an update.
+      runtime.snapshot = { ...runtime.snapshot, buildStatus: 'ready' }
+      this.emit(runtime, 'status')
+      return runtime.snapshot
+    }
+    runtime.snapshot = result.succeeded ? this.state.serverUpdated(runtime.snapshot) : this.state.serverUpdateFailed(runtime.snapshot, result.failure)
+    this.emit(runtime, 'status')
+    return runtime.snapshot
+  }
+
+  /** Before the first spawn of a start: rebuild an outdated server bundle. */
+  private async rebuildStaleServerBeforeStart(
+    runtime: ActiveRuntime,
+    root: string,
+  ): Promise<{ succeeded: boolean; failure: string } | 'aborted' | null> {
+    if (!this.autoUpdate || runtime.definition.serveScript !== 'start') return null
+    try {
+      if (!await serverBundleStale(root, await this.serverBuildRecords.get(runtime.definition.id))) return null
+      if (await fingerprintRuntimeSource(root) === this.updateFailedFingerprints.get(runtime.definition.id)) return null
+    } catch {
+      return null
+    }
+    runtime.snapshot = this.state.serverUpdating(runtime.snapshot)
+    this.emit(runtime, 'status')
+    return (await this.rebuildServerBundle(runtime, root)) ?? 'aborted'
+  }
+
+  /**
+   * Rebuild `.next` in place with a restorable backup (`DI-RSM-503`). The
+   * server must already be stopped. Returns null when the runtime was stopped
+   * mid-build (the backup is restored). A failure is remembered against the
+   * source fingerprint so the same source is not rebuilt automatically again.
+   */
+  private async rebuildServerBundle(runtime: ActiveRuntime, root: string): Promise<{ succeeded: boolean; failure: string } | null> {
+    const isActive = () => this.runtimes.get(runtime.definition.id) === runtime && !runtime.controller.signal.aborted
     const backup = await backupServerBundle(root)
     let succeeded = false
     let failure = '构建失败'
@@ -699,25 +750,18 @@ export class LocalAppRuntimeSupervisor {
     }
     if (!isActive()) {
       await restoreServerBundle(root, backup).catch(() => undefined)
-      return runtime.snapshot
+      return null
     }
     if (succeeded) {
       await discardServerBundleBackup(backup).catch(() => undefined)
       await this.recordServerBuild(runtime.definition.id, root)
+      this.updateFailedFingerprints.delete(runtime.definition.id)
     } else {
       await restoreServerBundle(root, backup).catch(() => undefined)
+      const fingerprint = await fingerprintRuntimeSource(root).catch(() => undefined)
+      if (fingerprint) this.updateFailedFingerprints.set(runtime.definition.id, fingerprint)
     }
-    const served = await this.startRuntime(runtime, new RuntimeInspectionPass())
-    if (!isActive()) return runtime.snapshot
-    if (served.status !== 'running') {
-      // Neither bundle would serve: this is now a start failure, not an update.
-      runtime.snapshot = { ...runtime.snapshot, buildStatus: 'ready' }
-      this.emit(runtime, 'status')
-      return runtime.snapshot
-    }
-    runtime.snapshot = succeeded ? this.state.serverUpdated(runtime.snapshot) : this.state.serverUpdateFailed(runtime.snapshot, failure)
-    this.emit(runtime, 'status')
-    return runtime.snapshot
+    return { succeeded, failure }
   }
 
   private async recordServerBuild(definitionId: string, canonicalRoot: string): Promise<void> {
@@ -757,7 +801,11 @@ export class LocalAppRuntimeSupervisor {
     )
   }
 
-  private async startRuntime(runtime: ActiveRuntime, pass: RuntimeInspectionPass): Promise<LocalAppRuntimeSnapshot> {
+  private async startRuntime(
+    runtime: ActiveRuntime,
+    pass: RuntimeInspectionPass,
+    options: { skipFreshness?: boolean } = {},
+  ): Promise<LocalAppRuntimeSnapshot> {
     const { definition } = runtime
     await this.loadPreparationRecord()
     const inspected = await pass.inspectDefinition(definition)
@@ -772,6 +820,11 @@ export class LocalAppRuntimeSupervisor {
       if (terminatedPids.length > 0) {
         this.captureLog(runtime, 'stdout', `已接管开发模式：停止旧开发进程 ${terminatedPids.join(', ')}`)
       }
+      // `C-RSM-503`: a start is a freshness checkpoint. A server bundle cannot
+      // keep serving while `next build` rewrites it, so an outdated one is
+      // rebuilt before it is served rather than served and then pulled away.
+      const startUpdate = options.skipFreshness ? null : await this.rebuildStaleServerBeforeStart(runtime, inspected.canonicalRoot)
+      if (startUpdate === 'aborted' || runtime.controller.signal.aborted) return runtime.snapshot
       runtime.snapshot = this.state.starting(runtime.snapshot, this.recentLogs(runtime))
       this.emit(runtime, 'status')
       let lastError = 'readiness_timeout'
@@ -788,6 +841,9 @@ export class LocalAppRuntimeSupervisor {
           const ready = await this.waitForReadiness(runtime, child, port)
           if (ready) {
             runtime.snapshot = this.state.running(runtime.snapshot, { readyUrl: ready, port, logs: this.recentLogs(runtime) })
+            if (startUpdate) {
+              runtime.snapshot = startUpdate.succeeded ? this.state.serverUpdated(runtime.snapshot) : this.state.serverUpdateFailed(runtime.snapshot, startUpdate.failure)
+            }
             this.emit(runtime, 'ready')
             return runtime.snapshot
           }
@@ -1031,6 +1087,7 @@ export class LocalAppRuntimeSupervisor {
       phase: runtime.snapshot.phase,
       errorCode: runtime.snapshot.errorCode,
       detail: runtime.snapshot.detail,
+      stopReason: runtime.snapshot.status === 'stopped' ? runtime.snapshot.stopReason : undefined,
       timestamp: this.now(),
       ...detail,
       runtimeDefinitionId: runtime.snapshot.runtimeDefinitionId ?? runtime.snapshot.localAppId ?? '',
