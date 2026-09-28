@@ -65,7 +65,7 @@ footer a{color:var(--accent);text-decoration:none}
 <h2>需要你决定什么</h2>
 <ul>
 <li><strong>已定（9-28）— Revision 5</strong>：你已确认——所有入口统一走四档探测；源码有更新自动重建（应用重启恢复、关闭后重开、重启运行时、↻ 时检查，AI 修改结束直接重建，切页不触发）；工作台正常态零按钮、菜单只留四项；局域网可访问是预期行为。实施顺序：预览自动出现 → 失败说真话 → 自动重建 → 按钮与菜单精简。</li>
-<li><strong>待你定 — 验收方式</strong>：Revision 5 做完后是直接归档、验完再归档，还是先归档以后再验？不回答则按「做完直接归档」处理。<span class="badge">默认假设，可推翻</span> 另：探测结论与手动覆盖入口将从工具栏移入「查看 Runtime」详情。</li>
+<li><strong>已定（9-28）— 验收方式</strong>：做完直接归档（<code>verify_policy: none</code>）。R5-01/R5-02 已完成并提交；<b>R5-03 自动重建已完成</b>（源码变了会在启动、恢复、重开、重启、↻ 时自动重建；失败还原旧版且不重复失败）<span class="badge ok">5 项新测试</span><span class="badge warn">未提交·未真机走查</span>；R5-04/05 设计已写入 design.md（停服—备份—构建—回滚；工作台零按钮、菜单四项；探测结论移入「查看 Runtime」<span class="badge">默认假设，可推翻</span>），状态稿见 <a href="mockup-r5.html">mockup-r5.html</a>。</li>
 <li><strong>决定 1 — 修复范围</strong>：8-31 用户视角评审发现 11 项体验缺口，其中 <b>2 项是已确认合同的实现差距</b>（探测结论在工作台侧不可见不可覆盖；opening 阶段输入框被整体禁用）。建议先修 F1／F2／F4／F5 四项（均有精确行号，可直接开 work order），其余进 backlog——接受这个切法吗？</li>
 <li><strong>决定 2 — 容错修复批次</strong>：8-31 容错状态机审查新发现 21 组问题（R-01〜R-21，见下表），其中 <b>9 项 P1</b>。建议第一批修 R-01（production 失败无路可走）、R-02（构建失败零反馈）、R-04（首屏假状态）、R-07（停止后状态回跳）、R-08（半成品被当成功产物）——接受吗？</li>
 <li><strong>决定 3 — 两个产品裁决</strong>：①构建进行中用户切走页面，构建应该<b>继续</b>还是<b>中止</b>？（现状：静默杀掉，用户以为成功了）②「停止」是否立即作废旧一代事件（结构性修复 R-07）？</li>
@@ -214,7 +214,7 @@ footer a{color:var(--accent);text-decoration:none}
 
 <footer>
 chg-20260818-agent-command-channel · revision 5 · 实施中 · Revision 5 于 2026-09-28 对话确认（记录于 proposal.md）<br>
-<a href="product.md">product.md</a> · <a href="design.md">design.md</a> · <a href="exploration.md">exploration.md</a> · <a href="Paintpoints.md">Paintpoints.md</a> · <a href="mockup.html">mockup.html</a> · <a href="proposal.md">proposal.md</a> · <a href="tasks.md">tasks.md</a>
+<a href="product.md">product.md</a> · <a href="design.md">design.md</a> · <a href="exploration.md">exploration.md</a> · <a href="Paintpoints.md">Paintpoints.md</a> · <a href="mockup.html">mockup.html</a> · <a href="mockup-r5.html">mockup-r5.html</a> · <a href="proposal.md">proposal.md</a> · <a href="tasks.md">tasks.md</a>
 </footer>
 </main>
 </body>

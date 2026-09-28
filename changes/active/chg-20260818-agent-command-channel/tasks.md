@@ -31,9 +31,14 @@ coverage_gate: buildable
   - 进度（2026-09-28，project-work）：`runtimePreviewReady` 抽为纯函数并作为 `RuntimePreview` 创建 effect 依赖（根因：readyUrl 在 starting 阶段写入、转 running 时依赖无变化）；`isStaleRuntimeSnapshot` 统一 IPC 回包与事件的新旧判定，拒绝同实例更早 `updatedAt` 的快照（应用重启后 renderer 卡 starting）。证据：`node --test electron/runtime-event-state.test.mjs` 新增 3 项先红后绿；`npx tsc` exit 0。版本：base 65a02c4 + 未提交 diff。未验证：真实 GUI 四条路径复走（待 R5-03 后一并走查）。
 - [x] `R5-02` 失败说真话：失败文案给出可读根因（端口被占用等），不再只取日志最后一行；无 last-good 时不显示「仍保留上次产物/继续显示上一版」（`C-RSM-506`；F18、F2）。判据：端口冲突场景文案含端口占用原因；首败文案不含上次产物。
   - 进度（2026-09-28，project-work）：`readableFailureReason` 取代「只取最后一行」——识别 `EADDRINUSE` 输出「端口 N 已被其他程序占用」，其次取含 error 的行，跳过 `}`/堆栈帧；生产服务退出文案改「页面服务退出」（F20 部分）；`runtimeBuildFailed` 改为中性「构建失败」，有 last-good 时才用 `runtimeBuildFailedKeptLast`/`serveBuildFailed`。证据：`node --test electron/local-app-runtime.test.mjs electron/runtime-event-state.test.mjs` 39/39；`npx tsc` exit 0。未做：端口冲突时自动换端口（不在确认范围）。
-- [ ] `R5-03` 源码新鲜度与自动重建：构建成功后记录源码指纹（静态、服务端对称）；按 `C-RSM-503` 时机比对，过期即重建；服务端档构建前备份 `.next`，失败回滚并以旧版重启（`C-RSM-502/503`；F13）。判据：改源码后五个触发点中四个检查点可看到新版，切页不触发；构建失败后旧版仍可用。
+- [x] `R5-03` 源码新鲜度与自动重建：构建成功后记录源码指纹（静态、服务端对称）；按 `C-RSM-503` 时机比对，过期即重建；服务端档构建前备份 `.next`，失败回滚并以旧版重启（`C-RSM-502/503`；F13）。判据：改源码后五个触发点中四个检查点可看到新版，切页不触发；构建失败后旧版仍可用。
+  - 进度（2026-09-28，project-work；covers `C-RSM-502/503`，preserves `DI-RSM-502/503/504`）：新增 `electron/local-app-runtime/server-bundle.ts`（服务端构建记录、过期判定：记录匹配比指纹/否则比 mtime、`.next` 克隆备份/还原）；`static.ts` 抽出源码遍历并新增 `newestRuntimeSourceMtime`；Supervisor 新增 `sourceFreshness` / `updateServer`（停服不触发崩溃重试 → 备份 → 构建 → 成功记账并重启 / 失败还原并以旧版重启，`update-failed`）、③→② 首次构建时写记录、`stop()` 等待更新还原备份；Manager 新增 `updateToLatest({force})` 与 `autoUpdate` 选项（Main 开启），每次 start 后后台检查；新 IPC `desktop:runtime:update`，↻（工作台与项目首页）调用之。证据：`node --test electron/runtime-auto-update.test.mjs` 5/5（过期判定、服务端成功、失败回滚且同源不重试、取消还原、静态自动重建）；全量 469 项中 468 通过，唯一失败为 `local-app-runtime.test.mjs` 真实 lsof 用例在并发负载下的既有抖动，单跑 28/28；`npx tsc` exit 0；`npx vite build` PASS。未覆盖：AI 修改结束对服务端档的重建（归 R5-04 统一入口）；真实 GUI 走查（R5-05 后一并）。
 - [ ] `R5-04` 入口统一：`buildRuntime` 与新建流程经四档阶梯，③ 无产物落 ②（`C-RSM-501`；F12）。判据：SSR 项目任何入口都不出现「构建没有产出可直接打开的静态页面」失败态。
 - [ ] `R5-05` 工作台零按钮与侧栏菜单精简；探测结论与覆盖入口移入「查看 Runtime」（`C-RSM-504/505`、`Q-R5-01`；F16）。判据：正常态工作台无运行类按钮、菜单四项；异常态出现恢复条与排障项。
+
+### 新发现（project-work）
+
+- `NF-R5-01` 全量 `node --test electron/*.test.mjs` 并发运行时偶发卡死或 `development takeover terminates only the process holding this project Next lock` 失败（真实 `lsof` 1s 超时）；逐文件运行全部通过。与 R5 改动无关，建议单独给该用例放宽超时或串行化。
 
 # Revision 4 Tasks
 

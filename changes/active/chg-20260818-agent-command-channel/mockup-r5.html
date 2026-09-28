@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工作台 R5 状态稿</title>
+<style>
+:root{--bg:#f6f5f2;--panel:#fff;--side:#ecebe7;--ink:#1d1d1f;--muted:#6e6e73;--line:#dddbd5;--accent:#0f62fe;--warn:#b3261e;--warnbg:#fdecea;--info:#e8f0fe;--ok:#1e7a46}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161618;--panel:#1f1f22;--side:#1a1a1c;--ink:#ececee;--muted:#9b9ba1;--line:#333336;--accent:#6ea8ff;--warn:#ff7b6b;--warnbg:#3a1f1d;--info:#1d2a40;--ok:#5cc98a}}
+:root[data-theme="dark"]{--bg:#161618;--panel:#1f1f22;--side:#1a1a1c;--ink:#ececee;--muted:#9b9ba1;--line:#333336;--accent:#6ea8ff;--warn:#ff7b6b;--warnbg:#3a1f1d;--info:#1d2a40;--ok:#5cc98a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 "PingFang SC",system-ui,sans-serif;padding:16px}
+.spec{max-width:1100px;margin:0 auto 12px;font-size:12px;color:var(--muted);border:1px dashed var(--line);border-radius:8px;padding:8px 12px}
+.rules{max-width:1100px;margin:0 auto 12px;font-size:13px}
+.rules li{margin:2px 0}
+.tabs{max-width:1100px;margin:0 auto 10px;display:flex;flex-wrap:wrap;gap:6px}
+.tabs button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:4px 12px;font:inherit;font-size:13px;cursor:pointer}
+.tabs button[aria-selected="true"]{border-color:var(--accent);color:var(--accent);font-weight:600}
+.app{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:230px 1fr;border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:430px;background:var(--panel)}
+.side{background:var(--side);padding:12px;font-size:13px;position:relative}
+.side h4{margin:4px 0 6px;font-size:12px;color:var(--muted);font-weight:500}
+.item{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:6px;background:var(--panel)}
+.item .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;margin-right:6px}
+.item.bad .dot{background:var(--warn)}
+.more{border:0;background:none;color:var(--muted);cursor:pointer;font:inherit}
+.menu{position:absolute;left:150px;top:62px;width:200px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.12);padding:4px;z-index:2}
+.menu div{padding:5px 10px;border-radius:5px}
+.menu .sep{border-top:1px solid var(--line);margin:4px 0;padding:0}
+.menu .grp{font-size:11px;color:var(--muted);padding:4px 10px 0}
+.menu .danger{color:var(--warn)}
+.main{display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);color:var(--muted);font-size:13px}
+.top .sp{flex:1}
+.top .ai{color:var(--ink)}
+.stage{flex:1;position:relative;padding:14px}
+.page{border:1px solid var(--line);border-radius:8px;height:100%;min-height:330px;padding:14px}
+.page h3{margin:0 0 8px}
+.page .ln{height:9px;background:var(--line);border-radius:4px;margin:8px 0}
+.page.stale{opacity:.85}
+.pill{position:absolute;top:22px;left:50%;transform:translateX(-50%);background:var(--info);color:var(--ink);border-radius:999px;padding:3px 14px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.warnbar{display:flex;align-items:center;gap:10px;background:var(--warnbg);color:var(--warn);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:13px}
+.warnbar .sp{flex:1}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:3px 12px;font:inherit;font-size:13px;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.center{height:100%;min-height:330px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center}
+.center .reason{color:var(--muted);font-size:13px}
+.spin{width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+.note{max-width:1100px;margin:10px auto 0;font-size:12px;color:var(--muted)}
+.tag{font:600 11px ui-monospace,monospace;border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-left:4px}
+footer{max-width:1100px;margin:14px auto 0;font-size:12px;color:var(--muted)}
+@media (max-width:720px){.app{grid-template-columns:1fr}.side{display:none}}
+</style>
+</head>
+<body>
+<div class="spec">交互状态型 · 单方案（design.md §6 已收敛方案，对应 exploration §6.R5 候选 B）· 结构基线：<code>src/components/RuntimeWorkspace.tsx</code>、<code>AppShellSidebar.tsx</code> 菜单、<code>zh.json runtime.*</code> 现有词条 · 视觉中性，非站点视觉 · 数据为占位（MD-Reader 走查截图语义）· 命名说明：<code>mockup.html</code> 保留 Revision 4 容错稿，本稿另存为 <code>mockup-r5.html</code></div>
+<ul class="rules">
+<li><b>正常不出按钮</b>：查看中与正在更新时主区只有页面（C-RSM-504；修 F12/F16）。</li>
+<li><b>旧版永不先消失</b>：更新中、更新失败都继续显示已渲染的页面（C-RSM-502，DI-RSM-503/504）。</li>
+<li><b>每个红色状态 = 一句真实原因 + 一个能走通的按钮</b>（C-RSM-506；修 F18、F2）。</li>
+<li><b>排障项只在异常时出现</b>：侧栏 ⋯ 正常四项（C-RSM-505）。</li>
+</ul>
+<div class="tabs" role="tablist" id="tabs"></div>
+<div class="app">
+  <aside class="side">
+    <h4>工作台</h4>
+    <div class="item" id="item"><span><span class="dot"></span>md-reader</span><button class="more" id="more" aria-label="更多">···</button></div>
+    <div class="menu" id="menu" hidden></div>
+  </aside>
+  <section class="main">
+    <div class="top"><span>‹ › ↻</span><span class="sp"></span><span class="ai">用 AI 修改</span></div>
+    <div class="stage" id="stage"></div>
+  </section>
+</div>
+<p class="note" id="note"></p>
+<footer>设计候选（agent_proposal）· 非最终视觉稿 · 契约以 <a href="design.md">design.md</a> Revision 5 为准 · 关联：<a href="proposal.md">proposal.md</a>、<a href="exploration.md">exploration.md</a> §4/§5.8/§6、<a href="Paintpoints.md">Paintpoints.md</a></footer>
+<script>
+const page = (title, cls='') => `<div class="page ${cls}"><h3>${title}</h3><div class="ln" style="width:70%"></div><div class="ln" style="width:90%"></div><div class="ln" style="width:55%"></div><div class="ln" style="width:80%"></div></div>`
+const normalMenu = ['打开工作台','用 AI 修改','—','重命名工作台','关闭工作台!']
+const badMenu = [...normalMenu,'—','#排查问题','重启运行时','停止运行时','查看 Runtime']
+const states = [
+  {id:'first', name:'首次准备', bad:false, menu:normalMenu, html:`<div class="center"><div class="spin"></div><div>正在准备页面…</div><div class="reason">第一次打开需要一点时间</div></div>`, note:'无按钮。构建→落到服务端→启动都在这一屏完成（C-RSM-501）。现状对照：「正在首次构建静态产物」→「启动失败」+ 三个按钮（F12、F18）。'},
+  {id:'view', name:'查看中', bad:false, menu:normalMenu, html:page('Markdown Reader'), note:'只有页面。运行成功后立即出现，不用切页（R5-01 已实现，F14）。'},
+  {id:'updating', name:'正在更新', bad:false, menu:normalMenu, html:page('Markdown Reader','stale')+`<div class="pill">正在更新到最新代码…</div>`, note:'检查点发现源码更新（重启恢复 / 重开 / 重启运行时 / ↻ / AI 修改结束）。旧页面保持可见；切页不触发检查（C-RSM-503）。'},
+  {id:'updatefail', name:'更新失败', bad:true, menu:badMenu, html:`<div class="warnbar"><span>更新失败：[stderr] Error: Type error in src/app/page.tsx</span><span class="sp"></span><button class="btn primary">重试</button><button class="btn">查看日志</button></div>`+page('Markdown Reader'), note:'.next 已从备份还原、旧版重新运行（DI-RSM-503）。源码不再变化时不自动重试。'},
+  {id:'openfail', name:'启动失败', bad:true, menu:badMenu, html:`<div class="center"><div><b>页面打不开</b></div><div class="reason">端口 3030 已被其他程序占用</div><div><button class="btn primary">重试</button> <button class="btn">查看日志</button></div></div>`, note:'原因来自 readableFailureReason（R5-02 已实现）。现状对照：「开发服务退出 (1)：[stderr] }」。'},
+  {id:'missing', name:'目录不可用', bad:true, menu:badMenu, html:`<div class="center"><div><b>找不到项目文件夹</b></div><div class="reason">/Volumes/macOS/Github/MD-Reader</div><div><button class="btn primary">更换目录</button></div></div>`, note:'只有这个状态出现「更换目录」。'},
+]
+let current = states[1], menuOpen = false
+function render(){
+  document.getElementById('tabs').innerHTML = states.map(s=>`<button role="tab" aria-selected="${s===current}" data-id="${s.id}">${s.name}</button>`).join('')+`<button data-theme>切换明暗</button>`
+  document.getElementById('stage').innerHTML = current.html
+  document.getElementById('note').innerHTML = current.note
+  document.getElementById('item').className = 'item'+(current.bad?' bad':'')
+  const m = document.getElementById('menu')
+  m.hidden = !menuOpen
+  m.innerHTML = current.menu.map(x=> x==='—'?'<div class="sep"></div>': x.startsWith('#')?`<div class="grp">${x.slice(1)}</div>`: x.endsWith('!')?`<div class="danger">${x.slice(0,-1)}</div>`:`<div>${x}</div>`).join('')
+}
+document.getElementById('tabs').addEventListener('click', e=>{
+  const b=e.target.closest('button'); if(!b) return
+  if(b.hasAttribute('data-theme')){const r=document.documentElement; r.dataset.theme = r.dataset.theme==='dark'?'light':'dark'; return}
+  current = states.find(s=>s.id===b.dataset.id); render()
+})
+document.getElementById('more').addEventListener('click',()=>{menuOpen=!menuOpen; render()})
+render()
+</script>
+</body>
+</html>

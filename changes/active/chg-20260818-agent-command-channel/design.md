@@ -1,8 +1,162 @@
 # Agent 指令通道、独立项目 Chat 与 Runtime 开发会话｜产品设计规格
 
-> Change：`chg-20260818-agent-command-channel` Revision 3
-> 状态：BUILDABLE / Planned；Revision 2 已实现但未正式验收，Revision 3 未实现
+> Change：`chg-20260818-agent-command-channel` Revision 5
+> 状态：BUILDABLE / Planned；Revision 2–4 已落码未正式验收，Revision 5 实施中（R5-01/02 已完成）
 > 本文只冻结用户可观察行为；技术接口见 `technical.md`，网站协议见 `protocol-v1.md`，正式场景见 `acceptance.md`。
+
+## Revision 5 Planned Delta：工作台零认知查看与自动更新
+
+来源：[`proposal.md`](proposal.md) Revision 5（`C-RSM-501`–`506`，2026-09-28 用户确认）；问题与证据见 [`exploration.md`](exploration.md) §4、§5.8，候选比较见 §6。本节取代 Revision 4 §3「产物新鲜度：不自动构建」与 §4 中卡片常驻「查看方式」控件的呈现位置；其余 Revision 4 规则不变。
+
+### 1. 方案摘要
+
+用户对工作台只有一个意图：**看到自己项目的最新页面**。系统负责三件事，用户不参与：
+
+- **怎么看**：所有入口都走同一个四档判定（`C-RSM-501`），不再有入口自带「静态构建」的假设。
+- **是不是最新**：在约定的检查点比较源码与产物，旧了就自己重建（`C-RSM-502/503`）。
+- **出了问题怎么办**：只有出问题时才出现按钮，且说清原因（`C-RSM-504/506`）。
+
+### 2. 新鲜度对象与规则
+
+| 对象 | 含义 | 何时写 | 存在哪 |
+| --- | --- | --- | --- |
+| 源码指纹 | `fingerprintRuntimeSource(root)`：遍历源码的路径+大小+修改时间，忽略 `.git`、`node_modules`、`.next` 与静态输出目录 | 仅在构建**成功之后**计算（构建会改写 `tsconfig.tsbuildinfo`、`next-env.d.ts`，构建前算会永远判旧） | — |
+| 静态产物记录 | last-good 产物 + 指纹（现有 `StaticArtifactStore` 指针的 `sourceFingerprint`） | 静态构建提交时（现状） | AgentOS userData |
+| 服务端构建记录（新增） | `{ definitionId, canonicalRoot, buildId: .next/BUILD_ID 内容, sourceFingerprint, builtAt }` | AgentOS 触发的服务端构建成功后 | AgentOS userData，与依赖准备记录同一持久化方式 |
+
+判定规则：
+
+1. **静态档**：指纹 ≠ last-good 记录 → 过期（现状已算出 `stale`，本轮起改为自动重建而非提示）。
+2. **服务端档**：有记录且 `buildId` 与磁盘 `.next/BUILD_ID` 一致 → 比指纹；记录缺失或 `buildId` 不一致（用户在终端自己构建过）→ 用「任一源码文件修改时间晚于 `.next/BUILD_ID`」判定，并在下次成功构建后建立记录。
+3. **开发档（④ 或开发会话）**：不检查，dev 自带热更新。
+4. 构建失败后记录「失败时的指纹」；源码未再变化前不自动重试，避免每个检查点都失败一次。
+5. 同一 Runtime 同时最多一次构建（复用现有构建锁）；开发会话进行中不触发。
+
+### 3. 检查点（`C-RSM-503`）
+
+| 检查点 | 行为 | 现有入口 |
+| --- | --- | --- |
+| 应用重启后恢复工作台 | 恢复后检查；过期即后台重建。**取代 Revision 4「恢复不 spawn」**：恢复仍先直开 last-good，再在后台重建 | `startRuntime(cause: 'restore')` → `manager.start` |
+| 关闭工作台后从列表重开 | 同上 | 新建工作台列表 → `startRuntime` |
+| 重启运行时 | 与其它启动一致：先起可查看的旧版，再后台检查并更新（单一路径，实现于 `manager.start`） | `manager.restart` → `manager.start` |
+| 点顶栏 ↻ | 先刷新页面；同时检查，过期则后台重建，完成后自动切换 | 现为 `reloadRuntimePreview`，需加一条「检查新鲜度」请求 |
+| 「用 AI 修改」结束 | 不检查，直接按四档重建（服务端档也要重建并重启，现状只处理静态档） | edit-bridge `settle` |
+| 切换页面 / 窗口聚焦 | **不检查** | — |
+
+### 4. 重建流程
+
+```mermaid
+stateDiagram-v2
+    [*] --> 查看中
+    查看中 --> 检查: 检查点触发
+    检查 --> 查看中: 最新 / 开发档 / 源码未变的失败记录
+    检查 --> 静态重建: 静态档过期
+    检查 --> 服务端更新: 服务端档过期
+    静态重建 --> 查看中: 成功，提交新产物，预览无感切换
+    静态重建 --> 更新失败: 失败，last-good 继续显示
+    静态重建 --> 服务端更新: 构建成功但无静态产物（③→②）
+    服务端更新 --> 查看中: 成功，新服务就绪，预览切到新页面
+    服务端更新 --> 更新失败: 失败，回滚备份并以旧版重新启动
+    更新失败 --> 检查: 用户点「重试」或源码再次变化
+```
+
+**服务端更新**（新增，按顺序）：
+
+1. 标记快照「正在更新」；**保留当前预览页面不关闭**（已渲染的页面继续可见，交互可能暂时失效）。
+2. 停止 `npm run start` 子进程（这次停止是更新的一部分，不发出「已停止」、不触发崩溃重试）。
+3. 备份 `.next`（APFS 克隆优先，失败时普通复制；`.next/cache` 可不备份）。
+4. `npm run build`。
+5. 成功：删除备份，写服务端构建记录，按现有启动流程起 `npm run start`，就绪后新一代快照替换，预览切换到新页面。
+6. 失败：用备份还原 `.next`，以旧版重新 `npm run start`；快照回到可查看，并带「更新失败」原因（`readableFailureReason`）。还原或旧版启动也失败时，才进入「启动失败」恢复条。
+7. 取消（关闭工作台、应用退出）：终止构建，还原备份，不留下半成品 `.next`。
+
+**首次打开（无任何产物）**：维持现有「构建一次再判定」；构建不出静态产物时落到服务端档（`C-RSM-501`），期间只显示进度占位，不出按钮。
+
+### 5. 统一入口（`C-RSM-501`）
+
+所有入口只向 Manager 表达意图，由 Manager 通过 `servedRuntimeDefinition` + 四档阶梯决定：
+
+| 入口 | 现状 | 改为 |
+| --- | --- | --- |
+| 新建工作台 | `AppShell` 在 `build_required` 时另调 `buildRuntime` | 只调 `startRuntime`；首次构建与 ③→② 兜底都在 Manager 内完成 |
+| `buildRuntime` IPC（侧栏/按钮/恢复条） | 强制 `mode: 'static'`，无兜底 | 改为「更新到最新」意图：静态档重建、服务端档走服务端更新、开发档无操作 |
+| 重启运行时 / 恢复 / 重开 | 已走阶梯 | 增加 §3 新鲜度检查 |
+| AI 修改结束 | 只处理静态档 | 服务端档走服务端更新 |
+
+### 6. 界面（`C-RSM-504/505/506`）
+
+**工作台主区**
+
+| 状态 | 主区 | 按钮 |
+| --- | --- | --- |
+| 首次准备（构建/依赖/启动） | 进度占位，一句「正在准备页面…」（首次构建可附「第一次打开需要一点时间」） | 无 |
+| 查看中 | 只有页面 | 无（顶栏 ↻ 与「用 AI 修改」保持现状） |
+| 正在更新 | 页面 + 顶部一枚轻提示「正在更新到最新代码…」 | 无 |
+| 更新失败（旧版仍在） | 页面 + 顶部警示条「更新失败：<原因>」 | 「重试」、「查看日志」 |
+| 启动失败（无可看页面） | 恢复条：「页面打不开：<原因>」 | 主按钮「重试」（走 §5 统一入口），次要「查看日志」 |
+| 目录不可用 | 恢复条：「找不到项目文件夹」 | 「更换目录」 |
+
+不再出现：「构建」「重新构建」「重启运行时」「启动运行时」作为主区按钮；「正在构建静态产物」「产物」等机制词。
+
+**侧栏工作台 ⋯ 菜单**
+
+- 正常：打开工作台 · 用 AI 修改 · 重命名工作台 · 关闭工作台。
+- 异常（启动失败、更新失败、目录不可用）：在上面基础上追加分隔的「排查问题」组：重启运行时 · 停止运行时 · 查看 Runtime。
+- 「关闭工作台」保持无确认（可从新建工作台列表一键重开，走查已证实）。
+
+**查看 Runtime 详情**（`Q-R5-01 [ASSUMED]`）：承载探测结论（「已保存预览 / 需要保持运行」＋依据）与手动覆盖（已保存预览 / 保持运行 / 恢复自动判断），以及日志。`C-RSM-404` 的可见、可覆盖在此兑现；标签按实际命令显示（`next start` 显示「页面服务」，不写「开发模式」）。
+
+### 7. 文案（新增/替换，中英同步）
+
+| 键（候选） | 中文 |
+| --- | --- |
+| `runtime.servePreparing` | 正在准备页面… |
+| `runtime.serveFirstBuildHint` | 第一次打开需要一点时间 |
+| `runtime.serveUpdating` | 正在更新到最新代码… |
+| `runtime.serveUpdateFailed` | 更新失败：{{reason}} |
+| `runtime.serveOpenFailed` | 页面打不开：{{reason}} |
+| `runtime.retry` | 重试 |
+| `runtime.troubleshoot` | 排查问题 |
+
+### 8. 能力复用图
+
+| 能力 | 处理 | 代码证据 |
+| --- | --- | --- |
+| 源码指纹 | 直接复用，两档共用 | `electron/local-app-runtime/static.ts` `fingerprintRuntimeSource` |
+| 静态过期判定 | 复用，结果从「提示」改为「触发重建」 | `supervisor.ts` `checkStaticStale` |
+| 静态构建与原子提交、栅栏 | 直接复用 | `supervisor.ts` `runStaticBuild`、`StaticBuildFence` |
+| ③→② 兜底 | 从 `manager.start` 提升为所有入口共用 | `manager.ts` `serveAsServer` |
+| 构建锁/执行租约 | 复用；服务端更新以 build 租约持有 root | `manager.ts` `buildWithExecutionLease`、`leases.transitionToBuild` |
+| 持久化记录 | 复用依赖准备记录的写法新增服务端构建记录 | `supervisor.ts` `preparationRecordPath` / `savePreparationRecord` |
+| 失败原因 | 复用 R5-02 | `child-process.ts` `readableFailureReason` |
+| 状态投影 | 工作台改用与项目首页相同的 `runtimeServeStatus`，退役 `RuntimeWorkspace` 旧 recovery 条文案表 | `runtime-event-state.ts` `runtimeServeStatus`；`RuntimeWorkspace.tsx` |
+| 预览保持 | 复用 R5-01 的 `runtimePreviewReady`：更新期间快照仍判定可预览 | `runtime-event-state.ts` |
+
+新增（职责确实不同）：服务端更新流程（停服—备份—构建—回滚），因为静态构建的「产物复制到 AgentOS 存储」模型不适用于必须原地运行的 `.next`。
+
+### 9. Design Invariants
+
+| ID | 必须保持 | 验证方式 |
+| --- | --- | --- |
+| `DI-RSM-501` | 伺服方式只有一个决定点（Manager + `servedRuntimeDefinition`）；任何入口不得自带 `mode: 'static'` 或直接构建 | 源码审计：`buildRuntime` IPC、新建流程、edit-bridge 不再写死 static；单测覆盖 SSR 目录各入口落 ② |
+| `DI-RSM-502` | 两档新鲜度用同一个指纹函数，且指纹只在构建成功后记录 | 单测：构建前后改写生成文件不导致误判过期 |
+| `DI-RSM-503` | 任何失败或取消都不丢可查看的旧版：静态 last-good 不动；服务端 `.next` 先备份、失败/取消必还原 | 单测：构建失败、构建中取消后 `.next` 与旧服务可用 |
+| `DI-RSM-504` | 构建期间不关闭当前预览（快照保持 `running` + `buildStatus: building`）；构建结束后重启新服务的数秒内允许显示「启动中」占位，就绪后自动呈现 | 单测：更新中快照 `runtimePreviewReady` 为真；GUI 走查 |
+| `DI-RSM-505` | 工作台与项目首页的状态文案与动作来自同一投影（`runtimeServeStatus`），不维护第二套 | 源码审计：`RuntimeWorkspace` 不再有独立状态→文案表 |
+
+### 10. 案例演算
+
+- **MD-Reader 首次打开**：无产物 → ③ 构建 → 无静态页 → 记录服务端构建 → ② `next start` → 页面出现（R5-01）。全程只有进度占位。
+- **在编辑器改标题后重开应用**：恢复 → 指纹变了 → 页面先显示旧版 + 「正在更新」→ 约几十秒后切到新标题。
+- **改坏了代码点 ↻**：页面刷新 → 检查过期 → 服务端更新 → 构建失败 → 还原 `.next`、旧版重启 → 旧页面 + 「更新失败：<原因>」+「重试」。不改代码再点 ↻：源码未变，不重复失败。
+- **端口被别的程序占用**：启动失败 → 恢复条「页面打不开：端口 3030 已被其他程序占用」+「重试」；侧栏菜单出现「排查问题」组。
+- **用户在终端自己 `next build` 过**：`buildId` 与记录不一致 → 按修改时间判定；未变化则直接用。
+
+### 11. 风险与未知
+
+- 服务端更新期间页面可见但点击可能无响应（`.next` 被重建）；大项目构建耗时与 CPU 占用。
+- `.next` 备份在非 APFS 卷上退化为完整复制，可能慢；`.next/cache` 不备份可接受。
+- 恢复时自动重建改变了 Revision 4「恢复不 spawn」的性能假设：多个工作台同时过期会排队构建（串行），需在实现中确认不阻塞首屏。
 
 ## Revision 4 Planned Delta：Runtime 伺服模式探测
 
