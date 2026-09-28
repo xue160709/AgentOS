@@ -7,6 +7,36 @@ export const MAX_RUNTIME_LOG_LINES = 160
 export const MAX_QUEUED_RUNTIME_LOG_EVENTS = 160
 
 export type RuntimeStateMap = Record<string, RuntimeSnapshot>
+
+/**
+ * Whether a Preview can be shown for this snapshot. Main may record the dev
+ * server's own URL while the Runtime is still `starting`, so readiness must be
+ * derived from status as well as the URL — the caller re-creates the Preview
+ * when this flips, not when the URL changes.
+ */
+export function runtimePreviewReady(runtime?: RuntimeSnapshot | null): boolean {
+  if (!runtime) return false
+  if (runtime.mode === 'static') {
+    return runtime.status !== 'stopped'
+      && Boolean(runtime.previewUrl)
+      && ['ready', 'stale', 'building', 'build_failed'].includes(runtime.buildStatus ?? runtime.status)
+  }
+  return runtime.status === 'running' && Boolean(runtime.readyUrl)
+}
+
+/**
+ * Snapshots reach the renderer both as events and as IPC replies, so an older
+ * snapshot of the same Runtime instance can arrive after a newer one. Reject
+ * older generations, a different instance within the same generation, and
+ * an earlier `updatedAt` of the same instance.
+ */
+export function isStaleRuntimeSnapshot(previous: RuntimeSnapshot | undefined, incoming: RuntimeSnapshot): boolean {
+  if (!previous) return false
+  if (incoming.generation < previous.generation) return true
+  if (incoming.generation > previous.generation) return false
+  if (incoming.runtimeId !== previous.runtimeId) return true
+  return incoming.updatedAt < previous.updatedAt
+}
 export type RuntimeDevelopmentStateMap = Record<string, RuntimeDevelopmentSnapshot>
 
 /**
@@ -71,7 +101,8 @@ export function runtimeServeStatus(
       return { message: t('runtime.serveDevelopment'), action: 'start', actionLabel: t('runtime.startRuntime') }
     }
     if (buildStatus === 'build_failed') {
-      return { message: t('runtime.serveBuildFailed'), alert: true, action: 'retry', actionLabel: t('runtime.updatePreview') }
+      // With no last-good artifact there is no previous version to keep showing.
+      return { message: t(runtime.artifactId ? 'runtime.serveBuildFailed' : 'runtime.serveBuildFailedFirst'), alert: true, action: 'retry', actionLabel: t('runtime.updatePreview') }
     }
     if (buildStatus === 'build_required') {
       return { message: t('runtime.serveNotGenerated'), action: 'update', actionLabel: t('runtime.updatePreview') }

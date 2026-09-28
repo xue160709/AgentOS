@@ -85,7 +85,7 @@ import { RuntimeOnboardingDialog } from './RuntimeOnboardingDialog'
 import { AgentOSPairingDialog } from './AgentOSPairingDialog'
 import { RuntimeWorkspace } from './RuntimeWorkspace'
 import { RuntimeDetailsDialog } from './RuntimeDetailsDialog'
-import { applyRuntimeDevelopmentSnapshot, applyRuntimeEvents, RuntimeEventBatcher } from './runtime-event-state'
+import { applyRuntimeDevelopmentSnapshot, applyRuntimeEvents, isStaleRuntimeSnapshot, RuntimeEventBatcher } from './runtime-event-state'
 import { projectContent } from '../project-content'
 import {
   projectRuntimeScopeId,
@@ -112,9 +112,7 @@ function mergeAcceptedRuntime(
 ): Record<string, RuntimeSnapshot> {
   const runtimeDefinitionId = incoming.runtimeDefinitionId
   if (!runtimeDefinitionId) return current
-  const previous = current[runtimeDefinitionId]
-  if (previous && incoming.generation < previous.generation) return current
-  if (previous && incoming.runtimeId !== previous.runtimeId && incoming.generation === previous.generation) return current
+  if (isStaleRuntimeSnapshot(current[runtimeDefinitionId], incoming)) return current
   const neutralSnapshot: RuntimeSnapshot = {
     runtimeDefinitionId,
     runtimeId: incoming.runtimeId,

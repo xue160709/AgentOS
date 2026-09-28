@@ -42,7 +42,7 @@ export function RuntimeWorkspace({ tab, definition, runtime, onRetry, onRestart,
   // Borrowed Runtime: this tab owns no process, so stopping only leaves it.
   const shared = runtime?.sharedRootRuntime
   const label = t(({
-    idle: 'runtime.runtimeStopped', ready: 'runtime.runtimeReady', stale: 'runtime.runtimeStale', build_required: 'runtime.runtimeBuildRequired', building: firstBuild ? 'runtime.runtimeFirstBuilding' : 'runtime.runtimeBuilding', build_failed: 'runtime.runtimeBuildFailed',
+    idle: 'runtime.runtimeStopped', ready: 'runtime.runtimeReady', stale: 'runtime.runtimeStale', build_required: 'runtime.runtimeBuildRequired', building: firstBuild ? 'runtime.runtimeFirstBuilding' : 'runtime.runtimeBuilding', build_failed: hasLastGood ? 'runtime.runtimeBuildFailedKeptLast' : 'runtime.runtimeBuildFailed',
     preparing: 'runtime.runtimePreparing', starting: 'runtime.runtimeStarting', running: 'runtime.runtimeRunning', degraded: 'runtime.runtimeDegraded', failed: 'runtime.runtimeFailed', path_missing: 'runtime.runtimePathMissing', stopped: 'runtime.runtimeStopped',
   } as Record<string, string>)[displayStatus] ?? 'runtime.runtimeStopped')
   const developmentStatus = runtimeDevelopmentStatus(t, runtimeDevelopment)

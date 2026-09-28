@@ -3,6 +3,7 @@ import { useI18n } from '../i18n/i18n'
 import type { RuntimePreviewHost } from '../desktop-api'
 import { RUNTIME_PREVIEW_RESIZE_EVENT, type RuntimePreviewResizeEvent } from '../runtime-preview-events'
 import type { PreviewStatus, RuntimeSnapshot } from './types'
+import { runtimePreviewReady } from './runtime-event-state'
 
 export type RuntimePreviewProps = { host: RuntimePreviewHost; runtime: RuntimeSnapshot | null; active: boolean; testId?: string }
 
@@ -17,15 +18,14 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
   const requestRef = useRef(0)
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus>('idle')
   const [previewMountKey, setPreviewMountKey] = useState(0)
+  const previewReady = runtimePreviewReady(runtime)
   useEffect(() => {
     const request = ++requestRef.current
     let cancelled = false
     const previous = previewIdRef.current
     if (previous) void window.desktop?.setRuntimePreviewVisible?.(previous, false)
     previewIdRef.current = null
-    const staticReady = runtime?.mode === 'static' && runtime.status !== 'stopped' && Boolean(runtime.previewUrl) && ['ready', 'stale', 'building', 'build_failed'].includes(runtime.buildStatus ?? runtime.status)
-    const developmentReady = runtime?.status === 'running' && Boolean(runtime.readyUrl)
-    if (!active || (!staticReady && !developmentReady) || !window.desktop?.createRuntimePreview) {
+    if (!active || !previewReady || !window.desktop?.createRuntimePreview) {
       setPreviewStatus(runtime?.status === 'degraded' ? 'degraded' : 'idle')
       return () => { cancelled = true; requestRef.current += 1 }
     }
@@ -46,7 +46,7 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
         void window.desktop?.setRuntimePreviewVisible?.(previewId, false)
       }
     }
-  }, [active, host.kind, host.kind === 'project-home' ? host.projectId : host.workspaceTabId, host.kind === 'project-home' ? host.mountId : host.runtimeDefinitionId, host.runtimeDefinitionId, runtime?.generation, runtime?.readyUrl, runtime?.previewUrl, runtime?.mode])
+  }, [active, host.kind, host.kind === 'project-home' ? host.projectId : host.workspaceTabId, host.kind === 'project-home' ? host.mountId : host.runtimeDefinitionId, host.runtimeDefinitionId, runtime?.generation, runtime?.readyUrl, runtime?.previewUrl, runtime?.mode, previewReady])
   useEffect(() => {
     const element = hostRef.current
     const previewId = previewIdRef.current
@@ -95,7 +95,7 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
             : staticLifecycleStatus === 'running' ? (effectivePreviewStatus === 'ready' ? t('runtime.preview') : t('runtime.runtimeRunning'))
               : staticLifecycleStatus === 'ready' ? (effectivePreviewStatus === 'ready' ? t('runtime.preview') : t('runtime.runtimeReady'))
                 : staticLifecycleStatus === 'stale' ? t('runtime.runtimeStale')
-                  : staticLifecycleStatus === 'build_failed' ? t('runtime.runtimeBuildFailed')
+                  : staticLifecycleStatus === 'build_failed' ? t(runtime?.artifactId && runtime.previewUrl ? 'runtime.runtimeBuildFailedKeptLast' : 'runtime.runtimeBuildFailed')
                     : staticLifecycleStatus === 'degraded' ? t('runtime.runtimeDegraded')
                       : staticLifecycleStatus === 'failed' ? t('runtime.runtimeFailed')
                         : staticLifecycleStatus === 'path_missing' ? t('runtime.runtimePathMissing')

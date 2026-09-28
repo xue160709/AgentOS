@@ -38,7 +38,10 @@ function loadTsModule(modulePath, cache = new Map()) {
 const {
   applyRuntimeDevelopmentSnapshot,
   applyRuntimeEvents,
+  isStaleRuntimeSnapshot,
   runtimeDevelopmentStatus,
+  runtimePreviewReady,
+  runtimeServeStatus,
   RuntimeEventBatcher,
 } = loadTsModule(resolve(testDir, '../src/components/runtime-event-state.ts'))
 
@@ -185,4 +188,43 @@ test('development action and copy come only from the Main snapshot', () => {
   const developmentOnlyClosed = runtimeDevelopmentStatus(t, development({ phase: 'closed', canSubmit: false, canEnd: false, exitRequested: true, userMessage: 'npm run build at /secret:4173' }))
   assert.equal(developmentOnlyClosed.message, 'runtime.developmentEnded')
   assert.doesNotMatch(developmentOnlyClosed.message, /npm|\/secret|4173/)
+})
+
+// `C-RSM-506` / Paintpoints F14: Main records the dev server's own URL while
+// the Runtime is still `starting`; the preview must still open on `running`.
+test('preview readiness flips on running even when readyUrl arrived earlier', () => {
+  const base = { runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 1, restartAttempt: 0, updatedAt: 1, mode: 'development', readyUrl: 'http://localhost:3031/' }
+  assert.equal(runtimePreviewReady({ ...base, status: 'starting' }), false)
+  assert.equal(runtimePreviewReady({ ...base, status: 'running' }), true)
+  assert.equal(runtimePreviewReady({ ...base, status: 'running', readyUrl: undefined }), false)
+  const staticBase = { ...base, mode: 'static', readyUrl: undefined, previewUrl: 'agentos-static://p/' }
+  assert.equal(runtimePreviewReady({ ...staticBase, status: 'ready', buildStatus: 'ready' }), true)
+  assert.equal(runtimePreviewReady({ ...staticBase, status: 'build_failed', buildStatus: 'build_failed' }), true)
+  assert.equal(runtimePreviewReady({ ...staticBase, status: 'stopped' }), false)
+  assert.equal(runtimePreviewReady(null), false)
+})
+
+// A reply carrying an older snapshot of the same Runtime instance must not
+// overwrite a newer event (seen as a renderer stuck on `starting` after restore).
+test('an older snapshot of the same runtime instance is stale', () => {
+  const previous = { runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 2, status: 'running', restartAttempt: 0, updatedAt: 200 }
+  assert.equal(isStaleRuntimeSnapshot(previous, { ...previous, status: 'starting', updatedAt: 150 }), true)
+  assert.equal(isStaleRuntimeSnapshot(previous, { ...previous, status: 'degraded', updatedAt: 250 }), false)
+  assert.equal(isStaleRuntimeSnapshot(previous, { ...previous, generation: 1, updatedAt: 999 }), true)
+  assert.equal(isStaleRuntimeSnapshot(previous, { ...previous, runtimeId: 'other', updatedAt: 999 }), true)
+  assert.equal(isStaleRuntimeSnapshot(previous, { ...previous, generation: 3, runtimeId: 'next', updatedAt: 10 }), false)
+  assert.equal(isStaleRuntimeSnapshot(undefined, previous), false)
+})
+
+test('RuntimePreview re-creates the Preview when readiness flips, not only when the URL changes', () => {
+  const source = readFileSync(resolve(testDir, '../src/components/RuntimePreview.tsx'), 'utf8')
+  assert.match(source, /const previewReady = runtimePreviewReady\(runtime\)/)
+  assert.match(source, /runtime\?\.mode, previewReady\]\)/, 'the create effect must depend on previewReady')
+})
+
+// Paintpoints F2: a first build failure has no previous version to keep showing.
+test('build failure copy only claims a previous version when one exists', () => {
+  const failed = { runtimeDefinitionId: 'r', runtimeId: 'rt', generation: 1, restartAttempt: 0, updatedAt: 1, mode: 'static', status: 'build_failed', buildStatus: 'build_failed' }
+  assert.equal(runtimeServeStatus(t, failed).message, 'runtime.serveBuildFailedFirst')
+  assert.equal(runtimeServeStatus(t, { ...failed, artifactId: 'a1', previewUrl: 'agentos-static://p/' }).message, 'runtime.serveBuildFailed')
 })
