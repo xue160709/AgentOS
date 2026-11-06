@@ -31,6 +31,10 @@ test('receipt store makes payload idempotency durable and enforces the state mac
     assert.equal(accepted.state, 'accepted')
     assert.equal((await store.transition({ bindingId: input.bindingId, idempotencyKey: input.idempotencyKey, state: 'accepted', requestIdLocal: 'ignored' })).requestIdLocal, 'local-request')
     assert.doesNotMatch(readFileSync(store.filePath, 'utf8'), /Title|Task|different/)
+    const receipt = { status: 'completed', summary: 'Created figure.png', thread_id: 'local-thread' }
+    await store.recordExecution(input.bindingId, input.idempotencyKey, receipt)
+    const reopened = new ExternalTaskReceiptStore({ userDataPath, now: () => now++ })
+    assert.deepEqual((await reopened.lookup(input.bindingId, input.idempotencyKey, first.record.payloadHash)).record.executionReceipt, receipt)
   })
 })
 

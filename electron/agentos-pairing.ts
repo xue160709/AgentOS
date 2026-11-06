@@ -17,12 +17,18 @@ export class AgentOSPairingService {
 
   async enqueue(link: AgentOSDeepLink): Promise<Outcome> {
     if (link.action !== 'pair') return { status: 'rejected', code: 'invalid-envelope' }
+    this.pruneExpired()
     const fetched = await this.options.tickets.getPair({ origin: link.origin, requestId: link.requestId })
-    if (!fetched.ok) return { status: 'rejected', code: 'invalid-envelope' }
+    if (!fetched.ok) { this.publishCurrent(); return { status: 'rejected', code: 'invalid-envelope' } }
     const parsed = parsePairEnvelope(fetched.value, { origin: link.origin, requestId: link.requestId, now: this.options.now })
-    if (!parsed.ok) return { status: 'rejected', code: parsed.error.code === 'ticket-expired' ? 'expired' : 'invalid-envelope' }
-    const pairingId = `pair_${++this.sequence}_${randomId(this.options.randomBytes)}`
-    this.pending.set(pairingId, parsed.value); this.queue.push(pairingId); if (this.queue.length === 1) this.publishCurrent()
+    if (!parsed.ok) { this.publishCurrent(); return { status: 'rejected', code: parsed.error.code === 'ticket-expired' ? 'expired' : 'invalid-envelope' } }
+    this.pruneExpired()
+    const existingId = this.queue.find((id) => { const current = this.pending.get(id); return current?.origin === link.origin && current.requestId === link.requestId })
+    const pairingId = existingId ?? `pair_${++this.sequence}_${randomId(this.options.randomBytes)}`
+    this.pending.set(pairingId, parsed.value)
+    if (!existingId) this.queue.push(pairingId)
+    // Reopening a link also restores a prompt lost during a renderer reload.
+    this.publishCurrent()
     return { status: 'accepted' }
   }
 
@@ -55,10 +61,18 @@ export class AgentOSPairingService {
     return result.status === 'accepted' ? { status: 'accepted' } : result
   }
 
+  private pruneExpired(): void {
+    for (let index = this.queue.length - 1; index >= 0; index--) {
+      const id = this.queue[index]
+      const envelope = this.pending.get(id)
+      if (!envelope || expired(envelope, this.options.now)) { this.pending.delete(id); this.queue.splice(index, 1) }
+    }
+  }
+
   private publishCurrent(): void {
+    this.pruneExpired()
     const pairingId = this.queue[0]; const envelope = pairingId ? this.pending.get(pairingId) : undefined
-    if (!pairingId || !envelope || expired(envelope, this.options.now)) { if (pairingId) { this.pending.delete(pairingId); this.queue.shift(); return this.publishCurrent() }; this.options.publish(null); return }
-    this.options.publish({ pairingId, displayName: envelope.displayName, origin: envelope.origin, expiresAt: envelope.expiresAt })
+    this.options.publish(pairingId && envelope ? { pairingId, displayName: envelope.displayName, origin: envelope.origin, expiresAt: envelope.expiresAt } : null)
   }
 }
 function randomId(random?: (size: number) => Buffer): string { return (random ?? randomBytes)(24).toString('base64url') }

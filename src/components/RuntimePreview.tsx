@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../i18n/i18n'
 import type { RuntimePreviewHost } from '../desktop-api'
-import { RUNTIME_PREVIEW_RESIZE_EVENT, type RuntimePreviewResizeEvent } from '../runtime-preview-events'
+import { RUNTIME_PREVIEW_MODAL_EVENT, RUNTIME_PREVIEW_RESIZE_EVENT, type RuntimePreviewResizeEvent } from '../runtime-preview-events'
 import type { PreviewStatus, RuntimeSnapshot } from './types'
 import { runtimePreviewReady } from './runtime-event-state'
 
@@ -53,7 +53,8 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
     const previewId = previewIdRef.current
     if (!element || !previewId || !window.desktop?.setRuntimePreviewBounds || !window.desktop.setRuntimePreviewVisible) return
     let resizeActive = false
-    const sync = () => { void window.desktop?.setRuntimePreviewBounds?.(previewId, runtimePreviewBoundsFromRect(element.getBoundingClientRect())); if (!resizeActive) void window.desktop?.setRuntimePreviewVisible?.(previewId, active) }
+    let modalActive = Boolean(document.querySelector('.agentos-pairing-backdrop'))
+    const sync = () => { void window.desktop?.setRuntimePreviewBounds?.(previewId, runtimePreviewBoundsFromRect(element.getBoundingClientRect())); if (!resizeActive) void window.desktop?.setRuntimePreviewVisible?.(previewId, active && !modalActive) }
     let resumeFrame: number | null = null
     const onResizeActive = (event: Event) => {
       const resizing = (event as RuntimePreviewResizeEvent).detail?.active === true
@@ -65,13 +66,15 @@ export function RuntimePreview({ host, runtime, active, testId = 'runtime-previe
       }
       resumeFrame = window.requestAnimationFrame(() => { resumeFrame = null; sync() })
     }
+    const onModal = (event: Event) => { modalActive = (event as CustomEvent<{ active: boolean }>).detail?.active === true; sync() }
+    window.addEventListener(RUNTIME_PREVIEW_MODAL_EVENT, onModal)
     sync()
     const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null
     observer?.observe(element)
     window.addEventListener('resize', sync)
     window.addEventListener('scroll', sync, true)
     window.addEventListener(RUNTIME_PREVIEW_RESIZE_EVENT, onResizeActive)
-    return () => { if (resumeFrame !== null) window.cancelAnimationFrame(resumeFrame); observer?.disconnect(); window.removeEventListener('resize', sync); window.removeEventListener('scroll', sync, true); window.removeEventListener(RUNTIME_PREVIEW_RESIZE_EVENT, onResizeActive); void window.desktop?.setRuntimePreviewVisible?.(previewId, false) }
+    return () => { window.removeEventListener(RUNTIME_PREVIEW_MODAL_EVENT, onModal); if (resumeFrame !== null) window.cancelAnimationFrame(resumeFrame); observer?.disconnect(); window.removeEventListener('resize', sync); window.removeEventListener('scroll', sync, true); window.removeEventListener(RUNTIME_PREVIEW_RESIZE_EVENT, onResizeActive); void window.desktop?.setRuntimePreviewVisible?.(previewId, false) }
   }, [active, previewMountKey])
   const effectivePreviewStatus = runtime?.previewStatus && runtime.previewStatus !== 'idle'
     ? runtime.previewStatus

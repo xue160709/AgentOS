@@ -459,3 +459,11 @@ html.is-resizing-runtime-preview * { user-select: none !important; }
 }
 .runtime-details-dialog__view-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 12px; }
 .runtime-details-dialog__view-mode > span { color: var(--color-token-text-secondary); font-size: var(--text-xs); margin-right: 4px; }
+
+/* Website pairing shares the application's modal surface and action layout. */
+.agentos-pairing-dialog code { overflow-wrap: anywhere; }
+.agentos-pairing-dialog__project { display: grid; gap: 8px; margin-block: 16px; }
+.agentos-pairing-dialog__project select { width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--color-token-border); border-radius: 8px; color: inherit; background: var(--color-token-main-surface-primary); }
+
+.agentos-pairing-backdrop { z-index: var(--z-layer-modal, 1000); -webkit-app-region: no-drag; }
+.agentos-pairing-dialog, .agentos-pairing-dialog button, .agentos-pairing-dialog select { -webkit-app-region: no-drag; }

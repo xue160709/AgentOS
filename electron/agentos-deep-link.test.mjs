@@ -85,3 +85,10 @@ test('receipt builders preserve only frozen protocol fields and deep link queue 
   queue.enqueue(first); tick = 6
   assert.equal(queue.size, 0)
 })
+
+
+test('local app origins allow only explicit loopback HTTP hosts', () => {
+  const { normalizeAgentOSOrigin } = loadProtocol()
+  for (const origin of ['http://localhost:3030', 'http://127.0.0.1:3030', 'http://[::1]:3030']) assert.equal(normalizeAgentOSOrigin(origin).ok, true)
+  for (const origin of ['http://example.com', 'http://localhost.example.com', 'http://192.168.1.2:3030', 'http://0.0.0.0:3030', 'http://user:pass@localhost:3030', 'http://localhost:3030/task']) assert.equal(normalizeAgentOSOrigin(origin).ok, false, origin)
+})

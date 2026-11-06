@@ -90,12 +90,13 @@ export function parseAgentOSDeepLink(raw: unknown): AgentOSProtocolResult<AgentO
   return { ok: true, value: { action, origin: origin.value, requestId } }
 }
 
-/** Canonical HTTPS origin used as the sole binding identity. */
+/** Canonical HTTPS origin (or HTTP loopback for local apps), used as the binding identity. */
 export function normalizeAgentOSOrigin(raw: unknown): AgentOSProtocolResult<string> {
   if (typeof raw !== 'string' || !raw) return invalidDeepLink('Origin is invalid')
   let url: URL
   try { url = new URL(raw) } catch { return invalidDeepLink('Origin is invalid') }
-  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash || !url.hostname) {
+  const localHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname.toLowerCase())
+  if ((!localHttp && url.protocol !== 'https:') || url.username || url.password || url.pathname !== '/' || url.search || url.hash || !url.hostname) {
     return invalidDeepLink('Origin is invalid')
   }
   const hostname = url.hostname.toLowerCase()

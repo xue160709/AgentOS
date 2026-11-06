@@ -95,6 +95,7 @@ export type ProjectChatRunSnapshot = {
   startedAt: number
   finishedAt?: number
   error?: ProjectChatError
+  finalResult?: string
 }
 
 export type ProjectChatPromptPayload =

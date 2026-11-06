@@ -32,6 +32,8 @@ export type ChatBrokerRun = ChatBrokerRequestRoute & {
   phase: ProjectChatRunPhase
   finishedAt?: number
   error?: ReturnType<typeof projectChatError>
+  /** SDK's final answer, kept separate from the accumulated streaming transcript. */
+  finalResult?: string
 }
 
 export type ChatBrokerPrompt = ChatBrokerRequestRoute & {
@@ -386,6 +388,7 @@ export class ChatBrokerCore {
         ...run,
         phase,
         finishedAt: now,
+        ...(event.type === 'result' ? { finalResult: event.result } : {}),
         error: event.type === 'error' ? projectChatError('internal-error', 'Run failed.') : undefined,
       })
       for (const [promptId, prompt] of this.prompts) {

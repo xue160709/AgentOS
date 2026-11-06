@@ -688,3 +688,17 @@ test('a store without the staging seam keeps saving durably on every event', asy
   await harness.broker.idle()
   assert.equal(durableSaves.length, before + 1)
 })
+
+test('broker preserves SDK final answer separately from accumulated assistant streaming content', async () => {
+  const harness = makeHarness()
+  const threadId = await createThread(harness, 'Illustration')
+  const submitted = await harness.broker.submitRun({ projectId: 'project-1', threadId, text: 'Generate an illustration' })
+  const requestId = submitted.value.requestId
+  harness.broker.publish({ type: 'assistant_delta', requestId, messageId: 'accumulated', text: 'Progress with private tool payload and signed URL. ' })
+  harness.broker.publish({ type: 'assistant_delta', requestId, messageId: 'accumulated', text: 'Created two images.' })
+  harness.broker.publish({ type: 'result', requestId, sessionId: 'session', result: 'Created two images.' })
+  await harness.broker.idle()
+  const snapshot = await harness.broker.getSnapshot('project-1')
+  assert.equal(snapshot.value.runs.find(run => run.requestId === requestId).finalResult, 'Created two images.')
+  assert.equal(snapshot.value.runs.find(run => run.requestId === requestId).phase, 'succeeded')
+})

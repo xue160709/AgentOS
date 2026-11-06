@@ -1,3 +1,4 @@
+import { RUNTIME_PREVIEW_MODAL_EVENT } from '../runtime-preview-events'
 /**
  * 应用壳：工作区持久化、侧栏尺寸、聊天路由与设置哈希同步。
  * Root shell owning workspace persistence, sidebar sizing, chat routing, and hash-synced settings.
@@ -986,6 +987,20 @@ export function AppShell() {
   useEffect(() => {
     if (activeViewId !== 'home') void setActiveLocalAppPreviewVisible(false)
   }, [activeViewId, setActiveLocalAppPreviewVisible])
+
+  useEffect(() => {
+    if (!pendingPairing) return
+    window.dispatchEvent(new CustomEvent(RUNTIME_PREVIEW_MODAL_EVENT, { detail: { active: true } }))
+    // Native WebContentsViews paint above DOM modals and otherwise intercept their clicks.
+    void setActiveLocalAppPreviewVisible(false)
+    if (projectRuntimePreviewId) void window.desktop?.setRuntimePreviewVisible?.(projectRuntimePreviewId, false)
+    return () => {
+      window.dispatchEvent(new CustomEvent(RUNTIME_PREVIEW_MODAL_EVENT, { detail: { active: false } }))
+      if (activeViewId === 'home') void setActiveLocalAppPreviewVisible(true)
+      if (projectRuntimePreviewId) void window.desktop?.setRuntimePreviewVisible?.(projectRuntimePreviewId, true)
+    }
+  }, [pendingPairing, activeViewId, projectRuntimePreviewId, setActiveLocalAppPreviewVisible])
+
 
   useEffect(() => {
     const open = Boolean(localAppInspect || localAppChooserOpen)

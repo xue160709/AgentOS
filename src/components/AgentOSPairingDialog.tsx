@@ -7,13 +7,17 @@ export function AgentOSPairingDialog({ pairing, projects }: { pairing: AgentOSPa
   useEffect(() => {
     if (!pairing) return
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    setProjectId(projects.find((project) => !project.pathMissing)?.id ?? ''); requestAnimationFrame(() => connectRef.current?.focus())
-    return () => { requestAnimationFrame(() => returnFocusRef.current?.focus()) }
+    const frame = requestAnimationFrame(() => (connectRef.current?.disabled ? dialogRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])') : connectRef.current)?.focus())
+    return () => { cancelAnimationFrame(frame); requestAnimationFrame(() => returnFocusRef.current?.focus()) }
+  }, [pairing?.pairingId])
+  useEffect(() => {
+    setProjectId((current) => projects.some((project) => project.id === current && !project.pathMissing)
+      ? current : projects.find((project) => !project.pathMissing)?.id ?? '')
   }, [pairing?.pairingId, projects])
   if (!pairing) return null
   const available = projects.filter((project) => !project.pathMissing)
   const submit = (action: 'accept' | 'reject') => void window.projectChat?.respondToWebsitePairing(action === 'reject' ? { pairingId: pairing.pairingId, action } : { pairingId: pairing.pairingId, action, projectId })
-  return <div className="agentos-pairing-backdrop"><section ref={dialogRef} role="dialog" aria-modal="true" aria-label="连接网站" className="agentos-pairing-dialog" onKeyDown={(event) => {
+  return <div className="local-app-dialog-backdrop agentos-pairing-backdrop"><section ref={dialogRef} role="dialog" aria-modal="true" aria-label="连接网站" className="local-app-dialog agentos-pairing-dialog" onKeyDown={(event) => {
     if (event.key === 'Escape') { event.preventDefault(); submit('reject'); return }
     if (event.key !== 'Tab') return
     const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]),select:not([disabled]),[href],input:not([disabled])') ?? [])]
@@ -22,8 +26,9 @@ export function AgentOSPairingDialog({ pairing, projects }: { pairing: AgentOSPa
     event.preventDefault(); controls[next]?.focus()
   }}>
     <h2>连接网站</h2><p><strong>{pairing.displayName}</strong></p><p><code>{pairing.origin}</code></p>
-    <p>该网站之后可以直接为项目创建新会话；它不能查看对话、文件、权限请求或最终结果。</p>
-    <label>目标项目<select aria-label="目标项目" value={projectId} onChange={(event) => setProjectId(event.target.value)}>{available.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-    <div><button ref={connectRef} type="button" onClick={() => submit('accept')} disabled={!projectId}>连接</button><button type="button" onClick={() => submit('reject')}>取消</button></div>
+    <p>连接后，该网站可向所选项目提交任务，并接收这些任务的执行状态和结果摘要。它无法查看其他会话、浏览项目文件或获取权限请求详情。</p>
+    <label className="agentos-pairing-dialog__project">目标项目<select aria-label="目标项目" value={projectId} onChange={(event) => setProjectId(event.target.value)}>{available.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+    {!available.length && <p role="status">暂无可用项目。请先取消，在侧栏添加项目后重新连接。</p>}
+    <footer className="local-app-dialog__actions"><button type="button" className="btn btn-ghost" onClick={() => submit('reject')}>取消</button><button className="btn btn-primary" ref={connectRef} type="button" onClick={() => submit('accept')} disabled={!projectId}>连接</button></footer>
   </section></div>
 }

@@ -507,7 +507,7 @@ function projectRoute(projectId: string, threadId: string, routeGeneration: numb
 }
 
 function projectRunSnapshot(run: ChatBrokerRun): ProjectChatRunSnapshot {
-  return { projectId: run.scopeId, threadId: run.threadId, requestId: run.requestId, phase: run.phase, routeGeneration: run.routeGeneration, startedAt: run.startedAt, finishedAt: run.finishedAt, error: run.error }
+  return { projectId: run.scopeId, threadId: run.threadId, requestId: run.requestId, phase: run.phase, routeGeneration: run.routeGeneration, startedAt: run.startedAt, finishedAt: run.finishedAt, error: run.error, ...(run.finalResult !== undefined ? { finalResult: run.finalResult } : {}) }
 }
 
 function projectPromptSnapshot(prompt: ChatBrokerPrompt): ProjectChatOwnedPromptSnapshot {

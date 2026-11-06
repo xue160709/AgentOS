@@ -217,7 +217,7 @@ const agentOSDeepLinkQueue = new AgentOSDeepLinkQueue()
 let agentOSExternalTaskService: AgentOSExternalTaskService | null = null
 let websiteBindingStore: WebsiteBindingStore | null = null
 let agentOSPairingService: AgentOSPairingService | null = null
-let externalTaskWindowHooks: { beforeCreate(projectId: string): Promise<{ exists: boolean; idle: boolean }>; accepted(projectId: string, threadId: string, receivedAt: number, before: unknown): Promise<void> } | null = null
+let refreshExternalTaskUnread: ((projectId: string) => Promise<void>) | null = null
 
 type ProjectRuntimeHostRegistration = {
   projectId: string
@@ -648,8 +648,7 @@ function initializeAgentOSExternalTasks(): void {
     bindings: websiteBindingStore ??= new WebsiteBindingStore({ userDataPath, safeStorage }),
     receipts: new ExternalTaskReceiptStore({ userDataPath }),
     tickets: new AgentOSTicketClient(createAgentOSTicketTransport()), broker: projectChatBroker,
-    beforeCreate: ({ projectId }) => externalTaskWindowHooks?.beforeCreate(projectId),
-    accepted: ({ projectId, threadId, receivedAt, before }) => externalTaskWindowHooks?.accepted(projectId, threadId, receivedAt, before),
+    accepted: ({ projectId }) => refreshExternalTaskUnread?.(projectId),
   })
   agentOSPairingService ??= new AgentOSPairingService({
     tickets: new AgentOSTicketClient(createAgentOSTicketTransport()), bindings: websiteBindingStore,
@@ -681,7 +680,7 @@ function installProjectChatProductionComposition(): void {
     runExclusive: (operation) => runChatWorkspaceOperation(async () => operation()),
     permissionMode: () => getDesktopPreferencesStore().read().chatPermissionMode ?? 'auto',
     promptOwnerCandidates: (input) => presence.ownerCandidates(input),
-    broadcast: broadcaster,
+    broadcast: (event) => { broadcaster(event); agentOSExternalTaskService?.observe(event) },
     runtimeEditCoordinator: runtimeEditCoordinator ?? undefined,
     runtimeEditEligible: (projectId) => readProjectRuntimeDefinition(projectId) !== null,
     onProjectRunStarting: (projectId, projectRoot) => projectRuntimePlacementTracker?.beforeRun(projectId, projectRoot),
@@ -807,23 +806,11 @@ function installProjectChatProductionComposition(): void {
         onWebContentsUnavailable: (webContentsId) => { void broker.onWebContentsUnavailable(webContentsId) },
         onCapabilityRegistered: lifecycle.onCapabilityRegistered, onWindowState: lifecycle.onWindowState, onWindowCleanup: lifecycle.onWindowCleanup,
       })
-      externalTaskWindowHooks = {
-        beforeCreate: async (projectId) => {
-          const existing = manager.get(projectId)
-          if (!existing || existing.isDestroyed()) return { exists: false, idle: true }
-          const [view, snapshot] = await Promise.all([viewStateStore.get(projectId), broker.getSnapshot(projectId)])
-          await broker.refreshExternalUnread(projectId, view.externalTaskSeenAt)
-          const active = snapshot.ok && snapshot.value.runs.some((run) => !['succeeded', 'failed', 'cancelled'].includes(run.phase))
-          const prompt = snapshot.ok && snapshot.value.pendingPrompts.length > 0
-          return { exists: true, idle: !view.draft && !active && !prompt }
-        },
-        accepted: async (projectId, threadId, receivedAt, before) => {
-          const eligible = !before || (typeof before === 'object' && before !== null && (before as { idle?: boolean }).idle)
-          if (!eligible) return
-          await manager.open(projectId)
-          await viewStateStore.save({ projectId, patch: { selectedThreadId: threadId, externalTaskSeenAt: receivedAt } })
-          await broker.refreshExternalUnread(projectId, receivedAt)
-        },
+      // Website tasks run in the project history without opening or selecting a chat window.
+      // Keep the previous seen timestamp so the new task remains discoverable as unread.
+      refreshExternalTaskUnread = async (projectId) => {
+        const view = await viewStateStore.get(projectId)
+        await broker.refreshExternalUnread(projectId, view.externalTaskSeenAt)
       }
       return {
         openProjectWindow: async (projectId: string) => { await manager.open(projectId); return { ok: true as const, value: undefined } },
@@ -1395,6 +1382,7 @@ if (gotSingleInstanceLock) {
   })
 
   app.on('before-quit', (event) => {
+    agentOSExternalTaskService?.dispose()
     void agentOSPairingService?.cancelAll()
     if (localAppQuitCleanup) return
     event.preventDefault()

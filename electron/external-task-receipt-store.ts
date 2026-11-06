@@ -14,6 +14,7 @@ export type ExternalTaskReceiptRecord = {
   threadId?: string
   requestIdLocal?: string
   rejectionCode?: ProjectChatErrorCode
+  executionReceipt?: Record<string, unknown>
   createdAt: number
   updatedAt: number
 }
@@ -79,6 +80,13 @@ export class ExternalTaskReceiptStore {
       }
       await this.commit({ schemaVersion: 1, records: file.records.map((record, candidate) => candidate === index ? next : record) })
       return clone(next)
+    })
+  }
+
+  async recordExecution(bindingId: string, idempotencyKey: string, receipt: Record<string, unknown>): Promise<void> {
+    await this.serialize(async () => {
+      const file = await this.load()
+      await this.commit({ ...file, records: file.records.map((record) => record.bindingId === bindingId && record.idempotencyKey === idempotencyKey ? { ...record, executionReceipt: receipt, updatedAt: this.now() } : record) })
     })
   }
 
