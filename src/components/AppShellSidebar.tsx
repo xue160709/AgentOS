@@ -389,15 +389,21 @@ export function AppShellSidebar({
     if (!contextMenu) return
     const panel = menuPanelRef.current
     if (!panel) return
-    const rect = panel.getBoundingClientRect()
     const pad = 8
+    const sidebar = sidebarRef.current?.getBoundingClientRect()
+    // 原生网页视图位于 DOM 之上，菜单必须留在侧栏内才能避免被遮挡。
+    const right = Math.min(window.innerWidth - pad, (sidebar?.right ?? window.innerWidth) - pad)
+    const leftEdge = Math.max(pad, (sidebar?.left ?? 0) + pad)
+    panel.style.maxWidth = `${Math.max(0, right - leftEdge)}px`
+    panel.style.minWidth = `${Math.min(180, Math.max(0, right - leftEdge))}px`
+    const rect = panel.getBoundingClientRect()
     let left = contextMenu.x
     let top = contextMenu.y
-    if (left + rect.width > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - pad - rect.width)
+    left = Math.max(leftEdge, Math.min(left, right - rect.width))
     if (top + rect.height > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - pad - rect.height)
     panel.style.left = `${left}px`
     panel.style.top = `${top}px`
-  }, [contextMenu])
+  }, [contextMenu, sidebarRef])
 
   useEffect(() => {
     if (!contextMenu) return

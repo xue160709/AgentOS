@@ -102,6 +102,7 @@
 - [ ] `LATER-03`｜确定并实现生产级跨平台 Sandbox Provider；完成项目外文件、网络、环境变量和子进程逃逸验证后再声明强隔离。
 - [ ] `PERF-P2-PID-REUSE-001`（P2）｜测试 fixture 的异常兜底在极窄窗口按刚写入的裸 PID 发 TERM/KILL，理论上存在 PID 复用误杀。生产 Runtime 清理路径不受影响。来源：`chg-20260825-local-app-tabs-runtime` PERF 轮质量检查。
 - [ ] `GUI-REG-01`｜补 `R-UI-HEIGHT-01` / `R-UI-FLOW-01` 的 Electron GUI smoke：Workspace Runtime 全高预览、Overview/Runtime 常规与窄宽度布局。首页布局返工 attempt 3 至今只有 typecheck 覆盖。
+- [ ] `GUI-REG-02`｜复验网页工作台打开时侧栏菜单的右键与“…”入口，确认菜单完整显示、操作可点击，并检查窄侧栏；已调整菜单位置，尚缺 Electron GUI 实测。
 
 > `LATER-01` 已被 Revision 2 的“项目首页独立 Runtime 页”取代，不再跟踪。
 
