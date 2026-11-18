@@ -307,7 +307,7 @@ type ChatPageProps = {
   onCloseAgentSettings: () => void
   homeModeResetKey: number
   hiddenSkillPaths: string[]
-  onCreateHomePluginCardThread: (projectId: string, initialPrompt: string) => string | void
+  onCreateHomePluginCardThread: (projectId: string, initialPrompt: string) => Promise<string | void> | string | void
   onEditHomePluginCard: (projectId: string, item: HomePluginRunItem) => void
   onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
@@ -477,6 +477,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const todoButtonRef = useRef<HTMLButtonElement>(null)
   const todoPanelRef = useRef<HTMLDivElement>(null)
   const activeThreadIdRef = useRef(activeThread?.id ?? '')
+  const dataCardSubmitPendingRef = useRef(false)
   const threadScrollTopRef = useRef(new Map<string, number>())
   const chatRunRef = useRef<ChatRun | null>(null)
   if (!chatRunRef.current) chatRunRef.current = new ChatRun()
@@ -2291,19 +2292,24 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   const submitDataCardDraft = async (rawText = inputValueRef.current) => {
     const text = rawText.trim()
-    if (!text) return
-    const threadId = onCreateHomePluginCardThread(activeProject.id, text)
-    if (!threadId) return
-    activeThreadIdRef.current = threadId
-    isFirstTranscriptLayoutRef.current = true
-    scrollIntentRef.current = 'force-bottom'
-    setHomeComposerMode('normal')
-    await window.claudeChat?.newThread(threadId)
-    await submitPrompt(buildDataCardPrompt(text, threadId), {
-      threadId,
-      project: activeProject,
-      promptMode: 'home-plugin-card-customization',
-    })
+    if (!text || dataCardSubmitPendingRef.current) return
+    dataCardSubmitPendingRef.current = true
+    try {
+      const threadId = await onCreateHomePluginCardThread(activeProject.id, text)
+      if (!threadId) return
+      activeThreadIdRef.current = threadId
+      isFirstTranscriptLayoutRef.current = true
+      scrollIntentRef.current = 'force-bottom'
+      setHomeComposerMode('normal')
+      if (!projectChatEnabled) await window.claudeChat?.newThread(threadId)
+      await submitPrompt(buildDataCardPrompt(text, threadId), {
+        threadId,
+        project: activeProject,
+        promptMode: 'home-plugin-card-customization',
+      })
+    } finally {
+      dataCardSubmitPendingRef.current = false
+    }
   }
 
   const submitComposer = async () => {

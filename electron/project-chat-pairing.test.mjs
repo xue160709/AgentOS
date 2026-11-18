@@ -29,6 +29,6 @@ test('pairing renderer source exposes only the fixed dialog controls and no secr
 
 test('website binding settings uses public projection and a confirmed accessible revoke dialog', () => {
   const source = readFileSync(resolve(testDir, '../src/components/setting/WebsiteBindingsSettingsPage.tsx'), 'utf8')
-  assert.match(source, /listWebsiteBindings/); assert.match(source, /revokeWebsiteBinding/); assert.match(source, /aria-label="撤销网站连接"/); assert.match(source, /event\.key === 'Escape'/)
+  assert.match(source, /listWebsiteBindings/); assert.match(source, /revokeWebsiteBinding/); assert.match(source, /<dialog/); assert.match(source, /showModal\(\)/); assert.match(source, /onCancel=/)
   for (const secret of ['credential', 'ciphertext', 'nonce']) assert.doesNotMatch(source, new RegExp(secret, 'i'))
 })

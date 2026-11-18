@@ -558,7 +558,8 @@ function createThreadInput(raw: unknown): CreateProjectThreadInput | null {
   const title = validString(raw.title)
   if (!projectId || !title) return null
   if (raw.source === 'user' || raw.source === 'app-command') {
-    if (raw.skill === undefined) return { projectId, title, source: raw.source }
+    if (raw.purpose !== undefined && (raw.source !== 'user' || raw.purpose !== 'home-plugin-card-customization' || raw.skill !== undefined)) return null
+    if (raw.skill === undefined) return { projectId, title, source: raw.source, ...(raw.purpose ? { purpose: 'home-plugin-card-customization' as const } : {}) }
     if (raw.source !== 'user' || !isRecord(raw.skill)) return null
     const path = validString(raw.skill.path)
     const command = validString(raw.skill.command)

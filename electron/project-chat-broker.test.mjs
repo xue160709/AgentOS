@@ -68,6 +68,19 @@ async function createThread(harness, title) {
   return result.value.threadId
 }
 
+test('data card thread is durable and submits with its card customization mode', async () => {
+  const harness = makeHarness()
+  const created = await harness.broker.createThread({ projectId: 'project-1', title: 'Card', source: 'user', purpose: 'home-plugin-card-customization' })
+  assert.equal(created.ok, true)
+  const threadId = created.value.threadId
+  assert.equal(harness.state().threads[0].purpose, 'home-plugin-card-customization')
+  const submitted = await harness.broker.submitRun({ projectId: 'project-1', threadId, text: 'Create a card' })
+  assert.equal(submitted.ok, true)
+  assert.equal(harness.runner.submitted[0].threadId, threadId)
+  assert.equal(harness.runner.submitted[0].promptMode, 'home-plugin-card-customization')
+  assert.equal(harness.state().threads[0].chatState.items[0].content, 'Create a card')
+})
+
 test('external unread cursor rebuilds from durable website receivedAt and rebroadcasts without a save', async () => {
   const threads = [
     { id: 'website-old', projectId: 'project-1', title: 'Old', createdAt: 1, updatedAt: 1, creationSource: { kind: 'website', bindingId: 'bnd_x', receivedAt: 10 }, chatState: { model: 'Claude', items: [] } },

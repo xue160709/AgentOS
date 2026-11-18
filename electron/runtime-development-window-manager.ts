@@ -63,6 +63,7 @@ export type RuntimeDevelopmentWindowManagerOptions = {
 type WindowEntry = {
   runtimeScopeId: RuntimeScopeId
   window: RuntimeDevelopmentWindow
+  webContentsId: number
   authority: RuntimeDevelopmentAuthority
   context: RuntimeDevelopmentWindowContext
   closeRequested: boolean
@@ -92,7 +93,8 @@ export class RuntimeDevelopmentWindowManager {
       title, width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y, minWidth: 720, minHeight: 560,
       webPreferences: { preload: this.options.preloadPath, contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: ['--agentos-window-kind=runtime-development'] },
     })
-    const entry: WindowEntry = { runtimeScopeId, window, authority: preparation.authority, context: preparation.context, closeRequested: false, cleaned: false }
+    // closed 回调执行时 BrowserWindow 可能已经销毁，提前保存清理所需的身份。
+    const entry: WindowEntry = { runtimeScopeId, window, webContentsId: window.webContents.id, authority: preparation.authority, context: preparation.context, closeRequested: false, cleaned: false }
     this.windows.set(runtimeScopeId, entry)
     if (!this.registerCapability(entry)) {
       this.cleanupAndDestroy(entry)
@@ -173,7 +175,7 @@ export class RuntimeDevelopmentWindowManager {
     if (entry.cleaned) return
     entry.cleaned = true
     if (this.windows.get(entry.runtimeScopeId) === entry) this.windows.delete(entry.runtimeScopeId)
-    this.options.onWindowCleanup(entry.window.webContents.id)
+    this.options.onWindowCleanup(entry.webContentsId)
   }
 
   private cleanupAndDestroy(entry: WindowEntry): void {

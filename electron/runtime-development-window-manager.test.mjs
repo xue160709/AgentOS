@@ -54,6 +54,16 @@ test('load failure releases capability, presence/window reference and never crea
   assert.equal(h.manager.get('workspace:a'), undefined); assert.equal(h.caps.size, 0); assert.equal(h.calls.some((value) => value.startsWith('exit:')), false); assert.equal(h.calls.filter((value) => value.startsWith('cleanup:')).length, 1)
 })
 
+test('cleanup releases capability when native window is already destroyed', async () => {
+  const h = harness(); const { window } = await h.manager.open('workspace:a')
+  const webContents = window.webContents
+  Object.defineProperty(window, 'webContents', { get() { if (window.destroyed) throw new TypeError('Object has been destroyed'); return webContents } })
+  assert.doesNotThrow(() => window.destroy())
+  assert.equal(h.manager.get('workspace:a'), undefined)
+  assert.equal(h.caps.size, 0)
+  assert.equal(h.calls.filter((value) => value === 'cleanup:10').length, 1)
+})
+
 test('close during load fences the late activation callback by window identity and generation', async () => {
   let releaseLoad; const gate = new Promise((resolve) => { releaseLoad = resolve }); const h = harness({ loadGate: gate })
   const opening = h.manager.open('workspace:a'); await new Promise((resolve) => setImmediate(resolve)); const window = h.windows[0]

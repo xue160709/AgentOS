@@ -170,6 +170,7 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
       const thread: WorkspaceThread = {
         id: this.createId('thread'), projectId: project.id, title, createdAt: now, updatedAt: now,
         creationSource: source, chatState: { model: 'Claude Agent', items: [] },
+        ...(input.source === 'user' && input.purpose ? { purpose: input.purpose } : {}),
         ...(input.source === 'user' && input.skill ? { purpose: 'skill-run' as const, skillPath: input.skill.path, skillCommand: input.skill.command, skillTitle: input.skill.title } : {}),
       }
       const saved = await this.saveMutation({ ...state, projects: state.projects.map((item) => item.id === project.id ? { ...item, updatedAt: now } : item), threads: [thread, ...state.threads] })
@@ -273,6 +274,7 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
           modelPick: persistedThread.chatState.modelPick, handoffContext: input.handoffContext,
           sessionId: persistedThread.chatState.sessionId, cwd: project.path, projectId: project.id,
           projectRuntimePrompt: context.projectRuntimePrompt === true, permissionMode,
+          ...(thread.purpose === 'home-plugin-card-customization' ? { promptMode: thread.purpose } : {}),
         }, pendingRequestId)
         this.registerRuntimeAccepted(input.projectId, submitted.requestId, permissionMode)
         this.broadcastSnapshot(saved, input.projectId, permissionMode)

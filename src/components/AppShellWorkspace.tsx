@@ -144,7 +144,7 @@ type AppShellWorkspaceProps = {
   onThreadCompletionStateChange: (threadId: string, completedAt: number | null) => void
   onProjectHomeModelPickChange: (projectId: string, pick: ChatModelPick | undefined) => void
   homeModeResetKey: number
-  onCreateHomePluginCardThread: (projectId: string, initialPrompt: string) => string | void
+  onCreateHomePluginCardThread: (projectId: string, initialPrompt: string) => Promise<string | void> | string | void
   onEditHomePluginCard: (projectId: string, item: HomePluginRunItem) => void
   hiddenSkillPaths: string[]
   projectSkills: AgentContextSlashItem[]
@@ -672,6 +672,7 @@ export function AppShellWorkspace({
                 hidden={false}
                 settingsCategory={settingsCategory}
                 activeProject={activeProject}
+                projects={projects}
                 showProjectSkillsInSidebar={showProjectSkillsInSidebar}
                 onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
                 onOpenAgentSettings={openAgentSettings}

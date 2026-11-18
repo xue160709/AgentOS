@@ -249,7 +249,7 @@ export type ProjectChatInternalEvent = Omit<ProjectChatEvent, 'snapshot'> & {
 }
 
 export type CreateProjectThreadInput =
-  | { projectId: string; title: string; source: 'user' | 'app-command'; skill?: { path: string; command: string; title: string } }
+  | { projectId: string; title: string; source: 'user' | 'app-command'; skill?: { path: string; command: string; title: string }; purpose?: 'home-plugin-card-customization' }
   | { projectId: string; title: string; source: 'website'; idempotencyKey: string; bindingId: string; receivedAt: number }
 export type CreateProjectThreadResult = { threadId: string; workspaceRevision: number }
 export type SubmitProjectRunInput = {
@@ -463,7 +463,7 @@ export type ProjectChatContractTypeFixtures = [
   Assert<IsExactly<ReportProjectChatPresenceInput, { projectId: string; selectedThreadId?: string }>>,
   Assert<IsExactly<AnswerProjectPromptInput, { projectId: string; threadId: string; requestId: string; promptId: string; routeGeneration: number; response: ClaudePermissionResponsePayload }>>,
   Assert<IsExactly<CreateProjectThreadInput,
-    | { projectId: string; title: string; source: 'user' | 'app-command'; skill?: { path: string; command: string; title: string } }
+    | { projectId: string; title: string; source: 'user' | 'app-command'; skill?: { path: string; command: string; title: string }; purpose?: 'home-plugin-card-customization' }
     | { projectId: string; title: string; source: 'website'; idempotencyKey: string; bindingId: string; receivedAt: number }
   >>,
   Assert<IsExactly<ProjectChatProjectSnapshot, { id: string; name: string; pathMissing: boolean }>>,

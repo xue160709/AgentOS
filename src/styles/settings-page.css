@@ -706,3 +706,15 @@
   color: var(--color-token-text-secondary);
   font-size: var(--text-xs);
 }
+
+.website-bindings-list { list-style: none; margin: 0; padding: 0; }
+.website-binding { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; }
+.website-binding + .website-binding { border-top: 1px solid var(--color-token-border-light); }
+.website-binding__details { min-width: 0; display: grid; gap: 6px; }
+.website-binding__heading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.website-binding__status { font-size: var(--text-xs); color: var(--color-token-text-secondary); }
+.website-binding__details code { overflow-wrap: anywhere; color: var(--color-token-text-secondary); font-size: var(--text-xs); }
+.website-binding__details p { margin: 0; color: var(--color-token-text-secondary); font-size: var(--text-xs); }
+.website-binding__actions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.website-bindings-error { color: var(--color-token-text-primary); font-size: var(--text-sm); }
+@media (max-width: 700px) { .website-binding { align-items: flex-start; flex-direction: column; } }

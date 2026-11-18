@@ -17,6 +17,7 @@ type SettingsPageProps = {
   hidden: boolean
   settingsCategory: SettingsCategoryId
   activeProject: WorkspaceProject
+  projects: WorkspaceProject[]
   showProjectSkillsInSidebar: boolean
   onShowProjectSkillsInSidebarChange: (enabled: boolean) => void
   onOpenAgentSettings: (panel: AgentSettingsPanelId) => void
@@ -27,6 +28,7 @@ export function SettingsPage({
   hidden,
   settingsCategory,
   activeProject,
+  projects,
   showProjectSkillsInSidebar,
   onShowProjectSkillsInSidebarChange,
   onOpenAgentSettings,
@@ -49,7 +51,7 @@ export function SettingsPage({
   }
 
   if (settingsCategory === 'website-bindings') {
-    return <WebsiteBindingsSettingsPage projects={activeProject ? [activeProject] : []} />
+    return <WebsiteBindingsSettingsPage projects={projects} />
   }
 
   if (settingsCategory === 'mcp') {

@@ -1555,8 +1555,21 @@ export function AppShell() {
   )
 
   const createHomePluginCardThread = useCallback(
-    (projectId: string, initialPrompt: string) => {
+    async (projectId: string, initialPrompt: string) => {
       setSelectedProjectSkill(null)
+      if (projectChatEnabled) {
+        if (!window.projectChat) { setHeaderStatus(t('chat.errorGeneric')); return }
+        try {
+          const result = await window.projectChat.createThread({ projectId, title: deriveDataCardThreadTitle(initialPrompt, t), source: 'user', purpose: 'home-plugin-card-customization' })
+          if (!result.ok) { setHeaderStatus(result.error.message); return }
+          updateChatWorkspace((state) => workspaceSession.selectThread(state, result.value.threadId))
+          goHome()
+          return result.value.threadId
+        } catch {
+          setHeaderStatus(t('chat.errorGeneric'))
+          return
+        }
+      }
       const threadId = createId('thread')
       threadChatStore.set(threadId, createEmptyChatState(), projectId)
       updateChatWorkspace((prev) =>
@@ -1570,7 +1583,7 @@ export function AppShell() {
       goHome()
       return threadId
     },
-    [goHome, t, updateChatWorkspace, workspaceSession],
+    [goHome, projectChatEnabled, t, updateChatWorkspace, workspaceSession],
   )
 
   const openHomePluginCardThread = useCallback(

@@ -1490,5 +1490,27 @@
         "- 暂无"
       ]
     }
+  },
+  "websiteBindings": {
+    "title": "网站连接",
+    "description": "已连接的网站可以向所选项目提交任务，并接收任务状态、会话标识和结果摘要。网站不能浏览项目文件、其他会话或权限请求详情。",
+    "listTitle": "已连接的网站",
+    "loadError": "无法加载网站连接，请重试。",
+    "openError": "无法打开项目，请检查项目是否仍然可用。",
+    "revokeError": "撤销连接失败，请重试。",
+    "retry": "重试",
+    "loading": "正在加载网站连接…",
+    "count": "共 {{count}} 个网站连接",
+    "empty": "尚无网站连接。网站发起连接请求并经你确认后，会显示在这里。",
+    "connected": "已连接",
+    "project": "项目：{{name}}",
+    "projectUnavailable": "项目不可用",
+    "created": "连接时间：{{date}}",
+    "openProject": "打开项目",
+    "revoke": "撤销连接",
+    "revokeTitle": "撤销网站连接",
+    "revokeDescription": "撤销与“{{name}}”的连接？网站将无法发起新任务，已运行的会话不会被取消。",
+    "cancel": "取消",
+    "confirmRevoke": "确认撤销"
   }
 }

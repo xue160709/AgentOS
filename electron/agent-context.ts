@@ -584,6 +584,7 @@ async function collectContextSourceRoots(projectRoot: string): Promise<ContextSo
   const bundledAgentsDirectories = [
     path.join(process.cwd(), '.agents'),
     path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), '.agents'),
+    ...(process.resourcesPath ? [path.join(process.resourcesPath, '.agents')] : []),
   ]
   const seenBundledDirectories = new Set<string>()
   for (const bundledAgentsDirectory of bundledAgentsDirectories) {
@@ -1136,7 +1137,10 @@ function normalizeQuery(value: string): string {
 
 function formatContextRelativePath(filePath: string, sourceRoot: ContextSourceRoot): string {
   if (sourceRoot.scope === 'user') {
-    return `~/${normalizeRelativePath(path.relative(os.homedir(), filePath))}`
+    const relative = path.relative(os.homedir(), filePath)
+    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      ? filePath
+      : `~/${normalizeRelativePath(relative)}`
   }
   return normalizeRelativePath(path.relative(sourceRoot.projectRoot, filePath))
 }

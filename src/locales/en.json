@@ -1490,5 +1490,27 @@
         "- None"
       ]
     }
+  },
+  "websiteBindings": {
+    "title": "Website connections",
+    "description": "Connected websites can submit tasks to the selected project and receive task status, a conversation identifier, and a result summary. They cannot browse project files, other conversations, or permission request details.",
+    "listTitle": "Connected websites",
+    "loadError": "Could not load website connections. Please try again.",
+    "openError": "Could not open the project. Check that it is still available.",
+    "revokeError": "Could not revoke the connection. Please try again.",
+    "retry": "Retry",
+    "loading": "Loading website connections…",
+    "count": "{{count}} website connection(s)",
+    "empty": "No website connections yet. Connections you approve will appear here.",
+    "connected": "Connected",
+    "project": "Project: {{name}}",
+    "projectUnavailable": "Project unavailable",
+    "created": "Connected: {{date}}",
+    "openProject": "Open project",
+    "revoke": "Revoke connection",
+    "revokeTitle": "Revoke website connection",
+    "revokeDescription": "Revoke the connection to “{{name}}”? The website cannot start new tasks; running conversations will continue.",
+    "cancel": "Cancel",
+    "confirmRevoke": "Revoke connection"
   }
 }
