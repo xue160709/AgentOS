@@ -170,6 +170,7 @@ export class ProjectChatBroker implements ClaudeChatEventSink {
       const thread: WorkspaceThread = {
         id: this.createId('thread'), projectId: project.id, title, createdAt: now, updatedAt: now,
         creationSource: source, chatState: { model: 'Claude Agent', items: [] },
+        ...(input.source === 'user' && input.skill ? { purpose: 'skill-run' as const, skillPath: input.skill.path, skillCommand: input.skill.command, skillTitle: input.skill.title } : {}),
       }
       const saved = await this.saveMutation({ ...state, projects: state.projects.map((item) => item.id === project.id ? { ...item, updatedAt: now } : item), threads: [thread, ...state.threads] })
       this.broadcastSnapshot(saved, project.id)

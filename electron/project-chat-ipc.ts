@@ -557,7 +557,15 @@ function createThreadInput(raw: unknown): CreateProjectThreadInput | null {
   const projectId = validString(raw.projectId)
   const title = validString(raw.title)
   if (!projectId || !title) return null
-  if (raw.source === 'user' || raw.source === 'app-command') return { projectId, title, source: raw.source }
+  if (raw.source === 'user' || raw.source === 'app-command') {
+    if (raw.skill === undefined) return { projectId, title, source: raw.source }
+    if (raw.source !== 'user' || !isRecord(raw.skill)) return null
+    const path = validString(raw.skill.path)
+    const command = validString(raw.skill.command)
+    const skillTitle = validString(raw.skill.title)
+    if (!path || !command || !skillTitle) return null
+    return { projectId, title, source: raw.source, skill: { path, command, title: skillTitle } }
+  }
   if (raw.source !== 'website') return null
   const idempotencyKey = validString(raw.idempotencyKey)
   const bindingId = validString(raw.bindingId)

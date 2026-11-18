@@ -702,3 +702,23 @@ test('broker preserves SDK final answer separately from accumulated assistant st
   assert.equal(snapshot.value.runs.find(run => run.requestId === requestId).finalResult, 'Created two images.')
   assert.equal(snapshot.value.runs.find(run => run.requestId === requestId).phase, 'succeeded')
 })
+
+test('skill execution creates a durable managed thread, submits and can be cancelled', async () => {
+  const harness = makeHarness()
+  const skill = { path: '/project/.claude/skills/output-1/SKILL.md', command: 'output-1', title: '/output-1' }
+  const created = await harness.broker.createThread({ projectId: 'project-1', title: 'New thread', source: 'user', skill })
+  assert.equal(created.ok, true)
+  const thread = harness.state().threads.find((item) => item.id === created.value.threadId)
+  assert.equal(thread.purpose, 'skill-run')
+  assert.equal(thread.skillPath, skill.path)
+  const submitted = await harness.broker.submitRun({ projectId: 'project-1', threadId: thread.id, text: '/output-1' })
+  assert.equal(submitted.ok, true)
+  assert.equal(harness.runner.submitted[0].text, '/output-1')
+  assert.equal(harness.runner.submitted[0].cwd, '/project')
+  const snapshot = (await harness.broker.getSnapshot('project-1')).value
+  assert.equal(snapshot.threads[0].skillCommand, 'output-1')
+  assert.equal(snapshot.threads[0].skillPath, undefined)
+  const cancelled = await harness.broker.cancelRun({ projectId: 'project-1', threadId: thread.id, requestId: submitted.value.requestId, routeGeneration: snapshot.routeGeneration })
+  assert.equal(cancelled.ok, true)
+  assert.deepEqual(harness.runner.cancelled, [submitted.value.requestId])
+})

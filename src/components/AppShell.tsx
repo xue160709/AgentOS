@@ -1671,8 +1671,25 @@ export function AppShell() {
           createThreadInProject(projectId)
           return
         }
+        const prompt = skill.command ? `/${skill.command.replace(/^\/+/, '')}` : skill.title
+        if (projectChatReadinessRef.current !== 'legacy') {
+          const api = window.projectChat
+          if (!api) { setHeaderStatus(t('chat.errorGeneric')); return }
+          try {
+            const created = await api.createThread({ projectId, title: t('thread.newThreadTitle'), source: 'user', skill: { path: skill.path, command: skill.command, title: skill.title } })
+            if (!created.ok) { setHeaderStatus(created.error.message); return }
+            await refreshProjectChatSnapshot(projectId)
+            updateChatWorkspace((prev) => workspaceSession.selectThread(prev, created.value.threadId))
+            if (consumedProjectDraft) setProjectHomeDraftModelPick(projectId, undefined)
+            goHome()
+            const submitted = await api.submitRun({ projectId, threadId: created.value.threadId, text: prompt, modelPick })
+            if (!submitted.ok) setHeaderStatus(submitted.error.message)
+          } catch {
+            setHeaderStatus(t('chat.errorGeneric'))
+          }
+          return
+        }
         const threadId = createId('thread')
-        const prompt = skill.title
 
         updateChatWorkspace((prev) =>
           workspaceSession.addThread(prev, {
@@ -1700,20 +1717,28 @@ export function AppShell() {
         })
       })()
     },
-    [chatWorkspace?.projects, createThreadInProject, goHome, resolveSkillRunModelPick, setProjectHomeDraftModelPick, t, updateChatWorkspace, workspaceSession],
+    [chatWorkspace?.projects, createThreadInProject, goHome, refreshProjectChatSnapshot, resolveSkillRunModelPick, setProjectHomeDraftModelPick, t, updateChatWorkspace, workspaceSession],
   )
 
   const stopProjectSkillRun = useCallback(
     async (projectId: string, skillPath: string) => {
+      const skill = projectSkillStates[projectId]?.skills.find((item) => item.path === skillPath)
       const runningThread = chatWorkspace?.threads
-        .filter((thread) => thread.projectId === projectId && thread.purpose === 'skill-run' && thread.skillPath === skillPath && !thread.archivedAt)
+        .filter((thread) => thread.projectId === projectId && thread.purpose === 'skill-run' && (thread.skillPath === skillPath || (!thread.skillPath && skill && thread.skillCommand === skill.command)) && !thread.archivedAt)
         .filter((thread) => Boolean(threadRunStates[thread.id]))
         .sort((a, b) => b.updatedAt - a.updatedAt)[0]
       const requestId = runningThread ? threadRunStates[runningThread.id]?.requestId : undefined
-      if (!requestId || requestId.startsWith('pending-') || !window.claudeChat) return
-      await window.claudeChat.cancel(requestId)
+      if (!requestId || requestId.startsWith('pending-') || !runningThread) return
+      if (projectChatReadinessRef.current !== 'legacy') {
+        const snapshot = projectChatSnapshotControllerRef.current.snapshot(projectId)
+        if (!snapshot || !window.projectChat) return
+        const result = await window.projectChat.cancelRun({ projectId, threadId: runningThread.id, requestId, routeGeneration: snapshot.routeGeneration })
+        if (!result.ok) setHeaderStatus(result.error.message)
+        return
+      }
+      await window.claudeChat?.cancel(requestId)
     },
-    [chatWorkspace?.threads, threadRunStates],
+    [chatWorkspace?.threads, projectSkillStates, threadRunStates],
   )
 
   const selectProject = useCallback(
@@ -2418,11 +2443,12 @@ export function AppShell() {
       // refused rather than silently orphaning its run.
       const archived = await threadIntentClient.archive(target.projectId, threadId)
       if (!archived) return
+      await refreshProjectChatSnapshot(target.projectId)
       setSelectedProjectSkill(null)
       // Only the archived thread's own selection may move.
       if (wasActive) goHome()
     },
-    [goHome, threadIntentClient, updateChatWorkspace, workspaceSession],
+    [goHome, refreshProjectChatSnapshot, threadIntentClient, updateChatWorkspace, workspaceSession],
   )
 
   /**

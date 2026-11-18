@@ -1436,12 +1436,12 @@ function SkillHomeCard({
   const [busy, setBusy] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
   const runningThread = useMemo(
-    () => latestSkillThread(threads, skill.path, (thread) => Boolean(threadRunStates[thread.id])),
-    [skill.path, threadRunStates, threads],
+    () => latestSkillThread(threads, skill.path, skill.command, (thread) => Boolean(threadRunStates[thread.id])),
+    [skill.path, skill.command, threadRunStates, threads],
   )
   const latestThread = useMemo(
-    () => runningThread ?? latestSkillThread(threads, skill.path),
-    [runningThread, skill.path, threads],
+    () => runningThread ?? latestSkillThread(threads, skill.path, skill.command),
+    [runningThread, skill.path, skill.command, threads],
   )
   const activeRunState = runningThread ? threadRunStates[runningThread.id] : undefined
   const lastStatus = latestThread ? latestThreadMessageStatus(latestThread) : undefined
@@ -3710,10 +3710,11 @@ function normalizeHomeCardLayout(value: unknown): HomeCardLayout {
 function latestSkillThread(
   threads: ThreadMetadata[],
   skillPath: string,
+  skillCommand: string,
   predicate: (thread: ThreadMetadata) => boolean = () => true,
 ): ThreadMetadata | undefined {
   return threads
-    .filter((thread) => thread.purpose === 'skill-run' && thread.skillPath === skillPath && !thread.archivedAt && predicate(thread))
+    .filter((thread) => thread.purpose === 'skill-run' && (thread.skillPath === skillPath || (!thread.skillPath && thread.skillCommand === skillCommand)) && !thread.archivedAt && predicate(thread))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
 

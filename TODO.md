@@ -94,6 +94,10 @@
 - [ ] 为 Local App writer 任务分配精确代码路径、diff 基线和唯一实现者；实现后按风险触发开发质量检查。
 - [ ] CodeNow Wiki live smoke 需要实际启动外部项目时，单独执行并保留真实日志/页面证据；fixture 不得替代。
 
+### 用户反馈：Skill 执行与对话删除（2026-11-18）
+
+- [~] Skill 执行已改走 Main 创建并提交运行，保留 Skill 元数据及停止入口；删除成功后主动回读项目快照。`npm run typecheck` 与相关 Electron 测试通过；尚未在实际桌面应用和真实模型上复现、验证。删除界面不刷新的原始触发条件仍待 GUI 复核。
+
 ## 2. 未排期 Backlog
 
 > 不属于任何 active change。来自 `chg-20260825-local-app-tabs-runtime` 关闭时迁出。
