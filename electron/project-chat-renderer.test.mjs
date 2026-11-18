@@ -129,7 +129,7 @@ test('Project window reuses the snapshot Chat surface while persisting only loca
   assert.doesNotMatch(projectWindow, /new WorkspaceSession|applyProjectChatSnapshot/)
   assert.match(chatPage, /projectWindow\?: \{ draft: string; onDraftChange/)
   assert.match(chatPage, /if \(projectChatEnabled\)/) // public project bridge remains the branch owner
-  assert.match(chatPage, /creatingThread \? newThreadModelPick \?\? currentModelPickRef\.current/)
+  assert.match(chatPage, /modelRowForPick\(modelMenuRows, requestedPick\)/)
   assert.match(appShell, /openRuntimeDevelopment\?\.\(target\)/)
   assert.match(appShell, /endRuntimeDevelopment\?\.\(target\)/)
   assert.match(appShell, /kind: 'workspace-runtime', workspaceTabId: activeWorkspaceTab\.id/)

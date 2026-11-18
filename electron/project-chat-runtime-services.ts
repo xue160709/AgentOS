@@ -50,7 +50,7 @@ export function createProjectChatScopedReadCollaborator(options: ProjectChatScop
       return {
         activeProviderId: settings.activeProviderId,
         activeAnthropicModel: settings.activeAnthropicModel,
-        providers: settings.providers.map((provider) => ({ id: provider.id, name: provider.name, model: provider.model, modelSupportsImages: provider.modelSupportsImages, defaultHaikuModel: provider.defaultHaikuModel, defaultHaikuSupportsImages: provider.defaultHaikuSupportsImages, defaultOpusModel: provider.defaultOpusModel, defaultOpusSupportsImages: provider.defaultOpusSupportsImages, defaultSonnetModel: provider.defaultSonnetModel, defaultSonnetSupportsImages: provider.defaultSonnetSupportsImages })),
+        providers: settings.providers.filter((provider) => provider.apiKey.trim() || provider.authToken.trim()).map((provider) => ({ id: provider.id, name: provider.name, model: provider.model, modelSupportsImages: provider.modelSupportsImages, defaultHaikuModel: provider.defaultHaikuModel, defaultHaikuSupportsImages: provider.defaultHaikuSupportsImages, defaultOpusModel: provider.defaultOpusModel, defaultOpusSupportsImages: provider.defaultOpusSupportsImages, defaultSonnetModel: provider.defaultSonnetModel, defaultSonnetSupportsImages: provider.defaultSonnetSupportsImages })),
       }
     },
     async getAgentContext(projectId: string): Promise<ProjectChatAgentContext> {
@@ -116,7 +116,7 @@ export function createRuntimeChatScopedReadCollaborator(options: RuntimeChatScop
   return {
     async getModelCatalog(): Promise<ProjectChatModelCatalog> {
       const { settings } = options.settings.getSnapshot()
-      return { activeProviderId: settings.activeProviderId, activeAnthropicModel: settings.activeAnthropicModel, providers: settings.providers.map((provider) => ({ id: provider.id, name: provider.name, model: provider.model, modelSupportsImages: provider.modelSupportsImages, defaultHaikuModel: provider.defaultHaikuModel, defaultHaikuSupportsImages: provider.defaultHaikuSupportsImages, defaultOpusModel: provider.defaultOpusModel, defaultOpusSupportsImages: provider.defaultOpusSupportsImages, defaultSonnetModel: provider.defaultSonnetModel, defaultSonnetSupportsImages: provider.defaultSonnetSupportsImages })) }
+      return { activeProviderId: settings.activeProviderId, activeAnthropicModel: settings.activeAnthropicModel, providers: settings.providers.filter((provider) => provider.apiKey.trim() || provider.authToken.trim()).map((provider) => ({ id: provider.id, name: provider.name, model: provider.model, modelSupportsImages: provider.modelSupportsImages, defaultHaikuModel: provider.defaultHaikuModel, defaultHaikuSupportsImages: provider.defaultHaikuSupportsImages, defaultOpusModel: provider.defaultOpusModel, defaultOpusSupportsImages: provider.defaultOpusSupportsImages, defaultSonnetModel: provider.defaultSonnetModel, defaultSonnetSupportsImages: provider.defaultSonnetSupportsImages })) }
     },
     async getAgentContext(runtimeScopeId: RuntimeScopeId): Promise<ProjectChatAgentContext> {
       return projectContext(await options.discoverAgentContext(contextRoot(resolved(runtimeScopeId))))

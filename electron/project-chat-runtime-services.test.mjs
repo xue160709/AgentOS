@@ -37,6 +37,24 @@ test('scoped services fresh-read durable state and never return settings/status 
   state.projects[0].pathMissing = true; await assert.rejects(service.getAgentContext('p')); assert.equal(calls.filter(([name]) => name === 'context').length, 1)
 })
 
+test('project and runtime catalogs reflect added and removed models and exclude providers without credentials', async () => {
+  const { createProjectChatScopedReadCollaborator, createRuntimeChatScopedReadCollaborator } = load(resolve(testDir, './project-chat-runtime-services.ts'))
+  const snapshot = settings()
+  const options = { workspace: { read: () => workspace() }, settings: { getSnapshot: () => snapshot }, runner: {}, discoverAgentContext: async () => ({}), searchProjectFiles: async () => ({}), pickAttachments: async () => ({}), readAttachments: async () => ({}), realpath: async (x) => x, runtimeWorkspace: { read: () => ({}) }, resolveScope: () => null }
+  const services = [createProjectChatScopedReadCollaborator(options), createRuntimeChatScopedReadCollaborator(options)]
+  for (const service of services) assert.equal((await service.getModelCatalog()).providers[0].model, 'm')
+  snapshot.settings.providers[0].model = 'new-model'
+  snapshot.settings.providers[0].defaultHaikuModel = ''
+  snapshot.settings.providers.push({ ...snapshot.settings.providers[0], id: 'empty', apiKey: '', authToken: '' })
+  for (const service of services) {
+    const catalog = await service.getModelCatalog()
+    assert.equal(catalog.providers.length, 1)
+    assert.equal(catalog.providers[0].model, 'new-model')
+    assert.equal(catalog.providers[0].defaultHaikuModel, '')
+    assert.equal(JSON.stringify(catalog).includes('credential-sentinel'), false)
+  }
+})
+
 test('attachment reads canonicalize candidates before reader and turn escapes into generic skips', async () => {
   const { createProjectChatScopedReadCollaborator } = load(resolve(testDir, './project-chat-runtime-services.ts'))
   const realpaths = []; const read = []; const service = createProjectChatScopedReadCollaborator({ workspace: { read: () => workspace('/root') }, settings: { getSnapshot: settings }, runner: { getStatus: async () => ({}) }, discoverAgentContext: async () => ({}), searchProjectFiles: async () => ({ ok: true, rootPath: '/root', items: [] }), pickAttachments: async () => ({ attachments: [], skipped: [] }), readAttachments: async (paths, allowImages) => { read.push([paths, allowImages]); return { attachments: [{ id: 'ok', kind: 'text', name: 'ok.md', mimeType: 'text/markdown', size: 999, text: 'ok', path: '/root/ok.md' }], skipped: [{ name: '/secret', path: '/secret', reason: 'secret' }] } }, realpath: async (input) => { realpaths.push(input); return input === '/root' ? '/real/root' : input.endsWith('ok.md') ? '/real/root/ok.md' : input.endsWith('escape.md') ? '/outside/escape.md' : Promise.reject(new Error('missing')) } })

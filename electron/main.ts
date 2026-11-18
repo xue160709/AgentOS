@@ -1661,7 +1661,13 @@ if (gotSingleInstanceLock) {
       return getClaudeAgentSettingsStore().getSnapshot()
     })
     ipcMain.handle('claude-agent-settings:save', (_event, settings: ClaudeAgentSettings) => {
-      return runClaudeSettingsOperation(async () => getClaudeAgentSettingsStore().save(settings))
+      return runClaudeSettingsOperation(async () => {
+        const snapshot = getClaudeAgentSettingsStore().save(settings)
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('claude-agent-settings:catalog-changed')
+        }
+        return snapshot
+      })
     })
     ipcMain.handle('claude-agent-settings:test-provider', (_event, provider: ClaudeAgentModelProvider) => {
       return getClaudeAgentSettingsStore().testProvider(provider)

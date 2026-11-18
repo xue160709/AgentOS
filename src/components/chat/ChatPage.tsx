@@ -34,7 +34,7 @@ import type {
   ClaudePermissionMode,
   ProjectFileSearchItem,
 } from '../../claude-chat-types'
-import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../../app-events'
+import { CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT, CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../../app-events'
 import type { HomePluginRunItem, SpeechRecognitionStatus } from '../../desktop-types'
 import { useI18n } from '../../i18n/i18n'
 import {
@@ -990,6 +990,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   useEffect(() => {
     if (!claudeSettingsSnapshot) return
+    if (projectChatEnabled) return
     const settings = claudeSettingsSnapshot.settings
     const requestedPick = activeThread?.id ? activeThreadModelPick : newThreadModelPick
     const effectivePick = resolveEffectiveModelPick(settings, requestedPick)
@@ -1003,7 +1004,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!isRunningRef.current) {
       onStatusChange(compactModelName(displayModel, t))
     }
-  }, [activeThreadModelPick, activeThread?.id, claudeSettingsSnapshot, modelMenuRows, newThreadModelPick, onStatusChange, t])
+  }, [activeThreadModelPick, activeThread?.id, claudeSettingsSnapshot, modelMenuRows, newThreadModelPick, onStatusChange, projectChatEnabled, t])
 
   useEffect(() => {
     setHomeComposerMode('normal')
@@ -1011,12 +1012,18 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   useEffect(() => {
     if (projectChatEnabled) {
-      void chatBridge?.getModelCatalog().then((result) => {
-        if (result?.ok) applyProjectModelCatalog(result.value)
-      }).catch(() => undefined)
-      return
+      let sequence = 0
+      let disposed = false
+      const refresh = () => {
+        const request = ++sequence
+        void chatBridge?.getModelCatalog().then((result) => {
+          if (!disposed && request === sequence && result?.ok) applyProjectModelCatalog(result.value)
+        }).catch(() => undefined)
+      }
+      refresh()
+      window.addEventListener(CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT, refresh)
+      return () => { disposed = true; window.removeEventListener(CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT, refresh) }
     }
-    if (projectChatEnabled) return
     window.claudeChat?.getSettings().then(applyGlobalModelFromSettings).catch(() => {
       /* 浏览器独立预览可能没有 Electron 桥接 / Browser preview may run without the Electron bridge */
     })
@@ -1031,10 +1038,9 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   useEffect(() => {
     if (!projectChatEnabled || !projectModelCatalog) return
     const requestedPick = activeThreadModelPick
-    const fallback = projectModelCatalog.providers.find((provider) => provider.id === projectModelCatalog.activeProviderId)
-    const effectivePick = requestedPick ?? (fallback && projectModelCatalog.activeAnthropicModel
-      ? { providerId: fallback.id, anthropicModel: projectModelCatalog.activeAnthropicModel }
-      : undefined)
+    const defaultPick = { providerId: projectModelCatalog.activeProviderId, anthropicModel: projectModelCatalog.activeAnthropicModel }
+    const effectiveRow = modelRowForPick(modelMenuRows, requestedPick) ?? modelRowForPick(modelMenuRows, defaultPick) ?? modelMenuRows[0]
+    const effectivePick = effectiveRow ? modelPickFromRow(effectiveRow) : undefined
     const row = modelRowForPick(modelMenuRows, effectivePick)
     const displayModel = row?.anthropicModelId ?? effectivePick?.anthropicModel ?? t('chat.modelFallback')
     currentModelPickRef.current = effectivePick
@@ -1358,7 +1364,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       })
     }
 
-    window.claudeChat?.getSettings().then(applyGlobalModelFromSettings).catch(() => {
+    if (!projectChatEnabled) window.claudeChat?.getSettings().then(applyGlobalModelFromSettings).catch(() => {
       /* 浏览器独立预览可能没有 Electron 桥接 / Browser preview may run without the Electron bridge */
     })
     return () => {
@@ -1638,7 +1644,10 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       }
       let threadId = target?.threadId ?? activeThread?.id
       const creatingThread = !threadId
-      const modelPickForSubmit = target?.modelPick ?? (creatingThread ? newThreadModelPick ?? currentModelPickRef.current : undefined)
+      const requestedPick = target?.modelPick ?? (creatingThread ? newThreadModelPick : threadId === activeThread?.id ? activeThreadModelPick : undefined)
+      const modelPickForSubmit = target?.threadId && target.threadId !== activeThread?.id && !target.modelPick
+        ? undefined
+        : modelRowForPick(modelMenuRows, requestedPick) ? requestedPick : currentModelPickRef.current
       if (!threadId) {
         const created = await chatBridge.createThread({ title: '新对话' })
         if (!created?.ok) { onStatusChange(created?.error.message ?? t('chat.errorGeneric')); return false }

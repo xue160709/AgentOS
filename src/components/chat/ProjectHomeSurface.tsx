@@ -23,7 +23,7 @@ import type {
   ProjectContextEntry,
 } from '../../desktop-types'
 import { IconInline } from '../../icon-inline'
-import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT } from '../../app-events'
+import { CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT, CLAUDE_AGENT_SETTINGS_CHANGED_EVENT } from '../../app-events'
 import { useI18n } from '../../i18n/i18n'
 import {
   buildModelPickRows,
@@ -390,15 +390,28 @@ export function ProjectHomeSurface({
   )
 
   useEffect(() => {
-    window.claudeChat?.getSettings().then(applyModelSettings).catch(() => {
-      setModelSettingsSnapshot(null)
-      setModelRows([])
-    })
+    let sequence = 0
+    let disposed = false
+    const refresh = () => {
+      const request = ++sequence
+      window.claudeChat?.getSettings().then((snapshot) => {
+        if (!disposed && request === sequence) applyModelSettings(snapshot)
+      }).catch(() => {
+        if (!disposed && request === sequence) { setModelSettingsSnapshot(null); setModelRows([]) }
+      })
+    }
+    refresh()
     const onSettingsChanged = (event: Event) => {
+      sequence += 1
       applyModelSettings((event as CustomEvent<ClaudeAgentSettingsSnapshot>).detail)
     }
     window.addEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
-    return () => window.removeEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
+    window.addEventListener(CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT, refresh)
+    return () => {
+      disposed = true
+      window.removeEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
+      window.removeEventListener(CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT, refresh)
+    }
   }, [applyModelSettings])
 
   const loadAgentSkillModelSettings = useCallback(async () => {

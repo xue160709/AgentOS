@@ -4,6 +4,7 @@
  */
 
 import { ipcRenderer, contextBridge, type IpcRendererEvent } from 'electron'
+import { CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT } from '../src/app-events'
 import type {
   AppUpdaterState,
   DesktopPreferences,
@@ -637,6 +638,11 @@ export function isProjectChatWindowProfile(argv: readonly string[] = process.arg
 export function isRuntimeDevelopmentWindowProfile(argv: readonly string[] = process.argv): boolean {
   return argv.includes('--agentos-window-kind=runtime-development')
 }
+
+// 通知只携带失效信号；各窗口通过自己的受限接口重新读取模型目录。
+ipcRenderer.on(CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT, () => {
+  window.dispatchEvent(new Event(CLAUDE_AGENT_MODEL_CATALOG_CHANGED_EVENT))
+})
 
 if (isRuntimeDevelopmentWindowProfile()) {
   // Runtime 开发窗口只能访问 capability-scoped Runtime Chat；不暴露 desktop、Project 或 Node/path API。
