@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Runtime 容错交互逻辑",
+    "output": "diagrams/runtime-fault-tolerance.html",
+    "viewBox": [980, 630],
+    "locale": "zh-CN",
+    "animation": "trace",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "authority", "label": "启动与权威状态", "focus": ["request", "authority_gate", "mode_route", "available", "preview_consumer"], "note": "信任、路径或配置失败时停在可解释状态，不创建半成品实例；修正后从原请求重试，所有异步回调服从当前 generation。" },
+      { "id": "static-recovery", "label": "静态构建容错", "focus": ["mode_route", "build_fault", "last_good"], "note": "新构建未通过完整校验前不替换 last-good；失败时保留上一版并提供显式重试。" },
+      { "id": "development-recovery", "label": "开发服务容错", "focus": ["available", "process_fault", "bounded_retry"], "note": "启动、readiness 或运行期崩溃进入有限恢复；耗尽后停在 failed，等待用户重试。" },
+      { "id": "preview-recovery", "label": "Preview 独立降级", "focus": ["preview_consumer", "preview_fault", "degraded_view"], "note": "单个 Preview 断连只降级该视图，不污染共享 Runtime；只有最后一个 consumer 关闭时才停止并回收实例。" }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "Runtime 权威生命周期" },
+    { "id": "static", "label": "静态构建" },
+    { "id": "development", "label": "开发进程" },
+    { "id": "terminal", "label": "可恢复结果" }
+  ],
+  "states": [
+    { "id": "request", "type": "start", "label": "打开工作台", "sublabel": "创建消费请求", "lane": "main", "col": 0, "step": "01", "tag": "intent" },
+    { "id": "authority_gate", "type": "decision", "label": "启动校验", "sublabel": "信任 · 路径 · 配置", "lane": "main", "col": 1, "step": "02", "tag": "gate" },
+    { "id": "mode_route", "type": "decision", "label": "模式分流", "sublabel": "static / development", "lane": "main", "col": 2, "step": "03", "tag": "mode" },
+    { "id": "available", "type": "success", "label": "Runtime 可用", "sublabel": "URL 与 generation 生效", "lane": "main", "col": 3, "step": "04", "tag": "authoritative" },
+    { "id": "preview_consumer", "type": "active", "label": "Preview 消费", "sublabel": "多 Tab 共享实例", "lane": "main", "col": 4, "step": "05", "tag": "session" },
+    { "id": "build_fault", "type": "failure", "label": "构建未提交", "sublabel": "失败 · 取消 · 超时", "lane": "static", "col": 0, "tag": "preserve" },
+    { "id": "process_fault", "type": "failure", "label": "进程异常", "sublabel": "启动 / readiness / 崩溃", "lane": "development", "col": 1, "tag": "recover" },
+    { "id": "preview_fault", "type": "waiting", "label": "Preview 断连", "sublabel": "视图级连接异常", "lane": "static", "col": 2, "tag": "degraded" },
+    { "id": "last_good", "type": "success", "label": "继续 last-good", "sublabel": "旧产物仍可访问", "lane": "terminal", "col": 0, "tag": "atomic" },
+    { "id": "bounded_retry", "type": "neutral", "label": "有限恢复", "sublabel": "新 PID / 端口或 failed", "lane": "terminal", "col": 1, "tag": "bounded" },
+    { "id": "degraded_view", "type": "waiting", "label": "降级页", "sublabel": "刷新 · 重连 · 关闭", "lane": "terminal", "col": 2, "tag": "isolated" }
+  ],
+  "transitions": [
+    { "from": "mode_route", "to": "build_fault", "variant": "security", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "from": "build_fault", "to": "last_good", "variant": "emphasis", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "from": "available", "to": "process_fault", "variant": "security", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "from": "process_fault", "to": "bounded_retry", "variant": "emphasis", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "from": "preview_consumer", "to": "preview_fault", "variant": "dashed", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "from": "preview_fault", "to": "degraded_view", "variant": "emphasis", "route": "straight", "fromSide": "bottom", "toSide": "top" }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "agentos-local-app-runtime-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node server.mjs"
+  }
+}

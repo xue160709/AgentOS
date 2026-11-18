@@ -1,5 +1,39 @@
 # 聊天与 Agent 运行时
 
+## Revision 3 Planned：Runtime 专用开发 Chat
+
+Runtime 开发将使用独立于普通对话信息架构的专用窗口：用户从 Project Runtime 或 Workspace Runtime 点击“用 AI 修改”进入，窗口固定当前 Runtime，不提供项目切换，并在窗口存续期间支持连续多轮 AI 修改。关闭窗口或主窗口“结束修改”只提交结束意图，不隐式取消仍运行的 Run；安全终态后由 Runtime 统一保存最新预览或进入失败恢复。
+
+Runtime 开发对话仍复用现有 durable Thread、Transcript、Claude Agent SDK、模型、权限、提问和 Diff，不建立第二套 Chatbot。Thread 需要持久绑定 Runtime scope：Project Runtime 使用项目与 `<project>/.agentos` 约束；Workspace Runtime 使用显式 Runtime root，不创建 synthetic Project、不改变 active Project。
+
+开发窗口只列当前 Runtime 的开发记录，并支持关闭重开、恢复最近对话和草稿。开发记录不混入普通项目对话列表；全局搜索可以返回带 Runtime 名称与归属的结果，打开后仍进入对应专用窗口。
+
+状态：BUILDABLE / Planned，未实现。完整设计与技术合同见 [`chg-20260818-agent-command-channel@3`](../../changes/active/chg-20260818-agent-command-channel/design.md)，正式场景见 `ATDD-RUNTIME-DEV-301`–`306`。
+
+## 项目 `.agentos` Runtime prompt（Change revision 3：Current / as-built）
+
+Runtime system prompt 不是所有有效项目聊天的默认上下文。它只适用于独立项目 Chat 窗口发起的普通提交或编辑重提，以及项目主页「让 Agent 创建 Runtime 网页」按钮的 Main-owned 编排提交。路径固定为 `<project>/.agentos/`；它只约束创建或修改项目 Runtime 网页的组件、样式、脚本、资源、依赖及构建配置；Agent 的 cwd 仍是项目根，用户明确要求的非 Runtime 项目代码不被改写到 `.agentos/`。
+
+- `runtimeRoot` 与 prompt eligibility 都由 Main 派生：前者只来自权威项目路径，后者只来自 IPC sender capability 或专用按钮编排；renderer 不能提供、覆盖或声明 `runtimeRoot`、prompt scope 或等价标记。
+- 主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目请求和项目路径失效请求均不注入该 prompt。
+- 创建按钮只能由 main-window capability 调用。它打开或聚焦对应项目的独立 Chat 窗口，在该窗口自动创建并选中线程并提交请求；主窗口不得创建或选中空对话。
+- prompt 是路径约束而非写权限；run 后若 `.agentos/` 仍缺失而项目根出现疑似网页工程迹象，项目 Runtime 页面只显示目标路径提示，绝不搬运、复制、删除或自动重试。
+
+状态：Revision 3 已实现，自动化 Development Check 通过；正式 GUI 验收尚未执行。验收场景见 [`acceptance.md`](acceptance.md)，技术数据流见 [`technical.md`](technical.md)。
+
+## Revision 2（Accepted；实现已落盘，验收未执行）
+
+本轮把应用内 Agent 指令通道扩展为 Main-owned 项目 Chat 事实源，并新增两个入口：每项目唯一的独立 Chat 窗口，以及经用户配对授权的网站任务。M0–M2 与 M3-01 均已实现，Project Chat broker 默认开启；正式验收尚未执行。
+
+- 主窗口、独立窗口、应用内指令和网站任务复用现有普通项目线程、Transcript 与 Claude Agent SDK，不建立第二套 Chatbot 或任务历史。
+- 一个 HTTPS Origin 最多绑定一个项目；授权网站可用 `agentos://v1` 唤醒 AgentOS，再由固定 HTTPS 一次性 Ticket 新建普通线程。
+- 网站只收到 `accepted/rejected`，不能读取线程 ID、进度、Transcript、Diff、权限、提问或最终结果。
+- 同一 thread 只允许一个 active run；不同 thread 可并行。Main 是 thread/run/session/diff/revision 唯一 writer，窗口只是 snapshot 投影。
+- v1 权限模式保持当前 app-global 语义，由 Main 持久化和同步；每次 submit 捕获当时值，网站不能选择或提升权限。
+- 发生可靠 Agent mutation 时进入共享实时预览；所有 potential write run 终态且源码稳定后，静态项目自动生成一次已保存预览。失败/取消不自动保存半成品。
+
+完整已确认方案见 [`../../changes/active/chg-20260818-agent-command-channel/design.md`](../../changes/active/chg-20260818-agent-command-channel/design.md)，技术与网站协议见同 Change 的 `technical.md` / `protocol-v1.md`。本节描述计划状态，下面“当前已实现”仍是 as-built 事实。
+
 ## 模块定位
 
 聊天与 Agent 运行时模块负责把用户输入、附件、模型选择、权限模式和项目上下文转成 Claude Agent SDK 请求，并把流式事件渲染为可追踪的对话时间线。
@@ -31,6 +65,8 @@
 
 ## 还没做什么
 
+- Revision 2 的 Main broker、独立项目 Chat 窗口、Website Binding、deep link/Ticket 与 Runtime edit settle 均已实现并默认开启，但**全部尚未正式验收**。
+- Revision 2 存在一处已确认的半迁移缺陷：thread 事实已迁给 Main 并关闭了 renderer 的 durable writer，项目生命周期与工作区偏好却仍留在 renderer，导致新建/移除/重定位项目与侧边栏归档/置顶不落盘。收口工单为 `FIX-WS-01` 与 `FIX-CHAT-01`（见 `changes/active/chg-20260818-agent-command-channel/`），完成前 M0 Gate 视为未通过。
 - 聊天运行时 acceptance 已完成正式验收状态同步；流式、取消、权限、Generative UI、MCP 与 WebSearch 核心路径均已有单测、source audit、selector audit 或 smoke 证据。
 - 端到端 UI 流式走查、权限弹窗、Composer 语音交互和 Generative UI 截图证据仍需沉淀为全页面点击式 E2E 脚本。
 - WebSearch 的真实 Provider 可用性仍受第三方网络、额度和 bot challenge 影响；API Key 池用于在 Brave/Tavily 单个 Key 认证、配额、网络或服务失败时按顺序尝试后续 Key，真实外网成功搜索可作为 live smoke 后续补充。

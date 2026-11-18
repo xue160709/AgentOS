@@ -14,5 +14,13 @@
     "task-home-plugin",
     "desktop-shell-settings-release"
   ],
-  "notes": "全量同步：对齐 2026-06-24 全量 project-verify 与 WebSearch API Key 池增量验收结果，当前 98 个场景中 95 个通过、0 个失败、3 个保留为桌面托盘和 macOS 语音权限人工确认；同步 interaction-flow-review 结论与 TODO 剩余验收细节。"
+  "workingTreeSync": {
+    "syncedAt": "2026-08-25",
+    "modules": [
+      "local-app-runtime"
+    ],
+    "baselineCommit": "a940b9bff60e19315e3fcce982589315c1d93c2b",
+    "notes": "Local App Runtime 已按当前未提交 working tree 同步 as-built；正式 Acceptance 为 10/16 通过、6 项待补证据、0 失败。"
+  },
+  "notes": "2026-06-24 全量 commit 同步点保持不变；2026-08-25 的 Local App Runtime 作为未提交 working tree 同步单独记录，避免把当前 HEAD 冒充已包含本轮实现。"
 }

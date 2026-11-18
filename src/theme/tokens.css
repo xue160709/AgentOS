@@ -24,8 +24,30 @@
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
 
+  --line-height-tight: 1.2;
+  --line-height-compact: 1.35;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.65;
+  --tracking-tight: -0.012em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+
   --spacing: 0.25rem;
 
+  /* Named spacing aliases make intent visible without breaking the existing
+     calc(var(--spacing) * n) convention used throughout the application. */
+  --space-0: 0;
+  --space-1: calc(var(--spacing) * 1);
+  --space-2: calc(var(--spacing) * 2);
+  --space-3: calc(var(--spacing) * 3);
+  --space-4: calc(var(--spacing) * 4);
+  --space-5: calc(var(--spacing) * 5);
+  --space-6: calc(var(--spacing) * 6);
+  --space-8: calc(var(--spacing) * 8);
+  --space-10: calc(var(--spacing) * 10);
+  --space-12: calc(var(--spacing) * 12);
+
+  --text-2xs: 10px;
   --text-xs: 11px;
   --text-sm: 12px;
   --text-base: 14px;
@@ -48,6 +70,14 @@
   --height-toolbar: 46px;
   --height-toolbar-sm: 36px;
   --height-toolbar-pane: 40px;
+  --height-control-compact: 28px;
+  --height-control-default: 32px;
+  --height-control-comfortable: 36px;
+  --size-target-touch: 44px;
+  --size-icon-xs: 12px;
+  --size-icon-sm: 16px;
+  --size-icon-md: 20px;
+  --size-icon-lg: 24px;
   --inset-toolbar: var(--height-toolbar);
   --inset-toolbar-sm: var(--height-toolbar-sm);
 
@@ -75,26 +105,50 @@
   --cubic-exit-snappy: cubic-bezier(0.65, 0, 0.4, 1);
   --transition-duration-basic: 0.15s;
   --transition-duration-relaxed: 0.3s;
+  --transition-duration-fast: 0.1s;
+  --transition-duration-slow: 0.45s;
   --transition-ease-basic: ease;
 
   --gray-0: #ffffff;
   --gray-50: #f9f9f9;
   --gray-100: #ededed;
   --gray-200: #e0e0e0;
+  --gray-300: #c6c6c6;
   --gray-400: #8e8e8e;
   --gray-500: #5d5d5d;
+  --gray-600: #4a4a4a;
   --gray-700: #3a3a3a;
   --gray-800: #2a2a2a;
   --gray-900: #181818;
+  --gray-1000: #0b0b0b;
 
+  --blue-50: #edf6ff;
+  --blue-100: #d8ebff;
   --blue-400: #0285ff;
   --blue-500: #0066cc;
+  --blue-600: #0057b8;
+  --red-50: #fff0ef;
   --red-500: #e02e2a;
+  --red-600: #c5221f;
+  --green-50: #eaf8ef;
   --green-500: #00a240;
+  --green-600: #007a2f;
+  --orange-50: #fff5e6;
   --orange-500: #d18616;
+  --orange-600: #985a00;
   --yellow-500: #c19c00;
 
   --color-token-main-surface-primary: var(--gray-50);
+  --color-token-main-surface-secondary: color-mix(
+    in oklab,
+    var(--color-token-foreground) 4%,
+    var(--color-token-main-surface-primary)
+  );
+  --color-token-main-surface-tertiary: color-mix(
+    in oklab,
+    var(--color-token-foreground) 7%,
+    var(--color-token-main-surface-primary)
+  );
   --color-token-side-bar-background: var(--gray-50);
   --color-token-bg-primary: var(--color-token-side-bar-background);
   --color-token-bg-secondary: color-mix(in srgb, var(--color-token-bg-primary) 92%, transparent);
@@ -158,6 +212,16 @@
   --color-token-icon-tertiary: var(--color-token-text-tertiary);
 
   --color-token-error-foreground: var(--red-500);
+  --color-token-danger-foreground: var(--red-600);
+  --color-token-text-danger: var(--color-token-danger-foreground);
+  --color-token-success-foreground: var(--green-600);
+  --color-token-warning-foreground: var(--orange-600);
+  --color-token-info-foreground: var(--blue-600);
+  --color-token-danger-background: color-mix(in oklab, var(--red-500) 9%, transparent);
+  --color-token-success-background: color-mix(in oklab, var(--green-500) 9%, transparent);
+  --color-token-warning-background: color-mix(in oklab, var(--orange-500) 10%, transparent);
+  --color-token-info-background: color-mix(in oklab, var(--blue-500) 9%, transparent);
+  --color-token-focus-ring: color-mix(in oklab, var(--color-token-focus-border) 24%, transparent);
   --color-token-editor-error-foreground: var(--red-500);
   --color-token-editor-warning-foreground: var(--orange-500);
   --color-token-progress-bar-background: var(--blue-400);
@@ -167,9 +231,24 @@
   --color-token-sidebar-edge-border: color-mix(in oklab, var(--gray-900) 10%, transparent);
   --codex-titlebar-tint: color-mix(in oklab, var(--gray-0) 72%, transparent);
 
+  --shadow-xs: 0px 1px 2px rgb(0 0 0 / 0.08);
+  --shadow-sm: 0px 2px 6px -2px rgb(0 0 0 / 0.1);
+  --shadow-md: 0px 6px 16px -6px rgb(0 0 0 / 0.14);
+  --shadow-lg: 0px 10px 28px -10px rgb(0 0 0 / 0.18);
   --shadow-xl: 0px 8px 16px -4px rgb(0 0 0 / 0.12);
   --shadow-2xl: 0px 16px 32px -8px rgb(0 0 0 / 0.19);
-  --shadow-xs: 0px 1px 2px rgb(0 0 0 / 0.08);
+
+  /* Compatibility aliases for older surfaces. New UI should use the
+     color-token names above so light/dark behavior stays centralized. */
+  --color-bg: var(--color-token-main-surface-primary);
+  --color-surface: var(--color-token-main-surface-primary);
+  --color-surface-subtle: var(--color-token-main-surface-secondary);
+  --color-text: var(--color-token-text-primary);
+  --color-text-muted: var(--color-token-text-secondary);
+  --text-secondary: var(--color-token-text-secondary);
+  --color-border-subtle: var(--color-token-border-light);
+  --color-accent: var(--color-token-link);
+  --color-danger: var(--color-token-danger-foreground);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -177,6 +256,16 @@
     color-scheme: dark;
 
     --color-token-main-surface-primary: var(--gray-900);
+    --color-token-main-surface-secondary: color-mix(
+      in oklab,
+      var(--gray-0) 5%,
+      var(--color-token-main-surface-primary)
+    );
+    --color-token-main-surface-tertiary: color-mix(
+      in oklab,
+      var(--gray-0) 8%,
+      var(--color-token-main-surface-primary)
+    );
     --color-token-side-bar-background: var(--gray-900);
     --color-token-bg-primary: var(--color-token-side-bar-background);
     --color-token-bg-secondary: color-mix(in srgb, var(--color-token-bg-primary) 92%, transparent);
@@ -231,13 +320,28 @@
     --color-token-menu-border: var(--color-token-border);
     --color-token-simple-scrim: rgb(0 0 0 / 0.5);
 
+    --color-token-error-foreground: #ff625c;
+    --color-token-danger-foreground: #ff625c;
+    --color-token-text-danger: var(--color-token-danger-foreground);
+    --color-token-success-foreground: #32c766;
+    --color-token-warning-foreground: #f2a33b;
+    --color-token-info-foreground: #4ca6ff;
+    --color-token-danger-background: color-mix(in oklab, #ff625c 13%, transparent);
+    --color-token-success-background: color-mix(in oklab, #32c766 12%, transparent);
+    --color-token-warning-background: color-mix(in oklab, #f2a33b 12%, transparent);
+    --color-token-info-background: color-mix(in oklab, #4ca6ff 12%, transparent);
+    --color-token-focus-ring: color-mix(in oklab, var(--color-token-focus-border) 38%, transparent);
+
     --color-token-sidebar-glass-surface: color-mix(in oklab, var(--gray-800) 36%, transparent);
     --color-token-sidebar-glass-fallback: color-mix(in oklab, var(--gray-800) 94%, var(--gray-900));
     --color-token-sidebar-edge-border: color-mix(in oklab, var(--gray-0) 12%, transparent);
     --codex-titlebar-tint: color-mix(in oklab, var(--gray-900) 88%, transparent);
 
+    --shadow-xs: 0px 1px 2px rgb(0 0 0 / 0.28);
+    --shadow-sm: 0px 2px 6px -2px rgb(0 0 0 / 0.3);
+    --shadow-md: 0px 6px 16px -6px rgb(0 0 0 / 0.34);
+    --shadow-lg: 0px 10px 28px -10px rgb(0 0 0 / 0.42);
     --shadow-xl: 0px 8px 16px -4px rgb(0 0 0 / 0.28);
     --shadow-2xl: 0px 16px 32px -8px rgb(0 0 0 / 0.36);
-    --shadow-xs: 0px 1px 2px rgb(0 0 0 / 0.28);
   }
 }

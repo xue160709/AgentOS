@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Runtime 容错优化：统一事务权威",
+    "output": "diagrams/runtime-fault-tolerance-optimization.html",
+    "viewBox": [960, 566],
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "authority-transaction",
+        "label": "统一权威事务",
+        "focus": ["request", "begin_epoch", "execute", "authority_gate", "publish"],
+        "note": "Build、Dev、Reload 先取得 operation epoch；只有当前且未取消的事务可以提交与发布。"
+      },
+      {
+        "id": "stop-and-timeout",
+        "label": "停止与超时",
+        "focus": ["execute", "cancel_requested", "stopped", "authority_gate", "invalidated", "safe_fallback"],
+        "note": "Stop 同步废弃排队操作；超时终止进程树与复制任务，并恢复安全状态。"
+      },
+      {
+        "id": "late-event-fence",
+        "label": "迟到事件围栏",
+        "focus": ["authority_gate", "invalidated", "safe_fallback", "publish"],
+        "note": "每个 await、回调和状态写入都校验 epoch、AbortSignal 与 Runtime identity。"
+      },
+      {
+        "id": "preview-recovery",
+        "label": "Preview 恢复闭环",
+        "focus": ["publish", "preview_degraded", "reload_wait"],
+        "note": "刷新等待真实 did-finish-load；失败、超时、崩溃或无响应只降级当前 Preview。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "Runtime 权威事务" },
+    { "id": "recovery", "label": "取消、失效与 Preview 降级" },
+    { "id": "terminal", "label": "安全结果" }
+  ],
+  "states": [
+    { "id": "request", "type": "start", "label": "接收操作", "sublabel": "Build · Dev · Reload", "lane": "main", "col": 0, "step": "01", "tag": "intent" },
+    { "id": "begin_epoch", "type": "decision", "label": "分配 operation epoch", "sublabel": "owner · AbortSignal", "lane": "main", "col": 1, "step": "02", "tag": "claim" },
+    { "id": "execute", "type": "active", "label": "受控执行", "sublabel": "inspect · spawn · copy · load", "lane": "main", "col": 2, "step": "03", "tag": "scoped" },
+    { "id": "authority_gate", "type": "decision", "label": "提交前权威校验", "sublabel": "当前 epoch 且未 abort", "lane": "main", "col": 3, "step": "04", "tag": "fence" },
+    { "id": "publish", "type": "success", "label": "发布当前结果", "sublabel": "状态 · URL · generation 一致", "lane": "main", "col": 4, "step": "05", "tag": "authoritative" },
+
+    { "id": "cancel_requested", "type": "failure", "label": "Stop / release", "sublabel": "epoch++ · abort · 禁止重启", "lane": "recovery", "col": 0, "tag": "cancel" },
+    { "id": "invalidated", "type": "failure", "label": "事务失效", "sublabel": "超时 · 旧 epoch · 已 abort", "lane": "recovery", "col": 1, "tag": "fenced" },
+    { "id": "preview_degraded", "type": "failure", "label": "当前 Preview 降级", "sublabel": "断连 · 崩溃 · 无响应", "lane": "recovery", "col": 2, "tag": "isolated" },
+
+    { "id": "stopped", "type": "neutral", "label": "保持 stopped", "sublabel": "零 spawn · 零新 token", "lane": "terminal", "col": 0, "yOffset": -64, "tag": "terminal" },
+    { "id": "safe_fallback", "type": "neutral", "label": "安全回退", "sublabel": "last-good 或丢弃事件", "lane": "terminal", "col": 1, "yOffset": -64, "tag": "no-write" },
+    { "id": "reload_wait", "type": "active", "label": "等待真实加载结果", "sublabel": "finish · fail · timeout", "lane": "terminal", "col": 2, "yOffset": -64, "tag": "event-driven" }
+  ],
+  "transitions": [
+    { "id": "execute-cancel", "from": "execute", "to": "cancel_requested", "variant": "security", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "id": "cancel-stopped", "from": "cancel_requested", "to": "stopped", "variant": "security", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "id": "gate-invalid", "from": "authority_gate", "to": "invalidated", "variant": "dashed", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "id": "invalid-fallback", "from": "invalidated", "to": "safe_fallback", "variant": "security", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "id": "publish-degraded", "from": "publish", "to": "preview_degraded", "variant": "security", "route": "straight", "fromSide": "bottom", "toSide": "top" },
+    { "id": "degraded-reload", "from": "preview_degraded", "to": "reload_wait", "label": "刷新 / 重建", "variant": "emphasis", "route": "straight", "fromSide": "bottom", "toSide": "top", "labelAt": [710, 350] },
+    { "id": "reload-publish", "from": "reload_wait", "to": "publish", "label": "did-finish-load", "variant": "emphasis", "route": "right-channel", "fromSide": "right", "toSide": "right", "channelX": 850 }
+  ]
+}

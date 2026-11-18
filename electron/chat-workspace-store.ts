@@ -5,10 +5,13 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   normalizeChatWorkspaceState,
+  normalizeProjectThreadCreationSource,
+  readChatThreadRollout,
+  serializeChatThreadRollout,
 } from '../src/chat-workspace-persistence'
 import {
   readWorkspaceRevision,
@@ -35,6 +38,20 @@ const MAX_HISTORY_SEARCH_LIMIT = 64
 const SEARCH_DOCUMENT_BODY_LIMIT = 12_000
 const SEARCH_DOCUMENT_TOOL_LIMIT = 2_400
 const SEARCH_SNIPPET_LENGTH = 180
+/**
+ * Upper bound on how long a staged (streaming) mutation may stay memory-only.
+ * A durable `save()` rewrites every rollout file and rebuilds the search index,
+ * so running it once per coalesced delta (up to 20/s) costs tens of milliseconds
+ * of blocked Main per event and grows with the whole workspace. Streaming writes
+ * are staged instead and flushed on this interval, plus unconditionally on the
+ * run's terminal event and before quit.
+ */
+const DEFAULT_DURABLE_FLUSH_DELAY_MS = 5_000
+
+export type ChatWorkspaceStoreOptions = {
+  /** Test seam: shorten the staged-write flush interval. */
+  durableFlushDelayMs?: number
+}
 
 type ProjectRow = {
   id: string
@@ -63,13 +80,24 @@ type ThreadRow = {
   model: string | null
   modelPickJson: string | null
   cwd: string | null
+  creationSourceJson: string | null
 }
 
 type WorkspaceMetaRow = {
   activeProjectId: string
   activeThreadId: string
+  activeWorkspaceTabId: string | null
+  activeLocalAppTabId: string | null
   sidebarPrefsJson: string
+  runtimeDefinitionsJson: string | null
+  workspaceTabsJson: string | null
+  projectHomeViewModesJson: string | null
+  localAppDefinitionsJson: string | null
+  localAppTabsJson: string | null
   workspaceRevision: number | null
+  workspaceSchemaVersion: number | null
+  snapshotComplete: number | null
+  savedAt: number | null
 }
 
 type SearchDocument = {
@@ -100,6 +128,16 @@ type SearchDocumentRow = {
   rank?: number
 }
 
+function snapshotCursorAtLeast(
+  snapshot: Pick<ChatWorkspaceSnapshot, 'savedAt' | 'revision'>,
+  cursor: Pick<ChatWorkspaceSnapshot, 'savedAt' | 'revision'>,
+): boolean {
+  if (snapshot.revision !== undefined && cursor.revision !== undefined && snapshot.revision !== cursor.revision) {
+    return snapshot.revision > cursor.revision
+  }
+  return (snapshot.savedAt ?? 0) >= (cursor.savedAt ?? 0)
+}
+
 /**
  * Codex-like chat workspace persistence.
  *
@@ -113,11 +151,17 @@ export class ChatWorkspaceStore {
   private readonly sessionsDir: string
   private readonly historySearchIndex: HistorySearchIndex
   private sqliteAvailable: boolean | null = null
+  private currentState: ChatWorkspaceState | null = null
+  private pendingDurableState: ChatWorkspaceState | null = null
+  private durableFlushHandle: ReturnType<typeof setTimeout> | null = null
+  private durableChain: Promise<void> = Promise.resolve()
+  private readonly durableFlushDelayMs: number
 
-  constructor(userDataPath: string) {
+  constructor(userDataPath: string, options: ChatWorkspaceStoreOptions = {}) {
     this.filePath = path.join(userDataPath, WORKSPACE_FILE_NAME)
     this.dbPath = path.join(userDataPath, WORKSPACE_DB_NAME)
     this.sessionsDir = path.join(userDataPath, SESSIONS_DIR_NAME)
+    this.durableFlushDelayMs = options.durableFlushDelayMs ?? DEFAULT_DURABLE_FLUSH_DELAY_MS
     this.historySearchIndex = new HistorySearchIndex({
       dbPath: this.dbPath,
       canUseSqlite: () => this.canUseSqlite(),
@@ -128,32 +172,150 @@ export class ChatWorkspaceStore {
   }
 
   read(): ChatWorkspaceState | null {
-    const fromDb = this.readFromDatabase()
+    // A staged streaming mutation is strictly newer than anything on disk.
+    // Re-reading here would both hand out a transcript rolled back to the last
+    // durable commit and overwrite the projection the next fold builds on.
+    if (this.pendingDurableState) return this.currentState
     const fromJson = this.readJsonSnapshot()
+    // The JSON mirror is a complete snapshot. In the common case it has the
+    // same revision as SQLite, so compare only the tiny SQLite cursor first
+    // and avoid spawning several sqlite3 processes plus reading every rollout.
+    const databaseCursor = fromJson ? this.readDatabaseCursor() : null
+    const jsonIsCurrent = Boolean(fromJson && databaseCursor && snapshotCursorAtLeast(fromJson, databaseCursor))
+    const fromDb = jsonIsCurrent ? null : this.readFromDatabase()
     const selected = resolveChatWorkspaceSnapshot([
-      fromDb ? { state: fromDb, savedAt: this.fileModifiedAt(this.dbPath), source: 'sqlite-index' } : null,
+      // SQLite carries the same logical savedAt as the JSON mirror. File mtime
+      // is deliberately not used for snapshot freshness: WAL/checkpoint and
+      // unrelated index writes can change it without changing the workspace.
+      fromDb,
       fromJson,
     ])
-    return selected ? migrateLegacySeedProjects(selected.state) : null
+    const state = selected ? migrateLegacySeedProjects(selected.state) : null
+    this.currentState = state
+    return state
+  }
+
+  private readDatabaseCursor(): Pick<ChatWorkspaceSnapshot, 'savedAt' | 'revision'> | null {
+    if (!existsSync(this.dbPath) || !this.canUseSqlite()) return null
+    try {
+      const row = this.selectJson<{ savedAt: number | null; revision: number | null }>(
+        'SELECT saved_at AS savedAt, workspace_revision AS revision FROM workspace_meta WHERE id = 1',
+      )[0]
+      return row ? { savedAt: row.savedAt ?? undefined, revision: row.revision ?? undefined } : null
+    } catch {
+      // Legacy schemas are upgraded by the full database reader below.
+      return null
+    }
+  }
+
+  /**
+   * Return the last state already read or committed by Main without touching
+   * SQLite or rollout files. Runtime/Preview hot paths use this projection;
+   * durable mutation paths still call read() under the workspace coordinator.
+   */
+  current(): ChatWorkspaceState | null {
+    return this.currentState
   }
 
   async save(state: unknown): Promise<ChatWorkspaceState> {
+    const toSave = this.normalizeForSave(state)
+    // An explicit save carries the staged mutations with it, so drop the
+    // deferred write rather than letting it re-run behind this one.
+    this.pendingDurableState = null
+    this.cancelDurableFlush()
+    this.currentState = toSave
+    await this.enqueueDurable(() => this.writeDurable(toSave))
+    return toSave
+  }
+
+  /**
+   * Hot-path commit for streaming mutations. Updates the in-memory projection
+   * that `current()` serves and defers the durable write behind a throttle, so
+   * a burst of deltas costs one rollout+index write instead of one per event.
+   * Callers that need durability now must follow with `flushPending()`.
+   */
+  stage(state: unknown): ChatWorkspaceState {
+    const toSave = this.normalizeForSave(state)
+    this.currentState = toSave
+    this.pendingDurableState = toSave
+    if (this.durableFlushHandle === null) {
+      this.durableFlushHandle = setTimeout(() => {
+        this.durableFlushHandle = null
+        void this.flushPending().catch(() => undefined)
+      }, this.durableFlushDelayMs)
+      this.durableFlushHandle.unref?.()
+    }
+    return toSave
+  }
+
+  /** Write any staged mutation to disk now. Safe to call when nothing is staged. */
+  async flushPending(): Promise<void> {
+    this.cancelDurableFlush()
+    const pending = this.pendingDurableState
+    if (!pending) {
+      // Still join the chain so callers observe in-flight writes.
+      await this.enqueueDurable(async () => {})
+      return
+    }
+    this.pendingDurableState = null
+    await this.enqueueDurable(() => this.writeDurable(pending))
+  }
+
+  /** True while a streaming mutation has not reached disk yet. */
+  hasPendingDurableWrite(): boolean {
+    return this.pendingDurableState !== null
+  }
+
+  private normalizeForSave(state: unknown): ChatWorkspaceState {
     const normalized = normalizeChatWorkspaceState(state)
-    const toSave = workspaceRevisionOf(normalized) > 0 ? normalized : withNextWorkspaceRevision(normalized)
+    return workspaceRevisionOf(normalized) > 0 ? normalized : withNextWorkspaceRevision(normalized)
+  }
+
+  private cancelDurableFlush(): void {
+    if (this.durableFlushHandle === null) return
+    clearTimeout(this.durableFlushHandle)
+    this.durableFlushHandle = null
+  }
+
+  /** Serialize durable writes so a scheduled flush cannot interleave with save(). */
+  private enqueueDurable(operation: () => Promise<void>): Promise<void> {
+    const next = this.durableChain.then(operation, operation)
+    this.durableChain = next.then(
+      () => undefined,
+      () => undefined,
+    )
+    return next
+  }
+
+  private async writeDurable(toSave: ChatWorkspaceState): Promise<void> {
     const savedAt = Date.now()
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await mkdir(this.sessionsDir, { recursive: true })
     await this.saveRolloutFiles(toSave)
-    this.saveDatabaseIndex(toSave)
-    await writeFile(this.filePath, `${JSON.stringify({ ...toSave, savedAt }, null, 2)}\n`, 'utf8')
-    return toSave
+    // SQLite 与 JSON 是两个独立恢复源：各自尝试，至少一个介质成功即可
+    // 完成保存；只有两边都失败才向显式调用方报告失败。
+    let databaseSaved = false
+    let jsonSaved = false
+    try {
+      databaseSaved = this.saveDatabaseIndex(toSave, savedAt)
+    } catch {
+      databaseSaved = false
+    }
+    try {
+      jsonSaved = await this.saveJsonSnapshot(toSave, savedAt)
+    } catch {
+      jsonSaved = false
+    }
+    if (!databaseSaved && !jsonSaved) {
+      throw new Error('workspace-save-failed')
+    }
   }
 
   searchChatHistory(projectId: string, query: string, options: ChatHistorySearchOptions = {}): ChatHistorySearchResult {
     return this.historySearchIndex.search(projectId, query, options)
   }
 
-  private readFromDatabase(): ChatWorkspaceState | null {
+  private readFromDatabase(): ChatWorkspaceSnapshot | null {
     if (!existsSync(this.dbPath) || !this.canUseSqlite()) return null
 
     try {
@@ -167,8 +329,6 @@ export class ChatWorkspaceStore {
           'ORDER BY pinned_at DESC NULLS LAST, created_at DESC',
         ].join(' '),
       )
-      if (projects.length === 0) return null
-
       const threads = this.selectJson<ThreadRow>(
         [
           'SELECT',
@@ -176,7 +336,7 @@ export class ChatWorkspaceStore {
           'skill_path AS skillPath, skill_command AS skillCommand, skill_title AS skillTitle,',
           'created_at AS createdAt, updated_at AS updatedAt,',
           'pinned_at AS pinnedAt, archived_at AS archivedAt,',
-          'session_id AS sessionId, model, model_pick_json AS modelPickJson, cwd',
+          'session_id AS sessionId, model, model_pick_json AS modelPickJson, cwd, creation_source_json AS creationSourceJson',
           'FROM threads',
           'ORDER BY pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC',
         ].join(' '),
@@ -186,13 +346,31 @@ export class ChatWorkspaceStore {
           'SELECT',
           'active_project_id AS activeProjectId,',
           'active_thread_id AS activeThreadId,',
+          'active_workspace_tab_id AS activeWorkspaceTabId,',
+          'active_local_app_tab_id AS activeLocalAppTabId,',
           'sidebar_prefs_json AS sidebarPrefsJson,',
-          'workspace_revision AS workspaceRevision',
+          'runtime_definitions_json AS runtimeDefinitionsJson,',
+          'workspace_tabs_json AS workspaceTabsJson,',
+          'project_home_view_modes_json AS projectHomeViewModesJson,',
+          'local_app_definitions_json AS localAppDefinitionsJson,',
+          'local_app_tabs_json AS localAppTabsJson,',
+          'workspace_schema_version AS workspaceSchemaVersion,',
+          'snapshot_complete AS snapshotComplete,',
+          'workspace_revision AS workspaceRevision,',
+          'saved_at AS savedAt',
           'FROM workspace_meta WHERE id = 1',
         ].join(' '),
       )[0]
 
-      return normalizeChatWorkspaceState({
+      const legacySchema = (meta?.workspaceSchemaVersion ?? 1) < 3
+      const legacyDefinitions = safeJsonParse(meta?.localAppDefinitionsJson ?? undefined, [])
+      const legacyTabs = safeJsonParse(meta?.localAppTabsJson ?? undefined, [])
+      const runtimeDefinitions = legacySchema ? legacyDefinitions : safeJsonParse(meta?.runtimeDefinitionsJson ?? undefined, [])
+      const workspaceTabs = legacySchema ? legacyTabs : safeJsonParse(meta?.workspaceTabsJson ?? undefined, [])
+      if (projects.length === 0 && (!Array.isArray(runtimeDefinitions) || runtimeDefinitions.length === 0)) return null
+
+      return {
+        state: normalizeChatWorkspaceState({
         workspaceRevision: meta?.workspaceRevision ?? 0,
         activeProjectId: meta?.activeProjectId ?? projects[0]?.id ?? '',
         activeThreadId: meta?.activeThreadId ?? '',
@@ -217,10 +395,21 @@ export class ChatWorkspaceStore {
           updatedAt: thread.updatedAt,
           pinnedAt: thread.pinnedAt ?? undefined,
           archivedAt: thread.archivedAt ?? undefined,
+          creationSource: normalizeProjectThreadCreationSource(safeJsonParse(thread.creationSourceJson ?? undefined, undefined)),
           chatState: this.readRolloutChatState(thread),
         })),
         sidebarPrefs: safeJsonParse(meta?.sidebarPrefsJson, undefined),
-      })
+        activeWorkspaceTabId: legacySchema ? meta?.activeLocalAppTabId ?? '' : meta?.activeWorkspaceTabId ?? '',
+        runtimeDefinitions,
+        workspaceTabs,
+        projectHomeViewModes: safeJsonParse(meta?.projectHomeViewModesJson ?? undefined, {}),
+        workspaceSchemaVersion: meta?.workspaceSchemaVersion ?? 1,
+        snapshotComplete: meta?.snapshotComplete !== 0,
+        }),
+        savedAt: meta?.savedAt ?? undefined,
+        revision: meta?.workspaceRevision ?? undefined,
+        source: 'sqlite-index',
+      }
     } catch {
       return null
     }
@@ -249,8 +438,8 @@ export class ChatWorkspaceStore {
     }
   }
 
-  private saveDatabaseIndex(state: ChatWorkspaceState): void {
-    if (!this.canUseSqlite()) return
+  private saveDatabaseIndex(state: ChatWorkspaceState, savedAt: number): boolean {
+    if (!this.canUseSqlite()) return false
 
     try {
       this.ensureWorkspaceSchemaColumns()
@@ -261,9 +450,19 @@ export class ChatWorkspaceStore {
           id INTEGER PRIMARY KEY CHECK (id = 1),
           active_project_id TEXT NOT NULL,
           active_thread_id TEXT NOT NULL,
+          active_workspace_tab_id TEXT NOT NULL DEFAULT '',
+          active_local_app_tab_id TEXT NOT NULL DEFAULT '',
           sidebar_prefs_json TEXT NOT NULL,
+          runtime_definitions_json TEXT NOT NULL DEFAULT '[]',
+          workspace_tabs_json TEXT NOT NULL DEFAULT '[]',
+          project_home_view_modes_json TEXT NOT NULL DEFAULT '{}',
+          local_app_definitions_json TEXT NOT NULL DEFAULT '[]',
+          local_app_tabs_json TEXT NOT NULL DEFAULT '[]',
           updated_at INTEGER NOT NULL,
-          workspace_revision INTEGER NOT NULL DEFAULT 0
+          workspace_revision INTEGER NOT NULL DEFAULT 0,
+          workspace_schema_version INTEGER NOT NULL DEFAULT 1,
+          snapshot_complete INTEGER NOT NULL DEFAULT 1,
+          saved_at INTEGER NOT NULL DEFAULT 0
         );`,
         `CREATE TABLE IF NOT EXISTS projects (
           id TEXT PRIMARY KEY,
@@ -291,6 +490,7 @@ export class ChatWorkspaceStore {
           model TEXT NOT NULL DEFAULT 'Claude Agent',
           model_pick_json TEXT,
           cwd TEXT,
+          creation_source_json TEXT,
           message_count INTEGER NOT NULL DEFAULT 0,
           first_user_message TEXT NOT NULL DEFAULT '',
           preview TEXT NOT NULL DEFAULT '',
@@ -314,16 +514,23 @@ export class ChatWorkspaceStore {
       }
 
       statements.push(
-        `INSERT INTO workspace_meta (id, active_project_id, active_thread_id, sidebar_prefs_json, updated_at, workspace_revision)
-         VALUES (1, ${sqlValue(state.activeProjectId)}, ${sqlValue(state.activeThreadId)}, ${sqlValue(
+        `INSERT INTO workspace_meta (id, active_project_id, active_thread_id, active_workspace_tab_id, sidebar_prefs_json, runtime_definitions_json, workspace_tabs_json, project_home_view_modes_json, updated_at, workspace_revision, workspace_schema_version, snapshot_complete, saved_at)
+         VALUES (1, ${sqlValue(state.activeProjectId)}, ${sqlValue(state.activeThreadId)}, ${sqlValue(state.activeWorkspaceTabId)}, ${sqlValue(
            JSON.stringify(state.sidebarPrefs),
-         )}, ${Date.now()}, ${sqlValue(workspaceRevisionOf(state))})
+         )}, ${sqlValue(JSON.stringify(state.runtimeDefinitions))}, ${sqlValue(JSON.stringify(state.workspaceTabs))}, ${sqlValue(JSON.stringify(state.projectHomeViewModes))}, ${Date.now()}, ${sqlValue(workspaceRevisionOf(state))}, ${sqlValue(Math.max(3, state.workspaceSchemaVersion ?? 3))}, ${state.snapshotComplete === false ? 0 : 1}, ${sqlValue(savedAt)})
          ON CONFLICT(id) DO UPDATE SET
            active_project_id = excluded.active_project_id,
            active_thread_id = excluded.active_thread_id,
+           active_workspace_tab_id = excluded.active_workspace_tab_id,
            sidebar_prefs_json = excluded.sidebar_prefs_json,
+           runtime_definitions_json = excluded.runtime_definitions_json,
+           workspace_tabs_json = excluded.workspace_tabs_json,
+           project_home_view_modes_json = excluded.project_home_view_modes_json,
            updated_at = excluded.updated_at,
-           workspace_revision = excluded.workspace_revision;`,
+           workspace_revision = excluded.workspace_revision,
+           workspace_schema_version = excluded.workspace_schema_version,
+           snapshot_complete = excluded.snapshot_complete,
+           saved_at = excluded.saved_at;`,
       )
 
       for (const project of state.projects) {
@@ -348,13 +555,13 @@ export class ChatWorkspaceStore {
         statements.push(
           `INSERT INTO threads (
              id, project_id, rollout_path, created_at, updated_at, title, pinned_at, archived_at,
-             purpose, home_plugin_slug, skill_path, skill_command, skill_title, session_id, model, model_pick_json, cwd, message_count, first_user_message, preview, response_duration_ms
+             purpose, home_plugin_slug, skill_path, skill_command, skill_title, session_id, model, model_pick_json, cwd, creation_source_json, message_count, first_user_message, preview, response_duration_ms
            )
            VALUES (
              ${sqlValue(thread.id)}, ${sqlValue(thread.projectId)}, ${sqlValue(rolloutPath)}, ${sqlValue(thread.createdAt)},
              ${sqlValue(thread.updatedAt)}, ${sqlValue(thread.title)}, ${sqlValue(thread.pinnedAt)}, ${sqlValue(thread.archivedAt)},
              ${sqlValue(thread.purpose)}, ${sqlValue(thread.homePluginSlug)}, ${sqlValue(thread.skillPath)}, ${sqlValue(thread.skillCommand)}, ${sqlValue(thread.skillTitle)},
-             ${sqlValue(thread.chatState.sessionId)}, ${sqlValue(thread.chatState.model)}, ${sqlValue(thread.chatState.modelPick ? JSON.stringify(thread.chatState.modelPick) : undefined)}, ${sqlValue(thread.chatState.cwd)},
+             ${sqlValue(thread.chatState.sessionId)}, ${sqlValue(thread.chatState.model)}, ${sqlValue(thread.chatState.modelPick ? JSON.stringify(thread.chatState.modelPick) : undefined)}, ${sqlValue(thread.chatState.cwd)}, ${sqlValue(JSON.stringify(thread.creationSource))},
              ${sqlValue(messageCount(thread.chatState.items))}, ${sqlValue(firstUser)}, ${sqlValue(preview)},
              ${sqlValue(responseDurationMs)}
            )
@@ -375,6 +582,7 @@ export class ChatWorkspaceStore {
              model = excluded.model,
              model_pick_json = excluded.model_pick_json,
              cwd = excluded.cwd,
+             creation_source_json = excluded.creation_source_json,
              message_count = excluded.message_count,
              first_user_message = excluded.first_user_message,
              preview = excluded.preview,
@@ -384,9 +592,25 @@ export class ChatWorkspaceStore {
 
       statements.push('COMMIT;')
       this.runSql(statements.join('\n'))
-      this.historySearchIndex.save(state)
+      // 搜索索引是可重建的附属数据；不让它的失败掩盖已提交的工作区事务。
+      try { this.historySearchIndex.save(state) } catch { /* rebuild on next save */ }
+      return true
     } catch {
       /* Keep the compatibility JSON snapshot as the durable fallback. */
+      return false
+    }
+  }
+
+  private async saveJsonSnapshot(state: ChatWorkspaceState, savedAt: number): Promise<boolean> {
+    const temporaryPath = `${this.filePath}.tmp-${process.pid}-${Date.now().toString(36)}`
+    try {
+      const { localAppDefinitions: _legacyDefinitions, localAppTabs: _legacyTabs, activeLocalAppTabId: _legacyActive, ...neutralState } = state
+      await writeFile(temporaryPath, `${JSON.stringify({ ...neutralState, savedAt }, null, 2)}\n`, 'utf8')
+      await rename(temporaryPath, this.filePath)
+      return true
+    } catch {
+      await unlink(temporaryPath).catch(() => undefined)
+      return false
     }
   }
 
@@ -397,47 +621,29 @@ export class ChatWorkspaceStore {
         const rolloutPath = existingRolloutPaths.get(thread.id) ?? this.rolloutPathForThread(thread)
         await mkdir(path.dirname(rolloutPath), { recursive: true })
         const tmpPath = `${rolloutPath}.tmp`
-        await writeFile(tmpPath, serializeRollout(thread), 'utf8')
+        await writeFile(tmpPath, serializeChatThreadRollout(thread, {
+          projectId: thread.projectId,
+          purpose: thread.purpose,
+          homePluginSlug: thread.homePluginSlug,
+          skillPath: thread.skillPath,
+          skillCommand: thread.skillCommand,
+          skillTitle: thread.skillTitle,
+        }), 'utf8')
         await rename(tmpPath, rolloutPath)
       }),
     )
   }
 
   private readRolloutChatState(thread: ThreadRow): ChatState {
-    const state: ChatState = {
+    const fallback: ChatState = {
       sessionId: thread.sessionId ?? undefined,
       model: thread.model || 'Claude Agent',
       modelPick: safeModelPick(safeJsonParse(thread.modelPickJson ?? undefined, undefined)),
       cwd: thread.cwd ?? undefined,
       items: [],
     }
-    if (!thread.rolloutPath || !existsSync(thread.rolloutPath)) return state
-
-    try {
-      const lines = readFileSync(thread.rolloutPath, 'utf8').split(/\n/).filter(Boolean)
-      for (const line of lines) {
-        const event = JSON.parse(line) as unknown
-        if (!isRecord(event)) continue
-        const payload = event.payload
-        if (!isRecord(payload)) continue
-
-        if (event.type === 'session_meta' || event.type === 'thread_state') {
-          state.sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : state.sessionId
-          state.model = typeof payload.model === 'string' ? payload.model : state.model
-          state.modelPick = safeModelPick(payload.modelPick) ?? state.modelPick
-          state.cwd = typeof payload.cwd === 'string' ? payload.cwd : state.cwd
-          continue
-        }
-
-        if (event.type === 'response_item') {
-          state.items.push(payload as TranscriptItem)
-        }
-      }
-    } catch {
-      return state
-    }
-
-    return state
+    if (!thread.rolloutPath || !existsSync(thread.rolloutPath)) return fallback
+    try { return readChatThreadRollout(readFileSync(thread.rolloutPath, 'utf8'), fallback) } catch { return fallback }
   }
 
   private rolloutPathForThread(thread: WorkspaceThread): string {
@@ -465,6 +671,36 @@ export class ChatWorkspaceStore {
       if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'workspace_revision')) {
         this.runSql('ALTER TABLE workspace_meta ADD COLUMN workspace_revision INTEGER NOT NULL DEFAULT 0;')
       }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'active_workspace_tab_id')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN active_workspace_tab_id TEXT NOT NULL DEFAULT '';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'runtime_definitions_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN runtime_definitions_json TEXT NOT NULL DEFAULT '[]';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'workspace_tabs_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN workspace_tabs_json TEXT NOT NULL DEFAULT '[]';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'project_home_view_modes_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN project_home_view_modes_json TEXT NOT NULL DEFAULT '{}';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'active_local_app_tab_id')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN active_local_app_tab_id TEXT NOT NULL DEFAULT '';" )
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'local_app_definitions_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN local_app_definitions_json TEXT NOT NULL DEFAULT '[]';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'local_app_tabs_json')) {
+        this.runSql("ALTER TABLE workspace_meta ADD COLUMN local_app_tabs_json TEXT NOT NULL DEFAULT '[]';")
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'workspace_schema_version')) {
+        this.runSql('ALTER TABLE workspace_meta ADD COLUMN workspace_schema_version INTEGER NOT NULL DEFAULT 1;')
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'snapshot_complete')) {
+        this.runSql('ALTER TABLE workspace_meta ADD COLUMN snapshot_complete INTEGER NOT NULL DEFAULT 1;')
+      }
+      if (metaColumns.length > 0 && !metaColumns.some((column) => column.name === 'saved_at')) {
+        this.runSql('ALTER TABLE workspace_meta ADD COLUMN saved_at INTEGER NOT NULL DEFAULT 0;')
+      }
 
       const columns = this.selectJson<{ name: string }>('PRAGMA table_info(threads)')
       if (columns.length > 0 && !columns.some((column) => column.name === 'purpose')) {
@@ -484,6 +720,9 @@ export class ChatWorkspaceStore {
       }
       if (columns.length > 0 && !columns.some((column) => column.name === 'model_pick_json')) {
         this.runSql('ALTER TABLE threads ADD COLUMN model_pick_json TEXT;')
+      }
+      if (columns.length > 0 && !columns.some((column) => column.name === 'creation_source_json')) {
+        this.runSql('ALTER TABLE threads ADD COLUMN creation_source_json TEXT;')
       }
     } catch {
       /* Fresh databases create the column through CREATE TABLE. */
@@ -1090,50 +1329,6 @@ function safeRecord(value: unknown): Record<string, unknown> {
 
 function isSearchDocumentKind(value: unknown): value is ChatHistorySearchDocumentKind {
   return value === 'activity' || value === 'message' || value === 'thread' || value === 'tool'
-}
-
-function serializeRollout(thread: WorkspaceThread): string {
-  const timestamp = new Date(thread.updatedAt || Date.now()).toISOString()
-  const lines = [
-    {
-      timestamp,
-      type: 'session_meta',
-      payload: {
-        id: thread.id,
-        projectId: thread.projectId,
-        title: thread.title,
-        purpose: thread.purpose,
-        homePluginSlug: thread.homePluginSlug,
-        skillPath: thread.skillPath,
-        skillCommand: thread.skillCommand,
-        skillTitle: thread.skillTitle,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-        archivedAt: thread.archivedAt,
-        model: thread.chatState.model,
-        modelPick: thread.chatState.modelPick,
-        cwd: thread.chatState.cwd,
-        sessionId: thread.chatState.sessionId,
-        source: 'agentos',
-      },
-    },
-    {
-      timestamp,
-      type: 'thread_state',
-      payload: {
-        sessionId: thread.chatState.sessionId,
-        model: thread.chatState.model,
-        modelPick: thread.chatState.modelPick,
-        cwd: thread.chatState.cwd,
-      },
-    },
-    ...thread.chatState.items.map((item) => ({
-      timestamp: new Date(itemTimestamp(item, thread.updatedAt)).toISOString(),
-      type: 'response_item',
-      payload: item,
-    })),
-  ]
-  return `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`
 }
 
 function sqlValue(value: unknown): string {

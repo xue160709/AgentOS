@@ -3,14 +3,16 @@
  * Active conversation layout wiring transcript viewport and composer slot.
  */
 
-import type { ReactNode, RefObject } from 'react'
+import { memo, type ReactNode, type RefObject } from 'react'
 import { IconInline } from '../../icon-inline'
 import { useI18n } from '../../i18n/i18n'
-import type { ChatFileDiffItem, ThreadRunState, TranscriptItem } from '../types'
+import type { ChatFileDiffItem, ThreadRunState } from '../types'
 import { Transcript } from './Transcript'
+import { useThreadChatState } from './thread-chat-state-store'
 
 type ChatThreadViewProps = {
-  items: TranscriptItem[]
+  /** 会话内容直接从 `ThreadChatStateStore` 订阅，流式 delta 不再穿过 `ChatPage`。 */
+  threadId: string | undefined
   isRunning: boolean
   activeRunState?: ThreadRunState
   composer: ReactNode
@@ -23,11 +25,12 @@ type ChatThreadViewProps = {
   onUserMessageEditDismissed?: () => void
   onReviewFileChanges: (item: ChatFileDiffItem) => void
   onRewindFileChanges: (item: ChatFileDiffItem) => void
+  rewindUsesBrokerLookup?: boolean
 }
 
 /** 有消息时的会话区：可滚动 Transcript + 吸底按钮 + Composer 插槽 / Active thread: scrollable transcript, scroll-to-bottom control, composer slot */
 export function ChatThreadView({
-  items,
+  threadId,
   isRunning,
   activeRunState,
   composer,
@@ -40,6 +43,7 @@ export function ChatThreadView({
   onUserMessageEditDismissed,
   onReviewFileChanges,
   onRewindFileChanges,
+  rewindUsesBrokerLookup,
 }: ChatThreadViewProps) {
   const { t } = useI18n()
 
@@ -48,8 +52,8 @@ export function ChatThreadView({
       {/* 主滚动区：ChatPage 据此计算吸底与 ResizeObserver / Main scroll viewport; ChatPage attaches stick-to-bottom logic here */}
       <div className="chat-scroll-region" id="chat-scroll-region" ref={scrollRegionRef}>
         <div className="chat-transcript" id="chat-transcript" aria-live="polite">
-          <Transcript
-            items={items}
+          <ThreadTranscript
+            threadId={threadId}
             isRunning={isRunning}
             activeRunState={activeRunState}
             onCopyMessage={onCopyMessage}
@@ -58,6 +62,7 @@ export function ChatThreadView({
             onUserMessageEditDismissed={onUserMessageEditDismissed}
             onReviewFileChanges={onReviewFileChanges}
             onRewindFileChanges={onRewindFileChanges}
+            rewindUsesBrokerLookup={rewindUsesBrokerLookup}
           />
         </div>
       </div>
@@ -80,3 +85,15 @@ export function ChatThreadView({
     </>
   )
 }
+
+/**
+ * 唯一订阅 transcript 的组件。放在 `ChatPage` 之下，
+ * 一次流式回答期间只有它（和 `Transcript`）重渲染。
+ */
+const ThreadTranscript = memo(function ThreadTranscript({
+  threadId,
+  ...rest
+}: { threadId: string | undefined } & Omit<Parameters<typeof Transcript>[0], 'items'>) {
+  const chatState = useThreadChatState(threadId)
+  return <Transcript items={chatState.items} {...rest} />
+})

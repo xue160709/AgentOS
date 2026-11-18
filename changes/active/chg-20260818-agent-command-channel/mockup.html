@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runtime 容错交互 Mockup</title>
+<style>
+:root{
+  --bg:#f5f4f0;--ink:#1d1d1f;--muted:#71717a;--line:#e0ded8;--card:#fff;--soft:#f0eee8;
+  --accent:#0f62fe;--accent-soft:#e8f0fe;--warn:#c0392b;--warn-soft:#fdeeec;
+  --ok:#1e7a46;--ok-soft:#e8f5ee;--amber:#9a6700;--amber-soft:#fdf6e3;
+}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#151517;--ink:#ececee;--muted:#9b9ba1;--line:#333336;--card:#1f1f22;--soft:#28282c;
+  --accent:#6ea8ff;--accent-soft:#1b2a45;--warn:#ff7b6b;--warn-soft:#3a2320;
+  --ok:#5cc98a;--ok-soft:#1c3226;--amber:#e3b341;--amber-soft:#38300f;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.6 "PingFang SC","Hiragino Sans GB",system-ui,sans-serif;padding:2.5rem 1.25rem 5rem}
+main{max-width:960px;margin:0 auto}
+h1{font-size:1.45rem;margin:0 0 .3rem}
+h2{font-size:1.05rem;margin:2.6rem 0 .3rem;padding-top:1.4rem;border-top:1px solid var(--line)}
+h2 .rid{font:600 .7rem/1.6 ui-monospace,monospace;color:var(--warn);background:var(--warn-soft);
+  border-radius:4px;padding:.1rem .4rem;vertical-align:2px;margin-left:.5rem}
+.sub{color:var(--muted);font-size:.85rem;margin-bottom:1.2rem}
+.note{color:var(--muted);font-size:.85rem;margin:.5rem 0 1rem}
+.rule{display:flex;gap:.75rem;align-items:baseline;margin:.55rem 0}
+.rule b{flex:none;font:700 .75rem/1.9 ui-monospace,monospace;color:var(--accent);
+  background:var(--accent-soft);border-radius:4px;padding:0 .45rem}
+
+/* ---------- 卡片骨架 ---------- */
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.card-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;
+  padding:.8rem 1.1rem;border-bottom:1px solid var(--line)}
+.card-head .title{font-weight:700}
+.card-head .path{font:.72rem ui-monospace,monospace;color:var(--muted)}
+.strip{display:flex;align-items:center;gap:.6rem;padding:.65rem 1.1rem;flex-wrap:wrap}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)}
+.dot.amber{background:var(--amber)} .dot.busy{background:var(--accent);animation:pulse 1.2s infinite}
+.dot.off{background:var(--muted)}
+@keyframes pulse{50%{opacity:.35}}
+.strip .msg{font-weight:600}
+.strip .spacer{flex:1}
+.reason{padding:0 1.1rem .3rem;color:var(--muted);font-size:.84rem}
+.reason.warn{color:var(--warn)}
+.btn{font:600 .82rem/1 inherit;border-radius:7px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink);padding:.5rem .85rem;cursor:pointer}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.ghost{border-color:transparent;color:var(--muted)}
+.btn.warnb{background:var(--warn);border-color:var(--warn);color:#fff}
+.preview{height:190px;background:var(--soft);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:.55rem;color:var(--muted);font-size:.85rem;text-align:center;padding:1rem}
+.preview .art{width:72%;height:52%;border-radius:8px;background:
+  linear-gradient(var(--card),var(--card)) padding-box,
+  repeating-linear-gradient(45deg,var(--line) 0 6px,transparent 6px 14px) border-box;
+  border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:.75rem}
+.preview.err .art{border-color:var(--warn);border-style:dashed}
+.pill{font:600 .7rem/1.7 inherit;border-radius:99px;padding:0 .6rem}
+.pill.amber{background:var(--amber-soft);color:var(--amber)}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.fix{margin-top:.6rem;font-size:.78rem;color:var(--muted)}
+.fix b{color:var(--warn)}
+
+/* ---------- 时间线 / 胶片条 ---------- */
+.strip-row{display:flex;gap:.6rem;align-items:stretch;flex-wrap:wrap;margin:.8rem 0}
+.frame{flex:1 1 180px;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:.7rem .8rem;position:relative}
+.frame.bad{border-color:var(--warn);border-style:dashed}
+.frame .t{font:600 .68rem/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:.35rem}
+.frame .s{display:flex;align-items:center;gap:.45rem;font-weight:600;font-size:.85rem}
+.frame .b{margin-top:.45rem;font-size:.72rem;color:var(--muted)}
+.frame .b .btn{padding:.25rem .5rem;font-size:.7rem;pointer-events:none}
+.arrow{align-self:center;color:var(--muted);flex:none}
+.lbl{font:700 .72rem/2 inherit;color:var(--muted);letter-spacing:.06em}
+.lbl.bad{color:var(--warn)} .lbl.good{color:var(--ok)}
+
+/* ---------- 状态切换器 ---------- */
+.tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:.9rem 0}
+.tab{font:600 .78rem/1 inherit;border-radius:99px;border:1px solid var(--line);
+  background:var(--card);color:var(--muted);padding:.45rem .8rem;cursor:pointer}
+.tab.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.toasts{margin:.8rem 0;display:flex;flex-direction:column;gap:.5rem}
+.toast{display:flex;align-items:center;gap:.6rem;background:var(--card);border:1px solid var(--line);
+  border-left:4px solid var(--accent);border-radius:9px;padding:.6rem .9rem;font-size:.85rem;max-width:480px}
+.toast.ok{border-left-color:var(--ok)} .toast.warn{border-left-color:var(--warn)}
+.toast .btn{margin-left:auto;padding:.3rem .6rem;font-size:.72rem}
+footer{margin-top:3rem;color:var(--muted);font-size:.8rem;border-top:1px solid var(--line);padding-top:1rem}
+</style>
+</head>
+<body>
+<main>
+<h1>Runtime 容错交互优化 Mockup</h1>
+<p class="sub">chg-20260818 · 针对 R-01〜R-21 / F1〜F11 的交互方案演示 · 设计候选（agent_proposal），非最终视觉稿</p>
+
+<!-- ================= 原则 ================= -->
+<h2>0 · 四条状态条规矩（所有 mockup 共用）</h2>
+<div class="rule"><b>规矩一</b><span>未知不冒充结论：拿到真实状态前只显示「正在打开预览…」，绝不显示「未初始化」或「已停止」。<em>（修 R-04/R-06）</em></span></div>
+<div class="rule"><b>规矩二</b><span>每个红色状态 = 一句原因 + 一个能走通的按钮；没有出路的报错不允许出现。<em>（修 R-01/R-02/R-12/R-13/F1）</em></span></div>
+<div class="rule"><b>规矩三</b><span>文案只说真话：没有上一版就不说「保留上一版」；跑的是 start 就不说「开发服务」。<em>（修 R-05/F2/F14）</em></span></div>
+<div class="rule"><b>规矩四</b><span>用户的定局不可被推翻：点过「停止」后，迟到的成功/失败事件一律作废。<em>（修 R-07/R-18）</em></span></div>
+
+<!-- ================= R-04 启动时序 ================= -->
+<h2>1 · 打开项目时显示什么<span class="rid">修 R-04</span></h2>
+<p class="lbl bad">现状 — 两段假状态，按钮还能点</p>
+<div class="strip-row">
+  <div class="frame bad"><div class="t">第 1 帧（0–800ms）</div>
+    <div class="s"><span class="dot off"></span>尚未创建项目 Runtime</div>
+    <div class="b">显示「让 AI 创建」按钮 —— 但项目明明创建过 <span class="btn pri">让 AI 创建</span></div></div>
+  <div class="arrow">→</div>
+  <div class="frame bad"><div class="t">第 2 帧（~1.5s）</div>
+    <div class="s"><span class="dot off"></span>已停止</div>
+    <div class="b">显示「启动」按钮 —— 但没人停止过它 <span class="btn">启动</span></div></div>
+  <div class="arrow">→</div>
+  <div class="frame"><div class="t">第 3 帧</div>
+    <div class="s"><span class="dot ok"></span>已保存预览</div>
+    <div class="b">真实状态终于到达</div></div>
+</div>
+<p class="lbl good">优化后 — 未知期只有一句话，无可误点按钮</p>
+<div class="strip-row">
+  <div class="frame"><div class="t">打开瞬间</div>
+    <div class="s"><span class="dot busy"></span>正在打开预览…</div>
+    <div class="b">无按钮。切换项目时同样先进入此态，旧项目的路径与状态立即清空（修 R-06）</div></div>
+  <div class="arrow">→</div>
+  <div class="frame"><div class="t">状态到达后</div>
+    <div class="s"><span class="dot ok"></span>已保存预览</div>
+    <div class="b">或按真实情况进入下面第 2 节的任意状态</div></div>
+</div>
+
+<!-- ================= 状态切换器 ================= -->
+<h2>2 · 一张卡片的全部状态（点下方切换）</h2>
+<p class="note">同一套「状态条 + 原因行 + 主按钮」骨架覆盖所有容错分支——每个状态都标注它修的问题编号。</p>
+<div class="tabs" id="tabs"></div>
+<div class="card" id="democard">
+  <div class="card-head">
+    <div><div class="title">homepage</div><div class="path">/Github/homepage/.agentos</div></div>
+    <div id="head-extra"></div>
+  </div>
+  <div class="strip" id="strip"></div>
+  <div class="reason" id="reason"></div>
+  <div class="preview" id="preview"></div>
+</div>
+<div class="fix" id="fix"></div>
+
+<!-- ================= R-09 后台构建 ================= -->
+<h2>3 · 构建中切走页面<span class="rid">修 R-09 / R-10</span></h2>
+<p class="note">产品裁决建议：<b>构建继续</b>（构建持有自己的 consumer，页面卸载不再杀进程）。用户离开与回来各得到一条轻通知；取消则立即有反馈，且取消后再点构建保证是新的一次。</p>
+<div class="toasts">
+  <div class="toast"><span class="dot busy"></span>正在生成预览 —— 离开此页构建仍会继续<span class="btn ghost">取消构建</span></div>
+  <div class="toast ok"><span class="dot ok"></span>「homepage」预览已生成完毕<span class="btn">查看</span></div>
+  <div class="toast warn"><span class="dot warn"></span>「homepage」预览生成失败 —— 已保留原页面<span class="btn">查看原因</span></div>
+</div>
+
+<!-- ================= R-07 停止语义 ================= -->
+<h2>4 · 「停止」是定局<span class="rid">修 R-07</span></h2>
+<div class="strip-row">
+  <div class="frame bad"><div class="t">现状</div>
+    <div class="s"><span class="dot off"></span>已停止</div>
+    <div class="b">1 秒后被迟到的探测结果改回 →<br><span class="dot ok" style="display:inline-block"></span> <b>运行中</b>（进程其实正在被杀）</div></div>
+  <div class="arrow">→</div>
+  <div class="frame"><div class="t">优化后</div>
+    <div class="s"><span class="dot off"></span>已停止</div>
+    <div class="b">停止即作废旧一代事件（generation 升位），任何迟到的成功/失败一律丢弃；界面永不回跳</div></div>
+</div>
+
+<footer>设计候选 · 需用户确认后由 product-spec / product-design 落正式合同 · 关联：exploration.md §5/§7、Paintpoints.md</footer>
+</main>
+
+<script>
+const STATES = [
+  { key:'ready', tab:'已保存预览', dot:'ok', msg:'已保存预览',
+    actions:[['用 AI 修改','pri']], extra:'<span class="pill ok">最新</span>',
+    reason:'', preview:{kind:'art', text:'静态页面 · 零进程'},
+    fix:'基线状态。日常只保留状态一句话 + 主按钮，其余动作收进「详情」菜单（修 F9 工具栏过载）。' },
+  { key:'stale', tab:'预览可更新', dot:'amber', msg:'预览可更新',
+    actions:[['更新预览','pri'],['用 AI 修改','']], extra:'<span class="pill amber">源码已变更</span>',
+    reason:'检测到源码在 3 分钟前有改动 —— 当前显示的仍是旧版本，可以继续看。',
+    preview:{kind:'art', text:'旧版页面（继续可用）'},
+    fix:'修 <b>R-15/R-16</b>：运行期定时/事件触发 stale 检测（含 production 档），不再只在启动时查一次。' },
+  { key:'building', tab:'正在生成预览', dot:'busy', msg:'正在生成预览…',
+    actions:[['取消','ghost']], extra:'',
+    reason:'离开此页构建仍会继续，完成后通知你。',
+    preview:{kind:'art', text:'旧版页面继续显示，不闪断'},
+    fix:'修 <b>R-09</b>：切走不杀构建；修 <b>R-10</b>：取消立即反馈，取消后再点构建必然是新的一次。' },
+  { key:'fail-first', tab:'首次构建失败', dot:'warn', msg:'生成预览失败',
+    actions:[['重试','pri'],['查看日志','']], extra:'',
+    reasonWarn:'构建命令退出（代码 1）：找不到模块 “sharp”。还没有可显示的版本。',
+    preview:{kind:'empty', text:'还没有生成过预览'},
+    fix:'修 <b>R-05/F2</b>：无上一版时不再谎称「继续显示上一版」；原因行给出构建日志里的第一条真实错误（修 <b>F1/userMessage 断链</b>）。' },
+  { key:'fail-again', tab:'构建失败·有旧版', dot:'warn', msg:'生成预览失败 — 继续显示上一版',
+    actions:[['重试','pri'],['查看日志','']], extra:'<span class="pill amber">显示的是旧版</span>',
+    reasonWarn:'构建命令退出（代码 1）。你的页面没有受影响。',
+    preview:{kind:'art', text:'上一版页面（完好）'},
+    fix:'与首次失败使用不同文案 —— 「有备份」只在真有备份时说。失败红字不会被迟到的 stale 事件冲掉（修 <b>R-18</b>）。' },
+  { key:'precheck', tab:'目录不可用', dot:'warn', msg:'项目目录不可用',
+    actions:[['重新定位目录','pri'],['移除','ghost']], extra:'',
+    reasonWarn:'原路径 /Github/homepage 已不存在（可能被移动或重命名）。你的绑定和历史预览仍保留。',
+    preview:{kind:'art', text:'上一版页面（仍可查看）'},
+    fix:'修 <b>R-02</b>：前置检查失败（目录丢失 / package.json 损坏 / 信任失效）不再静默吞掉 —— 每一种都落到这样的状态条，点按钮有真实反应（修 <b>R-12/R-13</b> 按钮全灰与死按钮）。' },
+  { key:'prod-fail', tab:'启动失败·降级', dot:'warn', msg:'页面启动失败',
+    actions:[['改用开发模式打开','pri'],['再试一次','' ],['查看日志','ghost']], extra:'',
+    reasonWarn:'已尝试 3 次：启动命令（npm run start）每次都立即退出，可能是构建产物已损坏。可以改用开发模式打开，或重新构建后再试。',
+    preview:{kind:'empty', text:'页面暂时无法打开'},
+    fix:'修 <b>R-01</b>（全场最重）：production 失败不再是死路 —— 明确说明失败的是哪条命令、试了几次，主按钮直接提供降级出口；「查看方式」覆盖对该档同样生效。文案不再把 start 写成「开发服务」（修 <b>F14</b>）。' },
+  { key:'artifact-lost', tab:'预览文件丢失', dot:'warn', msg:'预览文件已丢失',
+    actions:[['重新构建','pri']], extra:'',
+    reasonWarn:'已保存的预览文件不在磁盘上了（可能被清理工具删除）。重新构建即可恢复。',
+    preview:{kind:'err', text:'⚠ 预览文件已丢失 — 点击上方「重新构建」恢复'},
+    fix:'修 <b>R-03</b>：serve 层 404 上报为状态事件，卡片与预览区同步说明真相并给出路；不再出现裸文本 404 配「已保存预览」的自相矛盾。旧错误在成功后立即清除（修 <b>R-14</b> 黏滞）。' },
+  { key:'trust', tab:'需要授权', dot:'amber', msg:'需要授权后才能修改',
+    actions:[['授权此目录','pri']], extra:'',
+    reason:'此目录的访问授权已失效。授权后即可继续查看和修改。',
+    preview:{kind:'art', text:'上一版页面（仍可查看）'},
+    fix:'修 <b>R-12/F6</b>：权限错误的主按钮直接通向信任流程，不再是点了会重复报错的「用 AI 修改」。' },
+]
+const tabs = document.getElementById('tabs')
+function render(state){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on', t.dataset.key===state.key))
+  document.getElementById('head-extra').innerHTML = state.extra
+  const actions = state.actions.map(([label,cls])=>`<button class="btn ${cls}">${label}</button>`).join(' ')
+  document.getElementById('strip').innerHTML =
+    `<span class="dot ${state.dot}"></span><span class="msg">${state.msg}</span><span class="spacer"></span>${actions}<button class="btn ghost">详情 ▾</button>`
+  const r = document.getElementById('reason')
+  r.textContent = state.reasonWarn || state.reason || ''
+  r.className = 'reason' + (state.reasonWarn ? ' warn' : '')
+  const p = document.getElementById('preview')
+  p.className = 'preview' + (state.preview.kind==='err' ? ' err' : '')
+  p.innerHTML = state.preview.kind==='empty'
+    ? `<div>${state.preview.text}</div>`
+    : `<div class="art">${state.preview.text}</div>`
+  document.getElementById('fix').innerHTML = '↳ ' + state.fix
+}
+STATES.forEach(s=>{
+  const b=document.createElement('button'); b.className='tab'; b.dataset.key=s.key; b.textContent=s.tab
+  b.onclick=()=>render(s); tabs.appendChild(b)
+})
+render(STATES[0])
+</script>
+</body>
+</html>

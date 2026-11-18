@@ -3,8 +3,8 @@
  * Main-process facade for Claude Agent SDK `query`: resume, permission gating, and IPC streaming.
  */
 
-import type { WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import {
   query,
   type CanUseTool,
@@ -33,6 +33,7 @@ import type {
   ClaudePermissionResponsePayload,
 } from '../src/claude-chat-types'
 import type { AgentModeProjectSettings, AgentWebSearchSettings, AppUiLocale } from '../src/desktop-types'
+import type { ClaudeChatEventSink } from '../src/project-chat-contract'
 import { buildRuntimeContext, discoverAgentContext, resolvePromptWithContext } from './agent-context'
 import {
   buildSdkEnv,
@@ -44,6 +45,7 @@ import {
 import { ClaudeChatEventCoalescer } from './claude-agent-runner/event-coalescer'
 import { resolveClaudeCodeExecutablePath } from './claude-agent-runner/executable'
 import { fileDiffFromPostToolUse } from './claude-agent-runner/file-diff'
+import type { RuntimeEditRunnerHook } from './runtime-edit-coordinator'
 import { buildSdkPromptInput, normalizeSubmitAttachments, resolveWorkspaceCwd } from './claude-agent-runner/input'
 import { buildMcpPermissionCopy, buildMcpRuntimeOptions, mergeMcpRuntimeOptions } from './claude-agent-runner/mcp'
 import { ClaudeSdkMessageRouter } from './claude-agent-runner/sdk-message-router'
@@ -54,6 +56,8 @@ import {
   HOME_PLUGIN_TASK_RUN_SYSTEM_PROMPT,
 } from './home-plugin-customization-prompt'
 import { safeConsoleError, safeConsoleInfo, safeConsoleWarn } from './safe-console'
+import { buildProjectRuntimeSystemPrompt, resolveProjectAgentRuntimeContext } from './project-runtime-prompt'
+import { runtimeMutationTargetAllowed } from './chat-broker-core'
 
 /** 渲染进程订阅聊天事件的 IPC 信道 / IPC channel for streamed chat events to renderer */
 export const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
@@ -63,6 +67,9 @@ type ActiveRequest = {
   assistantMessageId: string
   threadId: string
   cwd: string
+  runtimeRoot?: string
+  projectId?: string
+  projectRuntimePrompt: boolean
   abortController: AbortController
   query?: Query
   cancelled: boolean
@@ -126,7 +133,7 @@ type StreamBlockState = {
   inputJson: string
 }
 
-/** 驱动单次或并行 Claude Agent 请求并同步到 WebContents / Runs Claude Agent turns and mirrors state to WebContents */
+/** 驱动单次或并行 Claude Agent 请求并同步到 event sink / Runs Claude Agent turns and mirrors state to an event sink */
 export class ClaudeAgentRunner {
   private readonly activeRequests = new Map<string, ActiveRequest>()
   private readonly activeRequestIdsByThread = new Map<string, string>()
@@ -136,9 +143,11 @@ export class ClaudeAgentRunner {
   private readonly pendingPermissionRequests = new Map<string, PendingPermissionRequest>()
   private readonly eventCoalescer: ClaudeChatEventCoalescer
   private readonly messageRouter: ClaudeSdkMessageRouter
+  private runtimeEditHook?: RuntimeEditRunnerHook
+  private readonly additionalRuntimeEditHooks = new Set<RuntimeEditRunnerHook>()
 
   constructor(
-    private readonly webContents: WebContents,
+    private readonly eventSink: ClaudeChatEventSink,
     private readonly cwd: string,
     private readonly resolveConfig: (modelPick?: ChatModelPick) => ClaudeAgentResolvedConfig,
     private readonly resolveAgentModeSettings: (rootPath: string) => Promise<AgentModeProjectSettings>,
@@ -146,17 +155,28 @@ export class ClaudeAgentRunner {
     private readonly resolveUiLocale: () => AppUiLocale,
     private readonly observeEvent?: (event: ClaudeChatEvent) => void,
   ) {
-    this.eventCoalescer = new ClaudeChatEventCoalescer((event) => this.sendEventNow(event))
+    this.eventCoalescer = new ClaudeChatEventCoalescer((event) => this.publishEventNow(event))
     this.messageRouter = new ClaudeSdkMessageRouter(
       (event) => this.emit(event),
       (threadId) => this.getThreadRuntimeState(threadId),
     )
   }
 
+  /** Main-only hook used by ProjectChatBroker's RuntimeEditCoordinator wiring. */
+  setRuntimeEditHook(hook?: RuntimeEditRunnerHook): void {
+    this.runtimeEditHook = hook
+  }
+
+  /** Runtime Development subscribes beside the legacy Project edit hook; each hook ignores unknown request ids. */
+  addRuntimeEditHook(hook: RuntimeEditRunnerHook): () => void {
+    this.additionalRuntimeEditHooks.add(hook)
+    return () => this.additionalRuntimeEditHooks.delete(hook)
+  }
+
   // --- Public API / 对外 API ---
 
   /** 排队新的用户轮次并在后台启动 SDK / Enqueue a user turn and start SDK query asynchronously */
-  submit(payload: ClaudeChatSubmitPayload): ClaudeChatSubmitResult {
+  submit(payload: ClaudeChatSubmitPayload & { runtimeRoot?: string }): ClaudeChatSubmitResult {
     const text = payload.text.trim()
     const attachments = normalizeSubmitAttachments(payload.attachments)
     const requestId = randomUUID()
@@ -189,6 +209,9 @@ export class ClaudeAgentRunner {
       assistantMessageId: `assistant-${requestId}`,
       threadId,
       cwd,
+      runtimeRoot: typeof payload.runtimeRoot === 'string' && payload.runtimeRoot.trim() ? path.resolve(payload.runtimeRoot) : undefined,
+      projectId: typeof payload.projectId === 'string' && payload.projectId.trim() ? payload.projectId.trim() : undefined,
+      projectRuntimePrompt: payload.projectRuntimePrompt === true,
       abortController: new AbortController(),
       cancelled: false,
       didEmitText: false,
@@ -515,6 +538,9 @@ export class ClaudeAgentRunner {
       }
     }
 
+    const threadState = this.getThreadRuntimeState(threadId)
+    const durableSessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (durableSessionId && !threadState.sessionId) threadState.sessionId = durableSessionId
     const config = this.resolveConfig(payload.modelPick)
     if (!config.apiKey && !config.authToken) {
       const result: ClaudeFileRewindResult = {
@@ -526,7 +552,6 @@ export class ClaudeAgentRunner {
       return result
     }
 
-    const threadState = this.getThreadRuntimeState(threadId)
     if (!threadState.sessionId) {
       const result: ClaudeFileRewindResult = {
         ok: false,
@@ -647,7 +672,11 @@ export class ClaudeAgentRunner {
       threadState.configSignature = nextConfigSignature
       const runtimeContext = await buildRuntimeContext(activeRequest.cwd, agentModeSettings, this.resolveUiLocale())
       this.captureHostContextCatalog(threadState, runtimeContext.catalog)
-      const appendSystemPrompt = buildRequestAppendSystemPrompt(activeRequest, runtimeContext.appendSystemPrompt)
+      const projectRuntimeContext = activeRequest.projectRuntimePrompt
+        ? await resolveProjectAgentRuntimeContext(activeRequest.projectId, activeRequest.cwd)
+        : null
+      const projectRuntimePrompt = projectRuntimeContext ? buildProjectRuntimeSystemPrompt(projectRuntimeContext) : undefined
+      const appendSystemPrompt = buildRequestAppendSystemPrompt(activeRequest, runtimeContext.appendSystemPrompt, projectRuntimePrompt)
       const resolvedPrompt = await resolvePromptWithContext(prompt, runtimeContext.catalog, {
         forcedSkillCommand:
           activeRequest.promptMode === 'home-plugin-customization' || activeRequest.promptMode === 'home-plugin-card-customization'
@@ -706,9 +735,19 @@ export class ClaudeAgentRunner {
               extraArgs: { 'replay-user-messages': null },
               forwardSubagentText: true,
               hooks: {
+                PreToolUse: [
+                  {
+                    hooks: [async (input) => this.handlePreToolUseHook(activeRequest, input)],
+                  },
+                ],
                 PostToolUse: [
                   {
                     hooks: [async (input) => this.handlePostToolUseHook(activeRequest, input)],
+                  },
+                ],
+                PostToolUseFailure: [
+                  {
+                    hooks: [async (input) => this.handlePostToolUseFailureHook(activeRequest, input)],
                   },
                 ],
                 PostCompact: [
@@ -822,11 +861,36 @@ export class ClaudeAgentRunner {
     this.emitActivity(activeRequest, 'file-checkpoint', '文件快照已创建', 'done', '可用于撤销本轮文件改动')
   }
 
+  private async handlePreToolUseHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true; hookSpecificOutput?: { hookEventName: 'PreToolUse'; permissionDecision: 'deny'; permissionDecisionReason: string } }> {
+    if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
+      const toolInput = isRecord(input.tool_input) ? input.tool_input : {}
+      if (activeRequest.runtimeRoot && !(await runtimeMutationTargetAllowed(activeRequest.runtimeRoot, input.tool_name, toolInput, activeRequest.cwd))) {
+        safeConsoleWarn('[ClaudeAgentRunner] runtime mutation rejected', { toolName: input.tool_name })
+        return { continue: true, suppressOutput: true, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'This Runtime can only modify files inside its Runtime root.' } }
+      }
+      this.notifyRuntimeEditHooks('beforeTool', {
+        requestId: activeRequest.requestId,
+        toolUseId: input.tool_use_id,
+        toolName: input.tool_name,
+      })
+    }
+    return { continue: true, suppressOutput: true }
+  }
+
   private async handlePostToolUseHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
     try {
       const toolUseId = isRecord(input) && typeof input.tool_use_id === 'string' ? input.tool_use_id : ''
       if (toolUseId && activeRequest.diffedToolUseIds.has(toolUseId)) return { continue: true, suppressOutput: true }
       const file = fileDiffFromPostToolUse(input, activeRequest.cwd)
+      if (toolUseId && isRecord(input) && typeof input.tool_name === 'string') {
+        this.notifyRuntimeEditHooks('afterTool', {
+          requestId: activeRequest.requestId,
+          toolUseId,
+          toolName: input.tool_name,
+          succeeded: true,
+          hasProjectDiff: Boolean(file),
+        })
+      }
       if (file) {
         if (toolUseId) activeRequest.diffedToolUseIds.add(toolUseId)
         this.emit({
@@ -838,9 +902,31 @@ export class ClaudeAgentRunner {
         })
       }
     } catch (error) {
+      if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
+        this.notifyRuntimeEditHooks('afterTool', {
+          requestId: activeRequest.requestId,
+          toolUseId: input.tool_use_id,
+          toolName: input.tool_name,
+          succeeded: true,
+          hasProjectDiff: false,
+        })
+      }
       safeConsoleWarn('[ClaudeAgentRunner] failed to collect file diff', {
         requestId: activeRequest.requestId,
         error: summarizeErrorForLog(error),
+      })
+    }
+    return { continue: true, suppressOutput: true }
+  }
+
+  private async handlePostToolUseFailureHook(activeRequest: ActiveRequest, input: unknown): Promise<{ continue: true; suppressOutput: true }> {
+    if (isRecord(input) && typeof input.tool_use_id === 'string' && typeof input.tool_name === 'string') {
+      this.notifyRuntimeEditHooks('afterTool', {
+        requestId: activeRequest.requestId,
+        toolUseId: input.tool_use_id,
+        toolName: input.tool_name,
+        succeeded: false,
+        hasProjectDiff: false,
       })
     }
     return { continue: true, suppressOutput: true }
@@ -868,6 +954,15 @@ export class ClaudeAgentRunner {
     return { continue: true, suppressOutput: true }
   }
 
+  private notifyRuntimeEditHooks<K extends keyof RuntimeEditRunnerHook>(method: K, input: Parameters<RuntimeEditRunnerHook[K]>[0]): void {
+    const hooks = new Set<RuntimeEditRunnerHook>(this.additionalRuntimeEditHooks)
+    if (this.runtimeEditHook) hooks.add(this.runtimeEditHook)
+    for (const hook of hooks) {
+      if (method === 'beforeTool') hook.beforeTool(input as Parameters<RuntimeEditRunnerHook['beforeTool']>[0])
+      else hook.afterTool(input as Parameters<RuntimeEditRunnerHook['afterTool']>[0])
+    }
+  }
+
   // --- Tool permission gating / 工具权限闸门 ---
 
   private async handleCanUseTool(
@@ -878,6 +973,12 @@ export class ClaudeAgentRunner {
   ): Promise<PermissionResult> {
     if (activeRequest.cancelled || options.signal.aborted) {
       return { behavior: 'deny', message: 'Request cancelled.', toolUseID: options.toolUseID }
+    }
+
+    // Runtime Chat 的 app-global 权限不等于 OS sandbox；可靠文件 mutation 仍必须留在 Main 冻结的 runtimeRoot。
+    if (activeRequest.runtimeRoot && !(await runtimeMutationTargetAllowed(activeRequest.runtimeRoot, toolName, input, activeRequest.cwd))) {
+      safeConsoleWarn('[ClaudeAgentRunner] runtime mutation rejected', { toolName })
+      return { behavior: 'deny', message: 'This Runtime can only modify files inside its Runtime root.', toolUseID: options.toolUseID }
     }
 
     const permissionRequestId = randomUUID()
@@ -984,7 +1085,6 @@ export class ClaudeAgentRunner {
   // --- IPC emission / IPC 发送 ---
 
   private emit(event: ClaudeChatEvent): void {
-    if (this.webContents.isDestroyed()) return
     const threadId = event.threadId ?? this.activeRequests.get(event.requestId)?.threadId
     if (threadId && event.type === 'error') {
       const threadState = this.getThreadRuntimeState(threadId)
@@ -994,10 +1094,16 @@ export class ClaudeAgentRunner {
     this.eventCoalescer.emit(threadId ? { ...event, threadId } : event)
   }
 
-  private sendEventNow(event: ClaudeChatEvent): void {
-    if (this.webContents.isDestroyed()) return
+  private publishEventNow(event: ClaudeChatEvent): void {
     this.observeEvent?.(event)
-    this.webContents.send(CLAUDE_CHAT_EVENT_CHANNEL, event)
+    try {
+      this.eventSink.publish(event)
+    } catch {
+      safeConsoleWarn('Claude chat event sink publish failed', {
+        eventType: event.type,
+        requestId: event.requestId,
+      })
+    }
   }
 
   private emitFileRewindResult(requestId: string, threadId: string, result: ClaudeFileRewindResult): void {
@@ -1130,8 +1236,8 @@ function isMissingConversationSessionError(error: unknown): boolean {
   return isMissingConversationSessionError(error.cause)
 }
 
-function buildRequestAppendSystemPrompt(activeRequest: ActiveRequest, basePrompt?: string): string | undefined {
-  const sections = [basePrompt?.trim()].filter((section): section is string => Boolean(section))
+function buildRequestAppendSystemPrompt(activeRequest: ActiveRequest, basePrompt?: string, projectRuntimePrompt?: string): string | undefined {
+  const sections = [basePrompt?.trim(), projectRuntimePrompt?.trim()].filter((section): section is string => Boolean(section))
   if (activeRequest.promptMode === 'home-plugin-customization') {
     sections.push(HOME_PLUGIN_CUSTOMIZATION_SYSTEM_PROMPT)
   }

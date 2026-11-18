@@ -39,9 +39,39 @@ import type {
   AgentKnowledgeSearchProject,
   AgentKnowledgeSearchResult,
   ClaudeChatAttachmentPickerResult,
+  ClaudeChatAPI,
 } from '../src/claude-chat-types'
-import type { DesktopAPI } from '../src/desktop-api'
+import type { DesktopAPI, LocalAppCloseTabResult, LocalAppCreationResult, LocalAppDefinitionResult, LocalAppOpenTabResult, LocalAppPreviewResult, LocalAppRelocationResult, ProjectRuntimeResult, RuntimeCreationResult, RuntimeDefinitionResult, RuntimeInspectResult, RuntimePreviewHost, RuntimePreviewLayout, RuntimePreviewLayoutSize, RuntimePreviewNavigationState, RuntimePreviewResult, WorkspaceTabCloseResult, WorkspaceTabResult } from '../src/desktop-api'
+import type { LocalAppRuntimeEvent, LocalAppRuntimeSnapshot, RuntimeEvent, RuntimeSnapshot } from '../src/components/types'
+import type { WorkspaceCommand, WorkspaceCommandResult } from '../src/workspace-commands'
 import { DESKTOP_EVENT_CHANNELS, DESKTOP_INVOKE_CHANNELS } from '../src/desktop-seam'
+import {
+  type AnswerProjectPromptInput,
+  type ArchiveProjectThreadInput,
+  type CancelProjectRunInput,
+  type CreateProjectThreadInput,
+  type EditAndSubmitProjectRunInput,
+  type ForkProjectThreadInput,
+  type MarkProjectFileDiffReviewedInput,
+  type RewindProjectFileDiffInput,
+  type ReportProjectChatPresenceInput,
+  type SaveProjectChatWindowViewStateInput,
+  type SubmitProjectRunInput,
+  type SetProjectThreadModelInput,
+  type SetProjectThreadPinnedInput,
+  type ProjectChatAPI,
+  type ProjectChatClientEvent,
+  type GetProjectChatThreadStatusInput,
+  type ReadProjectChatAttachmentsInput,
+  type SearchProjectChatFilesInput,
+} from '../src/project-chat-contract'
+import { PROJECT_CHAT_EVENT_CHANNELS, PROJECT_CHAT_INVOKE_CHANNELS } from '../src/project-chat-ipc-seam'
+import {
+  type RuntimeChatAPI,
+  type RuntimeChatEvent,
+  type RuntimeDevelopmentMainEvent,
+} from '../src/runtime-development-contract'
+import { RUNTIME_CHAT_INVOKE_CHANNELS } from './runtime-chat-ipc'
 
 const CLAUDE_CHAT_EVENT_CHANNEL = 'claude-chat:event'
 
@@ -179,6 +209,188 @@ const desktopAdapter = {
   saveChatWorkspace(state: unknown) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveChatWorkspace, state)
   },
+  applyWorkspaceCommand(command: WorkspaceCommand, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.applyWorkspaceCommand, command, expectedRevision) as Promise<WorkspaceCommandResult>
+  },
+  inspectLocalAppDirectory(rootPath: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.inspectLocalAppDirectory, rootPath)
+  },
+  trustLocalAppDirectory(rootPath: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.trustLocalAppDirectory, rootPath) as Promise<LocalAppDefinitionResult>
+  },
+  createLocalApp(rootPath: string, expectedRevision?: number, title?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createLocalApp, rootPath, expectedRevision, title) as Promise<LocalAppCreationResult>
+  },
+  openLocalAppTab(localAppId: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openLocalAppTab, localAppId, expectedRevision) as Promise<LocalAppOpenTabResult>
+  },
+  closeLocalAppTab(tabId: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeLocalAppTab, tabId, expectedRevision) as Promise<LocalAppCloseTabResult>
+  },
+  relocateLocalApp(localAppId: string, rootPath: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.relocateLocalApp, localAppId, rootPath, expectedRevision) as Promise<LocalAppRelocationResult>
+  },
+  revokeLocalAppTrust(canonicalRoot: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.revokeLocalAppTrust, canonicalRoot) as Promise<void>
+  },
+  getLocalAppRuntime(localAppId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getLocalAppRuntime, localAppId) as Promise<LocalAppRuntimeSnapshot | null>
+  },
+  startLocalAppRuntime(localAppId: string, cause?: 'user' | 'restore', consumerId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startLocalAppRuntime, localAppId, cause, consumerId) as Promise<LocalAppRuntimeSnapshot>
+  },
+  stopLocalAppRuntime(localAppId: string, reason?: 'user' | 'last-consumer' | 'app-quit') {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.stopLocalAppRuntime, localAppId, reason) as Promise<LocalAppRuntimeSnapshot | null>
+  },
+  releaseLocalAppRuntime(localAppId: string, consumerId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.releaseLocalAppRuntime, localAppId, consumerId) as Promise<LocalAppRuntimeSnapshot | null>
+  },
+  restartLocalAppRuntime(localAppId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.restartLocalAppRuntime, localAppId) as Promise<LocalAppRuntimeSnapshot>
+  },
+  buildLocalAppRuntime(localAppId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.buildLocalAppRuntime, localAppId)
+  },
+  cancelLocalAppRuntimeBuild(localAppId: string, buildId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.cancelLocalAppRuntimeBuild, localAppId, buildId) as Promise<LocalAppRuntimeSnapshot | null>
+  },
+  createLocalAppPreview(tabId: string, localAppId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createLocalAppPreview, tabId, localAppId) as Promise<LocalAppPreviewResult>
+  },
+  setLocalAppPreviewBounds(previewId: string, bounds: { x: number; y: number; width: number; height: number }) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setLocalAppPreviewBounds, previewId, bounds) as Promise<boolean>
+  },
+  setLocalAppPreviewVisible(previewId: string, visible: boolean) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setLocalAppPreviewVisible, previewId, visible) as Promise<boolean>
+  },
+  reloadLocalAppPreview(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.reloadLocalAppPreview, previewId) as Promise<boolean>
+  },
+  closeLocalAppPreview(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeLocalAppPreview, previewId) as Promise<boolean>
+  },
+  onLocalAppRuntimeEvent(handler: (event: LocalAppRuntimeEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: LocalAppRuntimeEvent) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onLocalAppRuntimeEvent, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onLocalAppRuntimeEvent, listener)
+  },
+  inspectRuntimeDirectory(rootPath: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.inspectRuntimeDirectory, rootPath) as Promise<RuntimeInspectResult>
+  },
+  trustRuntimeDirectory(rootPath: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.trustRuntimeDirectory, rootPath) as Promise<RuntimeDefinitionResult>
+  },
+  createWorkspaceTab(rootPath: string, expectedRevision?: number, title?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createWorkspaceTab, rootPath, expectedRevision, title) as Promise<RuntimeCreationResult>
+  },
+  openWorkspaceTab(runtimeDefinitionId: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openWorkspaceTab, runtimeDefinitionId, expectedRevision) as Promise<WorkspaceTabResult>
+  },
+  closeWorkspaceTab(tabId: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeWorkspaceTab, tabId, expectedRevision) as Promise<WorkspaceTabCloseResult>
+  },
+  renameWorkspaceTab(tabId: string, title: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.renameWorkspaceTab, tabId, title, expectedRevision) as Promise<WorkspaceTabResult>
+  },
+  relocateRuntime(runtimeDefinitionId: string, rootPath: string, expectedRevision?: number) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.relocateRuntime, runtimeDefinitionId, rootPath, expectedRevision) as Promise<LocalAppRelocationResult>
+  },
+  revokeRuntimeTrust(canonicalRoot: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.revokeRuntimeTrust, canonicalRoot) as Promise<void>
+  },
+  getRuntime(runtimeDefinitionId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntime, runtimeDefinitionId) as Promise<RuntimeSnapshot | null>
+  },
+  startRuntime(runtimeDefinitionId: string, cause?: 'user' | 'restore', consumerId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startRuntime, runtimeDefinitionId, cause, consumerId) as Promise<RuntimeSnapshot>
+  },
+  stopRuntime(runtimeDefinitionId: string, reason?: 'user' | 'last-consumer' | 'app-quit') {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.stopRuntime, runtimeDefinitionId, reason) as Promise<RuntimeSnapshot | null>
+  },
+  releaseRuntime(runtimeDefinitionId: string, consumerId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.releaseRuntime, runtimeDefinitionId, consumerId) as Promise<RuntimeSnapshot | null>
+  },
+  restartRuntime(runtimeDefinitionId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.restartRuntime, runtimeDefinitionId) as Promise<RuntimeSnapshot>
+  },
+  updateRuntime(runtimeDefinitionId: string, options?: { force?: boolean }) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.updateRuntime, runtimeDefinitionId, options) as Promise<RuntimeSnapshot | null>
+  },
+  buildRuntime(runtimeDefinitionId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.buildRuntime, runtimeDefinitionId)
+  },
+  cancelRuntimeBuild(runtimeDefinitionId: string, buildId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild, runtimeDefinitionId, buildId) as Promise<RuntimeSnapshot | null>
+  },
+  setRuntimeServeOverride(runtimeDefinitionId: string, serveOverride: 'artifact' | 'server' | null) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setRuntimeServeOverride, runtimeDefinitionId, serveOverride) as Promise<RuntimeSnapshot | null>
+  },
+  startRuntimeDevelopment(runtimeDefinitionId: string, consumerId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.startRuntimeDevelopment, runtimeDefinitionId, consumerId) as Promise<RuntimeSnapshot>
+  },
+  openRuntimeDevelopment(target) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openRuntimeDevelopment, target)
+  },
+  focusRuntimeDevelopmentConflict(conflictToken: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.focusRuntimeDevelopmentConflict, conflictToken)
+  },
+  endRuntimeDevelopment(target) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.endRuntimeDevelopment, target)
+  },
+  openRuntimeDevelopmentThread(threadId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.openRuntimeDevelopmentThread, threadId)
+  },
+  createRuntimePreview(host: RuntimePreviewHost) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.createRuntimePreview, host) as Promise<RuntimePreviewResult>
+  },
+  getRuntimePreviewLayout(projectId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewLayout, projectId) as Promise<RuntimePreviewLayout>
+  },
+  saveRuntimePreviewLayout(projectId: string, size: RuntimePreviewLayoutSize) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.saveRuntimePreviewLayout, projectId, size) as Promise<RuntimePreviewLayout>
+  },
+  resetRuntimePreviewLayout(projectId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.resetRuntimePreviewLayout, projectId) as Promise<RuntimePreviewLayout>
+  },
+  getRuntimePreviewNavigationState(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getRuntimePreviewNavigationState, previewId) as Promise<RuntimePreviewNavigationState | null>
+  },
+  setRuntimePreviewBounds(previewId: string, bounds: { x: number; y: number; width: number; height: number }) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewBounds, previewId, bounds) as Promise<boolean>
+  },
+  setRuntimePreviewVisible(previewId: string, visible: boolean) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewVisible, previewId, visible) as Promise<boolean>
+  },
+  navigateRuntimePreview(previewId: string, direction: 'back' | 'forward') {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.navigateRuntimePreview, previewId, direction) as Promise<boolean>
+  },
+  reloadRuntimePreview(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.reloadRuntimePreview, previewId) as Promise<boolean>
+  },
+  closeRuntimePreview(previewId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.closeRuntimePreview, previewId) as Promise<boolean>
+  },
+  onRuntimePreviewNavigationState(handler: (state: RuntimePreviewNavigationState) => void) {
+    const listener = (_event: IpcRendererEvent, state: RuntimePreviewNavigationState) => handler(state)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onRuntimePreviewNavigationState, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onRuntimePreviewNavigationState, listener)
+  },
+  onRuntimeEvent(handler: (event: RuntimeEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: RuntimeEvent) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onRuntimeEvent, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onRuntimeEvent, listener)
+  },
+  onRuntimeDevelopmentEvent(handler: (event: RuntimeDevelopmentMainEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: RuntimeDevelopmentMainEvent) => handler(event)
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.onRuntimeDevelopmentEvent, listener)
+    return () => ipcRenderer.off(DESKTOP_EVENT_CHANNELS.onRuntimeDevelopmentEvent, listener)
+  },
+  ensureProjectRuntime(projectId: string, mountId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.ensureProjectRuntime, projectId, mountId) as Promise<ProjectRuntimeResult>
+  },
+  trustProjectRuntime(projectId: string, mountId: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.trustProjectRuntime, projectId, mountId) as Promise<ProjectRuntimeResult>
+  },
   clearChatWorkspaceData() {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.clearChatWorkspaceData) as Promise<void>
   },
@@ -264,11 +476,9 @@ const desktopAdapter = {
   },
 } satisfies DesktopAPI
 
-contextBridge.exposeInMainWorld('desktop', desktopAdapter)
-
 // --- Claude chat IPC / Claude 聊天 IPC ---
 
-contextBridge.exposeInMainWorld('claudeChat', {
+const claudeChatAdapter: ClaudeChatAPI = {
   submit(payload: ClaudeChatSubmitPayload) {
     return ipcRenderer.invoke('claude-chat:submit', payload)
   },
@@ -304,4 +514,137 @@ contextBridge.exposeInMainWorld('claudeChat', {
     ipcRenderer.on(CLAUDE_CHAT_EVENT_CHANNEL, listener)
     return () => ipcRenderer.off(CLAUDE_CHAT_EVENT_CHANNEL, listener)
   },
-})
+}
+
+// Disabled Project Chat v2 bridge. M0-05 is responsible for enabling callers/handlers.
+const projectChatAdapter: ProjectChatAPI = {
+  getSnapshot(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getSnapshot, projectId)
+  },
+  createThread(input: CreateProjectThreadInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.createThread, input)
+  },
+  submitRun(input: SubmitProjectRunInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.submitRun, input)
+  },
+  forkThread(input: ForkProjectThreadInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.forkThread, input) },
+  editAndSubmitRun(input: EditAndSubmitProjectRunInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.editAndSubmitRun, input) },
+  archiveThread(input: ArchiveProjectThreadInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.archiveThread, input) },
+  setThreadPinned(input: SetProjectThreadPinnedInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.setThreadPinned, input) },
+  setThreadModel(input: SetProjectThreadModelInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.setThreadModel, input) },
+  markFileDiffReviewed(input: MarkProjectFileDiffReviewedInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.markFileDiffReviewed, input) },
+  rewindFileDiff(input: RewindProjectFileDiffInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.rewindFileDiff, input) },
+  cancelRun(input: CancelProjectRunInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.cancelRun, input)
+  },
+  answerPrompt(input: AnswerProjectPromptInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.answerPrompt, input)
+  },
+  reportPresenceSelection(input: ReportProjectChatPresenceInput) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.reportPresenceSelection, input) },
+  openProjectWindow(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openProjectWindow, projectId)
+  },
+  startProjectRuntimeChat(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.startProjectRuntimeChat, projectId)
+  },
+  openWorkspaceTabProjectChat(workspaceTabId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openWorkspaceTabProjectChat, workspaceTabId)
+  },
+  openProjectPreview(projectId: string) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openProjectPreview, projectId) },
+  openProjectPathRecovery(projectId: string) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.openProjectPathRecovery, projectId) },
+  getWindowViewState(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getWindowViewState, projectId)
+  },
+  saveWindowViewState(input: SaveProjectChatWindowViewStateInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.saveWindowViewState, input)
+  },
+  markExternalTasksSeen(projectId: string, seenAt: number) { return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.markExternalTasksSeen, { projectId, seenAt }) },
+  listWebsiteBindings() {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.listWebsiteBindings)
+  },
+  revokeWebsiteBinding(bindingId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.revokeWebsiteBinding, bindingId)
+  },
+  respondToWebsitePairing(input) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.respondToWebsitePairing, input)
+  },
+  initializePermissionMode(legacyMode) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.initializePermissionMode, legacyMode)
+  },
+  setPermissionMode(mode) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.setPermissionMode, mode)
+  },
+  getModelCatalog() {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getModelCatalog)
+  },
+  getAgentContext(projectId: string) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getAgentContext, projectId)
+  },
+  searchProjectFiles(input: SearchProjectChatFilesInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.searchProjectFiles, input)
+  },
+  pickAttachments(options?: { allowImages?: boolean }) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.pickAttachments, options)
+  },
+  readProjectAttachments(input: ReadProjectChatAttachmentsInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.readProjectAttachments, input)
+  },
+  getThreadStatus(input: GetProjectChatThreadStatusInput) {
+    return ipcRenderer.invoke(PROJECT_CHAT_INVOKE_CHANNELS.getThreadStatus, input)
+  },
+  onEvent(handler: (event: ProjectChatClientEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: ProjectChatClientEvent) => handler(event)
+    ipcRenderer.on(PROJECT_CHAT_EVENT_CHANNELS.onEvent, listener)
+    return () => ipcRenderer.off(PROJECT_CHAT_EVENT_CHANNELS.onEvent, listener)
+  },
+}
+
+const runtimeChatAdapter: RuntimeChatAPI = {
+  getSnapshot: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getSnapshot),
+  createThread: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.createThread, input),
+  submitRun: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.submitRun, input),
+  forkThread: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.forkThread, input),
+  editAndSubmitRun: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.editAndSubmitRun, input),
+  archiveThread: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.archiveThread, input),
+  setThreadPinned: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.setThreadPinned, input),
+  setThreadModel: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.setThreadModel, input),
+  markFileDiffReviewed: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.markFileDiffReviewed, input),
+  rewindFileDiff: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.rewindFileDiff, input),
+  cancelRun: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.cancelRun, input),
+  answerPrompt: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.answerPrompt, input),
+  getModelCatalog: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getModelCatalog),
+  getAgentContext: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getAgentContext),
+  searchFiles: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.searchFiles, input),
+  pickAttachments: (options) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.pickAttachments, options),
+  readAttachments: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.readAttachments, input),
+  getThreadStatus: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getThreadStatus, input),
+  getWindowContext: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getWindowContext),
+  getWindowViewState: () => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.getWindowViewState),
+  saveWindowViewState: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.saveWindowViewState, input),
+  reportPresenceSelection: (input) => ipcRenderer.invoke(RUNTIME_CHAT_INVOKE_CHANNELS.reportPresenceSelection, input),
+  onEvent(handler: (event: RuntimeChatEvent) => void) {
+    const listener = (_event: IpcRendererEvent, event: RuntimeChatEvent) => handler(event)
+    ipcRenderer.on('runtime-chat:event', listener)
+    return () => ipcRenderer.off('runtime-chat:event', listener)
+  },
+}
+
+/** Only Main-controlled BrowserWindow additionalArguments select this profile. */
+export function isProjectChatWindowProfile(argv: readonly string[] = process.argv): boolean {
+  return argv.includes('--agentos-window-kind=project-chat')
+}
+
+export function isRuntimeDevelopmentWindowProfile(argv: readonly string[] = process.argv): boolean {
+  return argv.includes('--agentos-window-kind=runtime-development')
+}
+
+if (isRuntimeDevelopmentWindowProfile()) {
+  // Runtime 开发窗口只能访问 capability-scoped Runtime Chat；不暴露 desktop、Project 或 Node/path API。
+  contextBridge.exposeInMainWorld('runtimeChat', runtimeChatAdapter)
+} else if (isProjectChatWindowProfile()) {
+  contextBridge.exposeInMainWorld('projectChat', projectChatAdapter)
+} else {
+  contextBridge.exposeInMainWorld('desktop', desktopAdapter)
+  contextBridge.exposeInMainWorld('claudeChat', claudeChatAdapter)
+  contextBridge.exposeInMainWorld('projectChat', projectChatAdapter)
+}

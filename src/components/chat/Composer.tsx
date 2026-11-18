@@ -38,6 +38,7 @@ type PopoverBox = {
 type ComposerProps = {
   inputValue: string
   isRunning: boolean
+  disabled?: boolean
   activeModelSupportsImages: boolean
   pendingAttachments: ClaudeChatAttachment[]
   permissionMode: ClaudePermissionMode
@@ -93,6 +94,7 @@ type ComposerProps = {
 export function Composer({
   inputValue,
   isRunning,
+  disabled = false,
   activeModelSupportsImages,
   pendingAttachments,
   permissionMode,
@@ -229,6 +231,7 @@ export function Composer({
           placeholder={t('chat.composerPlaceholder')}
           autoComplete="off"
           spellCheck={false}
+          disabled={disabled}
           value={inputValue}
           onChange={(event) => onInputChange(event.target.value, event.target.selectionStart, event.target.selectionEnd)}
           onCompositionStart={onCompositionStart}
@@ -293,7 +296,7 @@ export function Composer({
               className="composer-icon-button"
               title={activeModelSupportsImages ? t('chat.addAttachmentTitle') : t('chat.addTextAttachmentTitle')}
               aria-label={activeModelSupportsImages ? t('chat.addAttachmentAria') : t('chat.addTextAttachmentAria')}
-              disabled={isRunning}
+              disabled={isRunning || disabled}
               onClick={() => onAddComposerAttachments()}
             >
               <IconInline name="paperclip" />
@@ -307,7 +310,7 @@ export function Composer({
                 aria-label={t('chat.permissionModeAria')}
                 aria-expanded={permissionModeOpen}
                 aria-haspopup="menu"
-                disabled={isRunning}
+                disabled={isRunning || disabled}
                 onClick={() => {
                   if (isRunning) return
                   setPermissionModeOpen((open) => !open)
@@ -379,7 +382,7 @@ export function Composer({
                 aria-label={t('chat.modelPickerAria')}
                 aria-expanded={modelPickerOpen}
                 aria-haspopup="menu"
-                disabled={isRunning || modelMenuRows.length === 0}
+                disabled={isRunning || disabled || modelMenuRows.length === 0}
                 onClick={() => {
                   if (isRunning || modelMenuRows.length === 0) return
                   setModelPickerOpen((open) => !open)
@@ -443,7 +446,7 @@ export function Composer({
                 title={speechRecognitionButtonTitle}
                 aria-label={speechRecognitionButtonAriaLabel}
                 aria-pressed={speechRecognitionActive}
-                disabled={isRunning}
+                disabled={isRunning || disabled}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={onToggleSpeechRecognition}
               >
@@ -456,7 +459,7 @@ export function Composer({
               id="btn-send"
               title={isRunning ? t('chat.stop') : hasUnsupportedImageAttachment ? t('chat.imageInputDisabledTitle') : t('chat.send')}
               aria-label={isRunning ? t('chat.stop') : t('chat.send')}
-              disabled={!isRunning && ((!hasSendText && !hasComposerAttachments) || hasUnsupportedImageAttachment)}
+              disabled={disabled || (!isRunning && ((!hasSendText && !hasComposerAttachments) || hasUnsupportedImageAttachment))}
               onClick={onSendClick}
             >
               <IconInline name={isRunning ? 'stop' : 'send'} />

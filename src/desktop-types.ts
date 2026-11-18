@@ -3,7 +3,24 @@
  * Desktop preference and Agent Mode shared types aligned across renderer and main.
  */
 
-import type { ChatModelPick } from './claude-chat-types'
+import type { ChatModelPick, ClaudePermissionMode } from './claude-chat-types'
+export type LocalAppInspectResult =
+  | {
+      ok: true
+      rootPath: string
+      canonicalRoot: string
+      name: string
+      hasLockfile: boolean
+      lockfilePath?: string
+      lockDigest?: string
+      nodeModulesPresent: boolean
+    }
+  | {
+      ok: false
+      rootPath: string
+      code: 'invalid-root' | 'path-missing' | 'package-json-missing' | 'package-json-invalid' | 'dev-script-missing'
+      message: string
+    }
 
 /** UI 文本语言；与会话偏好一致并由主进程写入模板 / UI text locale; matches session prefs and main-process templates */
 export type AppUiLocale = 'zh' | 'en'
@@ -16,6 +33,8 @@ export type DesktopPreferences = {
   eyeComfortMode: boolean
   /** 缺省或未识别时按 zh 处理 / Defaults to zh when missing or unknown */
   locale?: AppUiLocale
+  /** Omission means the Main-owned Project Chat preference has not been initialized yet. */
+  chatPermissionMode?: ClaudePermissionMode
 }
 
 /** 托盘菜单动作（与 IPC 载荷一致）/ Tray menu action matching IPC payloads */

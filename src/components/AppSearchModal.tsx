@@ -14,6 +14,8 @@ import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ChatHistorySearch
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
 import { projectContent } from '../project-content'
+import { threadChatStore } from './chat/thread-chat-state-store'
+import '../styles/app-search.css'
 import type {
   AppSearchHighlightRange,
   AppSearchResult,
@@ -22,7 +24,7 @@ import type {
   ProjectSkillRunRequest,
   ThreadRunState,
   WorkspaceProject,
-  WorkspaceThread,
+  ThreadMetadata,
 } from './types'
 
 const MAX_SECTION_RESULTS = 8
@@ -32,7 +34,7 @@ const MESSAGE_SEARCH_DEBOUNCE_MS = 120
 type AppSearchModalProps = {
   activeProject: WorkspaceProject
   projects: WorkspaceProject[]
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
   projectSkills: AgentContextSlashItem[]
   threadRunStates: Record<string, ThreadRunState>
   initialScope: AppSearchScope
@@ -43,6 +45,7 @@ type AppSearchModalProps = {
   onInsertKnowledgeContext: (item: AgentKnowledgeSearchItem) => void
   onSelectMessage: (threadId: string, itemId?: string) => void
   onSelectThread: (threadId: string) => void
+  onOpenRuntimeDevelopmentThread?: (threadId: string) => void
 }
 
 type SearchHit =
@@ -52,7 +55,7 @@ type SearchHit =
     })
   | (AppSearchResult & {
       kind: 'chat' | 'task'
-      thread: WorkspaceThread
+      thread: ThreadMetadata
     })
   | (AppSearchResult & {
       kind: 'message'
@@ -105,6 +108,7 @@ export function AppSearchModal({
   onInsertKnowledgeContext,
   onSelectMessage,
   onSelectThread,
+  onOpenRuntimeDevelopmentThread,
 }: AppSearchModalProps) {
   const { locale, t } = useI18n()
   const [scope, setScope] = useState<AppSearchScope>(initialScope)
@@ -368,6 +372,11 @@ export function AppSearchModal({
       return
     }
     if (hit.kind === 'message') {
+      if (hit.message.metadata.scopeKind === 'runtime-development') {
+        onOpenRuntimeDevelopmentThread?.(hit.message.threadId)
+        onClose()
+        return
+      }
       onSelectMessage(hit.message.threadId, hit.message.itemId)
       onClose()
       return
@@ -738,7 +747,7 @@ function buildThreadHits({
   recentDays: number | undefined
   t: (path: string, vars?: Record<string, string | number>) => string
   threadRunStates: Record<string, ThreadRunState>
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
 }): SearchHit[] {
   return threads
     .filter((thread) => (projectScope === 'all' || thread.projectId === activeProject.id) && (includeArchived || !thread.archivedAt))
@@ -958,8 +967,8 @@ function recencyScore(updatedAt: number): number {
   return Math.max(0, 40 - ageDays)
 }
 
-function firstUserPrompt(thread: WorkspaceThread): string {
-  const item = thread.chatState.items.find((item) => item.type === 'message' && item.role === 'user')
+function firstUserPrompt(thread: ThreadMetadata): string {
+  const item = threadChatStore.read(thread.id).items.find((item) => item.type === 'message' && item.role === 'user')
   if (!item || item.type !== 'message') return ''
   return compactText(item.content, 120)
 }
@@ -970,7 +979,7 @@ function compactText(value: string, maxLength: number): string {
   return `${compact.slice(0, maxLength - 1).trimEnd()}…`
 }
 
-function threadPurposeLabel(thread: WorkspaceThread, t: (path: string) => string): string {
+function threadPurposeLabel(thread: ThreadMetadata, t: (path: string) => string): string {
   if (thread.purpose === 'home-plugin-customization') return t('search.purpose.homePlugin')
   if (thread.purpose === 'home-plugin-card-customization') return t('search.purpose.homePluginCard')
   if (thread.purpose === 'task-run') return t('search.purpose.task')
@@ -994,7 +1003,7 @@ function knowledgeKindLabel(item: AgentKnowledgeSearchItem, t: (path: string) =>
 function actionLabelForHit(hit: SearchHit, t: (path: string) => string): string {
   if (hit.kind === 'file') return t('search.action.openFile')
   if (hit.kind === 'directory') return t('search.action.openDirectory')
-  if (hit.kind === 'message') return t('search.action.openMessage')
+  if (hit.kind === 'message') return hit.message.metadata.scopeKind === 'runtime-development' ? t('search.action.openRuntime') : t('search.action.openMessage')
   if ('knowledge' in hit) {
     if (hit.kind === 'memory') return t('search.action.openMemory')
     if (hit.kind === 'skill' || hit.kind === 'command') return t('search.action.runSkill')

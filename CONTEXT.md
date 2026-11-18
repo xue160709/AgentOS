@@ -79,3 +79,15 @@ Desktop Seam 负责：
 - 阻止 renderer 任意发送或调用未声明的 IPC channel
 
 原始 `ipcRenderer` 不属于 Desktop Seam。
+
+## Workspace Tab
+
+侧栏中由用户创建、命名、切换和关闭的持久化工作区视图。当前 Workspace Tab 承载 Runtime 预览；它不是项目、聊天线程或独立“本地应用”栏目。
+
+_Avoid_: Local App、Local App Tab、本地应用
+
+## Runtime
+
+AgentOS 为已信任项目自动准备依赖、启动开发服务、探测就绪状态、承载预览并管理停止与恢复的共享运行能力。Workspace Tab 和项目首页 Runtime 页面是它的不同宿主，不各自拥有独立进程。
+
+_Avoid_: Local App Runtime、浏览器 Tab 本身、仅设置 `cwd` 的普通宿主子进程、Home Plugin Runtime

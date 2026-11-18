@@ -40,6 +40,94 @@ test('Desktop interface does not leak generic IPC primitives', () => {
   assert.match(desktopInterface, /export type DesktopAPI/)
 })
 
+test('Project Chat production composition is Main-only and preserves legacy rollback handlers', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const runner = readFileSync(resolve(root, 'electron/claude-agent-runner.ts'), 'utf8')
+
+  assert.match(main, /const PROJECT_CHAT_BROKER_V2_ENABLED = projectChatBrokerV2Enabled\(process\.env\)/)
+  assert.match(main, /createProjectChatIpcRouter|RendererCapabilityRegistry|ProjectChatBroker/)
+  assert.match(main, /ipcMain\.handle\('claude-chat:submit',[\s\S]{0,240}getClaudeAgentRunner\(\)\.submit\(safePayload\)/)
+  assert.match(main, /const \{ projectId: _rendererProjectId, projectRuntimePrompt: _rendererRuntimePrompt, \.\.\.safePayload \} = payload/)
+  assert.match(main, /ipcMain\.handle\('claude-chat:cancel',[\s\S]{0,120}getClaudeAgentRunner\(\)\.cancel\(requestId\)/)
+  assert.match(main, /ipcMain\.handle\('claude-chat:new-thread',[\s\S]{0,120}getClaudeAgentRunner\(\)\.newThread\(threadId\)/)
+  assert.match(main, /ipcMain\.handle\('claude-chat:answer-permission-request',[\s\S]{0,140}getClaudeAgentRunner\(\)\.answerPermissionRequest\(payload\)/)
+  assert.match(main, /new ClaudeAgentRunner\(\s*claudeChatEventMultiplexer/)
+  assert.doesNotMatch(runner, /requestId\s*->\s*\{/)
+})
+
+test('Runtime Chat creation is composed through the Project Chat seam and targets the dedicated window', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  assert.match(main, /startProjectRuntimeChat: async \(projectId: string\) => \{[\s\S]{0,900}manager\.open\(projectId\)[\s\S]{0,360}type: 'select-thread', projectId, threadId[\s\S]{0,300}broker\.submitRun\([\s\S]{0,140}\{ projectRuntimePrompt: true \}/)
+})
+
+test('Runtime development cutover keeps scopes independent and conflicts only at the Main-owned root lease', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const contract = readFileSync(resolve(root, 'src/runtime-development-contract.ts'), 'utf8')
+  const openStart = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openRuntimeDevelopment')
+  const focusStart = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.focusRuntimeDevelopmentConflict', openStart)
+  const focusEnd = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.endRuntimeDevelopment', focusStart)
+  const openHandler = main.slice(openStart, focusStart)
+  const focusHandler = main.slice(focusStart, focusEnd)
+
+  assert.match(contract, /\{ kind: 'project-runtime'; projectId: string; mountId: string \}/)
+  assert.match(contract, /\{ kind: 'workspace-runtime'; workspaceTabId: string \}/)
+  assert.match(main, /projectRuntimeScopeId\(projectId\)/)
+  assert.match(main, /workspaceRuntimeScopeId\(definition\.id\)/)
+  assert.match(openHandler, /runChatWorkspaceOperation\(async \(\) => resolveRuntimeDevelopmentTarget\(rawTarget, getChatWorkspaceStore\(\)\.read\(\)\)\)/)
+  assert.match(openHandler, /getByRoot\(definition\?\.canonicalRoot \?\? scope\.runtimeRoot\)/)
+  assert.match(openHandler, /currentLease\.runtimeScopeId !== resolvedTarget\.runtimeScopeId/)
+  assert.doesNotMatch(openHandler, /activeProjectId\s*:|activeWorkspaceTabId\s*:/)
+  assert.match(focusHandler, /runtimeDevelopmentConflictTokens\.delete\(rawToken\)/)
+  assert.match(focusHandler, /target\.show\(\); target\.focus\(\)/)
+  assert.doesNotMatch(focusHandler, /activeProjectId|activeWorkspaceTabId|save\(/)
+  assert.match(main, /mainWindow\.webContents\.send\(DESKTOP_EVENT_CHANNELS\.onRuntimeDevelopmentEvent, \{ type: 'snapshot', snapshot \}\)/)
+})
+
+test('Main uses one workspace coordinator and locks the Runtime trust commit before fresh read/save', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  assert.match(main, /import \{ ChatWorkspaceCoordinator \} from '\.\/chat-workspace-coordinator'/)
+  assert.match(main, /chatWorkspaceCoordinator = new ChatWorkspaceCoordinator\(\)/)
+  assert.match(main, /if \(!chatWorkspaceCoordinator\) throw new Error\('Chat workspace coordinator is not ready\.'\)/)
+  assert.match(main, /return chatWorkspaceCoordinator\.runExclusive\(operation\)/)
+  assert.doesNotMatch(main, /chatWorkspaceOperationChain/)
+  const trustStart = main.indexOf('const resolveProjectRuntime')
+  const trustEnd = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.ensureProjectRuntime', trustStart)
+  const trust = main.slice(trustStart, trustEnd)
+  assert.ok(trust.indexOf('await runChatWorkspaceOperation') < trust.indexOf('await getChatWorkspaceStore().save(proposed)'))
+  assert.ok(trust.indexOf('const lockedState = getChatWorkspaceStore().read()') < trust.indexOf('await getChatWorkspaceStore().save(proposed)'))
+  assert.match(trust, /lockedProject\.path !== project\.path/)
+  assert.match(trust, /if \(!committed\.ok\) \{[\s\S]{0,180}localAppTrustStore\?\.revoke\(inspected\.canonicalRoot\)/)
+  const source = ts.createSourceFile('main.ts', main, ts.ScriptTarget.ES2020, true)
+  const saves = []
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'save' && ts.isCallExpression(node.expression.expression) && ts.isIdentifier(node.expression.expression.expression) && node.expression.expression.expression.text === 'getChatWorkspaceStore') saves.push(node)
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  // 8th save: the `FIX-WS-01` workspace command handler.
+  // 9th save: the `R4-03` serve-override handler.
+  assert.equal(saves.length, 9)
+  for (const save of saves) {
+    let parent = save.parent; let wrapped = false
+    while (parent) {
+      if ((ts.isArrowFunction(parent) || ts.isFunctionExpression(parent)) && ts.isCallExpression(parent.parent) && ts.isIdentifier(parent.parent.expression) && parent.parent.expression.text === 'runChatWorkspaceOperation' && parent.parent.arguments.includes(parent)) { wrapped = true; break }
+      parent = parent.parent
+    }
+    assert.equal(wrapped, true, 'every workspace save is inside a runChatWorkspaceOperation callback')
+  }
+})
+
+test('runtime scoped services remain authority-free while Main composes them', () => {
+  const service = readFileSync(resolve(root, 'electron/project-chat-runtime-services.ts'), 'utf8')
+  const presence = readFileSync(resolve(root, 'electron/project-chat-presence.ts'), 'utf8')
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  assert.doesNotMatch(service, /\bipcMain\b|\bBrowserWindow\b|from ['"]\.\/main['"]|process\.env|\bwindow\b/)
+  assert.doesNotMatch(presence, /\bipcMain\b|\bBrowserWindow\b|from ['"]\.\/main['"]|process\.env/)
+  assert.match(main, /createProjectChatScopedReadCollaborator|createProjectChatBrokerRunnerAdapter|ProjectChatPresenceRegistry/)
+  assert.match(main, /queueMicrotask\(\(\) => projectChatBroker\?\.broadcastProjectSnapshot/)
+  assert.match(main, /type: 'open-project-preview', projectId/)
+})
+
 test('Desktop seam contract drives preload forwarding and main registration', () => {
   const {
     DESKTOP_EVENT_CHANNELS,
@@ -55,21 +143,206 @@ test('Desktop seam contract drives preload forwarding and main registration', ()
 
   assert.deepEqual(DESKTOP_STATIC_CAPABILITIES, ['platform', 'isDevRuntime', 'windowEffects'])
   assert.equal(DESKTOP_INVOKE_CHANNELS.getAppVersion, DESKTOP_INVOKE_CHANNELS.getAppUpdaterState)
+  assert.equal(DESKTOP_INVOKE_CHANNELS.createWorkspaceTab, 'desktop:workspace-tab:create')
+  assert.equal(DESKTOP_INVOKE_CHANNELS.openWorkspaceTab, 'desktop:workspace-tab:open')
+  assert.equal(DESKTOP_INVOKE_CHANNELS.closeWorkspaceTab, 'desktop:workspace-tab:close')
 
   for (const capability of Object.keys(DESKTOP_INVOKE_CHANNELS)) {
     assert.match(preload, new RegExp(`DESKTOP_INVOKE_CHANNELS\\.${capability}\\b`), `preload forwards ${capability}`)
-    if (capability !== 'getAppVersion') {
+    if (capability !== 'getAppVersion' && !['inspectLocalAppDirectory', 'trustLocalAppDirectory', 'createLocalApp', 'openLocalAppTab', 'closeLocalAppTab', 'relocateLocalApp', 'revokeLocalAppTrust', 'getLocalAppRuntime', 'startLocalAppRuntime', 'stopLocalAppRuntime', 'releaseLocalAppRuntime', 'restartLocalAppRuntime', 'buildLocalAppRuntime', 'cancelLocalAppRuntimeBuild', 'createLocalAppPreview', 'setLocalAppPreviewBounds', 'setLocalAppPreviewVisible', 'reloadLocalAppPreview', 'closeLocalAppPreview', 'inspectRuntimeDirectory', 'trustRuntimeDirectory', 'createWorkspaceTab', 'openWorkspaceTab', 'closeWorkspaceTab', 'renameWorkspaceTab', 'relocateRuntime', 'revokeRuntimeTrust', 'getRuntime', 'startRuntime', 'stopRuntime', 'releaseRuntime', 'restartRuntime', 'buildRuntime', 'cancelRuntimeBuild', 'startRuntimeDevelopment', 'createRuntimePreview', 'setRuntimePreviewBounds', 'setRuntimePreviewVisible', 'navigateRuntimePreview', 'reloadRuntimePreview', 'closeRuntimePreview', 'ensureProjectRuntime', 'trustProjectRuntime'].includes(capability)) {
       assert.match(registrationSource, new RegExp(`DESKTOP_INVOKE_CHANNELS\\.${capability}\\b`), `main registers ${capability}`)
     }
   }
 
   for (const capability of Object.keys(DESKTOP_EVENT_CHANNELS)) {
     assert.match(preload, new RegExp(`DESKTOP_EVENT_CHANNELS\\.${capability}\\b`), `preload subscribes ${capability}`)
-    assert.match(eventProducerSource, new RegExp(`DESKTOP_EVENT_CHANNELS\\.${capability}\\b`), `main emits ${capability}`)
+    if (!['onRuntimeEvent', 'onLocalAppRuntimeEvent'].includes(capability)) assert.match(eventProducerSource, new RegExp(`DESKTOP_EVENT_CHANNELS\\.${capability}\\b`), `main emits ${capability}`)
   }
 
   assert.doesNotMatch(preload, /ipcRenderer\.invoke\(['"](?:desktop|desktop-preferences|chat-workspace|app-updater):/)
   assert.doesNotMatch(registrationSource, /ipcMain\.handle\(['"](?:desktop|desktop-preferences|chat-workspace|app-updater):/)
+})
+
+test('Static build keeps last-good Preview alive and cancellation uses the build seam', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const buildStart = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.buildRuntime')
+  const buildEnd = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.cancelRuntimeBuild', buildStart)
+  assert.ok(buildStart >= 0 && buildEnd > buildStart)
+  const buildHandler = main.slice(buildStart, buildEnd)
+  // `C-RSM-501`: the entry hands the intent to the Manager's serve ladder and
+  // never stops the runtime or closes its Preview first, so whatever is being
+  // viewed stays up while it is rebuilt.
+  assert.match(buildHandler, /localAppRuntimeManager\.refresh\(id\)/)
+  assert.doesNotMatch(buildHandler, /closeForLocalApp\(id\)/)
+  assert.doesNotMatch(buildHandler, /localAppRuntimeManager\.stop\(id/)
+  assert.doesNotMatch(main, /protocol\.handle\(STATIC_PREVIEW_SCHEME, \(request\) => staticPreviewResponse\(request, staticRegistry\)\)/)
+  assert.match(buildHandler, /runtime\.buildStatus === 'build_failed'/)
+
+  const runtime = readFileSync(resolve(root, 'electron/local-app-runtime/child-process.ts'), 'utf8')
+  assert.match(runtime, /detached: process\.platform !== 'win32'/)
+  const workspace = readFileSync(resolve(root, 'src/components/RuntimeWorkspace.tsx'), 'utf8')
+  // `C-RSM-504`: the workbench derives everything from one projection and
+  // shows no build, rebuild, restart or stop controls; failures get a single
+  // retry (through the serve ladder) plus logs.
+  assert.match(workspace, /runtimeWorkbenchState\(runtime\)/)
+  assert.match(workspace, /data-testid="runtime-update-failed"/)
+  assert.match(workspace, /testId: 'runtime-retry'/)
+  assert.doesNotMatch(workspace, /runtime\.rebuild|runtime\.build'|runtime\.restart|runtime-cancel-build|runtime-stop/)
+  const shellWorkspace = readFileSync(resolve(root, 'src/components/AppShellWorkspace.tsx'), 'utf8')
+  assert.match(shellWorkspace, /runtime-open-development/)
+  assert.doesNotMatch(shellWorkspace, /data-testid="runtime-build"/)
+  const sidebar = readFileSync(resolve(root, 'src/components/AppShellSidebar.tsx'), 'utf8')
+  assert.match(sidebar, /id: 'runtime-tab-development'[\s\S]*?onRuntimeDevelopmentAction\(tab, development\)/)
+  // `C-RSM-505`: no build/refresh items; process controls only while troubleshooting.
+  assert.doesNotMatch(sidebar, /id: 'runtime-tab-build'|id: 'runtime-tab-refresh'/)
+  assert.match(sidebar, /const troubleshootItems: ContextMenuItem\[\] = troubleshoot \?/)
+  const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
+  assert.match(appShell, /onRuntimeDevelopmentAction=\{activeWorkspaceTab \?[\s\S]*?kind: 'workspace-runtime', workspaceTabId: activeWorkspaceTab\.id/)
+  assert.doesNotMatch(appShell, /startLocalAppDevelopment|openWorkspaceTabProjectChat/)
+  const projectHome = readFileSync(resolve(root, 'src/components/chat/ProjectHomeRuntimeView.tsx'), 'utf8')
+  assert.match(projectHome, /project-runtime-cancel-build/)
+  assert.match(projectHome, /onCancelBuild \?\? controller\.onStop/)
+  const preview = readFileSync(resolve(root, 'src/components/RuntimePreview.tsx'), 'utf8')
+  assert.match(preview, /'building', 'build_failed'/)
+  assert.doesNotMatch(preview, /runtime\?\.buildStatus, runtime\?\.mode/)
+})
+
+test('Local App Tab close is Main-authoritative and releases side effects only after readback', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const start = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.closeWorkspaceTab')
+  const end = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.trustRuntimeDirectory', start)
+  assert.ok(start >= 0 && end > start)
+  const handler = main.slice(start, end)
+  assert.match(handler, /runChatWorkspaceOperation/)
+  assert.match(handler, /rawExpectedRevision/)
+  assert.match(handler, /activeWorkspaceTabId/)
+  assert.match(handler, /persisted\.workspaceTabs\.some\(\(item\) => item\.id === tabId\)/)
+  assert.ok(handler.indexOf('await getChatWorkspaceStore().save(proposed)') < handler.indexOf('const persisted = getChatWorkspaceStore().read()'))
+  assert.ok(handler.indexOf('const persisted = getChatWorkspaceStore().read()') < handler.indexOf('await localAppPreviewManager?.closeForTab'))
+  assert.ok(handler.indexOf('await localAppPreviewManager?.closeForTab') < handler.indexOf('localAppRuntimeManager?.release'))
+  assert.match(handler, /localAppRuntimeManager\?\.release\(committed\.runtimeDefinitionId, `tab:\$\{committed\.tabId\}`\)/)
+  assert.match(handler, /code: 'workspace-save-failed'/)
+  const saveFailure = handler.slice(handler.indexOf("code: 'workspace-save-failed'"), handler.indexOf('if (!committed.ok)'))
+  assert.doesNotMatch(saveFailure, /closeForTab|\.release\(/)
+
+  const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
+  const closeStart = appShell.indexOf('const closeLocalAppTab')
+  const closeEnd = appShell.indexOf('const renameLocalAppTab', closeStart)
+  const closeFlow = appShell.slice(closeStart, closeEnd)
+  assert.ok(closeFlow.indexOf('await workspaceSession.flush()') < closeFlow.indexOf('await window.desktop.getChatWorkspace()'))
+  assert.ok(closeFlow.indexOf('await window.desktop.getChatWorkspace()') < closeFlow.indexOf('window.desktop.closeWorkspaceTab('))
+  assert.ok(closeFlow.indexOf('window.desktop.closeWorkspaceTab(') < closeFlow.indexOf('flushSync(() => adoptAuthoritativeSnapshot(result.workspace))'))
+  assert.ok(closeFlow.indexOf('flushSync(() => adoptAuthoritativeSnapshot(result.workspace))') < closeFlow.indexOf('persistChatWorkspaceStateToLocalStorage(result.workspace)'))
+  assert.doesNotMatch(closeFlow, /releaseLocalAppRuntime/)
+  const cleanupStart = appShell.indexOf('// --- Autosave through Workspace Session')
+  const cleanupEnd = appShell.indexOf('// --- Routing helper', cleanupStart)
+  assert.match(appShell.slice(cleanupStart, cleanupEnd), /workspaceSession\.flush\(\)\.catch/)
+  assert.doesNotMatch(appShell.slice(cleanupStart, cleanupEnd), /workspaceSession\.close\(\)/)
+})
+
+test('Local App chooser opens existing tabs through the authoritative Main commit before Runtime attach', () => {
+  const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
+  const openFlowStart = appShell.indexOf('const openExistingLocalApp')
+  const openFlowEnd = appShell.indexOf('const stopLocalApp', openFlowStart)
+  const openFlow = appShell.slice(openFlowStart, openFlowEnd)
+  assert.ok(openFlow.indexOf('await workspaceSession.flush()') < openFlow.indexOf('await window.desktop.getChatWorkspace()'))
+  assert.ok(openFlow.indexOf('await window.desktop.getChatWorkspace()') < openFlow.indexOf('window.desktop.openWorkspaceTab('))
+  assert.ok(openFlow.indexOf('adoptAuthoritativeSnapshot(result.workspace)') < openFlow.indexOf('startLocalApp(result.definition.id'))
+  assert.match(appShell, /await setActiveLocalAppPreviewVisible\(false\)[\s\S]{0,120}setLocalAppChooserOpen\(true\)/)
+  assert.doesNotMatch(appShell, /onChooseNew=\{\(\) => \{ setLocalAppChooserOpen\(false\); void inspectLocalApp\(\) \}\}/)
+  const preview = readFileSync(resolve(root, 'src/components/RuntimePreview.tsx'), 'utf8')
+  assert.match(preview, /setRuntimePreviewVisible\?\.\(previewId, false\)/)
+  assert.doesNotMatch(preview, /closeRuntimePreview\?\.\(previewId\)/)
+  const projectHomeRuntime = readFileSync(resolve(root, 'src/components/chat/ProjectHomeRuntimeView.tsx'), 'utf8')
+  assert.doesNotMatch(appShell, /openProjectRuntimeTab/)
+  assert.doesNotMatch(projectHomeRuntime, /onOpenTab|project-runtime-open-tab/)
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const openWorkspaceTab = main.slice(main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.openWorkspaceTab'), main.indexOf('const resolveProjectRuntime'))
+  assert.match(openWorkspaceTab, /definition\.owner\.kind !== 'workspace'/)
+  assert.match(openWorkspaceTab, /code: 'owner-mismatch'/)
+  assert.match(main, /closeForLocalApp\(rawId\.trim\(\)\)[\s\S]{0,120}localAppRuntimeManager\?\.stop\(rawId/)
+  assert.match(main, /closeForTab\([\s\S]{0,120}localAppRuntimeManager\?\.release\(rawId\.trim\(\), consumerId/)
+  assert.match(main, /if \(!host\) return localAppRuntimeManager\?\.release\(runtimeDefinitionId, consumerId\)/)
+  const localWorkspace = readFileSync(resolve(root, 'src/components/LocalAppWorkspace.tsx'), 'utf8')
+  assert.match(localWorkspace, /!showToolbar \? <span className="sr-only"/)
+  assert.doesNotMatch(localWorkspace, /!showToolbar \? <div className="local-app-runtime-summary"/)
+})
+
+test('Local App creation keeps durable commit before runtime start in Main', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const start = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.createWorkspaceTab')
+  const end = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.trustRuntimeDirectory', start)
+  assert.ok(start >= 0 && end > start)
+  const handler = main.slice(start, end)
+  assert.ok(handler.indexOf('localAppTrustStore') < handler.indexOf('getChatWorkspaceStore().save(proposed)'))
+  assert.ok(handler.indexOf('getChatWorkspaceStore().save(proposed)') < handler.indexOf('runtimeManager.register(committed.definition)'))
+  assert.doesNotMatch(handler, /runtimeManager\.start\(/)
+  assert.match(handler, /getChatWorkspaceStore\(\)\.read\(\)/)
+  assert.match(handler, /const wasTrusted =/)
+  assert.match(handler, /if \(!wasTrusted\) await trustStore\.revoke/)
+  assert.match(handler, /const tabIds = new Set\(current\.workspaceTabs\.map/)
+  assert.match(handler, /typeof rawTitle !== 'string' \|\| rawTitle\.trim\(\)\.length < 1 \|\| rawTitle\.trim\(\)\.length > 64/)
+  assert.match(handler, /title: rawTitle\.trim\(\)/)
+  assert.match(handler, /while \(tabIds\.has\(tabId\)\)/)
+  assert.doesNotMatch(handler, /id: `\$\{definition\.id\}-tab`/)
+  const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
+  const createFlow = appShell.slice(appShell.indexOf('const trustAndCreateLocalApp'), appShell.indexOf('const startLocalApp', appShell.indexOf('const trustAndCreateLocalApp')))
+  assert.ok(createFlow.indexOf('await workspaceSession.flush()') >= 0)
+  assert.ok(createFlow.indexOf('await workspaceSession.flush()') < createFlow.indexOf('await window.desktop.getChatWorkspace()'))
+  assert.ok(createFlow.indexOf('await window.desktop.getChatWorkspace()') < createFlow.indexOf('window.desktop.createWorkspaceTab('))
+  assert.match(createFlow, /catch \(error\)[\s\S]{0,260}setLocalAppDialogError\(message\)[\s\S]{0,80}return/)
+  const successBranch = appShell.slice(appShell.indexOf('if (!result.ok)'), appShell.indexOf('} finally {', appShell.indexOf('if (!result.ok)')))
+  assert.ok(successBranch.indexOf('adoptAuthoritativeSnapshot(result.workspace)') < successBranch.indexOf('startRuntime(result.definition.id'))
+})
+
+test('Local App relocation gates the Main revision after renderer flush and returns authoritative workspace', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const mainStart = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.relocateRuntime')
+  const mainEnd = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.revokeRuntimeTrust', mainStart)
+  const handler = main.slice(mainStart, mainEnd)
+  assert.match(handler, /rawExpectedRevision/)
+  assert.ok(handler.indexOf('getChatWorkspaceStore().read()') < handler.indexOf('getChatWorkspaceStore().save(nextState)'))
+  assert.ok(handler.indexOf('closeForLocalApp') < handler.indexOf('getChatWorkspaceStore().save(nextState)'))
+  assert.ok(handler.indexOf('runtimeManager.stop(rawId') < handler.indexOf('getChatWorkspaceStore().save(nextState)'))
+  assert.match(handler, /old-runtime-stop-failed/)
+  assert.match(handler, /restoreOldRuntime/)
+  assert.match(handler, /relocation-recovery-failed/)
+  assert.ok(main.indexOf('getChatWorkspaceStore().save(nextState)') < main.indexOf('runtimeManager.register(committed.definition)', mainStart))
+  assert.match(handler, /workspace: persisted/)
+  assert.match(handler, /wasTrustedNewRoot/)
+  assert.match(handler, /item\.id !== rawId[\s\S]{0,180}oldCanonicalRoot/)
+  const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
+  const start = appShell.indexOf('const relocateLocalApp')
+  const end = appShell.indexOf('useEffect(() => {', start)
+  const flow = appShell.slice(start, end)
+  assert.ok(flow.indexOf('await workspaceSession.flush()') < flow.indexOf('await window.desktop.getChatWorkspace()'))
+  assert.ok(flow.indexOf('await window.desktop.getChatWorkspace()') < flow.indexOf('window.desktop.relocateRuntime('))
+  assert.match(flow, /adoptAuthoritativeSnapshot\(result\.workspace\)/)
+})
+
+test('Main Preview creation returns before native loading and revalidates from the in-memory authority', () => {
+  const main = readFileSync(resolve(root, 'electron/main.ts'), 'utf8')
+  const start = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.createRuntimePreview')
+  const end = main.indexOf('ipcMain.handle(DESKTOP_INVOKE_CHANNELS.setRuntimePreviewBounds', start)
+  const handler = main.slice(start, end)
+  assert.match(handler, /waitForLoad: false/)
+  assert.ok(handler.indexOf('await localAppPreviewManager.create(') < handler.indexOf('const authoritative = chatWorkspaceStore?.current()'))
+  assert.ok(handler.indexOf('const authoritative = chatWorkspaceStore?.current()') < handler.indexOf('closeIfCurrent'))
+  assert.match(handler, /currentTab\.runtimeDefinitionId === rawRuntimeDefinitionId/)
+  assert.match(handler, /definition\.owner\.kind === 'project'/)
+  assert.match(handler, /workspaceOwnerMatches/)
+  assert.match(handler, /currentRuntime\.generation === runtime\.generation/)
+  assert.match(handler, /registeredProjectRuntimeHost\(projectHost\.projectId, projectHost\.mountId/)
+  assert.match(handler, /mountId/)
+  assert.match(main, /projectRuntimeHosts = new Map/)
+  const previewEvent = main.slice(main.indexOf('localAppPreviewManager = new LocalAppPreviewManager'), main.indexOf('attachExternalLinkHandlers'))
+  assert.doesNotMatch(previewEvent, /localAppId:/)
+  const appShell = readFileSync(resolve(root, 'src/components/AppShell.tsx'), 'utf8')
+  const runtimeEventState = readFileSync(resolve(root, 'src/components/runtime-event-state.ts'), 'utf8')
+  assert.match(appShell, /new RuntimeEventBatcher\(/)
+  assert.match(runtimeEventState, /const runtimeDefinitionId = event\.runtimeDefinitionId\n/)
+  assert.doesNotMatch(runtimeEventState.slice(runtimeEventState.indexOf('const next: RuntimeSnapshot'), runtimeEventState.indexOf('return \{ \.\.\.current, \[runtimeDefinitionId\]')),
+    /localAppId:/)
 })
 
 test('Web search settings expose provider test seam and UI status hooks', () => {

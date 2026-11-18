@@ -19,6 +19,7 @@ import {
   type RefObject,
 } from 'react'
 import { flushSync } from 'react-dom'
+import { ATTACHMENT_THUMBNAIL_MAX_CHARS, thumbnailSizeFor } from '../../chat-attachment-thumbnail'
 import { IconInline } from '../../icon-inline'
 import type {
   AgentContextCatalog,
@@ -51,7 +52,6 @@ import type {
   ChatMessageAttachment,
   ChatMessageItem,
   ChatTaskItem,
-  ChatTaskState,
   ChatState,
   CreateWorkspaceThreadOptions,
   FileTreeNode,
@@ -60,9 +60,12 @@ import type {
   ThreadRunState,
   TranscriptItem,
   WorkspaceProject,
-  WorkspaceThread,
+  ThreadMetadata,
 } from '../types'
 import { AgentInputPromptModal, type PendingUserInputPrompt, type UserInputDecision } from './AgentInputPromptModal'
+import { createProjectChatBridge, type ChatBridge, type ChatBrokerPrompt } from './chat-bridge'
+import { samePrompt, useBrokerSnapshotSelector, type ChatBrokerSnapshotSource } from './broker-snapshot-source'
+import { threadChatStore, useThreadChatSelector } from './thread-chat-state-store'
 import { ChatStartView } from './ChatStartView'
 import { ChatThreadView } from './ChatThreadView'
 import { ChatRun, type ChatRunTransition } from './chat-run'
@@ -73,6 +76,12 @@ import { formatBytes } from './format'
 import type { BuiltInSlashCommand, ChatModelMenuRow, ComposerSuggestion, ComposerTrigger, PermissionModeRow } from './local-types'
 import type { WorkspaceAgentModeState } from '../useWorkspaceAgentMode'
 import { agentCommandChannel } from '../../agent-command-channel'
+import type {
+  ProjectChatAgentContext,
+  ProjectChatAttachment,
+  ProjectChatAttachmentSelection,
+  ProjectChatModelCatalog,
+} from '../../project-chat-contract'
 
 const PROCESS_TRACE_TOGGLE_EVENT = 'chat-process-trace:toggle'
 const MAX_COMPOSER_SUGGESTIONS = 64
@@ -161,6 +170,34 @@ function imageExtensionForMimeType(mimeType: string): string {
   return 'png'
 }
 
+/**
+ * 生成用于持久化的缩略图；失败时回退到原图，保证预览不丢。
+ * Produce the durable UI thumbnail. The full image still reaches the Agent via
+ * `base64`; only this shrunken form is persisted, so a pasted screenshot no
+ * longer adds megabytes to every later workspace write and broker snapshot.
+ */
+async function readImageThumbnailDataUrl(file: File, fullDataUrl: string): Promise<string> {
+  if (fullDataUrl.length <= ATTACHMENT_THUMBNAIL_MAX_CHARS) return fullDataUrl
+  try {
+    const bitmap = await createImageBitmap(file)
+    const { width, height } = thumbnailSizeFor(bitmap.width, bitmap.height)
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d')
+    if (!context) {
+      bitmap.close()
+      return fullDataUrl
+    }
+    context.drawImage(bitmap, 0, 0, width, height)
+    bitmap.close()
+    const thumbnail = canvas.toDataURL('image/png')
+    return thumbnail.length < fullDataUrl.length ? thumbnail : fullDataUrl
+  } catch {
+    return fullDataUrl
+  }
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -231,12 +268,19 @@ export type SubmitPromptOptions = {
 type ChatPageProps = {
   hidden: boolean
   activeProject: WorkspaceProject
-  activeThread: WorkspaceThread | undefined
+  activeThread: ThreadMetadata | undefined
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
+  /** Broker 快照 seam：只订阅真正渲染的片段，流式期间 ChatPage 与 Composer 都不重渲染。 */
+  projectChatSnapshots?: ChatBrokerSnapshotSource
+  projectChatEnabled: boolean
+  /** 非 Project scope（如 Runtime 开发窗口）自带 broker 通道；缺省时按 activeProject 就地构造。 */
+  chatBridge?: ChatBridge
+  /** 有值时禁用输入并用它作为拦截文案；用于 Runtime 未就绪或只读态。 */
+  submitBlockedReason?: string
   agentStatusSnapshot: ClaudeAgentStatusSnapshot | null
   /** 按 threadId 查找持久化 sessionId（重启后恢复 SDK）/ Threads list for resolving persisted session ids */
-  threads: WorkspaceThread[]
+  threads: ThreadMetadata[]
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
   threadRunStates: Record<string, ThreadRunState>
@@ -245,6 +289,7 @@ type ChatPageProps = {
   onForkThread: (projectId: string, items: TranscriptItem[], title: string, model?: string, modelPick?: ChatModelPick) => void
   onCreateProject: (mode: 'scratch' | 'existing') => void | Promise<void>
   onSelectProject: (projectId: string) => void
+  onSelectThread: (threadId: string) => void
   onThreadChatStateChange: (threadId: string, update: ChatState | ((prev: ChatState) => ChatState)) => void
   onThreadPromptSubmit: (threadId: string, prompt: string) => void
   onThreadRunStateChange: (threadId: string, state: ThreadRunState | null) => void
@@ -267,6 +312,8 @@ type ChatPageProps = {
   onOpenProjectFile: (node: FileTreeNode) => void
   onRunProjectSkill: (projectId: string, skill: ProjectSkillRunRequest) => void
   onStopProjectSkillRun: (projectId: string, skillPath: string) => void
+  /** Project windows keep only this local view state; Chat facts remain broker snapshots. */
+  projectWindow?: { draft: string; onDraftChange: (draft: string) => void }
 }
 
 // --- Internal helpers / 模块内辅助 ---
@@ -315,7 +362,7 @@ function buildDataCardPrompt(userRequest: string, threadId: string): string {
 }
 
 /** 将线程用途映射到 `claudeChat.submit` 的 `promptMode` / Map thread `purpose` to SDK `promptMode` */
-function promptModeForThreadPurpose(purpose: WorkspaceThread['purpose']): ClaudeChatSubmitPayload['promptMode'] | undefined {
+function promptModeForThreadPurpose(purpose: ThreadMetadata['purpose']): ClaudeChatSubmitPayload['promptMode'] | undefined {
   if (purpose === 'home-plugin-customization' || purpose === 'home-plugin-card-customization') return purpose
   if (purpose === 'task-run') return 'home-plugin-task-run'
   return undefined
@@ -331,6 +378,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     activeThread,
     projectDefaultModelPick,
     projectHomeModelPick,
+    projectChatSnapshots,
+    projectChatEnabled,
     agentStatusSnapshot,
     threads,
     projects,
@@ -341,6 +390,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     onForkThread,
     onCreateProject,
     onSelectProject,
+    onSelectThread,
     onThreadChatStateChange,
     onThreadPromptSubmit,
     onThreadRunStateChange,
@@ -363,13 +413,30 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     onOpenProjectFile,
     onRunProjectSkill,
     onStopProjectSkillRun,
+    projectWindow,
+    chatBridge: injectedChatBridge,
+    submitBlockedReason,
   },
   ref,
 ) {
   // --- Local state & refs / 组件状态与引用 ---
 
   const { t } = useI18n()
-  const chatItems = activeThread?.chatState.items ?? []
+  // Project scope 的 bridge 就地构造；Runtime 等其它 scope 由上层注入同一个接口。
+  // routeGeneration 每次调用时现读，因此 bridge 不需要随快照重建，也不需要 ChatPage 重渲染。
+  const brokerSourceRef = useRef(projectChatSnapshots)
+  brokerSourceRef.current = projectChatSnapshots
+  const brokerScopeIdRef = useRef(activeProject.id)
+  brokerScopeIdRef.current = activeProject.id
+  const readBrokerSnapshot = useCallback(() => brokerSourceRef.current?.get(brokerScopeIdRef.current), [])
+  const brokerScope = useCallback(
+    () => ({ projectId: brokerScopeIdRef.current, routeGeneration: readBrokerSnapshot()?.routeGeneration ?? 0 }),
+    [readBrokerSnapshot],
+  )
+  const chatBridge = useMemo(
+    () => injectedChatBridge ?? (projectChatEnabled ? createProjectChatBridge(brokerScope) : undefined),
+    [brokerScope, injectedChatBridge, projectChatEnabled],
+  )
   const activeRunState = activeThread ? threadRunStates[activeThread.id] : undefined
   const isRunning = Boolean(activeRunState)
   const [inputValue, setInputValue] = useState('')
@@ -380,6 +447,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const [modelMenuSelectionKey, setModelMenuSelectionKey] = useState('')
   const [activeModelSupportsImages, setActiveModelSupportsImages] = useState(false)
   const [claudeSettingsSnapshot, setClaudeSettingsSnapshot] = useState<ClaudeAgentSettingsSnapshot | null>(null)
+  const [projectModelCatalog, setProjectModelCatalog] = useState<ProjectChatModelCatalog | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<ClaudeChatAttachment[]>([])
   const pendingAttachmentsRef = useRef<ClaudeChatAttachment[]>([])
   const [agentContext, setAgentContext] = useState<AgentContextCatalog | null>(null)
@@ -439,6 +507,8 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const currentModelPickRef = useRef<ChatModelPick | undefined>(undefined)
   const inputValueRef = useRef(inputValue)
   const composerSelectionRef = useRef(composerSelection)
+  const composerAutocompleteBoxKeyRef = useRef('')
+  const projectWindowDraftLoadedRef = useRef(false)
   const speechDraftRangeRef = useRef<SpeechDraftRange | null>(null)
   const lastSpeechAppliedValueRef = useRef<string | null>(null)
   const ignoreSpeechRecognitionTextRef = useRef(false)
@@ -456,14 +526,22 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   } | null>(null)
   const [todoPanelOpen, setTodoPanelOpen] = useState(false)
 
-  const hasMessages = chatItems.length > 0
-  const activeTaskState = activeThread?.chatState.tasks
-  const visibleTaskItems = useMemo(
-    () => (activeTaskState?.items ?? []).filter((task) => task.status !== 'deleted'),
-    [activeTaskState?.items],
+  // 这几个派生值在一次流式回答里都不变，因此订阅它们不会带来渲染。
+  const hasMessages = useThreadChatSelector(activeThread?.id, (chatState) => chatState.items.length > 0)
+  const hasVisibleTasks = useThreadChatSelector(
+    activeThread?.id,
+    (chatState) => (chatState.tasks?.items ?? []).some((task) => task.status !== 'deleted'),
   )
-  const hasVisibleTasks = visibleTaskItems.length > 0
+  const activeThreadSessionId = useThreadChatSelector(activeThread?.id, (chatState) => chatState.sessionId)
+  const activeThreadModelPick = useThreadChatSelector(activeThread?.id, (chatState) => chatState.modelPick, sameModelPick)
+  const ownedBrokerPrompt = useBrokerSnapshotSelector(
+    projectChatSnapshots,
+    activeProject.id,
+    (snapshot) => snapshot?.pendingPrompts.find((prompt) => prompt.threadId === activeThread?.id && prompt.isOwnedByCaller),
+    samePrompt,
+  )
   const activeUserInputPrompt = useMemo(() => {
+    if (projectChatEnabled) return projectPromptToPendingInput(ownedBrokerPrompt)
     const activeThreadId = activeThread?.id ?? activeThreadIdRef.current
     if (!activeThreadId) return null
     return (
@@ -472,7 +550,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return promptThreadId === activeThreadId
       }) ?? null
     )
-  }, [activeThread?.id, chatRun, pendingUserInputPrompts])
+  }, [activeThread?.id, chatRun, ownedBrokerPrompt, pendingUserInputPrompts, projectChatEnabled])
+  const foreignBrokerPrompt = useBrokerSnapshotSelector(
+    projectChatSnapshots,
+    activeProject.id,
+    (snapshot) => snapshot?.pendingPrompts.find((prompt) => prompt.threadId === activeThread?.id && !prompt.isOwnedByCaller),
+    samePrompt,
+  )
+  const activeReadOnlyPrompt = projectChatEnabled ? foreignBrokerPrompt : undefined
+  const brokerPermissionMode = useBrokerSnapshotSelector(
+    projectChatSnapshots,
+    activeProject.id,
+    (snapshot) => snapshot?.permissionMode,
+  )
   const permissionModeRows = useMemo(() => getPermissionModeRows(t), [t])
   const permissionModeLabel = permissionModeRows.find((row) => row.mode === permissionMode)?.label ?? t('chat.permissionModeAuto')
   const speechRecognitionSupported =
@@ -645,6 +735,15 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Agent context catalog (skills/agents for slash & @) / Agent 上下文目录（斜杠与 @ 联想数据来源） ---
 
   const refreshAgentContext = useCallback(async () => {
+    if (projectChatEnabled) {
+      try {
+        const result = await chatBridge?.getAgentContext()
+        setAgentContext(result?.ok ? projectChatAgentContextToCatalog(result.value) : null)
+      } catch {
+        setAgentContext(null)
+      }
+      return
+    }
     const listAgentContext = window.desktop?.listAgentContext
     if (!listAgentContext) {
       setAgentContext(null)
@@ -657,7 +756,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     } catch {
       setAgentContext(null)
     }
-  }, [activeProject.path])
+  }, [activeProject.path, chatBridge, projectChatEnabled])
 
   // --- Effects: desktop IPC & settings sync / 副作用：桌面 IPC 与设置 ---
 
@@ -675,15 +774,34 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   useEffect(() => {
     inputValueRef.current = inputValue
-  }, [inputValue])
+    if (!projectWindow) {
+      projectWindowDraftLoadedRef.current = false
+      return
+    }
+    if (!projectWindowDraftLoadedRef.current) {
+      projectWindowDraftLoadedRef.current = true
+      if (inputValue !== projectWindow.draft) {
+        inputValueRef.current = projectWindow.draft
+        setInputValue(projectWindow.draft)
+        setComposerSelection({ start: projectWindow.draft.length, end: projectWindow.draft.length })
+      }
+      return
+    }
+    projectWindow.onDraftChange(inputValue)
+  }, [inputValue, projectWindow?.draft, projectWindow?.onDraftChange])
 
   useEffect(() => {
     composerSelectionRef.current = composerSelection
   }, [composerSelection])
 
   useEffect(() => {
+    if (projectChatEnabled) return
     window.localStorage.setItem(PERMISSION_MODE_STORAGE_KEY, permissionMode)
-  }, [permissionMode])
+  }, [permissionMode, projectChatEnabled])
+
+  useEffect(() => {
+    if (projectChatEnabled && brokerPermissionMode) setPermissionMode(brokerPermissionMode)
+  }, [brokerPermissionMode, projectChatEnabled])
 
   useEffect(() => {
     globalDisplayModelRef.current = globalDisplayModel
@@ -837,10 +955,43 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     [t],
   )
 
+  const applyProjectModelCatalog = useCallback((catalog: ProjectChatModelCatalog) => {
+    const slots = {
+      primary: t('chat.modelSlotPrimary'),
+      haiku: t('chat.modelSlotHaiku'),
+      sonnet: t('chat.modelSlotSonnet'),
+      opus: t('chat.modelSlotOpus'),
+    }
+    const rows: ChatModelMenuRow[] = []
+    for (const provider of catalog.providers) {
+      const seen = new Set<string>()
+      const add = (model: string, slot: string, supportsImages: boolean, useOverlayPick: boolean) => {
+        const anthropicModel = model.trim()
+        if (!anthropicModel || seen.has(anthropicModel)) return
+        seen.add(anthropicModel)
+        rows.push({
+          pickKey: modelPickKey({ providerId: provider.id, anthropicModel }),
+          providerId: provider.id,
+          anthropicModelId: anthropicModel,
+          useOverlayPick,
+          supportsImages,
+          headline: compactModelName(anthropicModel, t),
+          metaLine: [provider.name, slot].filter(Boolean).join(' · '),
+        })
+      }
+      add(provider.model, slots.primary, provider.modelSupportsImages, false)
+      add(provider.defaultHaikuModel, slots.haiku, provider.defaultHaikuSupportsImages, true)
+      add(provider.defaultSonnetModel, slots.sonnet, provider.defaultSonnetSupportsImages, true)
+      add(provider.defaultOpusModel, slots.opus, provider.defaultOpusSupportsImages, true)
+    }
+    setProjectModelCatalog(catalog)
+    setModelMenuRows(rows)
+  }, [t])
+
   useEffect(() => {
     if (!claudeSettingsSnapshot) return
     const settings = claudeSettingsSnapshot.settings
-    const requestedPick = activeThread?.id ? activeThread.chatState.modelPick : newThreadModelPick
+    const requestedPick = activeThread?.id ? activeThreadModelPick : newThreadModelPick
     const effectivePick = resolveEffectiveModelPick(settings, requestedPick)
     const row = modelRowForPick(modelMenuRows, effectivePick)
     const displayModel = row?.anthropicModelId ?? displayModelForPick(settings, effectivePick, t('chat.modelFallback'))
@@ -852,13 +1003,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (!isRunningRef.current) {
       onStatusChange(compactModelName(displayModel, t))
     }
-  }, [activeThread?.chatState.modelPick, activeThread?.id, claudeSettingsSnapshot, modelMenuRows, newThreadModelPick, onStatusChange, t])
+  }, [activeThreadModelPick, activeThread?.id, claudeSettingsSnapshot, modelMenuRows, newThreadModelPick, onStatusChange, t])
 
   useEffect(() => {
     setHomeComposerMode('normal')
   }, [homeModeResetKey])
 
   useEffect(() => {
+    if (projectChatEnabled) {
+      void chatBridge?.getModelCatalog().then((result) => {
+        if (result?.ok) applyProjectModelCatalog(result.value)
+      }).catch(() => undefined)
+      return
+    }
+    if (projectChatEnabled) return
     window.claudeChat?.getSettings().then(applyGlobalModelFromSettings).catch(() => {
       /* 浏览器独立预览可能没有 Electron 桥接 / Browser preview may run without the Electron bridge */
     })
@@ -868,7 +1026,22 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
     window.addEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
     return () => window.removeEventListener(CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, onSettingsChanged)
-  }, [applyGlobalModelFromSettings])
+  }, [applyGlobalModelFromSettings, applyProjectModelCatalog, chatBridge, projectChatEnabled])
+
+  useEffect(() => {
+    if (!projectChatEnabled || !projectModelCatalog) return
+    const requestedPick = activeThreadModelPick
+    const fallback = projectModelCatalog.providers.find((provider) => provider.id === projectModelCatalog.activeProviderId)
+    const effectivePick = requestedPick ?? (fallback && projectModelCatalog.activeAnthropicModel
+      ? { providerId: fallback.id, anthropicModel: projectModelCatalog.activeAnthropicModel }
+      : undefined)
+    const row = modelRowForPick(modelMenuRows, effectivePick)
+    const displayModel = row?.anthropicModelId ?? effectivePick?.anthropicModel ?? t('chat.modelFallback')
+    currentModelPickRef.current = effectivePick
+    setModelMenuSelectionKey(effectivePick ? modelPickKey(effectivePick) : '')
+    setGlobalDisplayModel(displayModel)
+    setActiveModelSupportsImages(row?.supportsImages ?? false)
+  }, [activeThreadModelPick, modelMenuRows, projectChatEnabled, projectModelCatalog, t])
 
   // --- Composer autocomplete: slash commands, @mentions, debounced file search / 输入框联想：斜杠、@ 与防抖文件搜索 ---
 
@@ -899,6 +1072,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     }
 
     const query = activeComposerTrigger.query
+    if (projectChatEnabled) {
+      let active = true
+      const timer = window.setTimeout(() => {
+        void chatBridge?.searchFiles({ query }).then((result) => {
+          if (!active) return
+          setFileMentionResults(result?.ok ? result.value.map((item) => ({ ...item, path: item.relativePath })) : [])
+        }).catch(() => { if (active) setFileMentionResults([]) })
+      }, 90)
+      return () => {
+        active = false
+        window.clearTimeout(timer)
+      }
+    }
     const searchSession = projectContent.createSearchSession()
     const timer = window.setTimeout(() => {
       searchSession.search({
@@ -912,13 +1098,17 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       window.clearTimeout(timer)
       searchSession.dispose()
     }
-  }, [activeComposerTrigger, activeProject.path])
+  }, [activeComposerTrigger, activeProject.path, chatBridge, projectChatEnabled])
 
   useLayoutEffect(() => {
     if (!composerAutocompleteOpen || !chatInputRef.current) {
-      setComposerAutocompleteBox(null)
+      composerAutocompleteBoxKeyRef.current = ''
+      setComposerAutocompleteBox((current) => current === null ? current : null)
       return
     }
+
+    if (composerAutocompleteBoxKeyRef.current === activeAutocompleteKey) return
+    composerAutocompleteBoxKeyRef.current = activeAutocompleteKey
 
     const gap = 8
     const pad = 8
@@ -935,7 +1125,14 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       if (left < pad) left = pad
       const bottom = window.innerHeight - r.top + gap
       const maxHeight = Math.min(maxListPx, Math.max(120, r.top - pad - gap))
-      setComposerAutocompleteBox({ left, bottom, width, maxHeight })
+      setComposerAutocompleteBox((current) =>
+        current?.left === left &&
+        current.bottom === bottom &&
+        current.width === width &&
+        current.maxHeight === maxHeight
+          ? current
+          : { left, bottom, width, maxHeight },
+      )
     }
 
     sync()
@@ -945,7 +1142,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       window.removeEventListener('resize', sync)
       document.removeEventListener('scroll', sync, true)
     }
-  }, [composerAutocompleteOpen, composerSuggestions.length])
+  }, [activeAutocompleteKey, composerAutocompleteOpen])
 
   useEffect(() => {
     if (!composerAutocompleteOpen) return
@@ -966,6 +1163,11 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     if (isRunningRef.current) return
     const pick = modelPickFromRow(row)
     if (activeThread?.id) {
+      if (projectChatEnabled) {
+        const result = await chatBridge?.setThreadModel({ threadId: activeThread.id, modelPick: pick })
+        if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+        return
+      }
       currentModelPickRef.current = pick
       setThreadChatState(activeThread.id, (prev) => {
         const changed = !sameModelPick(prev.modelPick, pick)
@@ -989,7 +1191,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     setGlobalDisplayModel(pick.anthropicModel)
     setActiveModelSupportsImages(row.supportsImages)
     setModelPickerOpen(false)
-  }, [activeProject.id, activeThread?.id, onProjectHomeModelPickChange, setThreadChatState])
+  }, [activeProject.id, activeThread?.id, chatBridge, onProjectHomeModelPickChange, onStatusChange, projectChatEnabled, setThreadChatState, t])
 
   useLayoutEffect(() => {
     if (!modelPickerOpen || !modelPopoverAnchorRef.current) {
@@ -1162,7 +1364,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     return () => {
       if (frame) window.cancelAnimationFrame(frame)
     }
-  }, [activeThread?.id, activeProject.id, applyGlobalModelFromSettings, restoreThreadScrollTop])
+  }, [activeThread?.id, activeProject.id, applyGlobalModelFromSettings, projectChatEnabled, restoreThreadScrollTop])
 
   const suppressTranscriptResizeStick = useCallback((durationMs = 320) => {
     suppressTranscriptResizeStickRef.current = true
@@ -1234,19 +1436,21 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     } else {
       syncScrollButtonVisibility()
     }
-  }, [activeThread?.chatState, activeThread?.id, hasMessages, restoreThreadScrollTop, saveActiveThreadScrollTop, syncScrollButtonVisibility])
+    // 内容增长由下面的 ResizeObserver 负责吸底；这里只处理切换线程与首次布局，
+    // 因此不再随每条 delta 重跑。
+  }, [activeThread?.id, hasMessages, restoreThreadScrollTop, saveActiveThreadScrollTop, syncScrollButtonVisibility])
 
   useEffect(() => {
     const sr = scrollRegionRef.current
     if (!sr) return
     const onScroll = () => {
-      if (!chatItems.length) return
+      if (!hasMessages) return
       saveActiveThreadScrollTop()
       syncScrollButtonVisibility()
     }
     sr.addEventListener('scroll', onScroll, { passive: true })
     return () => sr.removeEventListener('scroll', onScroll)
-  }, [chatItems.length, saveActiveThreadScrollTop, syncScrollButtonVisibility])
+  }, [hasMessages, saveActiveThreadScrollTop, syncScrollButtonVisibility])
 
   useEffect(() => {
     const sr = scrollRegionRef.current
@@ -1396,11 +1600,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   )
 
   useEffect(() => {
+    if (projectChatEnabled) return
     const unsub = window.claudeChat?.onEvent((ev) => handleClaudeEvent(ev))
     return () => {
       unsub?.()
     }
-  }, [handleClaudeEvent])
+  }, [handleClaudeEvent, projectChatEnabled])
 
   // --- `submitPrompt`: optimistic user row, pending id → real `requestId`, bridge errors / 发送：乐观用户消息、pending id 对齐真实 requestId、桥接错误处理 ---
 
@@ -1411,6 +1616,10 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   ): Promise<boolean> => {
     const text = rawText.trim()
     if (!text && attachmentsForSubmit.length === 0) return false
+    if (submitBlockedReason) {
+      onStatusChange(submitBlockedReason)
+      return false
+    }
     if (text.toLowerCase() === '/status' && attachmentsForSubmit.length === 0) {
       clearComposerDraft()
       window.dispatchEvent(new CustomEvent(OPEN_AGENT_STATUS_EVENT, { detail: { refresh: true } }))
@@ -1420,6 +1629,35 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     const isLocalCompactCommand = text.toLowerCase() === '/compact' && attachmentsForSubmit.length === 0
     const projectForSubmit =
       target?.project ?? (activeThread ? projects.find((project) => project.id === activeThread.projectId) : undefined) ?? activeProject
+
+    if (projectChatEnabled) {
+      if (!chatBridge) return false
+      if (projectForSubmit.pathMissing) {
+        onStatusChange(t('shell.projectPathMissingSubmitBlocked'))
+        return false
+      }
+      let threadId = target?.threadId ?? activeThread?.id
+      const creatingThread = !threadId
+      const modelPickForSubmit = target?.modelPick ?? (creatingThread ? newThreadModelPick ?? currentModelPickRef.current : undefined)
+      if (!threadId) {
+        const created = await chatBridge.createThread({ title: '新对话' })
+        if (!created?.ok) { onStatusChange(created?.error.message ?? t('chat.errorGeneric')); return false }
+        threadId = created.value.threadId
+        onSelectThread(threadId)
+      }
+      const result = await chatBridge.submitRun({
+        threadId,
+        text,
+        attachments: attachmentsForSubmit.map(projectChatAttachmentFromComposer),
+        modelPick: modelPickForSubmit,
+      })
+      if (!result?.ok) {
+        onStatusChange(result?.error.code === 'thread-busy' ? '当前对话正在处理中，请等待完成后再发送。' : result?.error.message ?? t('chat.errorGeneric'))
+        return false
+      }
+      if (!target?.preserveComposerDraft) clearComposerDraft()
+      return true
+    }
 
     if (projectForSubmit.pathMissing) {
       onStatusChange(t('shell.projectPathMissingSubmitBlocked'))
@@ -1441,19 +1679,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       scrollIntentRef.current = 'force-bottom'
     }
     const submittingThread = threads.find((thread) => thread.id === submittingThreadId)
+    const submittingChatState = threadChatStore.read(submittingThreadId)
     const settings = claudeSettingsSnapshot?.settings
     const modelPickForSubmit =
       target?.modelPick ??
       (settings
-        ? resolveEffectiveModelPick(settings, submittingThread?.chatState.modelPick ?? createdThreadModelPick ?? currentModelPickRef.current)
+        ? resolveEffectiveModelPick(settings, submittingChatState.modelPick ?? createdThreadModelPick ?? currentModelPickRef.current)
         : currentModelPickRef.current)
-    const modelPickChanged = !sameModelPick(submittingThread?.chatState.modelPick, modelPickForSubmit)
+    const modelPickChanged = !sameModelPick(submittingChatState.modelPick, modelPickForSubmit)
     const resumeSessionId = target?.resetSession || modelPickChanged
       ? undefined
-      : submittingThread?.chatState.sessionId
+      : submittingChatState.sessionId
     const handoffContext =
-      !resumeSessionId && submittingThread?.chatState.items.length
-        ? buildHandoffContext(submittingThread.chatState.items)
+      !resumeSessionId && submittingChatState.items.length
+        ? buildHandoffContext(submittingChatState.items)
         : undefined
 
     const promptMode = target?.promptMode ?? promptModeForThreadPurpose(submittingThread?.purpose)
@@ -1531,15 +1770,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const forkMessage = useCallback(
     (messageId: string) => {
       if (!activeThread) return
-      const items = chatItems
+      if (projectChatEnabled) {
+        void chatBridge?.forkThread({ threadId: activeThread.id, messageId })
+        return
+      }
+      const chatState = threadChatStore.read(activeThread.id)
+      const items = chatState.items
       if (items.length === 0) return
       const idx = items.findIndex((item) => item.type === 'message' && item.id === messageId)
       if (idx < 0) return
       const forkedItems = items.slice(0, idx + 1).map((item) => structuredClone(item))
       const title = activeThread.title
-      onForkThread(activeProject.id, forkedItems, title, activeThread.chatState.model, activeThread.chatState.modelPick)
+      onForkThread(activeProject.id, forkedItems, title, chatState.model, chatState.modelPick)
     },
-    [activeProject.id, activeThread, chatItems, onForkThread, t],
+    [activeProject.id, activeThread, chatBridge, onForkThread, projectChatEnabled],
   )
 
   const editUserMessage = (messageId: string, text: string) => {
@@ -1550,10 +1794,15 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     const threadId = activeThreadIdRef.current
     if (!threadId) return
 
+    if (projectChatEnabled) {
+      void chatBridge?.editAndSubmitRun({ threadId, messageId, text: nextText })
+      return
+    }
+
     const projectForSubmit =
       activeThread ? projects.find((project) => project.id === activeThread.projectId) ?? activeProject : activeProject
 
-    const currentItems = threads.find((thread) => thread.id === threadId)?.chatState.items ?? activeThread?.chatState.items ?? []
+    const currentItems = threadChatStore.read(threadId).items
     if (!currentItems.some((item) => item.type === 'message' && item.role === 'user' && item.id === messageId)) return
 
     const editedAt = Date.now()
@@ -1722,6 +1971,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Cancel streaming + answer permission / tool questions from modal / 停止生成；在弹窗中应答权限或工具提问 ---
 
   const cancelActiveRequest = async () => {
+    if (projectChatEnabled) return
     const requestId = chatRun.runStateForThread(activeThread?.id ?? activeThreadIdRef.current)?.requestId
     if (!requestId || isPendingRequestId(requestId) || !window.claudeChat) return
     await window.claudeChat.cancel(requestId)
@@ -1730,6 +1980,19 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const resolveActiveUserInputPrompt = async (decision: UserInputDecision) => {
     const prompt = activeUserInputPrompt
     if (!prompt) return
+
+    if (projectChatEnabled) {
+      const activePrompt = readBrokerSnapshot()?.pendingPrompts.find((item) => item.promptId === prompt.permissionRequestId)
+      if (!activePrompt?.isOwnedByCaller) return
+      const result = await chatBridge?.answerPrompt({
+        threadId: activePrompt.threadId,
+        requestId: activePrompt.requestId,
+        promptId: activePrompt.promptId,
+        response: { permissionRequestId: prompt.permissionRequestId, ...decision },
+      })
+      if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+      return
+    }
 
     setPendingUserInputPrompts((prev) => prev.filter((item) => item.permissionRequestId !== prompt.permissionRequestId))
     const transition = chatRun.resumeAfterPrompt(
@@ -1772,6 +2035,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }
 
   const addComposerAttachments = async () => {
+    if (projectChatEnabled) {
+      if (isRunningRef.current) return
+      try {
+        const result = await chatBridge?.pickAttachments({ allowImages: activeModelSupportsImages })
+        if (!result) {
+          onStatusChange(t('chat.attachmentPickerUnavailable'))
+          return
+        }
+        applyComposerAttachmentResult(projectChatAttachmentSelectionToComposerResult(result))
+      } catch {
+        onStatusChange(t('chat.attachmentPickerUnavailable'))
+      }
+      return
+    }
     const pickChatAttachments = window.desktop?.pickChatAttachments
     if (!pickChatAttachments || isRunningRef.current) {
       if (!pickChatAttachments) onStatusChange(t('chat.attachmentPickerUnavailable'))
@@ -1782,6 +2059,12 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   }
 
   const addComposerAttachmentPaths = async (filePaths: string[]) => {
+    if (projectChatEnabled) {
+      // Native drops disclose absolute paths.  Project windows intentionally
+      // accept only the scoped picker or in-memory clipboard attachments.
+      if (filePaths.length > 0) onStatusChange(t('chat.attachmentPickerUnavailable'))
+      return
+    }
     const readChatAttachments = window.desktop?.readChatAttachments
     if (!readChatAttachments || isRunningRef.current || filePaths.length === 0) {
       if (!readChatAttachments) onStatusChange(t('chat.attachmentPickerUnavailable'))
@@ -1826,7 +2109,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           mimeType: file.type,
           size: file.size,
           base64,
-          dataUrl,
+          dataUrl: await readImageThumbnailDataUrl(file, dataUrl),
           preview: formatBytes(file.size),
         })
       } catch (error) {
@@ -2036,6 +2319,17 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const handleSendClick = (event: React.MouseEvent) => {
     if (!isRunning) return
     event.preventDefault()
+    if (projectChatEnabled) {
+      const run = activeThread ? readBrokerSnapshot()?.runs.find((candidate) => candidate.threadId === activeThread.id && candidate.phase !== 'succeeded' && candidate.phase !== 'failed' && candidate.phase !== 'cancelled') : undefined
+      if (!run) {
+        onStatusChange('当前对话正在处理中，请等待完成后再发送。')
+        return
+      }
+      void chatBridge?.cancelRun({ threadId: run.threadId, requestId: run.requestId }).then((result) => {
+        if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+      }).catch(() => onStatusChange(t('chat.errorGeneric')))
+      return
+    }
     void cancelActiveRequest()
   }
 
@@ -2179,6 +2473,10 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   const reviewFileChanges = useCallback(
     (item: ChatFileDiffItem) => {
       const threadId = item.threadId?.trim() || activeThreadIdRef.current
+      if (projectChatEnabled) {
+        void chatBridge?.markFileDiffReviewed({ threadId, changeSetId: item.changeSetId })
+        return
+      }
       setThreadChatState(threadId, (prev) => {
         const idx = prev.items.findIndex((it) => it.type === 'file_diff' && it.changeSetId === item.changeSetId)
         if (idx < 0) return prev
@@ -2188,12 +2486,17 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         return { ...prev, items: next }
       })
     },
-    [setThreadChatState],
+    [chatBridge, projectChatEnabled, setThreadChatState],
   )
 
   const rewindFileChanges = useCallback(
     async (item: ChatFileDiffItem) => {
       const threadId = item.threadId?.trim() || activeThreadIdRef.current
+      if (projectChatEnabled) {
+        const result = await chatBridge?.rewindFileDiff({ threadId, changeSetId: item.changeSetId })
+        if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.fileDiffUnavailable'))
+        return
+      }
       const owningThread = threads.find((thread) => thread.id === threadId)
       const projectForThread = owningThread
         ? projects.find((project) => project.id === owningThread.projectId) ?? activeProject
@@ -2207,7 +2510,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       const result = await window.claudeChat.rewindFiles({
         threadId,
         requestId: item.requestId,
-        modelPick: owningThread?.chatState.modelPick ?? currentModelPickRef.current,
+        modelPick: threadChatStore.read(threadId).modelPick ?? currentModelPickRef.current,
         changeSetId: item.changeSetId,
         checkpointId: item.checkpointId,
         cwd: projectForThread.path,
@@ -2216,20 +2519,20 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
         setThreadChatState(threadId, (prev) => updateFileDiffStatus(prev, item.changeSetId, 'error', result.message || t('chat.fileDiffUnavailable')))
       }
     },
-    [activeProject, projects, setThreadChatState, t, threads],
+    [activeProject, chatBridge, onStatusChange, projectChatEnabled, projects, setThreadChatState, t, threads],
   )
 
   const composerContextUsage = useMemo(() => {
-    const sessionId = activeThread?.chatState.sessionId?.trim()
+    const sessionId = activeThreadSessionId?.trim()
     if (!sessionId || !agentStatusSnapshot?.contextUsage) return undefined
     if (agentStatusSnapshot.threadId !== activeThread?.id) return undefined
     if (agentStatusSnapshot.sessionId !== sessionId) return undefined
     return agentStatusSnapshot.contextUsage
-  }, [activeThread?.chatState.sessionId, activeThread?.id, agentStatusSnapshot])
+  }, [activeThreadSessionId, activeThread?.id, agentStatusSnapshot])
 
   const compactContext = useCallback(() => {
     const threadId = activeThread?.id
-    const sessionId = activeThread?.chatState.sessionId?.trim()
+    const sessionId = threadChatStore.read(threadId).sessionId?.trim()
     if (!threadId || !sessionId) {
       onStatusChange(t('chat.contextCompactNoSessionStatus'))
       return
@@ -2238,7 +2541,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     void submitPrompt('/compact', {
       threadId,
       project: projectForThread,
-      modelPick: activeThread.chatState.modelPick ?? currentModelPickRef.current,
+      modelPick: threadChatStore.read(activeThread.id).modelPick ?? currentModelPickRef.current,
       suppressUserMessage: true,
       preserveComposerDraft: true,
     })
@@ -2248,12 +2551,31 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     onStatusChange(t('chat.contextCompactUnavailableStatus'))
   }, [onStatusChange, t])
 
+  const selectPermissionMode = useCallback((value: ClaudePermissionMode | ((previous: ClaudePermissionMode) => ClaudePermissionMode)) => {
+    const mode = typeof value === 'function' ? value(permissionMode) : value
+    const setBrokerPermissionMode = chatBridge?.setPermissionMode
+    if (!projectChatEnabled) {
+      setPermissionMode(mode)
+      return
+    }
+    // Runtime 开发对话没有独立开关：权限模式由主窗口 Project scope 决定。
+    if (!setBrokerPermissionMode) {
+      onStatusChange(t('chat.permissionModeManagedElsewhere'))
+      return
+    }
+    void setBrokerPermissionMode(mode).then((result) => {
+      if (result?.ok) setPermissionMode(result.value)
+      else onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+    }).catch(() => onStatusChange(t('chat.errorGeneric')))
+  }, [chatBridge, onStatusChange, permissionMode, projectChatEnabled, t])
+
   // --- Composer subtree (props-only; layout lives in `Composer.tsx`) / Composer 子树（仅传参；布局在 Composer 组件内）---
 
   const composer = (
     <Composer
       inputValue={inputValue}
       isRunning={isRunning}
+      disabled={activeProject.pathMissing || Boolean(submitBlockedReason)}
       activeModelSupportsImages={activeModelSupportsImages}
       pendingAttachments={pendingAttachments}
       permissionMode={permissionMode}
@@ -2282,7 +2604,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       modelPickerRef={modelPickerRef}
       modelPopoverAnchorRef={modelPopoverAnchorRef}
       modelPopoverSurfaceRef={modelPopoverSurfaceRef}
-      setPermissionMode={setPermissionMode}
+      setPermissionMode={selectPermissionMode}
       setPermissionModeOpen={setPermissionModeOpen}
       setModelPickerOpen={setModelPickerOpen}
       setComposerSuggestionIndex={setComposerSuggestionIndex}
@@ -2319,6 +2641,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
   // --- Main render: active thread transcript vs empty “start” surface / 主渲染：有消息走会话轨，否则走起始视图 ---
 
   const showThreadView =
+    Boolean(projectWindow) ||
     hasMessages ||
     activeThread?.purpose === 'home-plugin-customization' ||
     activeThread?.purpose === 'home-plugin-card-customization' ||
@@ -2335,7 +2658,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     >
       {showThreadView ? (
         <ChatThreadView
-          items={chatItems}
+          threadId={activeThread?.id}
           isRunning={isRunning}
           activeRunState={activeRunState}
           composer={composer}
@@ -2348,6 +2671,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
           onUserMessageEditDismissed={notifyUserMessageEditDismissed}
           onReviewFileChanges={reviewFileChanges}
           onRewindFileChanges={rewindFileChanges}
+          rewindUsesBrokerLookup={projectChatEnabled}
         />
       ) : (
         <ChatStartView
@@ -2384,7 +2708,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       )}
       {showThreadView && hasVisibleTasks ? (
         <ThreadTodoFloatingPanel
-          taskState={activeTaskState}
+          threadId={activeThread?.id}
           buttonRef={todoButtonRef}
           panelRef={todoPanelRef}
           open={todoPanelOpen}
@@ -2394,24 +2718,27 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       {activeUserInputPrompt ? (
         <AgentInputPromptModal prompt={activeUserInputPrompt} onResolve={(decision) => void resolveActiveUserInputPrompt(decision)} />
       ) : null}
+      {activeReadOnlyPrompt ? <p className="chat-prompt-readonly" role="status">此请求正在其他窗口等待处理。</p> : null}
     </section>
   )
 })
 
 function ThreadTodoFloatingPanel({
-  taskState,
+  threadId,
   buttonRef,
   panelRef,
   open,
   onOpenChange,
 }: {
-  taskState: ChatTaskState | undefined
+  threadId: string | undefined
   buttonRef: RefObject<HTMLButtonElement | null>
   panelRef: RefObject<HTMLDivElement | null>
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
   const { t } = useI18n()
+  // 待办面板自己订阅任务，`ChatPage` 因此不必随任务更新重渲染。
+  const taskState = useThreadChatSelector(threadId, (chatState) => chatState.tasks)
   const tasks = useMemo(() => (taskState?.items ?? []).filter((task) => task.status !== 'deleted'), [taskState?.items])
   if (tasks.length === 0) return null
 
@@ -2614,6 +2941,47 @@ function toChatMessageAttachment(attachment: ClaudeChatAttachment): ChatMessageA
     preview: attachment.preview,
     dataUrl: attachment.dataUrl,
   }
+}
+
+function projectChatAttachmentFromComposer(attachment: ClaudeChatAttachment): ProjectChatAttachment {
+  return attachment.kind === 'image'
+    ? { id: attachment.id, kind: 'image', name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, base64: attachment.base64, preview: attachment.preview, dataUrl: attachment.dataUrl }
+    : { id: attachment.id, kind: 'text', name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, text: attachment.text, preview: attachment.preview }
+}
+
+function projectChatAttachmentSelectionToComposerResult(result: import('../../project-chat-contract').ProjectChatResult<ProjectChatAttachmentSelection>): ClaudeChatAttachmentPickerResult {
+  if (!result.ok) return { ok: false, message: result.error.message }
+  return {
+    ok: true,
+    attachments: result.value.attachments.map((attachment) => ({ ...attachment, path: '' })),
+    skipped: result.value.skipped.map((item) => ({ ...item, path: '' })),
+  }
+}
+
+function projectChatAgentContextToCatalog(context: ProjectChatAgentContext): AgentContextCatalog {
+  return {
+    ok: true,
+    rootPath: '',
+    instructionFiles: [],
+    skills: context.skills.map((skill) => ({ ...skill, path: skill.relativePath })),
+    agents: context.agents.map((agent) => ({ ...agent, path: agent.relativePath })),
+  }
+}
+
+function projectPromptToPendingInput(prompt: ChatBrokerPrompt | undefined): PendingUserInputPrompt | null {
+  if (!prompt) return null
+  return prompt.payload.kind === 'permission'
+    ? {
+        type: 'permission_request', requestId: prompt.requestId, threadId: prompt.threadId,
+        permissionRequestId: prompt.payload.permissionRequestId, toolUseId: prompt.payload.toolUseId,
+        toolName: prompt.payload.toolName, title: prompt.payload.title, displayName: prompt.payload.displayName,
+        description: prompt.payload.description, inputPreview: prompt.payload.inputPreview,
+      }
+    : {
+        type: 'ask_user_question', requestId: prompt.requestId, threadId: prompt.threadId,
+        permissionRequestId: prompt.payload.permissionRequestId, toolUseId: prompt.payload.toolUseId,
+        questions: prompt.payload.questions,
+      }
 }
 
 function updateFileDiffStatus(

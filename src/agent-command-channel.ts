@@ -34,6 +34,32 @@ export type AgentCommandRuntime = {
   openThread: (threadId: string) => void | Promise<void>
 }
 
+/**
+ * Adapter for the Revision 2 single-writer path.  The channel keeps its
+ * Revision 1 public API, while creation and submission are delegated to the
+ * broker-backed preload API rather than a renderer workspace mutation.
+ */
+export function createProjectChatAgentCommandRuntime(
+  api: Pick<import('./project-chat-contract').ProjectChatAPI, 'createThread' | 'submitRun'>,
+  openThread: (threadId: string) => void | Promise<void>,
+): AgentCommandRuntime {
+  return {
+    async createThread({ projectId, threadTitle }) {
+      const result = await api.createThread({
+        projectId,
+        title: threadTitle || '新对话',
+        source: 'app-command',
+      })
+      return result.ok ? result.value.threadId : ''
+    },
+    async submitPrompt({ projectId, threadId, prompt }) {
+      const result = await api.submitRun({ projectId, threadId, text: prompt })
+      return result.ok
+    },
+    openThread,
+  }
+}
+
 export type AgentCommandChannelConfig = {
   projectId: string
   defaultNavigation?: AgentCommandNavigation

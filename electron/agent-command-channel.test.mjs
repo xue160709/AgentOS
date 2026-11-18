@@ -71,6 +71,30 @@ test('Agent command channel opens the created thread only when requested', async
   assert.deepEqual(opened, ['thread-open'])
 })
 
+test('Revision 1 command channel runtime delegates creation and submit to the broker API', async () => {
+  const { createProjectChatAgentCommandRuntime } = loadAgentCommandChannel()
+  const calls = []
+  const runtime = createProjectChatAgentCommandRuntime({
+    createThread: async (input) => {
+      calls.push(['create', input])
+      return { ok: true, value: { threadId: 'broker-thread', workspaceRevision: 7 } }
+    },
+    submitRun: async (input) => {
+      calls.push(['submit', input])
+      return { ok: true, value: { requestId: 'request-1' } }
+    },
+  }, (threadId) => calls.push(['open', threadId]))
+
+  assert.equal(await runtime.createThread({ projectId: 'project-1', threadTitle: '任务' }), 'broker-thread')
+  assert.equal(await runtime.submitPrompt({ projectId: 'project-1', threadId: 'broker-thread', prompt: '执行' }), true)
+  await runtime.openThread('broker-thread')
+  assert.deepEqual(calls, [
+    ['create', { projectId: 'project-1', title: '任务', source: 'app-command' }],
+    ['submit', { projectId: 'project-1', threadId: 'broker-thread', text: '执行' }],
+    ['open', 'broker-thread'],
+  ])
+})
+
 test('Agent command channel rejects empty prompts before creating a thread', async () => {
   const { AgentCommandChannel } = loadAgentCommandChannel()
   const channel = new AgentCommandChannel()

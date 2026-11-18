@@ -18,9 +18,26 @@ marked.use(
   }),
 )
 
+/**
+ * KaTeX 样式表按需注入：大多数会话没有公式，不必让首屏为它付费。
+ * KaTeX's stylesheet is only needed once math actually renders, so it loads on
+ * demand instead of shipping in the first-paint CSS.
+ */
+let katexStylesRequested = false
+
+function ensureKatexStyles(html: string): void {
+  if (katexStylesRequested || !html.includes('katex')) return
+  katexStylesRequested = true
+  void import('katex/dist/katex.min.css').catch(() => {
+    // A failed stylesheet must not break rendering; retry on the next math block.
+    katexStylesRequested = false
+  })
+}
+
 /** 渲染助手 Markdown 为安全 HTML / Render assistant markdown into sanitized HTML */
 export function renderMarkdown(markdown: string): string {
   const html = marked.parse(markdown, { async: false }) as string
+  ensureKatexStyles(html)
   return DOMPurify.sanitize(html, {
     ADD_ATTR: ['target', 'rel', 'display', 'encoding', 'xmlns'],
     USE_PROFILES: { html: true, mathMl: true },

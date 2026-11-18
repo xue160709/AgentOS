@@ -56,6 +56,7 @@ export const Transcript = memo(function Transcript({
   onUserMessageEditDismissed,
   onReviewFileChanges,
   onRewindFileChanges,
+  rewindUsesBrokerLookup = false,
 }: {
   items: TranscriptItem[]
   isRunning?: boolean
@@ -66,8 +67,8 @@ export const Transcript = memo(function Transcript({
   onUserMessageEditDismissed?: () => void
   onReviewFileChanges?: (item: ChatFileDiffItem) => void
   onRewindFileChanges?: (item: ChatFileDiffItem) => void
+  rewindUsesBrokerLookup?: boolean
 }) {
-  const now = useLiveNow(Boolean(activeRunState?.startedAt))
   const entries = useMemo(() => groupTranscriptForRendering(items, activeRunState), [items, activeRunState])
   const renderItem = (item: TranscriptItem): ReactNode => {
     if (item.type === 'tool') return <ToolRow key={item.id} item={item} />
@@ -81,6 +82,7 @@ export const Transcript = memo(function Transcript({
           item={item}
           onReviewFileChanges={onReviewFileChanges}
           onRewindFileChanges={onRewindFileChanges}
+          rewindUsesBrokerLookup={rewindUsesBrokerLookup}
         />
       )
     }
@@ -102,11 +104,10 @@ export const Transcript = memo(function Transcript({
       {entries.map((entry) => {
         if (entry.kind === 'item') return renderItem(entry.item)
         if (entry.kind === 'process-group') {
-          const elapsedMs = entry.startedAt ? Math.max(1, now - entry.startedAt) : undefined
           return (
             <ProcessTraceBlock
               key={`process-group-${entry.requestId}`}
-              durationMs={elapsedMs}
+              liveStartedAt={entry.startedAt}
               processItems={entry.processItems}
               renderItem={renderItem}
               isRunning
@@ -115,14 +116,15 @@ export const Transcript = memo(function Transcript({
         }
         const requestId = getAssistantRequestId(entry.message)
         const isActiveAssistantTurn = Boolean(activeRunState?.requestId && activeRunState.requestId === requestId)
-        const activeElapsedMs = isActiveAssistantTurn && activeRunState?.startedAt ? Math.max(1, now - activeRunState.startedAt) : undefined
-        const processDurationMs = entry.message.durationMs ?? activeElapsedMs
-        const hasProcessTrace = Boolean(processDurationMs && (entry.processItems.length > 0 || isActiveAssistantTurn))
+        const liveStartedAt = isActiveAssistantTurn ? activeRunState?.startedAt : undefined
+        const processDurationMs = entry.message.durationMs
+        const hasProcessTrace = Boolean((processDurationMs || liveStartedAt) && (entry.processItems.length > 0 || isActiveAssistantTurn))
         return (
           <Fragment key={`assistant-turn-${entry.message.id}`}>
             {hasProcessTrace ? (
               <ProcessTraceBlock
                 durationMs={processDurationMs}
+                liveStartedAt={liveStartedAt}
                 processItems={entry.processItems}
                 renderItem={renderItem}
                 isRunning={isActiveAssistantTurn}
@@ -310,22 +312,36 @@ function handleTranscriptLayoutToggle(
   })
 }
 
+/**
+ * 运行中的时长标签自己计时，避免整棵记录树每秒重渲染。
+ * Only this leaf re-renders on the one-second tick; hoisting the clock to the
+ * transcript root re-rendered every message and tool row once per second for
+ * the whole run.
+ */
+const LiveProcessDuration = memo(function LiveProcessDuration({ startedAt }: { startedAt: number }) {
+  const now = useLiveNow(true)
+  return <span>{formatDuration(Math.max(1, now - startedAt))}</span>
+})
+
 function ProcessTraceBlock({
   durationMs,
+  liveStartedAt,
   processItems,
   renderItem,
   isRunning = false,
 }: {
   durationMs?: number
+  liveStartedAt?: number
   processItems: ProcessTranscriptItem[]
   renderItem: (item: TranscriptItem) => ReactNode
   isRunning?: boolean
 }) {
   const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(false)
-  const durationLabel = durationMs ? formatDuration(durationMs) : ''
+  const settledLabel = durationMs ? formatDuration(durationMs) : ''
+  const hasDuration = Boolean(settledLabel) || liveStartedAt !== undefined
 
-  if (!durationLabel || (!isRunning && processItems.length === 0)) return null
+  if (!hasDuration || (!isRunning && processItems.length === 0)) return null
 
   return (
     <section className="chat-process-group">
@@ -338,7 +354,7 @@ function ProcessTraceBlock({
         onClick={(event) => handleTranscriptLayoutToggle(event, () => setIsOpen((value) => !value))}
       >
         <span>{t('chat.responseProcessed')}</span>
-        <span>{durationLabel}</span>
+        {settledLabel ? <span>{settledLabel}</span> : liveStartedAt !== undefined ? <LiveProcessDuration startedAt={liveStartedAt} /> : null}
         <IconInline name="chevron" />
       </button>
       {isOpen && processItems.length > 0 ? <div className="chat-process-group__body">{processItems.map((item) => renderItem(item))}</div> : null}
@@ -860,16 +876,18 @@ const FileDiffRow = memo(function FileDiffRow({
   item,
   onReviewFileChanges,
   onRewindFileChanges,
+  rewindUsesBrokerLookup,
 }: {
   item: ChatFileDiffItem
   onReviewFileChanges?: (item: ChatFileDiffItem) => void
   onRewindFileChanges?: (item: ChatFileDiffItem) => void
+  rewindUsesBrokerLookup: boolean
 }) {
   const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(item.status === 'captured')
   const additions = item.files.reduce((sum, file) => sum + file.additions, 0)
   const deletions = item.files.reduce((sum, file) => sum + file.deletions, 0)
-  const canRewind = Boolean(item.checkpointId && item.status !== 'reverted')
+  const canRewind = Boolean(item.status !== 'reverted' && (rewindUsesBrokerLookup || item.checkpointId))
   const canReview = item.status !== 'reviewed' && item.status !== 'reverted'
 
   useEffect(() => {

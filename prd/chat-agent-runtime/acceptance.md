@@ -3,6 +3,362 @@
 > 唯一验收事实源。当前为 2026-06-23 as-built 初始 PRD 同步；由 project-verify 逐条执行并回写实现状态。
 > 对应 TODO：§14 产品 PRD 初始化与后续差距。
 
+## Revision 3（BUILDABLE / Planned，未实现）
+
+> 来源：`changes/active/chg-20260818-agent-command-channel@3`。本节只定义 Runtime 专用开发 Chat 的计划合同；普通项目 Chat、Website task 与 Revision 2 未被点名的窗口/权限/安全规则继续有效。
+
+### 需求：Runtime 开发窗口固定正确的 Runtime scope
+
+#### `ATDD-RUNTIME-DEV-301` 场景：两个入口打开各自专用窗口
+
+- GIVEN 用户从 Project Runtime 或 Workspace Runtime 点击开发入口
+- WHEN Main 解析调用 sender、RuntimeDefinition 与 owner
+- THEN 打开或聚焦该 Runtime 唯一的开发窗口，窗口固定 `runtimeDefinitionId + owner scope`，不从 active project、相似路径或已有 Workspace Tab 猜测目标
+- AND Project 与 Workspace Runtime 即使 root 相同也不互相聚焦窗口、不切换主窗口页面或共享 Chat selection
+
+### 需求：Runtime 开发对话持久但不建立第二套 Chatbot
+
+#### `ATDD-RUNTIME-DEV-302` 场景：关闭重开恢复 Runtime 开发记录
+
+- GIVEN Runtime 开发窗口中已有一个或多个开发 Thread、selected thread 与未提交 draft
+- WHEN 用户关闭并重新打开同一 Runtime 开发窗口，或应用重启后重新进入
+- THEN 窗口只列出绑定当前 Runtime scope 的开发 Thread，并恢复最近选择与 draft；Thread、Transcript、模型、权限、Diff 与 Run 仍由现有 Main broker 单一写入
+- AND Runtime 开发 Thread 不进入普通项目对话列表；全局搜索结果明确显示 Runtime 名称与项目/工作台归属，打开结果进入对应 Runtime 专用窗口
+- AND 不创建第二套 SDK、Transcript、任务历史或 renderer durable writer
+
+### 需求：关闭窗口是可延迟的结束意图
+
+#### `ATDD-RUNTIME-DEV-303` 场景：运行中关闭不取消并在终态后收口
+
+- GIVEN Runtime 开发窗口存在 running Run，且用户关闭窗口或在主窗口点击“结束修改”
+- WHEN Main 接收结束意图
+- THEN 只幂等设置该 DevelopmentSession 的 `exitRequested` 并关闭/隐藏视图，不取消 Run、不删除 Thread/草稿/Transcript
+- AND 主窗口持续显示“AI 正在完成修改”；Run 安全终态后 Main 才向对应 Runtime 请求一次最终收口
+
+#### `ATDD-RUNTIME-DEV-304` 场景：等待权限或回答时可重新打开
+
+- GIVEN 用户请求“结束修改”时 Run 正等待权限或 AskUserQuestion
+- WHEN 开发窗口已关闭且 prompt 尚未终态
+- THEN Main 不构建未知半成品，Runtime 卡片/主窗口显示需要确认并提供重新打开；重新打开后交互 owner 只转移一次，迟到回答无效
+
+### 需求：显式开发会话期间不按单轮 Run 收口
+
+#### `ATDD-RUNTIME-DEV-305` 场景：连续多轮修改只在结束时请求保存
+
+- GIVEN 同一 RuntimeDevelopmentSession 的窗口保持打开
+- WHEN 第一轮成功修改后用户继续提交下一轮
+- THEN 第一轮终态不会触发最终 build/stop，实时预览继续；只有 exitRequested 且全部相关 Run 安全终态后才产生一次最新 generation 的 settle intent
+- AND settle/build 期间重新打开开发或提交新修改会提升 generation，旧结果不能关闭新会话或宣布预览已更新
+
+### 需求：Workspace Runtime Chat 不生成可见 Project
+
+#### `ATDD-RUNTIME-DEV-306` 场景：Workspace scope 以 Runtime root 运作
+
+- GIVEN Workspace Runtime 绑定用户显式选择的目录且当前另有 active Project
+- WHEN 用户打开其 Runtime 开发窗口并提交修改
+- THEN Thread/Run 使用受 Main 校验的 Runtime root 与 workspace owner scope，不创建 synthetic Project、不改变 activeProjectId、不把 root 再追加 `.agentos`
+- AND renderer 不能提交或覆盖 cwd、Runtime root、owner scope 或等价资格字段
+
+## 项目 `.agentos` Runtime prompt（Change revision 3：已实现 / 待正式 GUI 验收）
+
+> Revision 3 自动化 Development Check 已单独通过；真实 GUI 验收尚未执行，自动化结果不替代正式 Acceptance。
+
+### 需求：仅合格的独立项目 Chat / Main 编排获得 Runtime 目录约束
+
+#### `ATDD-PROJECT-RUNTIME-201` 场景：独立项目 Chat 普通/编辑重提注入固定路径
+
+- GIVEN Main 已从权威项目记录解析有效 `projectId` 与项目根目录
+- WHEN 用户从该独立项目 Chat 窗口提交普通请求或编辑重提
+- THEN Main 以 `<project>/.agentos/` 构造并稳定追加 system prompt；该 prompt 仅约束项目 Runtime 网页的实现
+- AND runner cwd 保持项目根；runtimeRoot 与 prompt eligibility 分别由 Main 的权威项目路径、sender capability 派生，renderer 不得传入 root、prompt scope 或等价标记
+- AND prompt 要求 Agent 读取当前项目已有内容和数据，以 Next.js、React、TypeScript 在 `.agentos/` 构建数据可视化工作台，配置静态导出，在 `.agentos/` 执行 `npm install` 后执行 `npm run build`，并验证成功生成 `out/index.html`；不得以 Python、Flask 或 Streamlit 实现 Runtime
+
+#### `ATDD-PROJECT-RUNTIME-202` 场景：主窗口、受管来源与非项目均不注入
+
+- GIVEN 请求来自主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目，或项目路径已失效
+- WHEN Main 构造 Agent request
+- THEN request 不含 `.agentos` Runtime system prompt，也不从 Workspace 目录推导项目 Runtime 根
+
+#### `ATDD-PROJECT-RUNTIME-204` 场景：创建按钮编排独立窗口与线程
+
+- GIVEN 项目 Runtime 处于 `not_initialized`，且调用 sender 具有 main-window capability
+- WHEN 用户点击「让 Agent 创建 Runtime 网页」
+- THEN Main 打开或聚焦对应项目唯一的独立 Chat 窗口，在其中自动创建并选中线程并提交创建 Runtime 网页请求
+- AND 主窗口不创建或选中空对话；按钮 IPC 以外的 sender capability 均被拒绝
+
+#### `ATDD-PROJECT-RUNTIME-205` 场景：伪造 prompt scope / runtimeRoot 不改变资格
+
+- GIVEN renderer 在请求 payload 中附加 `runtimeRoot`、prompt scope 或等价字段
+- WHEN Main 处理提交
+- THEN Main 忽略或拒绝这些调用方字段，并只按权威项目路径与 sender capability / 专用编排决定实际根目录及是否注入
+
+#### `ATDD-PROJECT-RUNTIME-203` 场景：写错项目根只提示
+
+- GIVEN 项目 run 结束后 `.agentos/` 仍不存在，且项目根出现新的 `package.json`、`index.html` 或 `src` 疑似网页工程迹象
+- WHEN 项目 Runtime 页面刷新状态
+- THEN 页面提示 Runtime 网页可能写在项目根并显示 `<project>/.agentos/` 目标路径
+- AND 系统不移动、复制、删除文件，不自动重试 Agent，也不把该提示写成 Agent run 失败
+
+## Revision 2（Accepted；实现已落盘，验收未执行）
+
+> 规格来源：`changes/active/chg-20260818-agent-command-channel/`。M0–M2 与 M3-01 的实现已落盘且 Project Chat broker 默认开启，但下列场景**全部尚未验收**；不得把 Revision 1 的通过证据复用为 Revision 2 通过证据，也不得把实现完成当作验收通过。
+>
+> 2026-08-29 `BUG-AUDIT-WS-02` 回补：`ATDD-CHAT-207`–`210` 与 `ATDD-WS-201`–`204` 此前只存在于 change 侧实施计划中，未写入本文，使"唯一事实源"声明失效。已补齐，且 `ATDD-WS-202`–`204`、`ATDD-CHAT-210` 对应的实现缺陷尚未修复（见 `FIX-WS-01`、`FIX-CHAT-01`）。
+
+### 需求：Main 是项目 Chat 的唯一事实源
+
+系统 SHALL 由 Main 串行持久化项目 thread、transcript、run、SDK session、diff 与 workspace revision；主窗口和独立窗口只投影同一项目 snapshot。
+
+#### `ATDD-CHAT-201` 场景：两个窗口观察同一运行
+
+- GIVEN 主窗口与该项目的独立 Chat 窗口同时订阅同一 thread
+- WHEN 该 thread 收到 SDK 流式事件并进入终态
+- THEN 两个窗口展示相同且不重复的 transcript 与终态，workspace revision 单调递增，任一 renderer 都不以旧完整快照覆盖 Main 状态
+
+#### `ATDD-CHAT-202` 场景：同一线程拒绝第二个运行
+
+- GIVEN 一个 thread 已处于 submitting、running、waiting permission 或 waiting answer
+- WHEN 任一窗口再次提交该 thread
+- THEN Main 返回 `thread-busy`，不创建新 requestId、不取消或改写旧 Run
+
+#### `ATDD-CHAT-203` 场景：不同线程并行
+
+- GIVEN 同一项目存在两个不同 thread
+- WHEN 两个 thread 同时提交有效任务
+- THEN 两个 Run 可以并行，事件、权限、问题与终态只进入各自 project/thread/request
+
+#### `ATDD-CHAT-204` 场景：迟到事件不能覆盖新状态
+
+- GIVEN Run 已终态或项目 routeGeneration 已变化
+- WHEN Main 收到该 request 的迟到非终态事件或旧 generation 事件
+- THEN 事件被幂等忽略，终态、Transcript 与新项目路由保持不变；renderer 发现 sequence gap 时重新获取 snapshot
+
+### 需求：权限与 Prompt 跨窗口只有一个权威状态
+
+#### `ATDD-CHAT-205` 场景：权限模式同步并按提交捕获
+
+- GIVEN 主窗口与独立窗口显示同一 app-global 权限模式，或升级用户只有旧 renderer localStorage 选择
+- WHEN 任一窗口修改权限并随后提交 Run
+- THEN Main 首次只迁移一次合法旧值（无值为 `auto`），持久化并向所有窗口广播相同模式；该 Run 固定使用提交线性化时的值，后续修改只影响新 Run，迟到旧 renderer 不能覆盖 Main 已存值
+
+#### `ATDD-CHAT-206` 场景：Prompt owner 转移
+
+- GIVEN 一个权限或 AskUserQuestion prompt 已分配给当前聚焦并显示该 thread 的窗口
+- WHEN 其它窗口尝试回答，或 owner 窗口关闭
+- THEN 非 owner 只能看到“请在另一窗口处理”且回答被拒绝；owner 关闭后 Main 按优先级转移一次交互权，首个有效回答后迟到回答无效
+
+### 需求：主窗口的会话变更同样只由 Main 持久化
+
+系统 SHALL 让主窗口侧边栏的会话归档与置顶只经 Main intent 生效；renderer SHALL NOT 在 broker 模式下写入 durable thread 事实。
+
+#### `ATDD-CHAT-207` 场景：主侧边栏归档会话
+
+- GIVEN broker 模式下用户在主窗口侧边栏对某会话执行右键"移除"或垃圾桶确认
+- WHEN 该操作提交，且期间有 Project Chat 或 RuntimeEdit snapshot 广播交错到达
+- THEN 只发送一次 Main archive intent，最终 Main store 保留 `archivedAt`，主窗口与项目窗口都隐藏该会话，重启后仍为归档态；renderer 不产生本地 durable thread mutation
+
+#### `ATDD-CHAT-208` 场景：主侧边栏置顶会话
+
+- GIVEN broker 模式下用户对某会话执行置顶或取消置顶
+- WHEN 该操作提交，且随后收到该项目的新 snapshot
+- THEN 使用显式布尔目标值的 Main intent 生效，排序不被后续 snapshot 回滚，双窗口顺序一致；重复提交幂等
+
+#### `ATDD-CHAT-209` 场景：归档运行中的会话
+
+- GIVEN 某会话存在未终态 Run 或 pending prompt，其 purpose 为普通、`task-run` 或 `skill-run` 之一
+- WHEN 用户尝试归档该会话
+- THEN 入口禁用或返回"请先停止当前运行，再移除会话"，系统不隐式取消 Run、不停止任务插件、不隐藏该会话；三种 purpose 行为一致，且提示文案不承诺自动终止
+
+#### `ATDD-CHAT-210` 场景：Project Chat readiness 三态
+
+- GIVEN AgentOS 启动后尚未确认 Project Chat 是否可用（probing），或已确认为 enabled / legacy
+- WHEN 用户在各状态下尝试会话归档或置顶
+- THEN probing 期间入口禁用且不产生任何 durable 写入，也不落入 legacy full-snapshot writer；enabled 走 Main intent；legacy 完整保留 Revision 1 行为
+
+### 需求：工作区事实只有一个持久化归属
+
+系统 SHALL 让项目生命周期与工作区偏好经 Main 持久化并回读确认；renderer SHALL NOT 持有第二条 durable workspace 写路径。
+
+#### `ATDD-WS-201` 场景：工作区写路径归属可枚举
+
+- GIVEN broker 模式下仍存在项目、侧栏、home-plugin、task、skill 相关的工作区 mutation
+- WHEN 对全部写路径做 ownership audit
+- THEN 每一条都归类为 Main durable command、独立 view-state 或 legacy-only，且不存在普通 UI 触发的 full workspace snapshot writer
+
+#### `ATDD-WS-202` 场景：项目生命周期持久化
+
+- GIVEN 用户创建、移除、重定位、置顶或重排一个项目
+- WHEN 操作提交
+- THEN Main 以 revision 为门槛保存并回读确认后才返回成功，结果在重启后保持；新建项目随后可被 Project Chat 正常获取快照、创建线程并提交任务，而不是返回项目不存在
+
+#### `ATDD-WS-203` 场景：工作区偏好持久化
+
+- GIVEN 用户收起侧栏、折叠项目或切换项目首页的概览/运行时页签
+- WHEN 用户连续快速切换后重启 AgentOS
+- THEN 偏好按最后一次结果恢复；连续切换合并为一次持久化命令，且窗口关闭前未提交的偏好不会丢失
+
+#### `ATDD-WS-204` 场景：工作区命令不接受快照载荷
+
+- GIVEN 一个工作区命令请求携带 threads、projects、chatState、renderer 生成的项目 id 或任何未知字段
+- WHEN Main 接收该请求
+- THEN 整条命令被拒绝且不做部分应用，工作区数据不变；Main 只从自身 store 派生 durable 内容
+
+### 需求：每个项目只有一个独立 Chat 窗口
+
+#### `ATDD-WIN-201` 场景：重复打开同一项目窗口
+
+- GIVEN 一个项目 Chat 窗口已经存在
+- WHEN 用户或外部任务再次要求打开该项目窗口
+- THEN 系统只显示并聚焦现有窗口，不创建第二个窗口；窗口固定该项目且不提供项目切换
+
+#### `ATDD-WIN-202` 场景：关闭窗口不终止任务
+
+- GIVEN 项目窗口中有运行中、等待权限或等待回答的 Run
+- WHEN 用户关闭该窗口
+- THEN 只关闭视图与订阅，不取消 Run、不删除 thread、不清空 transcript 或 draft；其它可用窗口可继续观察和处理
+
+#### `ATDD-WIN-203` 场景：独立视图状态恢复
+
+- GIVEN 用户在项目窗口选择了 thread、输入未提交 draft 并调整窗口 bounds
+- WHEN 关闭重开窗口或重启 AgentOS
+- THEN selected thread、draft 与有效 bounds 恢复，且不覆盖主窗口自己的 selected thread/draft
+
+#### `ATDD-WIN-204` 场景：外部新任务不打断当前工作
+
+- GIVEN 新任务进入 broker 前，项目窗口已有非空 draft、活跃 Run 或 pending prompt 中任一项（不计算新任务自身 Run）
+- WHEN 合法外部任务创建新 thread
+- THEN 当前选择、draft 与焦点不变，只增加持久“新任务”徽标；仅在窗口不存在或 draft 为空且无既有 active Run/prompt 时自动选择并显示新 thread；点击徽标选择最新未读并清除本批计数
+
+#### `ATDD-WIN-205` 场景：项目删除或路径丢失
+
+- GIVEN 项目窗口固定项目已被删除或本地路径不存在
+- WHEN 窗口刷新 snapshot 或用户尝试提交
+- THEN 提交被禁用，不自动切换其它项目；删除态提供关闭窗口，路径丢失态提供回主窗口修复入口
+
+### 需求：所有 Project Chat IPC 都受 Main capability 约束
+
+#### `ATDD-SEC-201` 场景：未授权 sender 访问 Chat
+
+- GIVEN 调用来自未知 webContents、subframe、错误 renderer URL、固定到其它项目的窗口或 Preview
+- WHEN 它调用任一 `project-chat:*` IPC
+- THEN Main 返回 `sender-not-authorized` 且不读写项目、thread、prompt、Binding 或 permission；Preview 保持无 preload/Node
+
+### 需求：网站配对由用户明确确认
+
+#### `ATDD-PAIR-201` 场景：接受合法配对
+
+- GIVEN `agentos://v1/pair` 与 fixed HTTPS PairEnvelope 均合法且未过期
+- WHEN AgentOS 显示规范化 Origin、网站名称、现有项目选择与能力说明，用户点击“连接”
+- THEN Main 再次校验项目和时效，安全保存一个 active Website Binding，再向同 Origin fixed endpoint 回传 accepted
+
+#### `ATDD-PAIR-202` 场景：取消配对或遇到冲突
+
+- GIVEN 用户关闭/取消配对，或该 Origin 已绑定另一个项目
+- WHEN 配对流程结束
+- THEN 取消不创建 Binding/thread/Runtime；冲突不覆盖旧 Binding，只提供取消或前往连接管理
+
+#### `ATDD-PAIR-203` 场景：Binding credential 安全
+
+- GIVEN Main 准备生成或读取 Binding credential
+- WHEN safeStorage 可用或不可用
+- THEN 可用时只有 ciphertext 落盘且 credential 只通过 accepted HTTPS response 发送一次；不可用时配对 rejected，UI/API/log/磁盘都无明文 fallback
+
+### 需求：授权网站用一次性 Ticket 新建普通线程
+
+#### `ATDD-TASK-201` 场景：接受合法外部任务
+
+- GIVEN Origin 有 active Binding，TaskEnvelope 合法、未过期且 idempotency key 未消费
+- WHEN AgentOS 从 fixed HTTPS endpoint 获取任务
+- THEN Main 先持久化普通 thread 与完整用户消息，再提交现有 Claude Agent SDK；runner 返回 requestId 后网站收到不含本地 ID 的 accepted
+
+#### `ATDD-TASK-202` 场景：回执失败后幂等重试
+
+- GIVEN thread 与 Run 已创建，但 accepted POST 因网络失败未送达
+- WHEN 网站用相同 Binding 和 idempotency key 重试相同任务
+- THEN 原 Run 继续，AgentOS 重发原 terminal receipt，且不创建第二个 thread 或 requestId
+
+#### `ATDD-TASK-203` 场景：无效或越权 Ticket
+
+- GIVEN Binding 不存在/已撤销、Ticket 过期/来源不符/已消费，或 envelope 携带 project path、thread/session、permission 等禁止字段
+- WHEN AgentOS 验证任务
+- THEN 请求 rejected，不创建 thread、不提交 SDK、不尝试其它项目或权限模式
+
+#### `ATDD-TASK-204` 场景：网站只获得最小回执
+
+- GIVEN 外部任务进入 accepted 或 rejected
+- WHEN AgentOS POST TaskReceipt
+- THEN body 只含协议版本、网站 request/idempotency key、status 与可选稳定 code，不含 project/thread/local request、Transcript、Diff、权限、问题、进度或最终结果
+
+### 需求：Deep link 在冷启动与已运行状态语义一致
+
+#### `ATDD-LINK-201` 场景：cold/warm deep link 去重
+
+- GIVEN 合法 pair/task URL 通过 macOS open-url、初始 argv 或 second-instance argv 到达
+- WHEN AgentOS 尚未 ready 或已经运行
+- THEN 所有入口使用同一严格 parser；ready 前进入最多 32 项/5 分钟队列，相同 action+origin+request 只处理一次，非法/过期/超长 URL 无副作用
+
+### 需求：Preview 只能触发窄 deep-link 导航
+
+#### `ATDD-PREVIEW-201` 场景：内嵌网站点击 AgentOS 链接
+
+- GIVEN 无 preload/Node 的项目 Preview 加载当前有效 Runtime generation
+- WHEN 页面导航到合法 `agentos://v1/pair|task`
+- THEN Preview 阻止自身导航并把原始 URL交给 Main 同一 parser；旧 generation 或非法链接不执行，Preview 仍不能调用 Project Chat IPC
+
+### 需求：可靠 Agent 写入才建立 Edit Session
+
+#### `ATDD-EDIT-201` 场景：只读与写入工具分流
+
+- GIVEN 一个非 plan Run 正在解释、搜索或读取文件
+- WHEN 尚未出现 `Edit/Write/NotebookEdit` before-tool 意图或成功工具后项目内实际 Diff
+- THEN 不启动 Agent edit lease 或实时预览；明确写工具在执行前 acquire，其他工具只按成功 Diff 登记 mutation，不解析 Bash 文本猜测
+
+#### `ATDD-EDIT-202` 场景：满足三条件后收口
+
+- GIVEN 本 editGeneration 至少一次成功 Agent mutation
+- WHEN 所有 potential/write-capable Run 已终态且源码 fingerprint 连续 1,500ms 不变
+- THEN Main 只产生一次 settle intent；任一条件不满足或 30,000ms 内未稳定都不自动 build
+
+#### `ATDD-EDIT-203` 场景：新修改使旧收口失效
+
+- GIVEN settle 或 build 已针对 generation N 开始
+- WHEN 新 potential Run 或 mutation 到达并产生 generation N+1
+- THEN N 的迟到 settle/build 结果不能切换 last-good 或宣布预览已更新，系统等待最新 generation 重新满足条件
+
+#### `ATDD-EDIT-204` 场景：静态项目成功更新已保存预览
+
+- GIVEN 静态项目的最新 editGeneration 满足 settle 且无失败栅栏
+- WHEN 固定静态 build 成功
+- THEN Main 原子切换 last-good，只对该 generation build 一次，并在没有其它 consumer/lease 时停止临时 dev Runtime
+
+#### `ATDD-EDIT-205` 场景：失败、取消或 build 失败
+
+- GIVEN Run 在产生 mutation 后失败/取消，或 Agent 成功但静态 build 失败
+- WHEN Main 处理终态
+- THEN 前者不自动 build 并显示“存在未完成修改，预览未更新”；后者保持 Agent 成功但显示“修改完成，但预览未更新”；两者都保留源码、Diff 与旧 last-good
+
+#### `ATDD-EDIT-206` 场景：项目 Runtime 能力矩阵
+
+- GIVEN 项目分别为 development-only、static-only 无 dev、或无可靠 dev/static 声明
+- WHEN 有成功 Agent mutation
+- THEN development-only 继续共享实时预览且不显示已保存更新；static-only 编辑期说明实时不可用但可固定 build；无声明不猜命令、不 spawn
+
+### 需求：用户可以管理网站连接
+
+#### `ATDD-UX-201` 场景：撤销 Binding
+
+- GIVEN Settings 网站连接列表显示 active Binding 的网站、Origin、项目与时间且不显示 credential
+- WHEN 用户二次确认撤销
+- THEN Binding 立即变为 revoked，未来任务 rejected；既有 thread/Run 不删除、不取消、不改标题
+
+### 需求：新增交互满足可访问性底线
+
+#### `ATDD-A11Y-201` 场景：Dialog、状态与菜单可访问
+
+- GIVEN 用户通过键盘操作配对、撤销、权限、提问、状态与“更多”菜单
+- WHEN 对话框打开/关闭或状态变化
+- THEN dialog 有正确 role/焦点陷阱/Escape 语义，status/alert 不逐 token 播报，菜单关闭后焦点回触发器，任何状态不只依赖颜色
+
 ## 验收契约
 
 ### 需求：聊天提交构造完整 Agent 运行载荷

@@ -1,0 +1,1 @@
+/Volumes/macOS/Github/codenow-pro-new/CLAUDE.md

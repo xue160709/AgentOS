@@ -16,10 +16,14 @@ import type {
   ChatContextCompactionItem,
   ChatMessageAttachment,
   ChatState,
+  ChatThreadBase,
   ChatTaskItem,
   ChatTaskState,
   ChatWorkspaceState,
+  RuntimeDefinition,
+  WorkspaceTab,
   WorkspaceProject,
+  ProjectThreadCreationSource,
   WorkspaceSidebarPrefs,
   WorkspaceThread,
 } from './components/types'
@@ -59,6 +63,23 @@ export function createDefaultSidebarPrefs(): WorkspaceSidebarPrefs {
   return { collapsed: false, collapsedProjectIds: [], projectOrderIds: [] }
 }
 
+const WORKSPACE_LOAD_DEADLINE_MS = 3_000
+const PROJECT_PATH_VALIDATION_DEADLINE_MS = 1_500
+
+async function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
 // --- Persistence IO / 持久化读写 ---
 
 /** 合并 Electron 与本地缓存加载工作区 / Load workspace preferring Electron then local fallback */
@@ -67,7 +88,10 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
 
   if (typeof window !== 'undefined' && window.desktop?.getChatWorkspace) {
     try {
-      const raw = await window.desktop.getChatWorkspace()
+      const raw = await withDeadline(window.desktop.getChatWorkspace(), WORKSPACE_LOAD_DEADLINE_MS)
+      if (raw === undefined) {
+        return finalizeChatWorkspaceState(fromLocal?.state ?? createDefaultChatWorkspaceState())
+      }
       if (raw != null) {
         const selected = resolveChatWorkspaceSnapshot([
           createChatWorkspaceSnapshot(raw, 'desktop-mirror'),
@@ -75,17 +99,18 @@ export async function loadChatWorkspaceState(): Promise<ChatWorkspaceState> {
         ])
         const finalized = await finalizeChatWorkspaceState(selected?.state ?? normalizeChatWorkspaceState(raw))
         if (selected === fromLocal && window.desktop.saveChatWorkspace) {
-          await window.desktop.saveChatWorkspace(finalized)
+          await withDeadline(window.desktop.saveChatWorkspace(finalized), WORKSPACE_LOAD_DEADLINE_MS)
         }
         return finalized
       }
-      if (fromLocal) {
-        const finalized = await finalizeChatWorkspaceState(fromLocal.state)
-        if (window.desktop.saveChatWorkspace) {
-          await window.desktop.saveChatWorkspace(finalized)
-        }
-        return finalized
+      // Main has no durable workspace yet (first launch). It is the only writer
+      // for project commands, so seed it now or every `project.create` is
+      // refused with `workspace-unavailable`.
+      const finalized = await finalizeChatWorkspaceState(fromLocal?.state ?? createDefaultChatWorkspaceState())
+      if (window.desktop.saveChatWorkspace) {
+        await withDeadline(window.desktop.saveChatWorkspace(finalized), WORKSPACE_LOAD_DEADLINE_MS)
       }
+      return finalized
     } catch {
       /* ignore */
     }
@@ -105,7 +130,7 @@ export async function finalizeChatWorkspaceState(state: ChatWorkspaceState): Pro
   if (changed && typeof window !== 'undefined' && window.desktop?.saveChatWorkspace) {
     try {
       next = withNextWorkspaceRevision(next, workspaceRevisionOf(state))
-      await window.desktop.saveChatWorkspace(next)
+      await withDeadline(window.desktop.saveChatWorkspace(next), WORKSPACE_LOAD_DEADLINE_MS)
     } catch {
       /* ignore */
     }
@@ -124,7 +149,11 @@ async function annotateProjectPathAvailability(state: ChatWorkspaceState): Promi
   }
 
   try {
-    const availability = await validate(state.projects.map((project) => project.path))
+    const availability = await withDeadline(
+      validate(state.projects.map((project) => project.path)),
+      PROJECT_PATH_VALIDATION_DEADLINE_MS,
+    )
+    if (!availability) return state
     return {
       ...state,
       projects: state.projects.map((project) => ({
@@ -140,23 +169,19 @@ async function annotateProjectPathAvailability(state: ChatWorkspaceState): Promi
   }
 }
 
-/** 写入 localStorage 并尽力同步主进程 / Persist locally and best-effort mirror to main */
+/** 写入主进程快照；失败必须传播给显式调用方 / Persist main snapshot and propagate failures */
 export async function persistChatWorkspaceState(state: ChatWorkspaceState): Promise<void> {
-  const toSave = stripRuntimeProjectFields(state)
+  const toSave = stripLegacyRuntimeFields(stripRuntimeProjectFields(state))
   const save = typeof window !== 'undefined' ? window.desktop?.saveChatWorkspace : undefined
   if (save) {
-    try {
-      await save(toSave)
-    } catch {
-      /* ignore */
-    }
+    await save(toSave)
   }
 }
 
 /** 同步写入 renderer 本地快照，用于覆盖退出前主进程 mirror 尚未完成的窗口。 */
 export function persistChatWorkspaceStateToLocalStorage(state: ChatWorkspaceState): void {
   try {
-    const toSave = stripRuntimeProjectFields(state)
+    const toSave = stripLegacyRuntimeFields(stripRuntimeProjectFields(state))
     const payload = {
       ...toSave,
       [CHAT_WORKSPACE_SAVED_AT_FIELD]: Date.now(),
@@ -166,6 +191,11 @@ export function persistChatWorkspaceStateToLocalStorage(state: ChatWorkspaceStat
   } catch {
     /* ignore */
   }
+}
+
+function stripLegacyRuntimeFields(state: ChatWorkspaceState): ChatWorkspaceState {
+  const { localAppDefinitions: _definitions, localAppTabs: _tabs, activeLocalAppTabId: _active, ...neutral } = state
+  return neutral as unknown as ChatWorkspaceState
 }
 
 function loadChatWorkspaceFromLocalStorage(): ChatWorkspaceSnapshot | null {
@@ -182,13 +212,36 @@ function loadChatWorkspaceFromLocalStorage(): ChatWorkspaceSnapshot | null {
 
 /** 首次启动空工作区 / Empty workspace for first launch */
 export function createDefaultChatWorkspaceState(): ChatWorkspaceState {
-  return {
+  return attachLegacyRuntimeView({
     activeProjectId: '',
     activeThreadId: '',
     workspaceRevision: 0,
     projects: [],
     threads: [],
     sidebarPrefs: createDefaultSidebarPrefs(),
+    runtimeDefinitions: [],
+    workspaceTabs: [],
+    activeWorkspaceTabId: '',
+    projectHomeViewModes: {},
+    localAppDefinitions: [],
+    localAppTabs: [],
+    activeLocalAppTabId: '',
+    workspaceSchemaVersion: 3,
+    snapshotComplete: true,
+  })
+}
+
+/**
+ * Keep the Revision 1 renderer alive while every durable adapter speaks the
+ * neutral Revision 2 vocabulary.  The adapter strips these compatibility
+ * fields before writing snapshots.
+ */
+function attachLegacyRuntimeView(state: ChatWorkspaceState): ChatWorkspaceState {
+  return {
+    ...state,
+    localAppDefinitions: state.runtimeDefinitions,
+    localAppTabs: state.workspaceTabs.map((tab) => ({ ...tab, localAppId: tab.runtimeDefinitionId })),
+    activeLocalAppTabId: state.activeWorkspaceTabId,
   }
 }
 
@@ -237,6 +290,20 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
     return createDefaultChatWorkspaceState()
   }
 
+  const runtimeDefinitions = normalizeRuntimeDefinitions(value.runtimeDefinitions ?? value.localAppDefinitions)
+  const workspaceTabs = normalizeWorkspaceTabs(
+    value.workspaceTabs ?? value.localAppTabs,
+    new Map(runtimeDefinitions.map((item) => [item.id, item])),
+  )
+  const activeWorkspaceTabId =
+    typeof (value.activeWorkspaceTabId ?? value.activeLocalAppTabId) === 'string' &&
+    workspaceTabs.some((item) => item.id === (value.activeWorkspaceTabId ?? value.activeLocalAppTabId))
+      ? (value.activeWorkspaceTabId ?? value.activeLocalAppTabId) as string
+      : ''
+  const workspaceSchemaVersion = Math.max(3, toFiniteNumber(value.workspaceSchemaVersion, 1))
+  const snapshotComplete = value.snapshotComplete !== false
+  const projectHomeViewModes = normalizeProjectHomeViewModes(value.projectHomeViewModes)
+
   const projects = value.projects.flatMap((project): WorkspaceProject[] => {
     if (!isRecord(project) || typeof project.id !== 'string' || typeof project.name !== 'string') return []
     return [
@@ -252,12 +319,23 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
   })
 
   if (projects.length === 0) {
-    return {
+    const workspaceRuntimeDefinitions = runtimeDefinitions.filter((definition) => definition.owner.kind === 'workspace')
+    return attachLegacyRuntimeView({
       ...migrateLegacySeedProjects(createDefaultChatWorkspaceState()),
       workspaceRevision: readWorkspaceRevision(value) ?? 0,
-    }
+      runtimeDefinitions: workspaceRuntimeDefinitions,
+      workspaceTabs,
+      activeWorkspaceTabId,
+      projectHomeViewModes,
+      localAppDefinitions: workspaceRuntimeDefinitions,
+      localAppTabs: workspaceTabs,
+      activeLocalAppTabId: activeWorkspaceTabId,
+      workspaceSchemaVersion,
+      snapshotComplete,
+    })
   }
   const projectIds = new Set(projects.map((project) => project.id))
+  const scopedRuntimeDefinitions = runtimeDefinitions.filter((definition) => definition.owner.kind === 'workspace' || projectIds.has(definition.owner.projectId))
   const threads = value.threads.flatMap((thread): WorkspaceThread[] => {
     if (!isRecord(thread) || typeof thread.id !== 'string' || typeof thread.projectId !== 'string') return []
     if (!projectIds.has(thread.projectId)) return []
@@ -276,6 +354,7 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
         updatedAt: toFiniteNumber(thread.updatedAt, Date.now()),
         pinnedAt: toOptionalFiniteNumber(thread.pinnedAt),
         archivedAt: toOptionalFiniteNumber(thread.archivedAt),
+        creationSource: normalizeProjectThreadCreationSource(thread.creationSource),
         chatState: normalizeStoredChatState(thread.chatState),
       },
     ]
@@ -283,17 +362,121 @@ export function normalizeChatWorkspaceState(value: unknown): ChatWorkspaceState 
 
   const sidebarPrefs = normalizeSidebarPrefs(value, projectIds)
 
-  return {
+  return attachLegacyRuntimeView({
     workspaceRevision: readWorkspaceRevision(value) ?? 0,
     activeProjectId: typeof value.activeProjectId === 'string' ? value.activeProjectId : '',
     activeThreadId: typeof value.activeThreadId === 'string' ? value.activeThreadId : '',
     projects,
     threads,
     sidebarPrefs,
+    runtimeDefinitions: scopedRuntimeDefinitions,
+    workspaceTabs,
+    activeWorkspaceTabId,
+    projectHomeViewModes,
+    localAppDefinitions: scopedRuntimeDefinitions,
+    localAppTabs: workspaceTabs,
+    activeLocalAppTabId: activeWorkspaceTabId,
+    workspaceSchemaVersion,
+    snapshotComplete,
+  })
+}
+
+function normalizeRuntimeDefinitions(value: unknown): RuntimeDefinition[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const seenProjectOwners = new Set<string>()
+  return value.flatMap((item): RuntimeDefinition[] => {
+    if (!isRecord(item) || typeof item.id !== 'string' || !item.id.trim() || seen.has(item.id)) return []
+    const rootPath = typeof item.rootPath === 'string' ? item.rootPath.trim() : ''
+    if (!rootPath) return []
+    seen.add(item.id)
+    const devCommand = { executable: 'npm' as const, args: ['run', 'dev'] as ['run', 'dev'] }
+    const agentos = normalizeStaticDeclaration(item.agentos)
+    const owner: RuntimeDefinition['owner'] = isRecord(item.owner) && item.owner.kind === 'project' && typeof item.owner.projectId === 'string' && item.owner.projectId.trim()
+      ? { kind: 'project', projectId: item.owner.projectId.trim() }
+      : { kind: 'workspace' }
+    if (owner.kind === 'project') {
+      if (seenProjectOwners.has(owner.projectId)) return []
+      seenProjectOwners.add(owner.projectId)
+    }
+    return [{
+      id: item.id,
+      owner,
+      name: typeof item.name === 'string' && item.name.trim()
+        ? item.name.trim()
+        : rootPath.split(/[\\/]/).filter(Boolean).slice(-1)[0] || 'Runtime',
+      rootPath,
+      canonicalRoot: typeof item.canonicalRoot === 'string' && item.canonicalRoot.trim() ? item.canonicalRoot.trim() : undefined,
+      packageManager: 'npm',
+      devCommand,
+      mode: agentos ? 'static' : undefined,
+      agentos,
+      // `C-RSM-404`: an explicit "how to view this" choice is durable, and the
+      // strict whitelist has to carry it or the readback check rejects it.
+      serveOverride: item.serveOverride === 'artifact' || item.serveOverride === 'server' ? item.serveOverride : undefined,
+      // Unknown/newly corrupted trust fields must never become executable by
+      // default. The binding remains visible so the user can re-trust it.
+      trustStatus: item.trustStatus === 'trusted' ? 'trusted' : 'revoked',
+      autoStart: item.autoStart === true,
+      createdAt: toFiniteNumber(item.createdAt, Date.now()),
+      updatedAt: toFiniteNumber(item.updatedAt, Date.now()),
+    }]
+  })
+}
+
+function normalizeStaticDeclaration(value: unknown): RuntimeDefinition['agentos'] {
+  if (!isRecord(value) || value.mode !== 'static' || value.buildCommand !== 'npm run build') return undefined
+  if (typeof value.outputRoot !== 'string' || typeof value.entryFile !== 'string') return undefined
+  if (!isSafeStaticRelativePath(value.outputRoot) || !isSafeStaticRelativePath(value.entryFile)) return undefined
+  return {
+    mode: 'static',
+    buildCommand: 'npm run build',
+    outputRoot: value.outputRoot.split('/').join('/'),
+    entryFile: value.entryFile.split('/').join('/'),
   }
 }
 
-function normalizeStoredChatState(value: unknown): ChatState {
+function isSafeStaticRelativePath(value: string): boolean {
+  if (!value || value.includes('\\') || value.includes('\0') || value.startsWith('/') || /^[A-Za-z]:/.test(value)) return false
+  return value.split('/').every((segment) => segment && segment !== '.' && segment !== '..')
+}
+
+function normalizeWorkspaceTabs(value: unknown, definitions: Map<string, RuntimeDefinition>): WorkspaceTab[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  return value.flatMap((item): WorkspaceTab[] => {
+    if (!isRecord(item) || typeof item.id !== 'string' || !item.id.trim() || seen.has(item.id)) return []
+    const runtimeDefinitionId = typeof item.runtimeDefinitionId === 'string'
+      ? item.runtimeDefinitionId
+      : typeof item.localAppId === 'string'
+        ? item.localAppId
+        : ''
+    const definition = definitions.get(runtimeDefinitionId)
+    if (!definition || definition.owner.kind !== 'workspace') return []
+    seen.add(item.id)
+    return [{
+      id: item.id,
+      runtimeDefinitionId,
+      // Legacy tabs intentionally remain unlinked until Main lazy-backfills
+      // them through the Workspace Tab Chat operation.
+      projectId: typeof item.projectId === 'string' && item.projectId.trim() ? item.projectId.trim() : undefined,
+      title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : 'Runtime',
+      createdAt: toFiniteNumber(item.createdAt, Date.now()),
+      updatedAt: toFiniteNumber(item.updatedAt, Date.now()),
+    }]
+  })
+}
+
+function normalizeProjectHomeViewModes(value: unknown): Record<string, 'overview' | 'runtime'> {
+  if (!isRecord(value)) return {}
+  const result: Record<string, 'overview' | 'runtime'> = {}
+  for (const [projectId, mode] of Object.entries(value)) {
+    if (projectId.trim() && (mode === 'overview' || mode === 'runtime')) result[projectId] = mode
+  }
+  return result
+}
+
+export function normalizeStoredChatState(value: unknown): ChatState {
   if (!isRecord(value)) return createEmptyChatState()
   return {
     sessionId: typeof value.sessionId === 'string' ? value.sessionId : undefined,
@@ -303,6 +486,86 @@ function normalizeStoredChatState(value: unknown): ChatState {
     tasks: normalizeStoredTaskState(value.tasks),
     items: Array.isArray(value.items) ? value.items.flatMap(normalizeTranscriptItem) : [],
   }
+}
+
+/** 两类 Thread 共用同一 rollout 编码，避免 Runtime 复制后逐渐偏离普通对话格式。 */
+export function serializeChatThreadRollout(
+  thread: ChatThreadBase,
+  identity: Record<string, unknown>,
+): string {
+  const timestamp = new Date(thread.updatedAt || Date.now()).toISOString()
+  const lines = [
+    {
+      timestamp,
+      type: 'session_meta',
+      payload: {
+        id: thread.id,
+        title: thread.title,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        pinnedAt: thread.pinnedAt,
+        archivedAt: thread.archivedAt,
+        model: thread.chatState.model,
+        modelPick: thread.chatState.modelPick,
+        cwd: thread.chatState.cwd,
+        sessionId: thread.chatState.sessionId,
+        source: 'agentos',
+        ...identity,
+      },
+    },
+    {
+      timestamp,
+      type: 'thread_state',
+      payload: {
+        sessionId: thread.chatState.sessionId,
+        model: thread.chatState.model,
+        modelPick: thread.chatState.modelPick,
+        cwd: thread.chatState.cwd,
+      },
+    },
+    ...thread.chatState.items.map((item) => ({
+      timestamp: new Date(chatTranscriptItemTimestamp(item, thread.updatedAt)).toISOString(),
+      type: 'response_item',
+      payload: item,
+    })),
+  ]
+  return `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`
+}
+
+/** rollout 损坏时保留已成功解析的前缀，让旧普通对话维持原有的部分恢复语义。 */
+export function readChatThreadRollout(text: string, fallback: ChatState): ChatState {
+  const state: ChatState = {
+    sessionId: fallback.sessionId,
+    model: fallback.model,
+    modelPick: fallback.modelPick,
+    cwd: fallback.cwd,
+    tasks: fallback.tasks,
+    items: [],
+  }
+  try {
+    for (const line of text.split(/\n/).filter(Boolean)) {
+      const event = JSON.parse(line) as unknown
+      if (!isRecord(event) || !isRecord(event.payload)) continue
+      const payload = event.payload
+      if (event.type === 'session_meta' || event.type === 'thread_state') {
+        state.sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : state.sessionId
+        state.model = typeof payload.model === 'string' ? payload.model : state.model
+        state.modelPick = normalizeStoredModelPick(payload.modelPick) ?? state.modelPick
+        state.cwd = typeof payload.cwd === 'string' ? payload.cwd : state.cwd
+      } else if (event.type === 'response_item') {
+        state.items.push(...normalizeTranscriptItem(payload))
+      }
+    }
+  } catch {
+    return state
+  }
+  return state
+}
+
+export function chatTranscriptItemTimestamp(item: ChatState['items'][number], fallback: number): number {
+  if (item.type === 'message') return item.completedAt ?? item.createdAt ?? fallback
+  if (item.type === 'context_compaction') return item.updatedAt ?? item.createdAt ?? fallback
+  return fallback
 }
 
 function normalizeStoredTaskState(value: unknown): ChatTaskState | undefined {
@@ -604,6 +867,21 @@ function normalizeThreadPurpose(value: unknown): WorkspaceThread['purpose'] {
     value === 'skill-run'
     ? value
     : undefined
+}
+
+export function normalizeProjectThreadCreationSource(value: unknown): ProjectThreadCreationSource {
+  if (!isRecord(value)) return { kind: 'user' }
+  if (value.kind === 'app-command') return { kind: 'app-command' }
+  if (
+    value.kind === 'website' &&
+    typeof value.bindingId === 'string' &&
+    value.bindingId.trim() &&
+    typeof value.receivedAt === 'number' &&
+    Number.isFinite(value.receivedAt)
+  ) {
+    return { kind: 'website', bindingId: value.bindingId.trim(), receivedAt: value.receivedAt }
+  }
+  return { kind: 'user' }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -5,6 +5,23 @@
 验证类别：正式验收（project-verify）
 验证范围：`prd/*/acceptance.md` 全部 10 个模块、98 个场景；本轮复验剩余 3 个 manual-only 场景并同步当前静态/集成测试结果
 
+## 增量验收矩阵：项目专属 `.agentos` Runtime（change revision 3）
+
+> 状态：Revision 3 已实现并通过自动化 Development Check；真实 Electron GUI 路径仍待正式验收。本矩阵不改写上方历史正式验收总数。
+
+| 合同 | 最小验证 | 预期 | 状态 |
+| --- | --- | --- | --- |
+| 固定项目根与 owner | 项目根有 `package.json` 而 `.agentos/` 缺失；再创建合法 `.agentos/package.json` | 前者 `not_initialized` 且不 spawn；后者仅以 `.agentos` 注册 `owner=project` / `project-home` | ✅ 自动化通过；GUI 待验收 |
+| Workspace 显式目录 | 创建、恢复和重定位 Workspace Runtime，并在项目下存在 `.agentos/` | `owner=workspace`、只读取显式目录，完全不发现/加载 `.agentos/` | ✅ 自动化通过；GUI 待验收 |
+| Tab/host 归属 | 请求让 project-owned Definition 进入 Workspace Tab，并分别创建 project-home/workspace-tab Preview | 无项目 Runtime Tab 入口；Workspace Tab 拒绝 project owner；各 host 只接受匹配 owner | ✅ 自动化与 seam audit 通过；GUI 待验收 |
+| 未初始化、创建与信任 | main-window 点击缺失 `.agentos` 项目的创建入口；随后出现目录 | 仅 main-window capability 可调用；打开/聚焦对应独立 Chat 窗口，在其中创建并选中线程、提交请求；主窗口不创建/选中空对话；不建空工程、不运行 npm；重新发现后仍要求显式信任 | ✅ 自动化通过；GUI 待验收 |
+| symlink escape | `.agentos` 是指向项目 realpath 外部的符号链接 | 拒绝且不 spawn | ✅ 自动化通过 |
+| 静态产物边界 | 在 `.agentos` 内构建成功后，触发失败、取消和迟到 generation | cwd/output/fingerprint 仅覆盖 `.agentos`；成功原子切换 last-good，失败保留旧产物 | ✅ 完整 Electron 回归通过；GUI 待验收 |
+| 项目聊天 prompt 最小 scope | 分别提交独立项目 Chat 普通/编辑重提、Main-owned 创建编排、主窗口普通 Chat、Agent command、Website task、Task/Home managed run、Workspace/非项目、路径失效项目请求 | 仅前两类注入绝对 `.agentos` 路径；cwd 仍为项目根；资格由 Main capability/编排派生 | ✅ 自动化通过；GUI 待验收 |
+| prompt root/scope 不可伪造 | 合格与不合格 sender 在 payload 中伪造 `runtimeRoot`、prompt-scope 或等价字段 | Main 忽略/拒绝调用方字段；root 只由权威项目路径派生，资格只由 sender capability/编排派生 | ✅ 自动化通过 |
+| 创建入口 capability | 由独立 Chat、Preview、subframe 和未知 renderer 调用专用 IPC | 全部被拒绝；仅 main-window capability 可编排独立 Chat 窗口与线程 | ✅ 自动化通过；GUI 待验收 |
+| 写错落点反馈 | 项目 run 后 `.agentos` 仍缺失且项目根新增疑似网页工程 | 只提示目标路径；不搬运、不复制、不删除、不自动重试 | ✅ 自动化与 source audit 通过；GUI 待验收 |
+
 ## 结论
 
 | 状态 | 数量 | 说明 |

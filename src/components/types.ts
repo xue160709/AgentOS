@@ -17,8 +17,187 @@ import type {
 /** 顶部主导航视图 / Primary shell view id */
 export type AppViewId = 'home' | 'docs' | 'settings'
 
+/** Runtime directory trust state / Runtime 目录信任状态 */
+export type RuntimeTrustStatus = 'trusted' | 'revoked'
+
+/** Static build declaration read from package.json.agentos. */
+export type RuntimeStaticDeclaration = {
+  mode: 'static'
+  buildCommand: 'npm run build'
+  outputRoot: string
+  entryFile: string
+}
+
+export type RuntimeMode = 'development' | 'static'
+/**
+ * Explicit "view this Runtime as…" choice; overrides automatic detection.
+ * `server` only means "keep it running"; production vs development stays
+ * detection's call.
+ */
+export type RuntimeServeOverride = 'artifact' | 'server'
+/** Forced serve script for one run; never persisted. */
+export type RuntimeServeScript = 'dev' | 'start'
+export type RuntimeBuildStatus = 'ready' | 'stale' | 'build_required' | 'building' | 'build_failed' | 'idle'
+
+/** Durable product-domain ownership; legacy definitions migrate to workspace. */
+export type RuntimeOwner =
+  | { kind: 'project'; projectId: string }
+  | { kind: 'workspace' }
+
+/** Durable Runtime definition / Runtime 持久化定义 */
+export type RuntimeDefinition = {
+  id: string
+  owner: RuntimeOwner
+  name: string
+  rootPath: string
+  canonicalRoot?: string
+  packageManager: 'npm'
+  devCommand: { executable: 'npm'; args: ['run', 'dev'] }
+  /** Omitted on legacy definitions; omission keeps the existing dev mode. */
+  mode?: RuntimeMode
+  /** Main-validated package.json.agentos declaration for static projects. */
+  agentos?: RuntimeStaticDeclaration
+  /**
+   * Explicit user choice of how this Runtime is viewed (`C-RSM-404`).
+   * Detection never overwrites it; absence means "decide automatically".
+   */
+  serveOverride?: RuntimeServeOverride
+  /**
+   * Runtime-only: forces one run onto a fixed npm script (an AI editing
+   * session needs `dev`). Never persisted, never read from the store.
+   */
+  serveScript?: RuntimeServeScript
+  trustStatus: RuntimeTrustStatus
+  autoStart: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/** User-facing Workspace Tab; independent from chat threads / 用户侧 Workspace Tab 视图入口 */
+export type WorkspaceTab = {
+  id: string
+  runtimeDefinitionId: string
+  /** @deprecated Revision 2 compatibility only; new Workspace Runtime entries never write or follow this link. */
+  projectId?: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  /** @deprecated Read-only compatibility for Revision 1 snapshots/components. */
+  localAppId?: string
+}
+
+export type RuntimeStatus =
+  | 'ready'
+  | 'stale'
+  | 'build_required'
+  | 'building'
+  | 'build_failed'
+  | 'development'
+  | 'preparing'
+  | 'starting'
+  | 'running'
+  | 'degraded'
+  | 'failed'
+  | 'path_missing'
+  | 'stopped'
+
+export type PreviewStatus = 'idle' | 'loading' | 'ready' | 'degraded' | 'failed' | 'closed'
+
+export type RuntimeSnapshot = {
+  runtimeDefinitionId: string
+  runtimeId: string
+  generation: number
+  status: RuntimeStatus
+  mode?: RuntimeMode
+  buildStatus?: RuntimeBuildStatus
+  artifactId?: string
+  buildId?: string
+  operationId?: string
+  stale?: boolean
+  lastBuildAt?: number
+  /** Main-generated static scheme URL; never a filesystem path. */
+  previewUrl?: string
+  readyUrl?: string
+  port?: number
+  restartAttempt: number
+  startedAt?: number
+  updatedAt: number
+  stopReason?: 'user' | 'last-consumer' | 'app-quit' | 'crash' | 'error'
+  phase?: 'inspect' | 'prepare' | 'start' | 'build' | 'readiness' | 'preview' | 'stop'
+  errorCode?: string
+  detail?: string
+  logs?: string[]
+  /** Preview state is kept separate from the managed process state. */
+  previewStatus?: PreviewStatus
+  /**
+   * Set when this view is served by another definition's process on the same
+   * root. The Runtime is borrowed, not owned: this definition holds no root
+   * lease, and leaving it never stops the shared process.
+   */
+  sharedRootRuntime?: SharedRootRuntimeRef
+  /** @deprecated Read-only compatibility for Revision 1 event payloads. */
+  localAppId?: string
+}
+
+/** Identity of the definition whose process is serving a borrowed Runtime. */
+export type SharedRootRuntimeRef = { runtimeDefinitionId: string; name: string }
+
+export type RuntimeEvent = {
+  type: 'snapshot' | 'status' | 'log' | 'ready' | 'exit'
+  runtimeDefinitionId: string
+  runtimeId: string
+  generation: number
+  status: RuntimeStatus
+  mode?: RuntimeMode
+  buildStatus?: RuntimeBuildStatus
+  artifactId?: string
+  buildId?: string
+  operationId?: string
+  stale?: boolean
+  lastBuildAt?: number
+  previewUrl?: string
+  readyUrl?: string
+  port?: number
+  stream?: 'stdout' | 'stderr'
+  line?: string
+  code?: number | null
+  signal?: string | null
+  detail?: string
+  phase?: RuntimeSnapshot['phase']
+  errorCode?: string
+  /** Why a `stopped` Runtime stopped; `error` means a failed start (its reason stays in `detail`). */
+  stopReason?: RuntimeSnapshot['stopReason']
+  previewStatus?: PreviewStatus
+  /** Mirrors `RuntimeSnapshot.sharedRootRuntime` for a borrowed Runtime. */
+  sharedRootRuntime?: SharedRootRuntimeRef
+  timestamp: number
+  /** @deprecated Read-only compatibility for Revision 1 event payloads. */
+  localAppId?: string
+}
+
+/**
+ * Compatibility aliases are intentionally kept type-only while the physical
+ * electron/local-app-runtime implementation is migrated.  Durable writes
+ * are normalized to the neutral fields above.
+ */
+/** @deprecated Use RuntimeDefinition. */
+export type LocalAppDefinition = RuntimeDefinition
+/** @deprecated Use WorkspaceTab. */
+export type LocalAppTab = WorkspaceTab
+/** @deprecated Use RuntimeSnapshot. */
+export type LocalAppRuntimeSnapshot = RuntimeSnapshot
+/** @deprecated Use RuntimeEvent. */
+export type LocalAppRuntimeEvent = RuntimeEvent
+/** @deprecated Use RuntimeStatus. */
+export type LocalAppRuntimeStatus = RuntimeStatus
+/** @deprecated Use PreviewStatus. */
+export type LocalAppPreviewStatus = PreviewStatus
+
+/** Project-home page preference; deliberately not part of Runtime state. */
+export type ProjectHomeViewMode = 'overview' | 'runtime'
+
 /** 设置页侧栏路由 `#settings/<id>` / Settings sidebar route fragment `#settings/<id>` */
-export type SettingsCategoryId = 'general' | 'search' | 'mcp' | 'skills' | 'updates' | 'agent' | 'developer'
+export type SettingsCategoryId = 'general' | 'search' | 'mcp' | 'skills' | 'updates' | 'agent' | 'website-bindings' | 'developer'
 
 /** Agent Mode 首页模态设置页签 / Agent Mode home modal settings panel id */
 export type AgentSettingsPanelId = 'project' | 'context' | 'mcp' | 'general' | 'card-order' | 'skills'
@@ -197,10 +376,26 @@ export type WorkspaceSidebarPrefs = {
 }
 
 /** 工作区对话线程 / Workspace chat thread */
-export type WorkspaceThread = {
+export type ProjectThreadCreationSource =
+  | { kind: 'user' }
+  | { kind: 'app-command' }
+  | { kind: 'website'; bindingId: string; receivedAt: number }
+
+/** Project 与 Runtime 开发对话共用的持久字段；scope 身份由各自子类型补充。 */
+export type ChatThreadBase = {
   id: string
-  projectId: string
   title: string
+  createdAt: number
+  updatedAt: number
+  /** 置顶权重：越大越靠前（持久化）/ Pin rank: larger sorts higher (persisted) */
+  pinnedAt?: number
+  archivedAt?: number
+  creationSource: ProjectThreadCreationSource
+  chatState: ChatState
+}
+
+export type WorkspaceThread = ChatThreadBase & {
+  projectId: string
   /** 特殊线程用途，例如项目首页插件定制 / Special thread purpose, such as project home customization */
   purpose?: 'home-plugin-customization' | 'home-plugin-card-customization' | 'task-run' | 'skill-run'
   /** 关联的 Home Plugin 目录名；用于单卡片修改线程 / Bound Home Plugin slug for card customization threads */
@@ -209,13 +404,14 @@ export type WorkspaceThread = {
   skillPath?: string
   skillCommand?: string
   skillTitle?: string
-  createdAt: number
-  updatedAt: number
-  /** 置顶权重：越大越靠前（持久化）/ Pin rank: larger sorts higher (persisted) */
-  pinnedAt?: number
-  archivedAt?: number
-  chatState: ChatState
 }
+
+/**
+ * 壳层线程元数据：不含 `chatState`。
+ * 渲染进程的对话内容由 `ThreadChatStateStore` 持有，流式 delta 不再进入 AppShell 的 React state。
+ * `WorkspaceThread` 可直接赋给它，反之不行——这样任何仍需要对话内容的读取点都会在编译期暴露。
+ */
+export type ThreadMetadata = Omit<WorkspaceThread, 'chatState'>
 
 /** 新建线程时的瞬时行为；不进入持久化线程数据。 / Ephemeral behavior for creating a thread. */
 export type CreateWorkspaceThreadOptions = {
@@ -294,7 +490,28 @@ export type ChatWorkspaceState = {
   projects: WorkspaceProject[]
   threads: WorkspaceThread[]
   sidebarPrefs: WorkspaceSidebarPrefs
+  /** Runtime definitions/tabs are durable UX state; process facts stay in Main memory. */
+  runtimeDefinitions: RuntimeDefinition[]
+  workspaceTabs: WorkspaceTab[]
+  activeWorkspaceTabId: string
+  /** Last page-level view selected for each project home. */
+  projectHomeViewModes: Record<string, ProjectHomeViewMode>
+  /** @deprecated Compatibility view over the neutral fields; not persisted by new snapshots. */
+  localAppDefinitions: LocalAppDefinition[]
+  /** @deprecated Compatibility view over the neutral fields; not persisted by new snapshots. */
+  localAppTabs: LocalAppTab[]
+  /** @deprecated Compatibility view over the neutral fields; not persisted by new snapshots. */
+  activeLocalAppTabId: string
+  /** Snapshot metadata shared by JSON and SQLite adapters. */
+  workspaceSchemaVersion?: number
+  snapshotComplete?: boolean
 }
+
+/**
+ * 壳层工作区投影：与 `ChatWorkspaceState` 同构，但线程只保留元数据。
+ * 落盘与主进程契约仍然使用 `ChatWorkspaceState`；两者之间由 hydrate/adopt 显式转换。
+ */
+export type WorkspaceMetadataState = Omit<ChatWorkspaceState, 'threads'> & { threads: ThreadMetadata[] }
 
 /** 某项目的技能列表加载状态 / Loaded slash skills for one project */
 export type ProjectSkillListState = {

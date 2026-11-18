@@ -3,9 +3,10 @@
  * Center pane coordinating Chat/Docs/Settings routes plus auxiliary drawers.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { IconInline } from '../icon-inline'
 import { useI18n } from '../i18n/i18n'
+import { sameModelPick } from '../model-pick'
 import type { AgentContextSlashItem, AgentKnowledgeSearchItem, ChatModelPick, ClaudeAgentStatusSnapshot, ProjectFileSearchItem } from '../claude-chat-types'
 import { CLAUDE_AGENT_SETTINGS_CHANGED_EVENT, OPEN_AGENT_STATUS_EVENT } from '../app-events'
 import type {
@@ -20,20 +21,32 @@ import type {
   SettingsCategoryId,
   ThreadRunState,
   WorkspaceProject,
-  WorkspaceThread,
+  ThreadMetadata,
+  RuntimeDefinition,
+  RuntimeSnapshot,
+  WorkspaceTab,
 } from './types'
 import { AgentModeMenu } from './AgentModeMenu'
 import { AppAgentStatusPopover } from './AppAgentStatusPopover'
 import { AppFileTreePane, type AppFileTreePaneHandle } from './AppFileTreePane'
-import { AppSearchModal } from './AppSearchModal'
+// Opened only from the search shortcut; keep it out of first paint.
+const AppSearchModal = lazy(async () => ({ default: (await import('./AppSearchModal')).AppSearchModal }))
 import { AppWorkspaceSidePanel, type WorkspaceSidePanelTab } from './AppWorkspaceSidePanel'
 import { ChatPage, type ChatPageHandle } from './chat/ChatPage'
 import { DocsPage } from './DocsPage'
 import { ProjectFilePreviewOverlay, type ProjectFilePreviewOverlayState } from './ProjectFilePreviewOverlay'
-import { SettingsPage } from './setting/SettingsPage'
+// Settings pulls in the whole agent/MCP/skills configuration subtree (the
+// single largest renderer route). It is only reachable from an explicit
+// navigation, so it must not sit in the first-paint bundle.
+const SettingsPage = lazy(async () => ({ default: (await import('./setting/SettingsPage')).SettingsPage }))
 import { useWorkspaceAgentMode } from './useWorkspaceAgentMode'
 import type { AgentModeSettingsResult, HomePluginRunItem } from '../desktop-types'
 import { projectContent } from '../project-content'
+import { RuntimeWorkspace } from './RuntimeWorkspace'
+import type { ChatBrokerSnapshotSource } from './chat/broker-snapshot-source'
+import { useThreadChatSelector } from './chat/thread-chat-state-store'
+import type { RuntimeDevelopmentSnapshot } from '../runtime-development-contract'
+import { runtimeDevelopmentStatus } from './runtime-event-state'
 
 /** 右侧辅助抽屉开关与当前标签 / Auxiliary side panel open flag and active tab */
 type SidePanelState = {
@@ -94,10 +107,27 @@ type AppShellWorkspaceProps = {
   activeViewId: AppViewId
   settingsCategory: SettingsCategoryId
   activeProject: WorkspaceProject
-  activeThread: WorkspaceThread | undefined
+  activeThread: ThreadMetadata | undefined
+  activeWorkspaceTab?: WorkspaceTab
+  activeRuntimeDefinition?: RuntimeDefinition
+  activeRuntime?: RuntimeSnapshot | null
+  onRetryRuntime?: () => void
+  onRestartRuntime?: () => void
+  onStopRuntime?: () => void
+  onReloadRuntime?: () => void
+  onNavigateRuntime?: (direction: 'back' | 'forward') => void
+  onRelocateRuntime?: () => void
+  onBuildRuntime?: () => void
+  onCancelBuildRuntime?: () => void
+  runtimeDevelopment?: RuntimeDevelopmentSnapshot
+  onRuntimeDevelopmentAction?: () => void
+  onOpenRuntimeDevelopmentThread?: (threadId: string) => void
   projectDefaultModelPick?: ChatModelPick
   projectHomeModelPick?: ChatModelPick
-  threads: WorkspaceThread[]
+  /** Broker 快照 seam：传 store 而不是快照对象，避免每条 delta 都换一次 prop。 */
+  projectChatSnapshots?: ChatBrokerSnapshotSource
+  projectChatEnabled: boolean
+  threads: ThreadMetadata[]
   projects: WorkspaceProject[]
   projectOrderIds: readonly string[]
   threadRunStates: Record<string, ThreadRunState>
@@ -132,8 +162,24 @@ export function AppShellWorkspace({
   settingsCategory,
   activeProject,
   activeThread,
+  activeWorkspaceTab,
+  activeRuntimeDefinition,
+  activeRuntime,
+  onRetryRuntime,
+  onRestartRuntime,
+  onStopRuntime,
+  onReloadRuntime,
+  onNavigateRuntime,
+  onRelocateRuntime,
+  onBuildRuntime,
+  onCancelBuildRuntime,
+  runtimeDevelopment,
+  onRuntimeDevelopmentAction,
+  onOpenRuntimeDevelopmentThread,
   projectDefaultModelPick,
   projectHomeModelPick,
+  projectChatSnapshots,
+  projectChatEnabled,
   threads,
   projects,
   projectOrderIds,
@@ -163,6 +209,7 @@ export function AppShellWorkspace({
   // --- Derived chrome flags (settings hide header; home “surface” vs chat stream) / 派生框架标志（设置页隐藏顶栏；首页表面对话流）---
 
   const { t } = useI18n()
+  const runtimeDevelopmentUi = runtimeDevelopmentStatus(t, runtimeDevelopment)
   const isSettingsChromeHidden = activeViewId === 'settings'
   const [sidePanel, setSidePanel] = useState<SidePanelState>(() => ({ open: false, tab: 'files' }))
   const [filePreview, setFilePreview] = useState<ProjectFilePreviewOverlayState | null>(null)
@@ -173,25 +220,29 @@ export function AppShellWorkspace({
   const [agentStatusOpen, setAgentStatusOpen] = useState(false)
   const [agentStatusLoading, setAgentStatusLoading] = useState(false)
   const [agentStatusSnapshot, setAgentStatusSnapshot] = useState<ClaudeAgentStatusSnapshot | null>(null)
+  const [localAppLogsOpen, setLocalAppLogsOpen] = useState(false)
+  const [runtimeNavigation, setRuntimeNavigation] = useState({ canGoBack: false, canGoForward: false })
   const filePaneRef = useRef<AppFileTreePaneHandle>(null)
   const filePreviewRequestRef = useRef(0)
   const agentStatusRequestSeqRef = useRef(0)
   const autoContextRefreshKeysRef = useRef<Set<string>>(new Set())
   const agentMode = useWorkspaceAgentMode(activeProject)
   const activeThreadRunning = Boolean(activeThread && threadRunStates[activeThread.id])
+  // 只订阅会话身份，不订阅 items：一次流式回答里这两个值不变，因此这里不会重渲染。
+  const activeThreadSessionId = useThreadChatSelector(activeThread?.id, (chatState) => chatState.sessionId)
+  const activeThreadModelPick = useThreadChatSelector(activeThread?.id, (chatState) => chatState.modelPick, sameModelPick)
   const agentStatusRequest = useMemo(
     () => ({
       threadId: activeThread?.id,
-      sessionId: activeThread?.chatState.sessionId,
-      modelPick: activeThread?.chatState.modelPick ?? projectHomeModelPick ?? projectDefaultModelPick,
+      sessionId: activeThreadSessionId,
+      modelPick: activeThreadModelPick ?? projectHomeModelPick ?? projectDefaultModelPick,
       cwd: activeProject.path,
     }),
-    [activeProject.path, activeThread?.chatState.modelPick, activeThread?.chatState.sessionId, activeThread?.id, projectDefaultModelPick, projectHomeModelPick],
+    [activeProject.path, activeThreadModelPick, activeThreadSessionId, activeThread?.id, projectDefaultModelPick, projectHomeModelPick],
   )
 
   /** 与 ChatPage.showThreadView 一致：有消息或插件定制线程时视为对话流，否则为项目首页 / Mirrors ChatPage.showThreadView */
-  const chatItems = activeThread?.chatState.items ?? []
-  const hasThreadMessages = chatItems.length > 0
+  const hasThreadMessages = useThreadChatSelector(activeThread?.id, (chatState) => chatState.items.length > 0)
   const showConversationFlow =
     hasThreadMessages ||
     activeThread?.purpose === 'home-plugin-customization' ||
@@ -200,6 +251,27 @@ export function AppShellWorkspace({
     activeThread?.purpose === 'skill-run'
   const showAgentModeToolbar = activeViewId === 'home' && !showConversationFlow
   const showAgentStatusToolbar = activeViewId !== 'home' || showConversationFlow
+  const isRuntimeActive = Boolean(activeWorkspaceTab && activeRuntimeDefinition && activeViewId === 'home')
+  const activeRuntimePreviewId = isRuntimeActive && activeWorkspaceTab && activeRuntime
+    ? `preview-${activeWorkspaceTab.id}-${activeRuntime.generation}`
+    : null
+
+  useEffect(() => {
+    setRuntimeNavigation({ canGoBack: false, canGoForward: false })
+    if (!activeRuntimePreviewId) return
+    let current = true
+    void window.desktop?.getRuntimePreviewNavigationState?.(activeRuntimePreviewId).then((state) => {
+      if (current && state?.previewId === activeRuntimePreviewId) setRuntimeNavigation({ canGoBack: state.canGoBack, canGoForward: state.canGoForward })
+    })
+    const unsubscribe = window.desktop?.onRuntimePreviewNavigationState?.((state) => {
+      if (state.previewId === activeRuntimePreviewId) setRuntimeNavigation({ canGoBack: state.canGoBack, canGoForward: state.canGoForward })
+    })
+    return () => { current = false; unsubscribe?.() }
+  }, [activeRuntimePreviewId])
+
+  useEffect(() => {
+    setLocalAppLogsOpen(false)
+  }, [activeWorkspaceTab?.id, activeRuntime?.generation])
 
   // --- Close auxiliary drawer when navigating into settings / 进入设置路由时收起辅助抽屉 ---
 
@@ -283,7 +355,7 @@ export function AppShellWorkspace({
 
   useEffect(() => {
     const threadId = activeThread?.id
-    const sessionId = activeThread?.chatState.sessionId?.trim()
+    const sessionId = activeThreadSessionId?.trim()
     if (activeViewId !== 'home' || !threadId || !sessionId || activeThreadRunning) return
     if (
       agentStatusSnapshot?.threadId === threadId &&
@@ -299,7 +371,7 @@ export function AppShellWorkspace({
     void refreshAgentStatus(true)
   }, [
     activeProject.path,
-    activeThread?.chatState.sessionId,
+    activeThreadSessionId,
     activeThread?.id,
     activeThreadRunning,
     activeViewId,
@@ -473,7 +545,6 @@ export function AppShellWorkspace({
 
   const folderToolbarActive = sidePanel.open && sidePanel.tab === 'files'
   const activePreviewPath = filePreview?.status === 'ready' ? filePreview.file.path : filePreview?.path ?? null
-
   // --- Layout: title bar (hidden in settings), routed `<main>`, right drawer / 布局：标题栏（设置页隐藏）、路由主区、右侧抽屉 ---
 
   return (
@@ -482,13 +553,23 @@ export function AppShellWorkspace({
         <div className="app-workspace-top-drag draggable" aria-hidden />
       ) : (
         <header className="app-workspace-header" role="banner">
-          <span className="app-workspace-title no-drag" id="workspace-title" title={workspaceTitle}>
+          {isRuntimeActive ? <nav className="runtime-preview-navigation no-drag" aria-label={t('runtime.previewNavigation')}>
+            <button type="button" className="btn btn-toolbar" data-testid="runtime-preview-back" title={t('sidebar.back')} aria-label={t('sidebar.back')} onClick={() => onNavigateRuntime?.('back')} disabled={!onNavigateRuntime || !runtimeNavigation.canGoBack}>
+              <IconInline name="back" />
+            </button>
+            <button type="button" className="btn btn-toolbar" data-testid="runtime-preview-forward" title={t('sidebar.forward')} aria-label={t('sidebar.forward')} onClick={() => onNavigateRuntime?.('forward')} disabled={!onNavigateRuntime || !runtimeNavigation.canGoForward}>
+              <IconInline name="forward" />
+            </button>
+            <button type="button" className="btn btn-toolbar" data-testid="runtime-preview-refresh" title={t('runtime.refresh')} aria-label={t('runtime.refresh')} onClick={onReloadRuntime} disabled={!onReloadRuntime}>
+              <IconInline name="refresh" />
+            </button>
+          </nav> : <span className="app-workspace-title no-drag" id="workspace-title" title={workspaceTitle}>
             {workspaceTitle}
-          </span>
+          </span>}
           <div className="app-workspace-drag-gap draggable" aria-hidden="true" />
-          <div className="app-workspace-actions no-drag">
-            {showAgentModeToolbar ? <AgentModeMenu agent={agentMode} onOpenSettings={() => openAgentSettings('project')} /> : null}
-            {showAgentStatusToolbar ? (
+          <div className={`app-workspace-actions no-drag${isRuntimeActive ? ' local-app-runtime-actions' : ''}`}>
+            {!isRuntimeActive && showAgentModeToolbar ? <AgentModeMenu agent={agentMode} onOpenSettings={() => openAgentSettings('project')} /> : null}
+            {!isRuntimeActive && showAgentStatusToolbar ? (
               <AppAgentStatusPopover
                 open={agentStatusOpen}
                 loading={agentStatusLoading}
@@ -502,7 +583,11 @@ export function AppShellWorkspace({
                 }}
               />
             ) : null}
-            <button
+            {isRuntimeActive && onRuntimeDevelopmentAction ? <button type="button" className="btn btn-toolbar runtime-chat-window-action" data-testid={runtimeDevelopmentUi.action === 'end' ? 'runtime-end-development' : 'runtime-open-development'} aria-label={runtimeDevelopmentUi.actionLabel} onClick={onRuntimeDevelopmentAction} disabled={runtimeDevelopmentUi.actionDisabled}>
+              <IconInline name="message" />
+              <span>{runtimeDevelopmentUi.actionLabel}</span>
+            </button> : null}
+            {!isRuntimeActive ? <button
               type="button"
               className={`btn btn-toolbar${folderToolbarActive ? ' is-active' : ''}`}
               id="btn-toggle-file-panel"
@@ -513,20 +598,39 @@ export function AppShellWorkspace({
               onClick={() => toggleSidePanelTab('files')}
             >
               <IconInline name="folder" />
-            </button>
+            </button> : null}
           </div>
         </header>
       )}
       <div className="app-workspace-content">
         <main className="app-main" role="main">
           {/* 三视图互斥：`hidden` 保留挂载以维持 Chat 内存态 / Mutually exclusive routes; `hidden` keeps Chat mounted */}
+          {isRuntimeActive && activeWorkspaceTab && activeRuntimeDefinition ? <RuntimeWorkspace
+            tab={activeWorkspaceTab}
+            definition={activeRuntimeDefinition}
+            runtime={activeRuntime ?? null}
+            runtimeDevelopment={runtimeDevelopment}
+            onRetry={onRetryRuntime ?? (() => undefined)}
+            onRestart={onRestartRuntime ?? (() => undefined)}
+            onStop={onStopRuntime ?? (() => undefined)}
+            onReload={onReloadRuntime ?? (() => undefined)}
+            onRelocate={onRelocateRuntime ?? (() => undefined)}
+            onBuild={onBuildRuntime}
+            onCancelBuild={onCancelBuildRuntime}
+            onDevelopmentAction={onRuntimeDevelopmentAction}
+            logsOpen={localAppLogsOpen}
+            onLogsToggle={() => setLocalAppLogsOpen((open) => !open)}
+            showToolbar={false}
+          /> : null}
           <ChatPage
             ref={chatRef}
-            hidden={activeViewId !== 'home'}
+            hidden={activeViewId !== 'home' || isRuntimeActive}
             activeProject={activeProject}
             activeThread={activeThread}
             projectDefaultModelPick={projectDefaultModelPick}
             projectHomeModelPick={projectHomeModelPick}
+            projectChatSnapshots={projectChatSnapshots}
+            projectChatEnabled={projectChatEnabled}
             agentStatusSnapshot={agentStatusSnapshot}
             threads={threads}
             projects={projects}
@@ -537,6 +641,7 @@ export function AppShellWorkspace({
             onForkThread={onForkThread}
             onCreateProject={onCreateProject}
             onSelectProject={onSelectProject}
+            onSelectThread={onSelectThread}
             onThreadChatStateChange={onThreadChatStateChange}
             onThreadPromptSubmit={onThreadPromptSubmit}
             onThreadRunStateChange={onThreadRunStateChange}
@@ -560,15 +665,19 @@ export function AppShellWorkspace({
             onRunProjectSkill={onRunProjectSkill}
             onStopProjectSkillRun={onStopProjectSkillRun}
           />
-          <DocsPage hidden={activeViewId !== 'docs'} />
-          <SettingsPage
-            hidden={activeViewId !== 'settings'}
-            settingsCategory={settingsCategory}
-            activeProject={activeProject}
-            showProjectSkillsInSidebar={showProjectSkillsInSidebar}
-            onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
-            onOpenAgentSettings={openAgentSettings}
-          />
+          {!isRuntimeActive ? <DocsPage hidden={activeViewId !== 'docs'} /> : null}
+          {!isRuntimeActive && activeViewId === 'settings' ? (
+            <Suspense fallback={null}>
+              <SettingsPage
+                hidden={false}
+                settingsCategory={settingsCategory}
+                activeProject={activeProject}
+                showProjectSkillsInSidebar={showProjectSkillsInSidebar}
+                onShowProjectSkillsInSidebarChange={onShowProjectSkillsInSidebarChange}
+                onOpenAgentSettings={openAgentSettings}
+              />
+            </Suspense>
+          ) : null}
           {filePreview ? (
             <ProjectFilePreviewOverlay preview={filePreview} onClose={() => setFilePreview(null)} />
           ) : null}
@@ -591,6 +700,7 @@ export function AppShellWorkspace({
         />
       </div>
       {searchOpen ? (
+        <Suspense fallback={null}>
         <AppSearchModal
           activeProject={activeProject}
           projects={projects}
@@ -605,7 +715,9 @@ export function AppShellWorkspace({
           onInsertKnowledgeContext={insertKnowledgeContext}
           onSelectMessage={openSearchMessageResult}
           onSelectThread={onSelectThread}
+          onOpenRuntimeDevelopmentThread={onOpenRuntimeDevelopmentThread}
         />
+        </Suspense>
       ) : null}
     </div>
   )
