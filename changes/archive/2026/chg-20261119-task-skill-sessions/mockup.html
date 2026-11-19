@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>编辑任务卡 · 会话方式</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef1ef;color:#263930;font:15px/1.6 system-ui,sans-serif}main{max-width:680px;background:#fff;border:1px solid #d0d9d1;border-radius:16px;margin:5vh auto;padding:clamp(20px,5vw,40px)}header{display:flex;align-items:center;justify-content:space-between}a{color:#285849}h1{font-size:26px;margin:0}small,p{color:#52655a}.group{padding:16px 0;border-bottom:1px solid #dce4de}.selection{margin-top:8px;background:#edf3ef;color:#245341;border-radius:6px;padding:8px 12px;display:inline-block}.panes{display:grid;grid-template-columns:1fr 1fr;gap:12px}.pane{border:1px solid #dce4de;border-radius:8px;padding:12px}.pane p{margin:7px 0}fieldset{border:0;padding:0;margin:20px 0}legend{font-weight:650}label{display:block;padding:10px 12px;border:1px solid #d5dfd9;border-radius:8px;margin:7px 0}label:has(:checked){background:#eff6f1;border-color:#52866c}input{accent-color:#326b51}#hint{font-size:14px}.meta{font-size:13px;letter-spacing:.03em}@media(max-width:540px){main{margin:10px}.panes{grid-template-columns:1fr}}
+</style></head><body><main><small class="meta">任务卡设置 · 局部原型</small><header><h1>编辑任务卡</h1><a href="view.html">方案说明</a></header>
+<div class="group"><b>任务名称</b><div>整理项目资料</div></div>
+<div class="group"><b>任务模式</b><div>Agent　 <span class="selection">编排 Skills</span></div></div>
+<div class="group panes"><div class="pane"><b>项目 Skills</b><p>收集资料</p><p>整理大纲</p></div><div class="pane"><b>已选 Skills</b><p>1　收集资料</p><p>2　整理大纲</p></div></div>
+<fieldset><legend>会话方式</legend><label><input type="radio" name="session" checked value="independent"> 每个 Skill 独立会话</label><label><input type="radio" name="session" value="shared"> 所有 Skill 共用会话</label><p id="hint" aria-live="polite">每步新建会话，共享项目文件，步骤之间不传摘要。</p></fieldset>
+<div class="group">TODO 模式　<span class="meta">关闭</span></div><div class="group">运行次数　1</div><div class="group">定时运行　<span class="meta">关闭</span></div></main>
+<script>document.querySelector('fieldset').addEventListener('change', e => {document.getElementById('hint').textContent = e.target.value === 'shared' ? '同一次启动的所有步骤沿用同一个会话上下文。' : '每步新建会话，共享项目文件，步骤之间不传摘要。'});</script></body></html>

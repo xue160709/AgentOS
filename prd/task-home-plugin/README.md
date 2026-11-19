@@ -2,14 +2,14 @@
 
 ## 模块定位
 
-Task Home Plugin 模块把项目首页卡片升级为可长期运行的任务：用户可以创建 Agent 模式或 Skills 编排模式任务，手动或定时运行，并把每次运行映射到独立线程。
+Task Home Plugin 模块把项目首页卡片升级为可长期运行的任务：用户可以创建 Agent 模式或 Skills 编排模式任务，手动或定时运行，并按会话设置执行任务。
 
 ## 当前已实现
 
 - 支持创建或更新任务卡，写入 `manifest.json`、`task.json`、`runtime.json` 和任务 extractor。
 - 任务模式包括基于项目 `AGENT.md` 的 Agent 模式，以及按步骤顺序执行的 Skills 模式。
 - 任务运行态覆盖 `idle`、`queued`、`running`、`waiting`、`done`、`error`、`cancelled`。
-- 每次启动任务会创建 `purpose: "task-run"` 的独立线程 seed。
+- Skills 默认每轮每步新建任务会话，旧配置缺少该字段时同样默认独立。编辑表单可选共用会话，同一次启动的所有步骤和轮次将复用一条任务线程。
 - 支持 1 到 100 次运行次数，以及 off/1h/2h/3h/6h/12h/1d interval 定时策略。
 - 支持手动停止运行，并取消关联 Claude Agent 请求。
 - 应用重启后会把未完成 runtime 标记为 cancelled，避免误认为后台任务仍在运行。
@@ -36,7 +36,7 @@ Task Home Plugin 模块把项目首页卡片升级为可长期运行的任务：
 ## 关键决策
 
 - 任务配置和运行态落在项目 `.agents/home-plugins/<slug>/` 下，方便项目级迁移和审阅。
-- 每次任务运行都映射到独立线程，避免与普通聊天混在一起。
+- 任务会话使用 task-run 类型，避免与普通聊天混在一起。
 
 ## 验收
 

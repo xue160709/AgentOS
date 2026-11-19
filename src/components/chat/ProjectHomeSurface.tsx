@@ -16,6 +16,7 @@ import type {
   AgentProjectDocumentName,
   HomePluginCardSize,
   HomePluginRunItem,
+  HomePluginTaskConfig,
   HomePluginTaskMode,
   HomePluginTaskSchedule,
   HomePluginTaskSkillStep,
@@ -1618,6 +1619,7 @@ function TaskCardDialog({
   const [title, setTitle] = useState('')
   const [mode, setMode] = useState<HomePluginTaskMode>('agent')
   const [skills, setSkills] = useState<AgentContextSlashItem[]>([])
+  const [sessionMode, setSessionMode] = useState<HomePluginTaskConfig['sessionMode']>('independent')
   const [selectedSkills, setSelectedSkills] = useState<HomePluginTaskSkillStep[]>([])
   const [draftTodoEnabled, setDraftTodoEnabled] = useState(todoEnabled)
   const [runCount, setRunCount] = useState(1)
@@ -1659,6 +1661,7 @@ function TaskCardDialog({
     if (!slug) {
       setTitle('')
       setMode('agent')
+      setSessionMode('independent')
       setSelectedSkills([])
       setDraftTodoEnabled(todoEnabled)
       setRunCount(1)
@@ -1687,6 +1690,7 @@ function TaskCardDialog({
         }
         setTitle(result.task.title)
         setMode(result.task.mode)
+        setSessionMode(result.task.sessionMode)
         setSelectedSkills(result.task.skillSteps)
         setDraftTodoEnabled(result.task.todoEnabled)
         setRunCount(result.task.runCount)
@@ -1779,6 +1783,7 @@ function TaskCardDialog({
         slug,
         title: normalizedTitle,
         mode,
+        sessionMode,
         skillSteps: mode === 'skills' ? selectedSkills : [],
         todoEnabled: draftTodoEnabled,
         runCount: clampInt(runCount, 1, 100, 1),
@@ -1906,6 +1911,21 @@ function TaskCardDialog({
               </div>
             </div>
           ) : null}
+
+          {mode === 'skills' && (
+            <label className="project-home-field">
+              <span>{t('workspace.taskSessionMode')}</span>
+              <select
+                className="settings-input settings-select"
+                value={sessionMode}
+                disabled={saving || loading}
+                onChange={(event) => setSessionMode(event.target.value === 'shared' ? 'shared' : 'independent')}
+              >
+                <option value="independent">{t('workspace.taskSessionIndependent')}</option>
+                <option value="shared">{t('workspace.taskSessionShared')}</option>
+              </select>
+            </label>
+          )}
 
           <label className="agent-mode-switch project-home-task-switch">
             <span className="agent-mode-switch__copy">

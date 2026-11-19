@@ -2431,7 +2431,7 @@ export function AppShell() {
           const project = chatWorkspaceRef.current?.projects.find((item) => item.id === target.projectId)
           if (project?.path && window.desktop?.stopTaskHomePlugin) {
             try {
-              await window.desktop.stopTaskHomePlugin(project.path, target.homePluginSlug)
+              await window.desktop.stopTaskHomePlugin(project.path, target.homePluginSlug, target.id)
             } catch {
               /* stop is best-effort when archiving a running task */
             }

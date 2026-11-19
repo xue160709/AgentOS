@@ -150,8 +150,8 @@ const desktopAdapter = {
   runTaskHomePlugin(rootPath: string, slug: string) {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.runTaskHomePlugin, rootPath, slug) as Promise<HomePluginTaskRunResult>
   },
-  stopTaskHomePlugin(rootPath: string, slug: string) {
-    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.stopTaskHomePlugin, rootPath, slug) as Promise<HomePluginTaskStopResult>
+  stopTaskHomePlugin(rootPath: string, slug: string, expectedThreadId?: string) {
+    return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.stopTaskHomePlugin, rootPath, slug, expectedThreadId) as Promise<HomePluginTaskStopResult>
   },
   getAgentModeStatus(rootPath: string, locale?: 'zh' | 'en') {
     return ipcRenderer.invoke(DESKTOP_INVOKE_CHANNELS.getAgentModeStatus, rootPath, locale)

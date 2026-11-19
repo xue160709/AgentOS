@@ -2684,8 +2684,8 @@ if (gotSingleInstanceLock) {
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.runTaskHomePlugin, (_event, rootPath: string, slug: string) => {
       return getTaskHomePluginManager().startTask(rootPath, slug)
     })
-    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.stopTaskHomePlugin, (_event, rootPath: string, slug: string) => {
-      return getTaskHomePluginManager().stopTask(rootPath, slug)
+    ipcMain.handle(DESKTOP_INVOKE_CHANNELS.stopTaskHomePlugin, (_event, rootPath: string, slug: string, expectedThreadId?: string) => {
+      return getTaskHomePluginManager().stopTask(rootPath, slug, expectedThreadId)
     })
     ipcMain.handle(DESKTOP_INVOKE_CHANNELS.getAgentModeStatus, (_event, rootPath: string, rawLocale?: unknown) => {
       return getAgentModeStatus(rootPath, getAgentModeSettingsStore(), resolveAgentModeIpcLocale(rawLocale))

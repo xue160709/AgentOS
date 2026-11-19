@@ -1,6 +1,6 @@
 {
   "lastPrdSyncCommit": "27851a1fcbd8e8a85b0892d8a5d30db5a17acc5f",
-  "lastPrdSyncAt": "2026-06-24",
+  "lastPrdSyncAt": "2026-11-19",
   "module": "task-home-plugin",
   "lastChangedFiles": [
     "electron/task-home-plugin-manager.ts",
@@ -11,5 +11,6 @@
     "src/components/workspace-session.ts",
     "electron/main.ts"
   ],
-  "notes": "全量同步：task-home-plugin acceptance 已通过；任务卡保存、运行、停止、重启清理、定时递推、runtime 和 task-run 线程完成验收状态同步，后续可补专项单测和真实 GUI/E2E。"
+  "notes": "同步每个 Skill 的会话方式和旧配置默认值。",
+  "lastChange": "chg-20261119-task-skill-sessions"
 }

@@ -14,7 +14,7 @@
 
 ## 数据结构
 
-- `HomePluginTaskConfig`：slug、title、mode、skillSteps、todoEnabled、runCount、schedule、enabled。
+- `HomePluginTaskConfig`：slug、title、mode、sessionMode（independent/shared）、skillSteps、todoEnabled、runCount、schedule、enabled。
 - `HomePluginTaskRuntime`：projectPath、threadId、status、requestId、run/step 进度、结果、错误、nextRunAt。
 - `HomePluginTaskEvent`：推送给渲染层的任务状态和可选 thread seed。
 
@@ -42,7 +42,7 @@
 
 ## 测试与验收
 
-- Task Home Plugin acceptance 已完成正式验收状态同步；当前仍缺专门的 Task Home Plugin 单元测试。
+- Task Home Plugin acceptance 已完成正式验收状态同步；会话配置读写、串行调度和停止当前步骤见 `electron/task-home-plugin-manager.test.mjs`。
 - 建议补充：保存任务 fixture、Skills 空步骤、stopTask、reconcileInterruptedRuntime、interval nextRunAt。
 - 验收契约：`prd/task-home-plugin/acceptance.md`。
 

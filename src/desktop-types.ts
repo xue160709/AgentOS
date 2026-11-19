@@ -546,6 +546,7 @@ export type HomePluginTaskConfig = {
   slug: string
   title: string
   mode: HomePluginTaskMode
+  sessionMode: 'independent' | 'shared'
   skillSteps: HomePluginTaskSkillStep[]
   todoEnabled: boolean
   runCount: number

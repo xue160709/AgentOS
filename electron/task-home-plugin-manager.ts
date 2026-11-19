@@ -84,6 +84,7 @@ type TaskDraftInput = {
   slug?: string
   title: string
   mode: HomePluginTaskMode
+  sessionMode?: HomePluginTaskConfig['sessionMode']
   skillSteps: HomePluginTaskSkillStep[]
   todoEnabled: boolean
   runCount: number
@@ -206,6 +207,7 @@ export class TaskHomePluginManager {
         slug,
         title: input.title,
         mode: input.mode,
+        sessionMode: input.sessionMode,
         skillSteps: input.skillSteps,
         todoEnabled: input.todoEnabled,
         runCount: input.runCount,
@@ -306,24 +308,14 @@ export class TaskHomePluginManager {
       return { ok: false, rootPath: resolvedProjectPath, slug: record.task.slug, message: 'Claude runner is not ready' }
     }
 
-    const threadId = createThreadId(record.task.slug)
-    const threadTitle = deriveTaskThreadTitle(record.task)
-    const threadSeed = {
-      id: threadId,
-      projectId: project.id,
-      title: threadTitle,
-      purpose: TASK_THREAD_PURPOSE,
-      homePluginSlug: record.task.slug,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    }
-
+    let threadSeed: NonNullable<HomePluginTaskEvent['thread']>
     try {
-      await runPort.ensureThread({ projectId: project.id, threadId, title: threadTitle, purpose: TASK_THREAD_PURPOSE, homePluginSlug: record.task.slug })
+      threadSeed = await createTaskThread(runPort, record)
     } catch {
       return { ok: false, rootPath: resolvedProjectPath, slug: record.task.slug, message: 'Claude runner is not ready' }
     }
 
+    const { id: threadId, title: threadTitle } = threadSeed
     record.runtime.threadId = threadId
     record.runtime.threadTitle = threadTitle
     record.runtime.projectPath = resolvedProjectPath
@@ -364,7 +356,7 @@ export class TaskHomePluginManager {
       record.runtime.detail = message
       record.runtime.updatedAt = new Date().toISOString()
       void writeJson(record.runtimePath, record.runtime)
-      this.emitTaskEvent(record, threadSeed)
+      this.emitTaskEvent(record, session.threadSeed)
       session.resolveStarted({ requestId: record.runtime.requestId || '' })
       this.finishSession(session, { ok: false, requestId: record.runtime.requestId || '', status: 'error', message })
     })
@@ -389,10 +381,13 @@ export class TaskHomePluginManager {
   }
 
   /** 停止某个任务卡的当前运行 / Stop the active run for a task-card */
-  async stopTask(projectPath: string, slug: string): Promise<HomePluginTaskStopResult> {
+  async stopTask(projectPath: string, slug: string, expectedThreadId?: string): Promise<HomePluginTaskStopResult> {
     const resolvedProjectPath = resolveProjectPath(projectPath)
     const key = this.taskKey(resolvedProjectPath, slug)
     const session = this.activeSessions.get(key)
+    if (expectedThreadId && session?.threadId !== expectedThreadId) {
+      return { ok: true, rootPath: resolvedProjectPath, slug, stopped: false }
+    }
     if (!session) {
       const record = await this.ensureRecord(resolvedProjectPath, slug)
       if (record && isActiveTaskRuntimeStatus(record.runtime.status)) {
@@ -403,7 +398,7 @@ export class TaskHomePluginManager {
     }
 
     session.cancelled = true
-    const requestId = session.record.runtime.requestId || session.activeRequestId
+    const requestId = session.activeRequestId
     const runPort = this.deps.getRunPort()
     if (requestId && runPort) {
       await runPort.cancel({ projectId: session.record.projectId, threadId: session.threadId, requestId })
@@ -416,8 +411,6 @@ export class TaskHomePluginManager {
     this.emitTaskEvent(session.record, session.threadSeed)
     if (requestId) {
       this.resolveWaiter(requestId, { ok: false, requestId, status: 'cancelled', message: '已终止' })
-    } else {
-      this.finishSession(session, { ok: false, requestId: '', status: 'cancelled', message: '已终止' })
     }
     return { ok: true, rootPath: resolvedProjectPath, slug, stopped: true }
   }
@@ -439,7 +432,7 @@ export class TaskHomePluginManager {
     if (session) {
       session.cancelled = true
       session.deleted = true
-      const activeRequestId = session.record.runtime.requestId || session.activeRequestId
+      const activeRequestId = session.activeRequestId
       const runPort = this.deps.getRunPort()
       if (activeRequestId && runPort) {
         try {
@@ -551,6 +544,15 @@ export class TaskHomePluginManager {
       if (task.mode === 'skills') {
         for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
           if (session.cancelled) break
+          if (task.sessionMode === 'independent' && (stepIndex > 0 || runIndex > 0)) {
+            const thread = await createTaskThread(runPort, record)
+            if (session.cancelled) break
+            session.threadSeed = thread
+            session.threadId = thread.id
+            record.runtime.threadId = thread.id
+            record.runtime.threadTitle = thread.title
+            record.runtime.requestId = undefined
+          }
           const step = steps[stepIndex]
           const prompt = buildSkillStepPrompt(task, step, runIndex + 1, runs, stepIndex + 1, steps.length)
           session.record.runtime.stepIndex = stepIndex + 1
@@ -560,6 +562,7 @@ export class TaskHomePluginManager {
           session.record.runtime.updatedAt = new Date().toISOString()
           await this.flushRuntime(record, session.threadSeed)
 
+          if (session.cancelled) break
           const outcome = await this.submitAndWait(runPort, session, prompt, {
             mode: 'home-plugin-task-run',
             todoEnabled: task.todoEnabled,
@@ -596,6 +599,7 @@ export class TaskHomePluginManager {
     }
 
     if (session.cancelled) {
+      session.resolveStarted({ requestId: '' })
       record.runtime.status = 'cancelled'
       record.runtime.detail = '已终止'
     } else if (record.runtime.status !== 'error') {
@@ -669,7 +673,7 @@ export class TaskHomePluginManager {
 
   private finishSession(session: TaskRunSession, outcome?: TaskRequestOutcome): void {
     const current = this.activeSessions.get(session.key)
-    if (!current) return
+    if (current !== session) return
     if (current.activeRequestId) {
       this.requestToTaskKey.delete(current.activeRequestId)
     }
@@ -1070,6 +1074,7 @@ function normalizeTaskConfig(raw: unknown, slug: string): HomePluginTaskConfig {
     slug,
     title: typeof value.title === 'string' && value.title.trim() ? value.title.trim() : titleFromSlug(slug),
     mode: value.mode === 'skills' ? 'skills' : 'agent',
+    sessionMode: value.sessionMode === 'shared' ? 'shared' : 'independent',
     skillSteps,
     todoEnabled: value.todoEnabled === true,
     runCount: clampNumber(value.runCount, 1, 100, 1),
@@ -1224,8 +1229,17 @@ function createTaskSlug(title: string): string {
   return `${base}-${randomUUID().slice(0, 8)}`
 }
 
+async function createTaskThread(runPort: TaskHomeRunPort, record: ManagedTaskRecord) {
+  const id = createThreadId(record.task.slug)
+  const title = deriveTaskThreadTitle(record.task)
+  const metadata = { projectId: record.projectId, title, purpose: TASK_THREAD_PURPOSE, homePluginSlug: record.task.slug }
+  await runPort.ensureThread({ ...metadata, threadId: id })
+  const now = Date.now()
+  return { ...metadata, id, createdAt: now, updatedAt: now }
+}
+
 function createThreadId(slug: string): string {
-  return `task-${normalizeSlug(slug) || 'run'}-${randomUUID().slice(0, 8)}`
+  return `task-${normalizeSlug(slug) || 'run'}-${randomUUID()}`
 }
 
 function normalizeSlug(value: string): string {

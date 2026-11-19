@@ -200,7 +200,7 @@ export type DesktopAPI = {
   ) => Promise<HomePluginTaskSaveResult>
   getTaskHomePlugin?: (rootPath: string, slug: string) => Promise<HomePluginTaskReadResult>
   runTaskHomePlugin?: (rootPath: string, slug: string) => Promise<HomePluginTaskRunResult>
-  stopTaskHomePlugin?: (rootPath: string, slug: string) => Promise<HomePluginTaskStopResult>
+  stopTaskHomePlugin?: (rootPath: string, slug: string, expectedThreadId?: string) => Promise<HomePluginTaskStopResult>
   getAgentModeStatus?: (rootPath: string, locale?: AppUiLocale) => Promise<AgentModeStatusResult>
   ensureAgentModeFiles?: (rootPath: string, locale?: AppUiLocale) => Promise<AgentModeFilesResult>
   setAgentModeState?: (
