@@ -1038,7 +1038,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
 
   useEffect(() => {
     if (!projectChatEnabled || !projectModelCatalog) return
-    const requestedPick = activeThreadModelPick
+    const requestedPick = activeThread?.id ? activeThreadModelPick : newThreadModelPick
     const defaultPick = { providerId: projectModelCatalog.activeProviderId, anthropicModel: projectModelCatalog.activeAnthropicModel }
     const effectiveRow = modelRowForPick(modelMenuRows, requestedPick) ?? modelRowForPick(modelMenuRows, defaultPick) ?? modelMenuRows[0]
     const effectivePick = effectiveRow ? modelPickFromRow(effectiveRow) : undefined
@@ -1048,7 +1048,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
     setModelMenuSelectionKey(effectivePick ? modelPickKey(effectivePick) : '')
     setGlobalDisplayModel(displayModel)
     setActiveModelSupportsImages(row?.supportsImages ?? false)
-  }, [activeThreadModelPick, modelMenuRows, projectChatEnabled, projectModelCatalog, t])
+  }, [activeThread?.id, activeThreadModelPick, modelMenuRows, newThreadModelPick, projectChatEnabled, projectModelCatalog, t])
 
   // --- Composer autocomplete: slash commands, @mentions, debounced file search / 输入框联想：斜杠、@ 与防抖文件搜索 ---
 
@@ -1173,6 +1173,7 @@ export const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatP
       if (projectChatEnabled) {
         const result = await chatBridge?.setThreadModel({ threadId: activeThread.id, modelPick: pick })
         if (!result?.ok) onStatusChange(result?.error.message ?? t('chat.errorGeneric'))
+        else setModelPickerOpen(false)
         return
       }
       currentModelPickRef.current = pick

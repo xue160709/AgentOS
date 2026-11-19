@@ -16,8 +16,19 @@ function makeHarness() {
   const scopedRead = { getModelCatalog: async () => ({ activeProviderId: 'p', activeAnthropicModel: 'm', providers: [{ id: 'p', name: 'Provider', model: 'm', modelSupportsImages: true, defaultHaikuModel: 'h', defaultHaikuSupportsImages: false, defaultOpusModel: 'o', defaultOpusSupportsImages: false, defaultSonnetModel: 's', defaultSonnetSupportsImages: true, apiKey: 'credential' }] }), getAgentContext: async (scopeId) => ({ skills: [{ kind: 'skill', name: 's', command: '/s', title: 'S', description: 'D', argumentHint: '', relativePath: 'skills/s.md', scope: 'project', source: 'claude', native: false, root: '/secret' }], agents: [], scopeId, root: '/secret' }), searchFiles: async (scopeId) => ({ ok: true, rootPath: '/secret', items: [{ label: scopeId, relativePath: 'src/a.ts', type: 'file', path: '/secret' }] }), pickAttachments: async () => ({ attachments: [], skipped: [] }), readAttachments: async () => ({ attachments: [], skipped: [{ name: '/secret', reason: '/secret' }] }), getThreadStatus: async (_scope, input) => ({ threadId: input.threadId, active: false, reportedModel: 'm', permissionMode: 'auto', tools: [], skills: [], slashCommands: [], agents: [], cwd: '/secret' }) }
   const window = { getWindowContext: async (id) => ok({ runtimeScopeId: 'workspace:w1', runtimeName: `Runtime ${id}`, ownerLabel: '工作台', scopeAvailable: true }), getWindowViewState: async (scope) => ok({ schemaVersion: 1, runtimeScopeId: scope, selectedThreadId: 't1', draft: 'draft', updatedAt: 1 }), saveWindowViewState: async (scope, input) => ok({ schemaVersion: 1, runtimeScopeId: scope, ...input.patch, draft: input.patch.draft ?? '', updatedAt: 2 }), reportPresenceSelection: (id, scope, input) => { broker.calls.push(['presence', id, scope, input]); return ok(undefined) } }
   const router = ipc.createRuntimeChatIpcRouter({ broker, capabilities, rendererEntries: ['http://renderer.test/index.html'], scopedRead, window })
-  return { ...ipc, router, broker, capabilities }
+  return { ...ipc, router, broker, capabilities, scopedRead }
 }
+
+test('Runtime model catalog accepts empty optional model slots and strips credentials', async () => {
+  const h = makeHarness()
+  h.scopedRead.getModelCatalog = async () => ({ activeProviderId: 'p', activeAnthropicModel: '', providers: [{ id: 'p', name: 'Provider', model: 'model-a', modelSupportsImages: false, defaultHaikuModel: '', defaultHaikuSupportsImages: false, defaultOpusModel: '', defaultOpusSupportsImages: false, defaultSonnetModel: '', defaultSonnetSupportsImages: false, apiKey: 'secret' }] })
+  const result = await h.router.getModelCatalog(event(7))
+  assert.equal(result.ok, true)
+  assert.equal(result.value.providers[0].model, 'model-a')
+  assert.equal(JSON.stringify(result).includes('secret'), false)
+  h.scopedRead.getModelCatalog = async () => ({ activeProviderId: '', activeAnthropicModel: '', providers: [] })
+  assert.equal((await h.router.getModelCatalog(event(7))).ok, true)
+})
 
 test('Runtime capability rejects Preview, unknown, project/main windows, subframes, and wrong documents', async () => {
   const h = makeHarness(); const attempts = [event(99), event(8), event(1), event(7, undefined, true), event(7, 'http://evil.test/index.html')]

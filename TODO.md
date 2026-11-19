@@ -59,6 +59,7 @@
 #### 缺陷收口（阻塞 M0 Gate 与 Development Check）
 
 - [~] 模型目录同步｜保存模型设置后向各窗口发送无凭据刷新信号，项目对话和首页重新读取候选；已删除选择回退到可用模型。类型检查与相关自动化测试通过；实际桌面窗口中新增、删除模型及跨窗口刷新仍待 GUI 复核。
+- [~] Runtime 独立窗口模型选择｜修复模型目录对合法空模型档位的错误拒绝，以及新对话所选模型的显示计算；typecheck 和相关测试 25/25 通过。仍需在实际桌面窗口复核模型显示、切换及新对话提交。
 - [~] `FIX-WS-01`｜单一 Main-owned 命令通道 `chat-workspace:command` 已落地（六个 variant + revision 门槛 + 回读校验 + DTO 结构性拒绝快照载荷），纯转换集中于 `src/workspace-commands.ts` 并由 `WorkspaceSession` 复用；`ATDD-WS-201` 归属矩阵已落盘。typecheck exit 0，新增目标测试 30/30，`vite build` PASS。正式验收待 `CHECK-02`。
 - [~] `FIX-CHAT-01`｜主侧边栏归档/置顶已走 broker intent（显式 boolean、目标项目自身 generation、pending fence、单次 stale 重试）；busy 判定改读 snapshot 事实并覆盖全部 purpose，broker 路径移除隐式 cancel 并新增固定提示；readiness 拆为 `probing | enabled | legacy`。两处实现偏离已在任务单记录。正式验收待 `CHECK-02`。
 - [x] 收尾｜`runtimeEditStatus` 三条状态文案已改走 i18n（`runtime.editFailed / editSaving / editActive`），中英文同步。
